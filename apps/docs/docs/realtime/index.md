@@ -247,6 +247,7 @@ When a realtime query runs, Holo records which tables and rows it read. When a m
 - **Most results are patched, not re-run.** For lists, single records, relations loaded with `with(...)`, aggregates like `count()` and `sum(...)`, and paginated results, Holo usually updates the result in place. When it can't do that safely, it re-runs your handler and sends the new result.
 - **Relations serialize like a fresh query.** When a related model sets `hidden`, `visible`, `casts`, `accessors`, or `appended`, Holo re-runs the handler for that relation instead of patching it, so the result matches what the model returns on its own. The same holds for a root model with those rules, and for a handler that changes visibility or appends attributes on the records it loads.
 - **Bursts are batched.** Several quick writes produce one refresh with the final data.
+- **A write doesn't wait for refreshes.** Awaiting a write no longer waits for live-query refreshes already in progress; subscribers receive the update when the refresh completes.
 
 ::: warning
 Live refreshes come from writes that run inside the broadcast worker, which is where realtime mutations called from the browser execute. Writes made in another process, such as a regular API route, a form action, or a queue job, don't refresh open realtime queries. Make those changes through a realtime mutation, or [broadcast an event](/broadcasting/) for them.
