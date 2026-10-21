@@ -2397,14 +2397,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const query = repository.query()
     const relationConstraint = relation.constraint
     const relationResult = relationConstraint?.(query)
-    const constrained = relationResult instanceof ModelQueryBuilder ? relationResult : query
+    const constrained = relationResult instanceof ModelQueryBuilder ? relationResult as ModelQueryBuilder : query
 
     if (!constraint) {
       return constrained
     }
 
     const result = constraint(constrained)
-    return result instanceof ModelQueryBuilder ? result : constrained
+    return result instanceof ModelQueryBuilder ? result as ModelQueryBuilder : constrained
   }
 
   private buildRelationExistenceSubqueries(

@@ -574,6 +574,12 @@ User.with({
 
 Relation callbacks now also type their query builder as the related model, so a callback that uses a column of another model is a type error. `whereRelation()` and `orWhereRelation()` on a nested path check their column against the leaf model too. See [Constraining eager loads](/orm/relationships/loading#constraining-eager-loads).
 
+### Scope names must not match builder methods
+
+Model scopes are now also methods on every query builder for the model, so a scope name has to be free on the builder as well as on the model. Defining a model with a scope named like a query builder method (`where`, `count`, `get`) or an internal builder property throws a configuration error. Before, the scope silently replaced that method on the model, so a call such as `Post.where(...)` ran the scope instead.
+
+Rename the scope. A name such as `whereActive` or `activeOnly` keeps the meaning clear and does not collide with a builder method. See [Local scopes](/orm/scopes#local-scopes).
+
 ### Password hashing cost
 
 New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.

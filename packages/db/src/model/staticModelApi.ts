@@ -142,7 +142,8 @@ type StaticModelQueryForwardMethod =
 type StaticModelQueryForwarders<
   TTable extends TableDefinition,
   TRelations extends RelationMap,
-> = Pick<ModelQueryBuilder<TTable, TRelations>, StaticModelQueryForwardMethod>
+  TScopes extends ModelScopesDefinition,
+> = Pick<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, StaticModelQueryForwardMethod>
 
 export type StaticModelApi<
   TTable extends TableDefinition,
@@ -151,14 +152,14 @@ export type StaticModelApi<
   THidden extends readonly string[] = readonly string[],
 > = ModelReference<TTable, TScopes, TRelations>
   & ModelScopeMethods<TTable, TScopes, TRelations>
-  & StaticModelQueryForwarders<TTable, TRelations>
+  & StaticModelQueryForwarders<TTable, TRelations, TScopes>
   & {
   readonly definition: ModelDefinition<TTable, TScopes, TRelations> & { readonly hidden: Readonly<THidden> }
-  query(): ModelQueryBuilder<TTable, TRelations>
-  newQuery(): ModelQueryBuilder<TTable, TRelations>
-  newModelQuery(): ModelQueryBuilder<TTable, TRelations>
-  newQueryWithoutScopes(): ModelQueryBuilder<TTable, TRelations>
-  newQueryWithoutRelationships(): ModelQueryBuilder<TTable, TRelations>
+  query(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+  newQuery(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+  newModelQuery(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+  newQueryWithoutScopes(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+  newQueryWithoutRelationships(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   preventLazyLoading(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
   preventAccessingMissingAttributes(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
   automaticallyEagerLoadRelationships(value?: boolean): StaticModelApi<TTable, TScopes, TRelations, THidden>
@@ -221,8 +222,8 @@ export type StaticModelApi<
   destroy(ids: readonly ModelPrimaryKeyValue<TTable>[]): Promise<number>
   restore(id: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>
   forceDelete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
-  withTrashed(): ModelQueryBuilder<TTable, TRelations>
-  onlyTrashed(): ModelQueryBuilder<TTable, TRelations>
+  withTrashed(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
+  onlyTrashed(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   updateOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   upsert(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>

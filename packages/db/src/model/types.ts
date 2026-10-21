@@ -76,7 +76,9 @@ type RelationConstraintCallback<TQuery> = { bivarianceHack(query: TQuery): unkno
 export type ScopedRelationConstraint<TRelation extends RelationDefinition>
   = RelationConstraintCallback<ModelQueryBuilder<
     RelatedTableOfRelation<TRelation>,
-    RelatedRelationsOfRelation<TRelation>
+    RelatedRelationsOfRelation<TRelation>,
+    unknown,
+    RelatedScopesOfRelation<TRelation>
   >>
 
 export interface ScopedRelationDefinition {
@@ -456,6 +458,20 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
 
+/**
+ * Extracts the named scopes of a related model so relation constraint
+ * callbacks expose the same scope methods as the related model's query.
+ */
+export type RelatedScopesOfDefinition<TRef>
+  = TRef extends { readonly scopes: infer S extends ModelScopesDefinition } ? S
+    : TRef extends { readonly definition: { readonly scopes: infer S extends ModelScopesDefinition } } ? S
+      : EmptyScopeMap
+
+export type RelatedScopesOfRelation<TRelation extends RelationDefinition>
+  = TRelation extends { readonly related: () => infer TRef }
+    ? RelatedScopesOfDefinition<TRef>
+    : EmptyScopeMap
+
 type RelationOfPath<TRelations extends RelationMap, TPath extends string>
   = string extends TPath
     ? never
@@ -483,8 +499,20 @@ export type RelatedRelationsOfPath<TRelations extends RelationMap, TPath extends
       ? RelatedRelationsOfRelation<TRelation>
       : RelationMap
 
+export type RelatedScopesOfPath<TRelations extends RelationMap, TPath extends string>
+  = [RelationOfPath<TRelations, TPath>] extends [never]
+    ? EmptyScopeMap
+    : RelationOfPath<TRelations, TPath> extends infer TRelation extends RelationDefinition
+      ? RelatedScopesOfRelation<TRelation>
+      : EmptyScopeMap
+
 export type RelationQueryBuilderOfPath<TRelations extends RelationMap, TPath extends string>
-  = ModelQueryBuilder<RelatedTableOfPath<TRelations, TPath>, RelatedRelationsOfPath<TRelations, TPath>>
+  = ModelQueryBuilder<
+    RelatedTableOfPath<TRelations, TPath>,
+    RelatedRelationsOfPath<TRelations, TPath>,
+    unknown,
+    RelatedScopesOfPath<TRelations, TPath>
+  >
 
 /** True for relation kinds that resolve to an array of entities. */
 type IsToManyRelation<TRelation extends RelationDefinition>
@@ -849,10 +877,11 @@ export type ModelScopeMethods<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
   TRelations extends RelationMap = RelationMap,
+  TLoaded = unknown,
 > = {
   [K in keyof TScopes]:
-  TScopes[K] extends (query: ModelQueryBuilder<TTable, TRelations>, ...args: infer TArgs) => ModelQueryBuilder<TTable, TRelations>
-    ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations>
+  TScopes[K] extends (query: never, ...args: infer TArgs) => unknown
+    ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
     : never
 }
 

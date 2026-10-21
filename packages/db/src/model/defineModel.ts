@@ -19,7 +19,7 @@ import {
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
-import type { ModelQueryBuilder } from './ModelQueryBuilder'
+import { assertModelScopeNameAvailable, type ModelQueryBuilder } from './ModelQueryBuilder'
 import type { Entity } from './Entity'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type {
@@ -399,20 +399,20 @@ function createStaticModelApi<
     unguarded<TResult>(callback: () => TResult | Promise<TResult>) {
       return withoutModelGuards(callback)
     },
-    where(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations>>, operator?: unknown, value?: unknown) {
+    where(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>, operator?: unknown, value?: unknown) {
       return typeof columnOrCallback === 'function'
         ? this.query().where(columnOrCallback)
         : this.query().where(columnOrCallback, operator, value)
     },
-    orWhere(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations>>, operator?: unknown, value?: unknown) {
+    orWhere(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>, operator?: unknown, value?: unknown) {
       return typeof columnOrCallback === 'function'
         ? this.query().orWhere(columnOrCallback)
         : this.query().orWhere(columnOrCallback, operator, value)
     },
-    whereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations>>) {
+    whereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>) {
       return this.query().whereNot(callback)
     },
-    orWhereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations>>) {
+    orWhereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>) {
       return this.query().orWhereNot(callback)
     },
     whereExists<TSubTable extends TableDefinition>(subquery: SubqueryBuilder<TSubTable>) {
@@ -466,10 +466,10 @@ function createStaticModelApi<
     orWhereNotNull(column: ModelColumnName<TTable>) {
       return this.query().orWhereNotNull(column)
     },
-    when<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations>, TValue>) {
+    when<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>) {
       return this.query().when(value, callback, defaultCallback)
     },
-    unless<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations>, TValue>) {
+    unless<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>) {
       return this.query().unless(value, callback, defaultCallback)
     },
     distinct() {
@@ -901,7 +901,8 @@ function createStaticModelApi<
   } as StaticModelApi<TTable, TScopes, TRelations>
 
   for (const [name, scope] of Object.entries(definition.scopes)) {
-    const scoped = scope as (query: ModelQueryBuilder<TTable, TRelations>, ...args: readonly unknown[]) => ModelQueryBuilder<TTable, TRelations>
+    assertModelScopeNameAvailable(name)
+    const scoped = scope as (query: ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, ...args: readonly unknown[]) => ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
     ;(model as Record<string, unknown>)[name] = (...args: readonly unknown[]) => scoped(model.query(), ...args)
   }
 
