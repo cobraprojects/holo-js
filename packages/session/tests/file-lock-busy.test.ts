@@ -35,6 +35,25 @@ vi.mock('node:fs/promises', async importOriginal => {
   }
 })
 
+const STALE_INTERVAL_MS = 10_000
+
+async function acquireOnFakeClock(recordPath: string): Promise<{ readonly release: () => Promise<void>, readonly waitedMs: number }> {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  try {
+    const started = Date.now()
+    let settled = false
+    const acquisition = fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir).finally(() => { settled = true })
+    while (!settled) {
+      await new Promise(resolve => setImmediate(resolve))
+      if (!settled && vi.getTimerCount() > 0) await vi.advanceTimersToNextTimerAsync()
+    }
+    const release = await acquisition
+    return { release, waitedMs: Date.now() - started }
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
 async function createRecordPath() {
   const root = await mkdtemp(join(tmpdir(), 'holo-file-lock-busy-'))
   onTestFinished(() => rm(root, { force: true, recursive: true }))
@@ -55,9 +74,8 @@ describe('file session lock reclamation under busy file errors', () => {
   it('reclaims an empty lock directory without waiting for the stale interval', async () => {
     const { recordPath } = await createRecordPath()
     await mkdir(`${recordPath}.lock`)
-    const started = Date.now()
-    const release = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-    expect(Date.now() - started).toBeLessThan(2_000)
+    const { release, waitedMs } = await acquireOnFakeClock(recordPath)
+    expect(waitedMs).toBeLessThan(STALE_INTERVAL_MS)
     await release()
   }, 15_000)
 
@@ -68,9 +86,8 @@ describe('file session lock reclamation under busy file errors', () => {
     await mkdir(lockPath)
     await writeFile(join(lockPath, `owner.${token}.json`), JSON.stringify({ host: hostname(), pid: 2_147_483_640, token }))
     faults.rmdir = 1
-    const started = Date.now()
-    const release = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-    expect(Date.now() - started).toBeLessThan(2_000)
+    const { release, waitedMs } = await acquireOnFakeClock(recordPath)
+    expect(waitedMs).toBeLessThan(1_000)
     await release()
   }, 15_000)
 
@@ -84,9 +101,8 @@ describe('file session lock reclamation under busy file errors', () => {
     await release()
     faults.unlink = false
     expect(reports).toEqual([{ error: expect.any(Error), context: { capability: 'session', operation: 'file.releaseLock' } }])
-    const started = Date.now()
-    const next = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-    expect(Date.now() - started).toBeLessThan(2_000)
+    const { release: next, waitedMs } = await acquireOnFakeClock(recordPath)
+    expect(waitedMs).toBeLessThan(STALE_INTERVAL_MS)
     await next()
   }, 15_000)
 })
