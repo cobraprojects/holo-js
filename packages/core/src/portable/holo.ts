@@ -776,7 +776,7 @@ async function configureDatabaseInvalidationScaling(
   const state = getRuntimeState()
   const senders = getDatabaseInvalidationSenders()
   const scaling = broadcastModule ? loadedConfig.broadcast.worker.scaling : undefined
-  const appId = broadcastModule ? broadcastModule.workerInternals.resolveBroadcastAppIds(loadedConfig.broadcast)[0] : undefined
+  const appId = broadcastModule ? broadcastModule.workerInternals.resolveDefaultBroadcastAppId(loadedConfig.broadcast) : undefined
   let unsubscribe: (() => void) | undefined
   if (broadcastModule && scaling && appId !== undefined) {
     const lease = await senders.acquire(

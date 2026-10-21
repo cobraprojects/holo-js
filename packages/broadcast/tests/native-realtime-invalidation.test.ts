@@ -519,3 +519,43 @@ it('keeps publishing exactly once after the first of two embedded workers stops'
   await new Promise(resolve => setTimeout(resolve, 300))
   expect(invalidations).toHaveLength(1)
 }, 30_000)
+
+it('gives no remote receives in either of two embedded workers that share a process with a write from one of them', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const sender = createScalingSender(redisPort)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(unsubscribeSender)
+  const receivedByA: unknown[] = []
+  const receivedByB: unknown[] = []
+  const bridgeA = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const bridgeB = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  await startScoresWorker(db, redisPort, {
+    nodeId: 'worker-a',
+    databaseInvalidation: {
+      connect: bridgeA.connect,
+      receive: async invalidation => {
+        receivedByA.push(invalidation)
+        await bridgeA.receive(invalidation)
+      },
+    },
+  })
+  await startScoresWorker(db, redisPort, {
+    nodeId: 'worker-b',
+    databaseInvalidation: {
+      connect: bridgeB.connect,
+      receive: async invalidation => {
+        receivedByB.push(invalidation)
+        await bridgeB.receive(invalidation)
+      },
+    },
+  })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+  await new Promise(resolve => setTimeout(resolve, 500))
+
+  expect(receivedByA).toEqual([])
+  expect(receivedByB).toEqual([])
+}, 30_000)

@@ -352,14 +352,15 @@ async function createScalingInvalidationProject(): Promise<{
   return { root, client, connections, baseline }
 }
 
-async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly close: () => void }> {
+async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly appIds: () => string[], readonly close: () => void }> {
   const listener = client.duplicate()
-  let received = 0
+  const appIds: string[] = []
   listener.on('message', (_channel: string, message: string) => {
-    if ((JSON.parse(message) as { type?: string }).type === 'database-invalidation') received += 1
+    const parsed = JSON.parse(message) as { type?: string, appId?: string }
+    if (parsed.type === 'database-invalidation') appIds.push(String(parsed.appId))
   })
   await listener.subscribe('holo:broadcast:scaling:shared:events')
-  return { count: () => received, close: () => { listener.disconnect() } }
+  return { count: () => appIds.length, appIds: () => [...appIds], close: () => { listener.disconnect() } }
 }
 
 async function publishThroughRegisteredPublisher(): Promise<void> {
@@ -3556,6 +3557,30 @@ export default defineRedisConfig({ default: 'shared', connections: { shared: { h
     await stopWorker()
     await resetHoloRuntime()
     await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
+  }, 30_000)
+
+  it('sends invalidations under the app id of the default broadcast connection', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
+export default defineBroadcastConfig({
+  default: 'second',
+  connections: {
+    first: { driver: 'holo', appId: 'app-first', key: 'key-first', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } },
+    second: { driver: 'holo', appId: 'app-second', key: 'key-second', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } },
+  },
+  worker: { host: '127.0.0.1', port: 6001, scaling: { driver: 'redis', connection: 'shared' } },
+})
+`)
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
+    expect(counter.appIds()).toEqual(['app-second'])
+    await resetHoloRuntime()
   }, 30_000)
 
   it('keeps the previous publisher working when a reconfiguration to an unusable scaling connection fails', async () => {

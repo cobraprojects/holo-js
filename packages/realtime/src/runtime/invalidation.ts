@@ -260,6 +260,22 @@ const queuedRemoteRefreshKeys = new Set<string>()
 const remoteRefreshLastRunAt = new Map<string, number>()
 const remoteRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+export function forgetRemoteRefreshSchedule(refreshKey: string): void {
+  const timer = remoteRefreshTimers.get(refreshKey)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    remoteRefreshTimers.delete(refreshKey)
+  }
+  remoteRefreshLastRunAt.delete(refreshKey)
+  queuedRemoteRefreshKeys.delete(refreshKey)
+}
+
+export function hasRemoteRefreshSchedule(refreshKey: string): boolean {
+  return remoteRefreshTimers.has(refreshKey)
+    || remoteRefreshLastRunAt.has(refreshKey)
+    || queuedRemoteRefreshKeys.has(refreshKey)
+}
+
 export function resetRemoteRefreshSchedule(): void {
   remoteRefreshGeneration += 1
   activeRemoteRefreshes = 0

@@ -248,3 +248,31 @@ it('drops a stale remote refresh whose slot was granted before a reset, even whe
 
   expect(staleRuns).toBe(before)
 }, 30_000)
+
+it('forgets a subscription\'s remote refresh schedule and cancels its deferred run when it unsubscribes', async () => {
+  const { db } = await openRealtimeDatabase()
+  let runs = 0
+  const scheduled = query({
+    name: 'records.scheduled',
+    access: 'public',
+    handler: async () => {
+      runs += 1
+      return { records: await db.table('records').orderBy('id').get() }
+    },
+  })
+  const subscription = await subscribeRealtimeQuery(scheduled)
+  const [refreshKey] = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.keys()]
+  if (!refreshKey) throw new Error('No subscription was registered')
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  await bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  void bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(realtimeRuntimeInternals.hasRemoteRefreshSchedule(refreshKey)).toBe(true)
+
+  subscription.unsubscribe()
+
+  expect(realtimeRuntimeInternals.hasRemoteRefreshSchedule(refreshKey)).toBe(false)
+  const afterUnsubscribe = runs
+  await new Promise(resolve => setTimeout(resolve, 250))
+  expect(runs).toBe(afterUnsubscribe)
+}, 30_000)

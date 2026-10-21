@@ -1,3 +1,4 @@
+import { forgetRemoteRefreshSchedule } from './invalidation'
 import { captureAuthContext, getDatabaseContext } from './execution'
 import { createExecutionContext } from './execution-context'
 import type {
@@ -98,6 +99,7 @@ export function deleteSubscription(subscriptionId: string): void {
   }
 
   state.subscriptions.delete(subscriptionId)
+  forgetRemoteRefreshSchedule(subscription.refreshKey)
   const entry = state.queryEntries.get(subscription.refreshKey)
   if (entry?.current) {
     subscription.current = entry.current

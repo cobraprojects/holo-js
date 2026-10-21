@@ -277,6 +277,15 @@ function createScalingDatabaseInvalidationPayload(originNodeId: string, appId: s
   } satisfies BroadcastScalingDatabaseInvalidationMessage)
 }
 
+function resolveDefaultBroadcastAppId(config: NormalizedHoloBroadcastConfig): string | undefined {
+  const connection = config.connections[config.default]
+  if (!connection || connection.driver !== 'holo' || !('appId' in connection)) {
+    return undefined
+  }
+
+  return connection.appId
+}
+
 function resolveBroadcastAppIds(config: NormalizedHoloBroadcastConfig): readonly string[] {
   return Object.values(config.connections).flatMap(connection => {
     if (connection.driver !== 'holo' || !('appId' in connection)) {
@@ -602,6 +611,31 @@ let processScalingNodeId: string | undefined
 function getProcessScalingNodeId(): string {
   processScalingNodeId ??= createScalingNodeId()
   return processScalingNodeId
+}
+
+const localScalingOriginCounts = new Map<string, number>()
+
+function registerLocalScalingOrigin(nodeId: string): () => void {
+  localScalingOriginCounts.set(nodeId, (localScalingOriginCounts.get(nodeId) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) {
+      return
+    }
+
+    released = true
+    const remaining = (localScalingOriginCounts.get(nodeId) ?? 1) - 1
+    if (remaining > 0) {
+      localScalingOriginCounts.set(nodeId, remaining)
+      return
+    }
+
+    localScalingOriginCounts.delete(nodeId)
+  }
+}
+
+function isLocalScalingOrigin(originNodeId: string): boolean {
+  return originNodeId === getProcessScalingNodeId() || localScalingOriginCounts.has(originNodeId)
 }
 
 function resolveScalingEventChannel(connection: string): string {
@@ -1190,7 +1224,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const currentTime = (): number => options.now?.() ?? performance.now()
   const startedAt = currentTime()
   const servedAppIds = resolveBroadcastAppIds(options.config)
-  const databaseInvalidationAppId = servedAppIds[0]
+  const databaseInvalidationAppId = resolveDefaultBroadcastAppId(options.config)
   const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && databaseInvalidationAppId !== undefined
     ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation))
     : undefined
@@ -1848,7 +1882,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (message.type === 'database-invalidation') {
-      if (message.originNodeId === getProcessScalingNodeId()) {
+      if (typeof message.originNodeId === 'string' && isLocalScalingOrigin(message.originNodeId)) {
         return
       }
 
@@ -2319,7 +2353,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   let closing: Promise<void> | undefined
+  const unregisterLocalScalingOrigin = scaling ? registerLocalScalingOrigin(scaling.nodeId) : undefined
   async function closeRuntime(): Promise<void> {
+    unregisterLocalScalingOrigin?.()
   if (livenessTimer !== undefined) {
     clearInterval(livenessTimer)
   }
@@ -2872,6 +2908,7 @@ export const workerInternals = {
   buildWorkerApps,
   createScalingInvalidationSender,
   resolveBroadcastAppIds,
+  resolveDefaultBroadcastAppId,
   createScalingNodeId,
   createRedisScalingAdapter,
   createPusherSignature,
