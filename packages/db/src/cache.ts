@@ -71,7 +71,10 @@ export interface RemoteDatabaseDependencyInvalidation {
   readonly dependencies: readonly string[]
 }
 
+// One registration per publisher. Registrations that share a scope target the same transport, so only
+// the most recent one of a scope publishes; the others take over when it unregisters.
 type DatabaseDependencyInvalidationPublisherCandidate = {
+  readonly scope: string
   readonly publisher: DatabaseDependencyInvalidationPublisher
 }
 
@@ -403,9 +406,12 @@ export function onDatabaseDependencyInvalidated(
   }
 }
 
-function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependencyInvalidationPublisher): () => void {
+function onDatabaseDependencyInvalidationPublished(
+  publisher: DatabaseDependencyInvalidationPublisher,
+  scope: string,
+): () => void {
   const state = getQueryCacheBridgeState()
-  const candidate: DatabaseDependencyInvalidationPublisherCandidate = { publisher }
+  const candidate: DatabaseDependencyInvalidationPublisherCandidate = { scope, publisher }
   state.dependencyInvalidationPublishers = [...(state.dependencyInvalidationPublishers ?? []), candidate]
 
   return () => {
@@ -814,12 +820,20 @@ export function hasDatabaseDependencyInvalidationPublisher(): boolean {
   return (getQueryCacheBridgeState().dependencyInvalidationPublishers?.length ?? 0) > 0
 }
 
+function activeDependencyInvalidationPublishers(): readonly DatabaseDependencyInvalidationPublisher[] {
+  const active = new Map<string, DatabaseDependencyInvalidationPublisher>()
+  for (const candidate of getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []) {
+    active.set(candidate.scope, candidate.publisher)
+  }
+  return [...active.values()]
+}
+
 function publishDatabaseDependencyInvalidation(
   publisher: DatabaseDependencyInvalidationPublisher,
-  event: DatabaseDependencyInvalidationEventInternal,
+  invalidation: RemoteDatabaseDependencyInvalidation,
 ): void {
   void Promise.resolve()
-    .then(() => publisher(serializeDatabaseDependencyInvalidation(event)))
+    .then(() => publisher(invalidation))
     .catch((error: unknown) => {
       reportError(error, { capability: 'db', operation: 'cache.invalidationPublisher' })
     })
@@ -845,6 +859,10 @@ function serializeDatabaseDependencyInvalidation(
 async function receiveRemoteDatabaseDependencyInvalidation(
   invalidation: RemoteDatabaseDependencyInvalidation,
 ): Promise<void> {
+  if (invalidation.dependencies.length === 0) {
+    return
+  }
+
   await evictThenNotify(
     () => getDatabaseQueryCacheBridge()?.invalidateDependencyTables?.(invalidation.dependencies),
     () => notifyDatabaseDependencyInvalidationListeners(Object.freeze({
@@ -2148,16 +2166,19 @@ export async function invalidateQueryCacheDependencies(
     await evictThenNotify(
       () => bridge?.invalidateDependencies(dependencies),
       async () => {
-        const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
-        const publisher = candidates[candidates.length - 1]?.publisher
+        const publishers = activeDependencyInvalidationPublishers()
         const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
-        if (!publisher && !hasLocalListeners) {
+        if (publishers.length === 0 && !hasLocalListeners) {
           return
         }
 
         const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
-        if (publisher) {
-          publishDatabaseDependencyInvalidation(publisher, event)
+        // Tags that are not table keys stay local: a remote worker can evict nothing for them.
+        const remote = serializeDatabaseDependencyInvalidation(event)
+        if (remote.dependencies.length > 0) {
+          for (const publisher of publishers) {
+            publishDatabaseDependencyInvalidation(publisher, remote)
+          }
         }
         if (hasLocalListeners) {
           await notifyDatabaseDependencyInvalidationListeners(event)

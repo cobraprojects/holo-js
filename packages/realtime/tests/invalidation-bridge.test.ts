@@ -18,9 +18,9 @@ it('attaches a later bridge without replacing the registered publisher, and a di
   const published: string[] = []
   const first = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   const second = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const disconnectFirst = first.connect(async () => { published.push('first') })
+  const disconnectFirst = first.connect(async () => { published.push('first') }, 'holo:broadcast:scaling:shared:events')
   onTestFinished(() => disconnectFirst())
-  const disconnectSecond = second.connect(async () => { published.push('second') })
+  const disconnectSecond = second.connect(async () => { published.push('second') }, 'holo:broadcast:scaling:shared:events')
   disconnectSecond()
 
   await db.table('records').where('id', 1).update({ score: 1 })

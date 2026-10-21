@@ -226,7 +226,7 @@ export interface BroadcastRealtimeSubscription<TResult = unknown> {
 }
 
 export interface BroadcastDatabaseInvalidationBridge {
-  connect(publish: (invalidation: unknown) => Promise<void>): () => void
+  connect(publish: (invalidation: unknown) => Promise<void>, scope: string): () => void
   receive(invalidation: unknown): Promise<void>
 }
 

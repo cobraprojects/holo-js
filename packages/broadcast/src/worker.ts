@@ -1234,7 +1234,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const servedAppIds = resolveBroadcastAppIds(options.config)
   const databaseInvalidationAppId = resolveDefaultBroadcastAppId(options.config)
   const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && databaseInvalidationAppId !== undefined
-    ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation))
+    ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation), scaling.eventChannel)
     : undefined
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
@@ -2884,7 +2884,7 @@ function createScalingInvalidationSender(input: {
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
   readonly appId: string
-}): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+}): { readonly eventChannel: string, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
   const redisConnection = resolveRedisScalingConnection(input.queue, connectionName, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
@@ -2900,6 +2900,7 @@ function createScalingInvalidationSender(input: {
   }
 
   return {
+    eventChannel,
     async publish(invalidation) {
       const scalingAdapter = await openAdapter()
       await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appId, invalidation))

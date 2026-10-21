@@ -196,7 +196,7 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
     redis: redisConfig,
     appId: 'app',
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
@@ -244,7 +244,7 @@ it('does not refresh from its own write when the worker has an explicit node id 
     redis: redisConfig,
     appId: 'app',
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
@@ -312,7 +312,7 @@ it('keeps publishing once per mutation after the worker stops when the app sende
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
   onTestFinished(unsubscribeSender)
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
@@ -333,7 +333,7 @@ it('publishes once per mutation when the worker starts first and the app sender 
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
   onTestFinished(unsubscribeSender)
 
   await db.table('scores').where('id', 1).update({ score: 8 })
@@ -527,7 +527,7 @@ it('gives no remote receives in either of two embedded workers that share a proc
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.eventChannel)
   onTestFinished(unsubscribeSender)
   const receivedByA: unknown[] = []
   const receivedByB: unknown[] = []
@@ -642,3 +642,72 @@ it('suppresses a worker\'s own echo on its scaling connection while still delive
   await expect.poll(() => receivedByA.length).toBe(1)
   expect(receivedByA).toEqual([{ connectionName: 'main', dependencies: ['db:main:sentinel'] }])
 }, 30_000)
+
+async function subscribeToScalingChannels(redis: Awaited<ReturnType<typeof startRedisService>>, connections: readonly string[]) {
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const subscriber = client.duplicate()
+  onTestFinished(() => subscriber.disconnect())
+  const channels = connections.map(connection => `holo:broadcast:scaling:${connection}:events`)
+  const invalidationsByChannel = new Map<string, unknown[]>(channels.map(channel => [channel, []]))
+  subscriber.on('message', (channel: string, message: string) => {
+    const parsed = JSON.parse(message) as { type: string, invalidation?: unknown }
+    if (parsed.type === 'database-invalidation') invalidationsByChannel.get(channel)?.push(parsed.invalidation)
+  })
+  await subscriber.subscribe(...channels)
+  return invalidationsByChannel
+}
+
+it('publishes one write once to each scaling connection when two embedded workers use different connections', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const invalidations = await subscribeToScalingChannels(redis, ['alpha', 'beta'])
+  await startScoresWorker(db, redisPort, { scalingConnection: 'alpha' })
+  await startScoresWorker(db, redisPort, { scalingConnection: 'beta' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  const expected = { connectionName: 'main', dependencies: ['db:main:scores'] }
+  await expect.poll(() => invalidations.get('holo:broadcast:scaling:alpha:events')?.length).toBe(1)
+  await expect.poll(() => invalidations.get('holo:broadcast:scaling:beta:events')?.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations.get('holo:broadcast:scaling:alpha:events')).toEqual([expected])
+  expect(invalidations.get('holo:broadcast:scaling:beta:events')).toEqual([expected])
+}, 30_000)
+
+it('publishes one write once when two embedded workers register on the same scaling connection', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const invalidations = await subscribeToScalingChannels(redis, ['shared'])
+  await startScoresWorker(db, redisPort)
+  await startScoresWorker(db, redisPort)
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => invalidations.get('holo:broadcast:scaling:shared:events')?.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations.get('holo:broadcast:scaling:shared:events')).toHaveLength(1)
+}, 30_000)
+
+it('keeps publishing to the other scaling connection after the worker on one connection stops', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const invalidations = await subscribeToScalingChannels(redis, ['alpha', 'beta'])
+  const alpha = await startScoresWorker(db, redisPort, { scalingConnection: 'alpha' })
+  await startScoresWorker(db, redisPort, { scalingConnection: 'beta' })
+  await alpha.stop()
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => invalidations.get('holo:broadcast:scaling:beta:events')?.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(invalidations.get('holo:broadcast:scaling:alpha:events')).toEqual([])
+  expect(invalidations.get('holo:broadcast:scaling:beta:events')).toHaveLength(1)
+}, 30_000)
+

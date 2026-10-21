@@ -789,7 +789,7 @@ async function configureDatabaseInvalidationScaling(
     })
     unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
       await lease.hold(() => lease.value.publish(invalidation))
-    })
+    }, lease.value.eventChannel)
   }
 
   const previous = state.databaseInvalidationUnsubscribe

@@ -12,7 +12,7 @@ import {
   type DatabaseContext, type DatabaseLogger, type DatabaseDependencyInvalidationEvent,
 } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
-import type { DatabaseMutationEvent, RemoteDatabaseDependencyInvalidation } from '../src/cache'
+import { invalidateQueryCacheDependencies, type DatabaseMutationEvent, type RemoteDatabaseDependencyInvalidation } from '../src/cache'
 
 const users = defineTable('users', {
   id: column.id(), name: column.string(), status: column.string(), score: column.integer(),
@@ -256,7 +256,7 @@ describe('native database and cache integration', () => {
 
   it('publishes each committed invalidation as JSON without the local context id', async () => {
     const published: RemoteDatabaseDependencyInvalidation[] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) }, 'test-scope')
     onTestFinished(unsubscribe)
     await DB.transaction(async tx => {
       await tx.table(users).where('id', 1).update({ score: 11 })
@@ -269,9 +269,41 @@ describe('native database and cache integration', () => {
     expect(JSON.stringify(published[0])).not.toContain('contextId')
   })
 
+  it('does not publish an invalidation whose dependencies include no table keys', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) }, 'test-scope')
+    onTestFinished(unsubscribe)
+
+    await invalidateQueryCacheDependencies(db, ['custom:orders'])
+    await delay(20)
+
+    expect(published).toEqual([])
+  })
+
+  it('publishes an invalidation that includes a table key, with only the table keys', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) }, 'test-scope')
+    onTestFinished(unsubscribe)
+
+    await invalidateQueryCacheDependencies(db, ['custom:orders', 'db:main:users'])
+
+    await expect.poll(() => published.length).toBe(1)
+    expect(published[0]).toEqual({ connectionName: 'main', dependencies: ['db:main:users'] })
+  })
+
+  it('ignores a received remote invalidation that carries no table keys', async () => {
+    const received: string[][] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
+    onTestFinished(unsubscribe)
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ connectionName: 'main', dependencies: [] })
+
+    expect(received).toEqual([])
+  })
+
   it('dispatches received remote invalidations to local listeners without publishing them again', async () => {
     const published: RemoteDatabaseDependencyInvalidation[] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) }, 'test-scope')
     onTestFinished(unsubscribe)
     const received: string[][] = []
     queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
@@ -305,7 +337,7 @@ describe('native database and cache integration', () => {
     errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
     onTestFinished(() => { errorReportingInternals.configure(undefined) })
     const publisherError = new Error('broker unavailable')
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(() => { throw publisherError })
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(() => { throw publisherError }, 'test-scope')
     onTestFinished(unsubscribe)
 
     await DB.table(users).where('id', 1).update({ score: 12 })
