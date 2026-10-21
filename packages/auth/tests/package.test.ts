@@ -885,7 +885,7 @@ describe('@holo-js/auth package runtime', () => {
     const succeeded = results.filter(result => result.status === 'fulfilled')
     expect(succeeded).toHaveLength(1)
     expect(results.filter(result => result.status === 'rejected')).toEqual([
-      expect.objectContaining({ reason: expect.objectContaining({ code: expect.stringMatching(/^multi_factor_/) }) }),
+      expect.objectContaining({ reason: expect.objectContaining({ code: expect.stringMatching(/^multi_factor_(already_enabled|enrollment_missing)$/) }) }),
     ])
     const [winner] = succeeded
     expect(winner?.value.recovery.recoveryCodes).toHaveLength(8)
