@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { CapabilityError, column, createSchemaService, SchemaError, TransactionError } from '../src'
+import { CapabilityError, column, createSchemaService, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -242,12 +242,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { db, schema, table } = await openDatabase(driver)
       let releaseStray!: () => void
       const strayReleased = new Promise<void>(resolve => { releaseStray = resolve })
-      let stray!: Promise<unknown>
+      let strayOutcome!: Promise<unknown>
 
       await schema.withoutForeignKeyConstraints(async () => {
         await db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'first' })
-          stray = strayReleased.then(() => db.table(table).insert({ id: 2, name: 'stray' }))
+          strayOutcome = strayReleased
+            .then(() => db.table(table).insert({ id: 2, name: 'stray' }))
+            .then(() => 'ran', (error: unknown) => error)
         })
         await expect(db.transaction(async tx => {
           await tx.table(table).insert({ id: 3, name: 'second' })
@@ -255,7 +257,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
           await new Promise(resolve => { setTimeout(resolve, 20) })
           throw new Error('second failed')
         })).rejects.toThrow('second failed')
-        await expect(stray).rejects.toBeInstanceOf(TransactionError)
+        expect(await strayOutcome).toBeInstanceOf(TransactionError)
       })
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }])
@@ -274,18 +276,18 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
 
       await schema.withoutForeignKeyConstraints(async () => {
-        let stray!: Promise<unknown>
+        let strayOutcome!: Promise<unknown>
         await db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'first' })
           pauseNextQuery = true
-          stray = db.table(table).insert({ id: 2, name: 'stray' })
+          strayOutcome = db.table(table).insert({ id: 2, name: 'stray' }).then(() => 'ran', (error: unknown) => error)
         })
         await expect(db.transaction(async tx => {
           await tx.table(table).insert({ id: 3, name: 'second' })
           await new Promise(resolve => { setTimeout(resolve, 60) })
           throw new Error('second failed')
         })).rejects.toThrow('second failed')
-        await expect(stray).rejects.toBeInstanceOf(TransactionError)
+        expect(await strayOutcome).toBeInstanceOf(TransactionError)
       })
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }])
@@ -311,6 +313,55 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }, { id: 2 }])
     })
+
+    it('keeps a timed-out write counted until it reaches the connection, so a transaction cannot take it', async () => {
+      const delaySubmission = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property === 'execute') {
+            return async (...args: Parameters<DriverAdapter['execute']>) => {
+              await new Promise(resolve => { setTimeout(resolve, 30) })
+              return target.execute(...args)
+            }
+          }
+          return Reflect.get(target, property, target)
+        },
+      })
+      const { db, schema, table } = await openDatabase(driver, {
+        security: { allowUnsafeRawSql: true },
+        wrapAdapter: delaySubmission,
+      })
+      const placeholder = (index: number) => driver === 'postgres' ? `$${index}` : '?'
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        const slow = db.unsafeExecute(unsafeSql(
+          `insert into ${table.tableName} (id, name) values (${placeholder(1)}, ${placeholder(2)})`,
+          [2, 'slow'],
+        ), { timeoutMs: 5 })
+        await expect(slow).rejects.toThrow()
+        await db.transaction(async tx => {
+          await tx.table(table).insert({ id: 1, name: 'transaction' })
+          await new Promise(resolve => { setTimeout(resolve, 80) })
+          throw new Error('transaction failed')
+        }).catch(() => undefined)
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 2 }])
+    }, 5_000)
+
+    it('does not hang when a query logger starts a transaction while foreign-key checks are restored', async () => {
+      let loggedRestore = false
+      const { db, schema } = await openDatabase(driver, {
+        logger: {
+          onQuerySuccess: async entry => {
+            if (loggedRestore || entry.source !== 'schema:enableForeignKeys') return
+            loggedRestore = true
+            await db.transaction(async () => undefined)
+          },
+        },
+      })
+
+      await expect(schema.withoutForeignKeyConstraints(async () => undefined)).resolves.toBeUndefined()
+    }, 2_000)
 
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
@@ -435,14 +486,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         await schema.withoutForeignKeyConstraints(async () => {
           first = db.transaction(async tx => {
             await tx.table(table).insert({ id: 1, name: 'first' })
-          })
+          }).then(() => undefined, (error: unknown) => error)
           second = db.transaction(async tx => {
             await tx.table(table).insert({ id: 2, name: 'second' })
-          })
+          }).then(() => undefined, (error: unknown) => error)
         })
 
-        await expect(first).rejects.toThrow('must finish before the callback returns')
-        await expect(second).rejects.toThrow('must finish before the callback returns')
+        expect(String(await first)).toContain('must finish before the callback returns')
+        expect(String(await second)).toContain('must finish before the callback returns')
         expect((await db.table(table).select('id').orderBy('id').get())).toEqual([])
       })
 

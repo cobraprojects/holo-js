@@ -51,7 +51,7 @@ export function enterPinnedStatement(pinned: PinnedConnection): () => void {
   }
 }
 
-export async function serializeOnPinnedConnection<T>(
+async function serializeOnPinnedConnection<T>(
   pinned: PinnedConnection,
   callback: () => Promise<T>,
 ): Promise<T> {
@@ -67,6 +67,13 @@ export async function serializeOnPinnedConnection<T>(
   } finally {
     release()
   }
+}
+
+export function closePinnedConnection(pinned: PinnedConnection): Promise<void> {
+  return serializeOnPinnedConnection(pinned, async () => {
+    pinned.active = false
+    await waitForInFlightStatements(pinned)
+  })
 }
 
 export function runPinnedTransaction<T>(pinned: PinnedConnection, attempt: () => Promise<T>): Promise<T> {

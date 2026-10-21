@@ -1,4 +1,4 @@
-import { currentPinnedConnection, runPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { closePinnedConnection, currentPinnedConnection, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
@@ -214,13 +214,8 @@ export class SchemaService {
       await this.disableForeignKeyConstraints()
       return await callback()
     } finally {
-      await serializeOnPinnedConnection(pinned, async () => {
-        try {
-          await this.restoreForeignKeyConstraints()
-        } finally {
-          pinned.active = false
-        }
-      })
+      await closePinnedConnection(pinned)
+      await this.restoreForeignKeyConstraints()
     }
   }
 

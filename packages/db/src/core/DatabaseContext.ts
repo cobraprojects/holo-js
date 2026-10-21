@@ -780,14 +780,18 @@ export class DatabaseContext {
     const start = Date.now()
     const pinned = currentPinnedConnection(this._adapter)
     if (pinned) assertPinnedStatementAllowed(pinned)
-    const execute = async () => {
+    const submit = (): Promise<TResult> => {
       const leave = pinned ? enterPinnedStatement(pinned) : undefined
+      let pending: Promise<TResult>
       try {
-        return await this._guardOperation(runner, options, kind === 'query' ? 'query' : 'execute')
-      } finally {
+        pending = runner()
+      } catch (error) {
         leave?.()
+        throw error
       }
+      return leave ? pending.finally(leave) : pending
     }
+    const execute = () => this._guardOperation(submit, options, kind === 'query' ? 'query' : 'execute')
     const scheduled = await this._runtime.scheduler.schedule({
       transactional: this._scope.kind !== 'root' && this._adapter.supportsConcurrentTransactionScopes !== true,
       preferWorkerThreads: this._concurrency.workerThreads,
