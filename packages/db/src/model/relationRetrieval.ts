@@ -1,6 +1,6 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
-import { valuesAreEqual } from './entityRuntime'
+import { canonicalStoredKey } from './entityRuntime'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { SelectQueryPlan } from '../query/ast'
@@ -42,13 +42,12 @@ export function singleStatementRelationKeys(values: readonly unknown[]): unknown
 }
 
 export function distinctStoredKeys(values: readonly unknown[]): unknown[] {
+  const seen = new Set<unknown>()
   const distinct: unknown[] = []
-  const seenPrimitives = new Set<unknown>()
   for (const value of values) {
-    if (value !== null && typeof value === 'object') {
-      if (!distinct.some(existing => valuesAreEqual(existing, value))) distinct.push(value)
-    } else if (!seenPrimitives.has(value)) {
-      seenPrimitives.add(value)
+    const identity = canonicalStoredKey(value)
+    if (!seen.has(identity)) {
+      seen.add(identity)
       distinct.push(value)
     }
   }

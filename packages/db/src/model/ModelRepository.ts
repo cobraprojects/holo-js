@@ -26,7 +26,7 @@ import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
-import { ModelQueryBuilder, whereIntegerKeysIn } from './ModelQueryBuilder'
+import { ModelQueryBuilder, loadRelationsOn, whereIntegerKeysIn, withoutRelationLoads } from './ModelQueryBuilder'
 import { ModelEventDispatcher } from './ModelEventDispatcher'
 import { ModelValueTransformer } from './ModelValueTransformer'
 import {
@@ -283,16 +283,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         : query.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
     }
 
-    const storedRows = await loadRelationKeyChunks(keys, false, chunk => this.query()
+    const scoped = this.query()
+    const storedRows = await loadRelationKeyChunks(keys, false, chunk => scoped
       .getTableQueryBuilder()
       .select(primaryKey as never)
       .where(primaryKey, 'in', chunk)
       .get<Record<string, unknown>>())
     const storedKeys = distinctStoredKeys(storedRows.map(row => row[primaryKey]))
-    const entities = await loadRelationKeyChunks(storedKeys, false, chunk => this.query()
+    const hydration = scoped[withoutRelationLoads]()
+    const entities = await loadRelationKeyChunks(storedKeys, false, chunk => hydration
       .where(primaryKey, 'in', chunk)
       .get())
     this.attachCollection(entities)
+    await scoped[loadRelationsOn](entities)
     return this.createCollection(entities)
   }
 

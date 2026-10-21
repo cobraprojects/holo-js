@@ -17,6 +17,7 @@ import {
 
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
+import { canonicalStoredKey } from '../src/model/entityRuntime'
 import { createTestTable } from './support/schema'
 
 function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
@@ -270,6 +271,52 @@ describe('bounded relation loading', () => {
 
     expect(found).toHaveLength(256)
     expect(found.filter(entity => Buffer.from(entity.get('key') as Uint8Array).equals(Buffer.from('abc')))).toHaveLength(1)
+  })
+
+  it('applies a global scope eager-load limit once across findMany key chunks', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: { posts: hasMany(() => Post, 'userId') },
+      globalScopes: { firstFivePosts: query => query.with('posts', relation => relation.orderBy('id').limit(5)) },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(postIdsAcross(found)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('loads default with relations on every row of a findMany over more than 256 keys', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      with: ['posts'],
+      relations: { posts: hasMany(() => Post, 'userId') },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found.every(user => user.hasRelation('posts'))).toBe(true)
+    expect(postIdsAcross(found)).toHaveLength(300)
+  })
+
+  it('treats equal stored binary values as one key and keeps numbers and strings distinct', () => {
+    expect(canonicalStoredKey(Buffer.from('ab'))).toBe(canonicalStoredKey(Uint8Array.from([97, 98])))
+    expect(canonicalStoredKey(Buffer.from('ab'))).not.toBe(canonicalStoredKey(Buffer.from('ac')))
+    expect(canonicalStoredKey(1)).not.toBe(canonicalStoredKey('1'))
+    expect(canonicalStoredKey('binary:6162')).not.toBe(canonicalStoredKey(Buffer.from('ab')))
   })
 
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
