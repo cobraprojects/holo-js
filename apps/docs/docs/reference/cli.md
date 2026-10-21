@@ -136,6 +136,8 @@ If you don't pass `--port` (or `-p`), Holo uses the `PORT` environment variable 
 npx holo dev --port 4000
 ```
 
+If the port is already in use, `holo dev` exits with a non-zero status and names the port. If another `holo dev` for this project is already running, the message gives its PID. `holo dev` never stops a process for you, so stop the other server yourself and run it again.
+
 Your scaffolded `package.json` already has `"dev": "holo dev"`, so `npm run dev` does the same thing.
 
 ### build

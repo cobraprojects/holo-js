@@ -33,6 +33,11 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
       createError: createNuxtAuthorizationError,
     },
   })
+  let projectPending = true
+  const markProjectSettled = () => {
+    projectPending = false
+  }
+  const projectSettled = project.then(markProjectSettled, markProjectSettled)
 
   const onRequest = nitroApp.h3App.options.onRequest
   nitroApp.h3App.options.onRequest = async (event) => {
@@ -40,7 +45,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     return await onRequest?.(event)
   }
 
-  nitroApp.hooks.hook('close', async () => {
+  const shutdownProject = async () => {
     let report: ReturnType<typeof captureErrorReporter> | undefined
     try {
       const { runtime } = await project
@@ -49,5 +54,13 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     } catch (error) {
       (report ?? captureErrorReporter())(error, { capability: 'nuxt', operation: 'shutdown' })
     }
+  }
+
+  nitroApp.hooks.hook('close', async () => {
+    if (projectPending) {
+      void projectSettled.then(shutdownProject)
+      return
+    }
+    await shutdownProject()
   })
 })

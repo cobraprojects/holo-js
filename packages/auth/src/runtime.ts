@@ -3216,7 +3216,7 @@ export async function providerForGuard(guardName: string): Promise<string | null
 
   const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
 
-  return resolveSessionPayloadProvider(payload!)
+  return payload ? resolveSessionPayloadProvider(payload) : guard.provider
 }
 
 export async function hashPassword(password: string): Promise<string> {

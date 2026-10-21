@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readdir, realpath, rename, rm, stat, symlink, writeFile
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runCacheTableCommand } from '../src/cache-migrations'
 import { runQueueFailedTableCommand, runQueueTableCommand } from '../src/queue-migrations'
 import { createMediaTableMigration, runMediaTableCommand } from '../src/media-migrations'
@@ -50,10 +50,9 @@ os.execv(sys.argv[1], sys.argv[1:])
   child.stderr.on('data', chunk => { stderr += String(chunk) })
   try {
     await once(child, 'close')
-    const deadline = Date.now() + 5000
-    while (expectedFiles.some(expected => ![...filenames].some(filename => filename.includes(expected))) && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
+    await vi.waitFor(() => {
+      expect(expectedFiles.every(expected => [...filenames].some(filename => filename.includes(expected)))).toBe(true)
+    }, { timeout: 5000, interval: 10 }).catch(() => undefined)
     return { status: child.exitCode, stdout, stderr, filenames: [...filenames] }
   } finally {
     watcher.close()

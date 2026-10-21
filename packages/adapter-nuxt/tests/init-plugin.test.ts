@@ -105,8 +105,7 @@ describe('nuxt init plugin shutdown', () => {
       runtime: { shutdown: vi.fn().mockRejectedValue(failure) },
     })
     await closing
-
-    expect(reports).toEqual([failure])
+    await vi.waitFor(() => expect(reports).toEqual([failure]))
   })
 
   it('stays silent when the runtime shuts down cleanly', async () => {

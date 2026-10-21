@@ -65,6 +65,7 @@ type RuntimeState = {
   loadDbModule?: () => Promise<DbModule | null>
   loadNodemailerModule?: () => Promise<NodemailerModule>
   loadStorageModule?: () => Promise<StorageModule>
+  smtpTransports?: Map<string, SmtpTransportEntry>
 }
 
 type RuntimeBindingsWithProjectRoot = MailRuntimeBindings & {
@@ -189,6 +190,13 @@ type NodemailerSendResult = {
 
 type NodemailerTransport = {
   sendMail(message: NodemailerMailMessage): Promise<NodemailerSendResult>
+  close(): void
+}
+
+type SmtpTransportEntry = {
+  readonly transport: NodemailerTransport
+  inFlight: number
+  retired: boolean
 }
 
 type NodemailerModule = {
@@ -834,6 +842,44 @@ async function createSmtpMessage(
   }
 }
 
+const SMTP_POOL_IDLE_TIMEOUT_MS = 5000
+
+function retireSmtpTransports(): void {
+  const state = getRuntimeState()
+  const entries = [...state.smtpTransports?.values() ?? []]
+  state.smtpTransports = undefined
+  for (const entry of entries) {
+    entry.retired = true
+    if (entry.inFlight === 0) entry.transport.close()
+  }
+}
+
+function getOrCreateSmtpTransport(
+  mailer: string,
+  createTransport: () => NodemailerTransport,
+): SmtpTransportEntry {
+  const state = getRuntimeState()
+  state.smtpTransports ??= new Map()
+  const existing = state.smtpTransports.get(mailer)
+  if (existing) return existing
+  const entry = { transport: createTransport(), inFlight: 0, retired: false }
+  state.smtpTransports.set(mailer, entry)
+  return entry
+}
+
+async function sendThroughSmtpTransport(
+  entry: SmtpTransportEntry,
+  createMessage: () => Promise<NodemailerMailMessage>,
+): Promise<NodemailerSendResult> {
+  entry.inFlight++
+  try {
+    return await entry.transport.sendMail(await createMessage())
+  } finally {
+    entry.inFlight--
+    if (entry.retired && entry.inFlight === 0) entry.transport.close()
+  }
+}
+
 async function sendViaSmtp(
   mail: Readonly<ResolvedMail>,
   context: Readonly<MailDriverExecutionContext>,
@@ -847,7 +893,10 @@ async function sendViaSmtp(
     )
   }
 
-  const transporter = nodemailer.createTransport({
+  const entry = getOrCreateSmtpTransport(context.mailer, () => nodemailer.createTransport({
+    pool: true,
+    maxConnections: 1,
+    idleTimeout: SMTP_POOL_IDLE_TIMEOUT_MS,
     host: mailerConfig.host,
     port: mailerConfig.port,
     secure: mailerConfig.secure,
@@ -859,9 +908,8 @@ async function sendViaSmtp(
           },
         }
       : {}),
-  })
-  const smtpMessage = await createSmtpMessage(mail, context)
-  const result = await transporter.sendMail(smtpMessage)
+  }))
+  const result = await sendThroughSmtpTransport(entry, () => createSmtpMessage(mail, context))
 
   return createBaseSendResult(context, {
     ...(typeof result.messageId === 'string' ? { providerMessageId: result.messageId } : {}),
@@ -1591,6 +1639,7 @@ function resolveMailInput(
 }
 
 export function configureMailRuntime(bindings?: RuntimeBindingsWithProjectRoot): void {
+  retireSmtpTransports()
   const state = getRuntimeState()
   if (!bindings) {
     state.bindings = undefined
@@ -1615,6 +1664,7 @@ export function getMailRuntimeBindings(): MailRuntimeBindings {
 }
 
 export function resetMailRuntime(): void {
+  retireSmtpTransports()
   const state = getRuntimeState()
   state.bindings = undefined
   state.projectRoot = undefined

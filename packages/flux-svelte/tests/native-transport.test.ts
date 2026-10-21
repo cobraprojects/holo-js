@@ -108,3 +108,14 @@ it('updates its native presence store after real joins and leaves and resumes af
   presence.leaveChannel()
   await expect.poll(() => transport.subscriptions()).toBe(0)
 })
+
+it('calls onError when the real worker refuses a private channel the helper subscribes to', async () => {
+  const transport = await startNativeTransport({ authorizeOrders: () => false })
+  const errors: string[] = []
+  const controls = useFlux('orders.1', 'order.shipped', () => {}, { client: transport.client, onError: error => errors.push(error.message) })
+  await transport.client.connect()
+  await expect.poll(() => errors).toEqual([
+    '[@holo-js/flux] Subscription to orders.1 was refused: Unable to authorize the channel subscription.',
+  ])
+  controls.leaveChannel()
+})

@@ -177,6 +177,10 @@ Local disks also change to exact names; see [Local file names](#local-file-names
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
 
+### S3 uploads now carry a Content-Type
+
+S3 uploads now carry a `Content-Type`, taken from the file's first bytes or its extension. Before, S3 stored every object as `binary/octet-stream`, so browsers downloaded it. New uploads of browser-renderable types, such as images, PDF, text, and JSON, now display inline when a public bucket or CDN serves them. HTML, SVG, and XML are still stored as `application/octet-stream`, so they keep downloading. Existing objects are unchanged. See [Content types](/storage/s3#content-types).
+
 ### Local file names
 
 Local disks now store files under their exact names, like Laravel. Before 0.4.0, Holo stored `reports/Q1 café.pdf` as `reports/Q1%20caf%C3%A9.pdf` on disk. After upgrading, Holo looks for `reports/Q1 café.pdf`, and `path()` returns that location.
@@ -435,6 +439,15 @@ The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `tru
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
 
+### Redis sessions use one key per session
+
+Each Redis session is its own key: the store's `prefix`, then `holo:session:`, then the session ID. Sessions spread across a Redis Cluster, and they never sit under a bare session ID.
+
+- **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
+- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
+- **Set a `prefix` to share a Redis database.** Holo's `holo:session:` namespace keeps session keys apart from other data, and a `prefix` separates apps that use the same database.
+- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry. Under heavy concurrent writes to the same session, rotation falls back to reading the latest state, copying it, and deleting the old key without a check. A write or flash value that lands between that final read and the delete can be lost or kept on both IDs.
+
 ### Verification resend requires a signed-in user
 
 `resendEmailVerification()` and `sendEmailVerification()` no longer take an email address, and `verification.resend()` no longer accepts `email`. A new link always goes to the signed-in user, and without one the call throws `email_verification_user_missing` with status 401. The unauthenticated resend is gone, so a guest can no longer ask for a link by typing an address.
@@ -517,6 +530,12 @@ Check three behaviors when you upgrade:
 
 A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
 
+### Query writes set updated_at
+
+On a model with timestamps, these query writes now set `updated_at` to the current time unless you pass your own value: `update()`, `updateJson()`, `increment()`, and `decrement()`. Query `upsert()` sets `created_at` and `updated_at` on new rows, and sets `updated_at` on conflict when you list columns to update. On a soft-delete model, query and instance `delete()` and `restore()` set `updated_at` together with `deleted_at`. Before, all of these left `updated_at` unchanged. Instance `restore()` also saves the model's unsaved changes, as Laravel's restore does, so a changed attribute or primary key is written when you restore.
+
+Check code that reads `updated_at` to find changed rows, such as a "recently updated" list, a cache key, or a sync cursor. Rows you write from now on change `updated_at`; existing rows keep their stored values. `forceDelete()` and the table builder (`DB.table()`) don't change. Use the table builder for a write that must leave `updated_at` alone. See [Query updates](/orm/writes#update-many-rows).
+
 ### Password hashing cost
 
 New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
@@ -524,6 +543,10 @@ New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r
 A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
 
 No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
+
+### Dev server exits non-zero on a port conflict
+
+`holo dev` now exits with a non-zero status when another `holo dev` for the same project is already running. Before, it exited 0 and left the first server running. A port already in use by another process has always exited non-zero, and it still does, now with the port named. `holo dev` never stops a process for you. Update any CI script or wrapper that treated a second `holo dev` as success. To replace a running server, stop it first, using the PID in the message.
 
 ## Earlier 0.3.x releases
 

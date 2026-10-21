@@ -80,6 +80,14 @@ describe('@holo-js/flux typing', () => {
     subscription.listenForWhisper('typing.start', (payload) => {
       expectTypeOf(payload).toEqualTypeOf<BroadcastJsonObject>()
     })
+    subscription.error((error) => {
+      expectTypeOf(error).toEqualTypeOf<Error>()
+    })
+    presenceSubscription.error((error) => {
+      expectTypeOf(error).toEqualTypeOf<Error>()
+    }).here((members) => {
+      expectTypeOf(members).not.toBeAny()
+    })
     await subscription.whisper('typing.start', {
       editing: true,
     })

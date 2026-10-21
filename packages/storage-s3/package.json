@@ -29,6 +29,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
+  "dependencies": {
+    "@holo-js/kernel": "catalog:"
+  },
   "peerDependencies": {
     "@holo-js/storage": "catalog:"
   },
