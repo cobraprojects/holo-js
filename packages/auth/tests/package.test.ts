@@ -2202,6 +2202,34 @@ describe('@holo-js/auth package runtime', () => {
     expect((await runtime.sessionStore.read(established.sessionId))?.data.auth).toBeUndefined()
   })
 
+  it('restores the actor on the next request when the impersonated target was deleted', async () => {
+    const runtime = await configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await loginUsing(actor)
+    const established = await impersonate(target)
+
+    await runtime.usersProvider.delete!(target.id)
+
+    const nextRequest = authRuntimeInternals.createMemoryAuthContext()
+    nextRequest.setSessionId('web', established.sessionId)
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: nextRequest })
+
+    await expect(user()).resolves.toMatchObject({ id: actor.id, email: actor.email })
+    await expect(check()).resolves.toBe(true)
+    await expect(impersonation()).resolves.toBeNull()
+  })
+
   it('refuses to impersonate with remember and changes nothing', async () => {
     const runtime = await configureRuntime()
     const actor = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
