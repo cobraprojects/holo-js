@@ -43,13 +43,15 @@ it.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('persists concurrent new M
       await control.queryCompiled({ sql: 'SELECT GET_LOCK(?, 10)', bindings: [name], source: 'sessions' })
       const writes = Promise.allSettled(records.map(record => store.write(record)))
       try {
-        await vi.waitFor(async () => {
+        await vi.waitUntil(async () => {
           const { rows } = await control.queryCompiled<{ arrived: number }>({
             sql: 'SELECT IS_USED_LOCK(?) IS NOT NULL AND IS_USED_LOCK(?) IS NOT NULL AS arrived',
             bindings: [`${name}a`, `${name}b`], source: 'sessions',
           })
-          expect(rows[0]?.arrived, 'Both native session inserts must reach the database barrier').toBe(1)
-        }, { timeout: 5000, interval: 10 })
+          return rows[0]?.arrived === 1
+        }, { timeout: 5000, interval: 10 }).catch(error => {
+          throw new Error('Both native session inserts must reach the database barrier', { cause: error })
+        })
       } finally {
         await control.queryCompiled({ sql: 'SELECT RELEASE_LOCK(?)', bindings: [name], source: 'sessions' })
         await writes

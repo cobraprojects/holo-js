@@ -76,10 +76,12 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
-  await vi.waitFor(async () => {
-    if (server.exitCode !== null) throw new Error(output)
-    expect(await fetch(baseUrl).then(response => response.ok).catch(() => false), `Next did not become ready: ${output}`).toBe(true)
-  }, { timeout: 60_000, interval: 100 })
+  await vi.waitUntil(async () => {
+    if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
+    return fetch(baseUrl).then(response => response.ok).catch(() => false)
+  }, { timeout: 60_000, interval: 100 }).catch(error => {
+    throw new Error(`Next did not become ready: ${output}`, { cause: error })
+  })
   const first = await fetch(`${baseUrl}/api/token`)
   expect(first.status, output).toBe(200)
   const payload: unknown = await first.json()

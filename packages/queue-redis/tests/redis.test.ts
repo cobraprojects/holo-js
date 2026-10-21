@@ -74,21 +74,16 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
     const envelope = { ...job(), availableAt: Date.now() + 300 }
     await driver.dispatch(envelope)
     expect(await driver.reserve({})).toBeNull()
-    const first = await vi.waitFor(async () => {
-      const reserved = await driver.reserve({})
-      if (!reserved) throw new Error('Expected a delayed reservation')
-      return reserved
-    }, { timeout: 5_000, interval: 50 })
+    const first = await vi.waitUntil(() => driver.reserve({}), { timeout: 5_000, interval: 50 }).catch(error => {
+      throw new Error('Expected a delayed reservation', { cause: error })
+    })
     await driver.release(first, { delaySeconds: 0.3 })
     expect(await driver.reserve({})).toBeNull()
-    const retry = await vi.waitFor(async () => {
-      const reserved = await driver.reserve({})
-      if (!reserved) throw new Error('Expected a retry reservation')
-      return reserved
-    }, { timeout: 5_000, interval: 50 })
+    const retry = await vi.waitUntil(() => driver.reserve({}), { timeout: 5_000, interval: 50 }).catch(error => {
+      throw new Error('Expected a retry reservation', { cause: error })
+    })
     expect(retry?.envelope.id).toBe(envelope.id)
     expect(retry?.envelope.attempts).toBe(1)
-    if (!retry) throw new Error('Expected a retry reservation')
     await driver.delete(retry)
     expect(await driver.reserve({})).toBeNull()
   })
