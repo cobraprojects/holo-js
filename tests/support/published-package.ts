@@ -7,6 +7,7 @@ type PackageManifest = {
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   name?: string
 }
 
@@ -28,7 +29,7 @@ export function stageWorkspacePackagesSync(
       nodeModulesRoot: join(directory, 'node_modules'),
       packageJsonPath: join(sourceDirectory, 'package.json'),
     })
-    const dependencies = { ...manifest.dependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies }
+    const dependencies = { ...manifest.dependencies, ...manifest.optionalDependencies, ...requiredPeerDependencies(manifest) }
     for (const dependency of Object.keys(dependencies)) {
       const dependencyTarget = targets.get(dependency)
       if (dependencyTarget) symlinkPackageDependencySync(join(directory, 'node_modules'), dependency, dependencyTarget)
@@ -45,6 +46,14 @@ function unique(values: readonly string[]): string[] {
 
 function isWorkspaceDependency(dependencyName: string): boolean {
   return dependencyName.startsWith('@holo-js/')
+}
+
+// Optional peers stay unlinked so that tests can prove they are absent; a test that needs one links it explicitly.
+function requiredPeerDependencies(manifest: PackageManifest): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(manifest.peerDependencies ?? {})
+      .filter(([dependencyName]) => manifest.peerDependenciesMeta?.[dependencyName]?.optional !== true),
+  )
 }
 
 function workspacePackageDirectories(): Map<string, string> {
@@ -69,7 +78,7 @@ function readWorkspaceDependencies(packageJsonPath: string): Array<{ name: strin
   const found = new Map<string, string>()
   const visit = (manifestPath: string): void => {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageManifest
-    const declared = { ...manifest.dependencies, ...manifest.peerDependencies }
+    const declared = { ...manifest.dependencies, ...requiredPeerDependencies(manifest) }
     for (const dependencyName of Object.keys(declared).filter(isWorkspaceDependency)) {
       if (found.has(dependencyName)) continue
       const directory = directories.get(dependencyName)
