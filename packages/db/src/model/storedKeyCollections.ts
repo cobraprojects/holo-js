@@ -1,5 +1,9 @@
 import { canonicalStoredKey } from './entityRuntime'
 
+function dictionaryKey(value: unknown): unknown {
+  return value instanceof Date ? value : canonicalStoredKey(value)
+}
+
 export class StoredKeyMap<TValue> {
   readonly #entries = new Map<unknown, [unknown, TValue]>()
 
@@ -12,15 +16,15 @@ export class StoredKeyMap<TValue> {
   }
 
   get(key: unknown): TValue | undefined {
-    return this.#entries.get(canonicalStoredKey(key))?.[1]
+    return this.#entries.get(dictionaryKey(key))?.[1]
   }
 
   has(key: unknown): boolean {
-    return this.#entries.has(canonicalStoredKey(key))
+    return this.#entries.has(dictionaryKey(key))
   }
 
   set(key: unknown, value: TValue): this {
-    this.#entries.set(canonicalStoredKey(key), [key, value])
+    this.#entries.set(dictionaryKey(key), [key, value])
     return this
   }
 
@@ -49,12 +53,12 @@ export class StoredKeySet {
   }
 
   add(value: unknown): this {
-    this.#keys.set(canonicalStoredKey(value), value)
+    this.#keys.set(dictionaryKey(value), value)
     return this
   }
 
   has(value: unknown): boolean {
-    return this.#keys.has(canonicalStoredKey(value))
+    return this.#keys.has(dictionaryKey(value))
   }
 
   *values(): IterableIterator<unknown> {

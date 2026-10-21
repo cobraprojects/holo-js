@@ -271,7 +271,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable>> {
     const primaryKey = this.definition.primaryKey
-    const keys = distinctStoredKeys(values)
+    const keys = [...new Set(values)]
     if (keys.length === 0) {
       return this.createCollection([])
     }

@@ -18,6 +18,7 @@ import {
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
 import { canonicalStoredKey } from '../src/model/entityRuntime'
+import { StoredKeyMap } from '../src/model/storedKeyCollections'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { queryCacheInternals } from '../src'
 import { createTestTable } from './support/schema'
@@ -326,6 +327,14 @@ describe('bounded relation loading', () => {
     const circular: Record<string, unknown> = {}
     circular.self = circular
     expect(canonicalStoredKey(circular)).toBe(circular)
+  })
+
+  it('matches relation dictionary Date keys by instance so millisecond-truncated timestamps never attach unrelated parents', () => {
+    const parents = new StoredKeyMap<string>([[new Date(1000), 'first']])
+    expect(parents.get(new Date(1000))).toBeUndefined()
+    const same = new Date(1000)
+    parents.set(same, 'second')
+    expect(parents.get(same)).toBe('second')
   })
 
   it('returns one row per stored JSON primary key on SQLite when equal object keys fall into different findMany chunks', async () => {

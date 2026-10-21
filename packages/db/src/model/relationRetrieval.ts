@@ -66,7 +66,7 @@ function padRelationKeys(keys: readonly unknown[]): unknown[] {
 }
 
 export function singleStatementRelationKeys(values: readonly unknown[]): unknown[] {
-  const keys = distinctStoredKeys(values)
+  const keys = [...new Set(values)]
   return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
 }
 
