@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +34,12 @@ function record(id: string, expiresAt: Date, data: Record<string, unknown> = { u
   return { id, store: 'file', data, createdAt: now, lastActivityAt: now, expiresAt }
 }
 
+async function clearReleaseTombstones(root: string): Promise<void> {
+  for (const name of await readdir(root)) {
+    if (name.endsWith('.released')) await rm(join(root, name), { force: true })
+  }
+}
+
 function sweepable(store: SessionStore): (now: Date) => Promise<number> {
   if (!store.sweepExpired) throw new Error('File session stores must sweep expired records.')
   return store.sweepExpired.bind(store)
@@ -49,6 +55,7 @@ describe('file session garbage collection', () => {
         return store.write(live)
       }))
     }
+    await clearReleaseTombstones(root)
     await expect(sweepable(store)(new Date())).resolves.toBe(0)
     for (let batch = 0; batch < 21; batch += 1) {
       await Promise.all(Array.from({ length: 50 }, (_, index) => {
@@ -56,6 +63,7 @@ describe('file session garbage collection', () => {
       }))
     }
 
+    await clearReleaseTombstones(root)
     await expect(sweepable(store)(new Date())).resolves.toBe(50)
     await expect(sweepable(store)(new Date())).resolves.toBe(1_000)
     await expect(sweepable(store)(new Date())).resolves.toBe(0)
@@ -155,5 +163,15 @@ describe('file session garbage collection', () => {
 
     await expect(store.read(expired.id)).resolves.toBeNull()
     await expect(store.read(live.id)).resolves.toMatchObject({ id: live.id })
+  })
+
+  it('removes release tombstones that a background unlink gave up on', async () => {
+    const root = await createRoot()
+    const store = createFileSessionStore(root)
+    await writeFile(join(root, `${encodeURIComponent(randomUUID())}.json.lock.${randomUUID()}.released`), '')
+
+    await sweepable(store)(new Date())
+
+    await expect(readdir(root)).resolves.not.toContainEqual(expect.stringMatching(/\.released$/))
   })
 })

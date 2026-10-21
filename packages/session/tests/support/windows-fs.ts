@@ -2,10 +2,12 @@ import type * as FsPromises from 'node:fs/promises'
 import { createWindowsFsModel } from './windows-fs-model.mjs'
 
 export type WindowsFsState = {
+  readonly blockedRenamePrefixes: Set<string>
   readonly blockedRenameSources: Set<string>
   readonly blockedUnlinkPrefixes: Set<string>
   readonly blockedWritePrefixes: Set<string>
   readonly ioErrorOpenPrefixes: Set<string>
+  readonly ioErrorRenamePrefixes: Set<string>
   readonly ioErrorUnlinkPrefixes: Set<string>
   readonly renameAttempts: Map<string, number>
   readonly pausedRenameSources?: Map<string, Promise<void>>
@@ -45,7 +47,8 @@ export function windowsFsOverrides(actual: typeof FsPromises, state: WindowsFsSt
       const sourcePath = String(source)
       await state.pausedRenameSources?.get(sourcePath)
       state.renameAttempts.set(sourcePath, (state.renameAttempts.get(sourcePath) ?? 0) + 1)
-      if (state.blockedRenameSources.has(sourcePath)) throw permissionDenied('rename')
+      if (startsWithAny(sourcePath, state.ioErrorRenamePrefixes)) throw ioError('rename')
+      if (state.blockedRenameSources.has(sourcePath) || startsWithAny(sourcePath, state.blockedRenamePrefixes)) throw permissionDenied('rename')
       return await model.rename(source, target)
     },
   }
