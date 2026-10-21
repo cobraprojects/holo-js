@@ -172,8 +172,8 @@ type MediaEnabledResult<
   ? Promise<MediaEnabledResult<TResult, TCollectionName, TConversionName>>
   : TValue extends AsyncGenerator<infer TYield, infer TReturn, infer TNext>
     ? AsyncGenerator<MediaEnabledResult<TYield, TCollectionName, TConversionName>, TReturn, TNext>
-    : TValue extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
-      ? MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+    : TValue extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
+      ? MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
       : TValue extends ModelCollection<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TItem>
         ? TItem extends Entity<TTable, TRelations>
           ? ModelCollection<TTable, TRelations, MediaEnabledEntityResult<TItem, TCollectionName, TConversionName>>
@@ -217,12 +217,12 @@ type MediaEnabledQueryBuilderWith<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
   ? {
       <TPaths extends readonly MediaRelationPath<TRelations>[]>(
         ...relations: TPaths
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>, TScopes>,
         TCollectionName,
         TConversionName
       >
@@ -230,17 +230,17 @@ type MediaEnabledQueryBuilderWith<
         relation: TPath,
         constraint: RelationConstraintFor<TRelations, TPath>
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes>,
         TCollectionName,
         TConversionName
       >
       (
         relations: RelationConstraintMap<TRelations>
-      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
       <TPaths extends readonly MediaRelationPath<TRelations>[]>(
         relations: TPaths
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>, TScopes>,
         TCollectionName,
         TConversionName
       >
@@ -253,10 +253,10 @@ type MediaEnabledRelationAggregate<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
   ? {
-      (first: ModelRelationName<TRelations>, ...rest: readonly ModelRelationName<TRelations>[]): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
-      <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      (first: ModelRelationName<TRelations>, ...rest: readonly ModelRelationName<TRelations>[]): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
+      <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
     }
   : never
 
@@ -264,18 +264,18 @@ type MediaEnabledRelationColumnAggregate<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
   ? {
       <TRelationName extends ModelRelationName<TRelations>>(
         first: TRelationName,
         column: RelatedColumnNameForRelationPath<TRelations, TRelationName>,
         ...rest: readonly ModelRelationName<TRelations>[]
-      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
       <TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(
         first: TConstraints,
         column: RelatedColumnNameForRelationPath<TRelations, ModelRelationName<TRelations>>,
         ...rest: readonly ModelRelationName<TRelations>[]
-      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
     }
   : never
 
@@ -283,23 +283,23 @@ type MediaEnabledRelationFilter<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
   ? <TPath extends MediaRelationPath<TRelations>>(
       relation: TPath,
       constraint?: RelationConstraintFor<TRelations, TPath>,
-    ) => MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+    ) => MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
   : never
 
 type MediaEnabledWithWhereHas<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
   ? <TPath extends MediaRelationPath<TRelations>>(
       relation: TPath,
       constraint?: RelationConstraintFor<TRelations, TPath>,
     ) => MediaEnabledQueryBuilder<
-      ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>,
+      ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes>,
       TCollectionName,
       TConversionName
     >
