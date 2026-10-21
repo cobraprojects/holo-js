@@ -558,6 +558,49 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(guardTimers.size).toBe(0)
     }, 5_000)
 
+    it('rejects a query issued from a rollback hook after the rollback failed', async () => {
+      let failNextRollback = true
+      const hookOutcomes: unknown[] = []
+      const failFirstRollback = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
+        get(target, property) {
+          if (property === 'rollback') {
+            return async (...args: Parameters<DriverAdapter['rollback']>) => {
+              if (failNextRollback) {
+                failNextRollback = false
+                throw new Error('rollback failed')
+              }
+              return target.rollback(...args)
+            }
+          }
+          return Reflect.get(target, property, target)
+        },
+      })
+      const { db, schema, table, adapter } = await openDatabase(driver, {
+        wrapAdapter: failFirstRollback,
+        logger: {
+          onTransactionRollback: async () => {
+            await db.table(table).insert({ id: 2, name: 'from hook' }).then(() => { hookOutcomes.push('ran') }, (error: unknown) => {
+              hookOutcomes.push(error)
+            })
+          },
+        },
+      })
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        try {
+          await expect(db.transaction(async tx => {
+            await tx.table(table).insert({ id: 1, name: 'failed' })
+            throw new Error('callback failed')
+          })).rejects.toThrow()
+          expect(hookOutcomes[0]).toBeInstanceOf(TransactionError)
+        } finally {
+          await adapter.rollback().catch(() => undefined)
+        }
+      })
+
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
+    }, 5_000)
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)

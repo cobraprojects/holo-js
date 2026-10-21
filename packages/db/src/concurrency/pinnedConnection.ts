@@ -43,6 +43,7 @@ export function isPinnedRestoreStatement(options: DatabaseOperationOptions | und
 
 export function assertPinnedStatementAllowed(pinned: PinnedConnection, restore: boolean): void {
   if (restore) return
+  if (pinned.transaction?.stuck) throw transactionStuckError()
   if (pinned.closed) {
     throw new TransactionError('A query ran after the callback of withoutForeignKeyConstraints() returned, so it could run with foreign-key checks off. Await every query before the callback returns.')
   }
@@ -70,7 +71,7 @@ function transactionAfterCallbackError(): TransactionError {
 }
 
 function transactionStuckError(): TransactionError {
-  return new TransactionError('A transaction on the connection held by withoutForeignKeyConstraints() could not be rolled back, so no further transactions run on that connection.')
+  return new TransactionError('A transaction on the connection held by withoutForeignKeyConstraints() could not be rolled back, so no queries or further transactions run on that connection.')
 }
 
 async function serializeOnPinnedConnection<T>(
