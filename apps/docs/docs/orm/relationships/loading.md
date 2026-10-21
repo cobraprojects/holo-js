@@ -66,6 +66,8 @@ const members = await User.with({
 }).get()
 ```
 
+A callback on a nested path applies only to the relation it names. `with('posts.comments', query => ...)` filters `comments` and loads `posts` unconstrained.
+
 ::: warning Return the query
 Query builders are immutable, so the callback must return the builder: `query => query.where(...)`. A block body like `query => { query.where(...) }` returns nothing, and the constraint is silently skipped.
 :::
