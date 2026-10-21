@@ -29,7 +29,7 @@ function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
     adapter,
     dialect: createDatabaseDialect('sqlite'),
     logger,
-    security: { redactBindingsInLogs: false, maxLoggedBindings: 100_000 },
+    security: { redactBindingsInLogs: false, maxLoggedBindings: 100_000, allowUnsafeRawSql: true, debugSqlInLogs: true },
   })
   configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
   return db
@@ -431,6 +431,38 @@ describe('bounded relation loading', () => {
 
     expect(collected.value).toHaveLength(300)
     expect(collected.dependencies.length).toBeGreaterThan(0)
+  })
+
+  it('evaluates a volatile scope predicate in one statement for a findMany over more than 256 keys', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { volatile: query => query.unsafeWhere('random() % 2 = 0', []) },
+    })
+    queries.length = 0
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(queries.filter(entry => entry.sql.includes('random()'))).toHaveLength(1)
+  })
+
+  it('still splits a structured scope predicate over more than 256 keys into chunk passes', async () => {
+    const queries: QueryStartLog[] = []
+    const db = openSQLite({ onQueryStart: entry => queries.push(entry) })
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { positive: query => query.where('id', '>', 0) },
+    })
+    queries.length = 0
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(queries.filter(entry => entry.sql.includes('"id" IN ('))).toHaveLength(4)
   })
 
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {

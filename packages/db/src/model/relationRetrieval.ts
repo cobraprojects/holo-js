@@ -4,7 +4,7 @@ import { hasQueryCache } from '../query/TableQueryBuilder'
 import { canonicalStoredKey } from './entityRuntime'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
-import type { SelectQueryPlan } from '../query/ast'
+import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
@@ -19,6 +19,7 @@ export function isKeySeparableQuery<TTable extends TableDefinition>(query: Model
   const tableQuery = query.getTableQueryBuilder()
   const plan = tableQuery.getPlan()
   return !tableQuery[hasQueryCache]()
+    && !planHasRawSql(plan)
     && typeof plan.limit !== 'number'
     && typeof plan.offset !== 'number'
     && plan.orderBy.length === 0
@@ -26,6 +27,30 @@ export function isKeySeparableQuery<TTable extends TableDefinition>(query: Model
     && plan.having.length === 0
     && plan.unions.length === 0
     && !plan.distinct
+}
+
+function planHasRawSql(plan: SelectQueryPlan): boolean {
+  return plan.selections.some(selection => selection.kind === 'raw' || (selection.kind === 'subquery' && planHasRawSql(selection.query)))
+    || plan.joins.some(join => join.subquery !== undefined && planHasRawSql(join.subquery))
+    || plan.unions.some(union => planHasRawSql(union.query))
+    || plan.predicates.some(predicate => predicateHasRawSql(predicate))
+    || plan.orderBy.some(orderBy => orderBy.kind === 'raw')
+}
+
+function predicateHasRawSql(predicate: QueryPredicateNode): boolean {
+  if (predicate.kind === 'raw') {
+    return true
+  }
+
+  if (predicate.kind === 'group') {
+    return predicate.predicates.some(nested => predicateHasRawSql(nested))
+  }
+
+  if (predicate.kind === 'exists' || predicate.kind === 'subquery') {
+    return planHasRawSql(predicate.subquery)
+  }
+
+  return false
 }
 
 export function isPaginatedRelationQuery(query: ModelQueryBuilder): boolean {
