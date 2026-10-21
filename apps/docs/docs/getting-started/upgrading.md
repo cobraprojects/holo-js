@@ -123,6 +123,10 @@ The Node.js worker now pings each WebSocket connection every 30 seconds and clos
 
 Workers that use [Redis scaling](/broadcasting/production#run-several-workers) now write a lease key, `holo:broadcast:scaling:<connection>:nodes:<node-id>`, every 10 seconds, and read presence keys to remove members of crashed workers. If your Redis user is limited by ACL rules, allow `SET` and `EXISTS` on `holo:broadcast:scaling:*`. Without them, the worker can't refresh its lease and its presence members disappear from other workers.
 
+### Realtime queries refresh across processes
+
+With [Redis scaling](/broadcasting/production#run-several-workers) on, a query-builder or model write that commits in your web app or queue workers now publishes to `holo:broadcast:scaling:<connection>:events` once per Broadcast worker or app runtime sender in that process. Every Broadcast worker refreshes the realtime queries that read the changed rows, and each worker applies a write once, by its write ID, however many copies arrive. Those processes need the Redis connection, `ioredis` installed, and permission to `PUBLISH` on `holo:broadcast:scaling:*`. Without the permission, writes still commit, but realtime queries on other workers don't update.
+
 ### Broadcast workers upgrade together
 
 Upgrade every Broadcast worker that uses [Redis scaling](/broadcasting/production#run-several-workers) to 0.4 at the same time. A presence entry written by a worker from before this change has no lease. The upgraded workers treat it as belonging to a dead node and remove it, so during a mixed rollout users still connected to an old worker drop out of presence until they reconnect.

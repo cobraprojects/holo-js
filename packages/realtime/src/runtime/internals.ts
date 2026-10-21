@@ -3,6 +3,8 @@ import { createRealtimeDatabaseContext } from './execution'
 import {
   handleBatchedDatabaseInvalidation,
   handleDatabaseInvalidation,
+  hasRemoteRefreshSchedule,
+  refreshRemoteEntry,
   scheduleSubscriptionRefresh,
 } from './invalidation'
 import { getRuntimeState } from './state'
@@ -14,7 +16,9 @@ export const realtimeRuntimeInternals = {
   getRuntimeState,
   handleBatchedDatabaseInvalidation,
   handleDatabaseInvalidation,
+  hasRemoteRefreshSchedule,
   nextDefinitionName,
+  refreshRemoteEntry,
   scheduleSubscriptionRefresh,
   stableStringify,
 }

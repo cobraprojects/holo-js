@@ -111,6 +111,10 @@ type BroadcastRealtimeSubscription = {
 }
 
 type BroadcastRealtimeRuntimeBindings = {
+  readonly databaseInvalidation?: {
+    connect(publish: (invalidation: unknown) => Promise<void>): () => void
+    receive(invalidation: unknown): Promise<void>
+  }
   query(
     name: string,
     args: Record<string, unknown>,
@@ -141,6 +145,9 @@ type AuthRequestAccessors = {
 }
 
 type RealtimeServerModule = {
+  realtimeServerInternals?: {
+    createRealtimeDatabaseInvalidationBridge(): BroadcastRealtimeRuntimeBindings['databaseInvalidation']
+  }
   configureRealtimeRuntime?(bindings?: {
     runWithAuthRequestAccessors<TValue>(
       accessors: AuthRequestAccessors,
@@ -357,6 +364,7 @@ async function createRealtimeWorkerBindings(
   }
 
   return {
+    databaseInvalidation: realtime.realtimeServerInternals?.createRealtimeDatabaseInvalidationBridge(),
     async query(name, args, context) {
       return await withRealtimeRequest(context, async (authRequest) => {
         return await realtime.executeRealtimeQuery(await resolveDefinition(name), args, { authRequest })

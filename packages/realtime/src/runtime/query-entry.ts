@@ -1,3 +1,9 @@
+import {
+  forgetRemoteRefreshSchedule,
+  hasTableInvalidationSince,
+  requestInitialRefresh,
+  snapshotTableInvalidationGenerations,
+} from './invalidation'
 import { captureAuthContext, getDatabaseContext } from './execution'
 import { createExecutionContext } from './execution-context'
 import type {
@@ -64,6 +70,7 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
   }
   state.queryEntries.set(refreshKey, entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
 
+  const generationsAtStart = snapshotTableInvalidationGenerations()
   try {
     const result = await executeInitialQuery(definition, args, undefined)
     const auth = await captureAuthContext(state.bindings)
@@ -82,6 +89,9 @@ export async function createQueryEntry<TDefinition extends RealtimeQueryDefiniti
       result.snapshot.data,
     )
     addQueryEntryDependencies(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
+    if (hasTableInvalidationSince(generationsAtStart, entry.dependencies)) {
+      requestInitialRefresh(refreshKey)
+    }
     addQueryEntryInvalidationIndexes(entry as ActiveQueryEntry<RealtimeQueryDefinitionMetadata>)
     return entry as InitializedActiveQueryEntry<TDefinition>
   } catch (error) {
@@ -98,6 +108,7 @@ export function deleteSubscription(subscriptionId: string): void {
   }
 
   state.subscriptions.delete(subscriptionId)
+  forgetRemoteRefreshSchedule(subscription.refreshKey)
   const entry = state.queryEntries.get(subscription.refreshKey)
   if (entry?.current) {
     subscription.current = entry.current

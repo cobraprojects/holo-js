@@ -12,7 +12,11 @@ Realtime and Broadcast are not production-ready. The deployment settings below d
 
 - Browsers reconnect with backoff after a socket closes or fails, and then resubscribe. A browser whose network drops without the socket closing reconnects only when the operating system reports the close, so live updates can pause until then.
 - A worker that stops refreshing its Redis lease for 30 seconds, because it is stalled or can't reach Redis, loses its presence members from other workers' rosters. Those members stay out until their clients resubscribe. See [Run several workers](#run-several-workers).
-- Redis scaling shares broadcast events and presence members, but not Realtime query subscriptions. A mutation refreshes only subscribers on the worker that runs it; writes in other processes do not refresh those queries.
+- Without Redis scaling, a write made in another process, such as your web app or a queue worker, does not refresh Realtime queries on this worker. With Redis scaling, it does. See [Run several workers](#run-several-workers).
+- Realtime queries that use `.cache()` on the cache-database store can stall on re-entrant invalidation. Tracked in [#234](https://github.com/cobraprojects/holo-js/issues/234).
+- Remote writes reach only Broadcast workers. Your web app and queue processes don't receive them, so a per-process memory cache there keeps entries for another process's writes until their TTL ends. A shared value store alone doesn't fix this, because no shared dependency index ships with Holo. Evict on write with `cache.forget()`, or keep TTLs short. See [Automatic invalidation](/cache/query-caching#automatic-invalidation).
+- Remote refreshes run at most once every 100 ms per subscription. Under sustained writes from other processes, a live query can lag by up to 100 ms. The last state is always delivered. Writes in the same process refresh immediately.
+- Inside a Broadcast worker, a cache store with a custom dependency index that doesn't implement `listDependencies()` keeps cached query results after a remote write until their TTL ends. The worker logs one warning.
 
 These items are tracked in the separate Realtime production readiness milestone. The Experimental label does not change runtime behavior or indicate that the planned 0.4.0 data-exposure fixes have already shipped.
 
@@ -209,13 +213,23 @@ Every worker must point at the same Redis server and database. Put a load balanc
 
 Without `ioredis` installed, the worker refuses to start with scaling enabled.
 
-Redis shares broadcast events and presence members between workers. It doesn't share [realtime query](/realtime/) subscriptions: a realtime mutation refreshes only the subscribers connected to the worker that ran it.
+Redis shares broadcast events, presence members, and [realtime query](/realtime/) invalidations between workers. When a write commits in any process, including your web app, a queue worker, or another worker, every worker refreshes the realtime queries that read the changed rows.
+
+Each committed query-builder or model write that changes a table is published to Redis once per registered publisher, whether or not a realtime query is subscribed. Each Broadcast worker running with Redis scaling is one publisher when realtime is installed, and so is the app runtime's sender when Redis scaling is configured. A process that runs two scaling workers therefore sends two copies of every write, even when both workers use the same Redis connection. Every copy carries the same write ID. Each receiving worker applies a write once, so it drops any copy whose write ID it has already applied. Raw SQL statements don't publish. The copies are sent after the write commits, in the background, so a slow Redis doesn't delay the write or the refresh of queries in the process that wrote. If Redis rejects a copy, the failure is reported through [exceptions.report](/basics/errors#reporting-errors). Realtime queries on other workers then keep their last result until a later write refreshes them.
 
 Each worker keeps a Redis lease that it refreshes every 10 seconds. When a worker stops refreshing for 30 seconds, because it crashed or lost Redis, the other workers remove its presence members and send `pusher_internal:member_removed` to their subscribers. A member that is also connected to a live worker stays listed. A crashed worker's members can stay listed for up to about 40 seconds.
 
 Each worker also checks its own presence entries on every lease refresh. If Redis rejects the delete for a disconnected socket's member, the worker removes it on the next refresh, within about 10 seconds, and the other workers receive one `member_removed`. A member with a live socket is never removed this way.
 
-Redis is part of the trust boundary. Workers accept presence and event messages from the scaling channel without verifying a signature, so anyone who can publish to that channel can add or remove presence members. Run Redis on a private network reachable only by your web app and workers, and require authentication with `username` and `password` in `config/redis.ts`.
+Redis is part of the trust boundary. Workers accept presence, event, and invalidation messages from the scaling channel without verifying a signature, so anyone who can publish to that channel can add or remove presence members or trigger realtime refreshes. Run Redis on a private network reachable only by your web app and workers, and require authentication with `username` and `password` in `config/redis.ts`.
+
+### Invalidation traffic
+
+Each write that changes a table adds one small message per registered publisher. A message names the connection and the tables that changed, not the rows, and carries the write ID. Size Redis and the network between your processes with these rules in mind:
+
+- The message count per write equals the number of publishers in the sending process. Two scaling workers in one process, or a worker plus the app runtime's sender, double the traffic for every write. Run one scaling worker per process where you can.
+- Every receiving worker applies each write once, but it still receives every copy. Each extra publisher adds inbound messages on every worker that subscribes to the channel.
+- Each process remembers up to 10,000 write IDs for 60 seconds. If more than 10,000 writes commit within 60 seconds, the oldest IDs are forgotten early. A copy that arrives after its ID is forgotten is applied again. That costs one extra refresh of the affected queries and never leaves a write unapplied.
 
 ## Next steps
 

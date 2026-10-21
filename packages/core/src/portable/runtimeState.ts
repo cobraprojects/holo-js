@@ -7,13 +7,15 @@ export interface HoloRuntimeTransition<TRuntime> {
   readonly settled: Promise<void>
 }
 
-export interface HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections> {
+export interface HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections, TDatabaseInvalidationSenders> {
   current?: TRuntime
   transition?: HoloRuntimeTransition<TRuntime>
   pending?: Promise<TRuntime>
   pendingProjectRoot?: string
   securityResources?: TSecurityResources
   securityRateLimitStore?: object
+  databaseInvalidationSenders?: TDatabaseInvalidationSenders
+  databaseInvalidationUnsubscribe?: () => void
   sessionRuntimeBindings?: object
   sessionRedisConnections?: TSessionRedisConnections
   optionalSubsystemsTurn?: Promise<void>
@@ -34,16 +36,16 @@ type OptionalRuntimeGlobals = typeof globalThis & {
   __holoSecurityRuntime__?: { bindings?: { readonly rateLimitStore?: unknown } }
 }
 
-export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessionRedisConnections>(): {
-  getRuntimeState(): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections>
+export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessionRedisConnections, TDatabaseInvalidationSenders>(): {
+  getRuntimeState(): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections, TDatabaseInvalidationSenders>
   snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings
   restoreOptionalSubsystemRuntimeBindings(
     bindings: OptionalSubsystemRuntimeBindings,
   ): void
 } {
-  const getRuntimeState = (): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections> => {
+  const getRuntimeState = (): HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections, TDatabaseInvalidationSenders> => {
     const runtime = globalThis as typeof globalThis & {
-      __holoRuntime__?: HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections>
+      __holoRuntime__?: HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisConnections, TDatabaseInvalidationSenders>
     }
     runtime.__holoRuntime__ ??= {}
     return runtime.__holoRuntime__

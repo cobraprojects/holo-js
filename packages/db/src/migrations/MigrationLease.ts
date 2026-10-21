@@ -16,6 +16,7 @@ const migrationLocksTable = defineTable('_holo_migration_locks', {
 
 const migrationLockName = 'migrations'
 const migrationLockLifetimeMs = 60 * 60 * 1000
+const migrationLockAcquireAttempts = 5
 
 type MigrationLockRecord = {
   id: number
@@ -31,10 +32,10 @@ export class MigrationLease {
 
   async acquire(): Promise<boolean> {
     await this.ensureTable()
-    return this.tryAcquire(true)
+    return this.tryAcquire(1)
   }
 
-  private async tryAcquire(retryAfterRelease: boolean): Promise<boolean> {
+  private async tryAcquire(attempt: number): Promise<boolean> {
     const current = await this.read()
     if (current) {
       if (current.expiresAt > Date.now()) {
@@ -60,15 +61,16 @@ export class MigrationLease {
       this.owner = owner
       return true
     } catch (error) {
-      if (await this.read()) {
+      const current = await this.read()
+      if (current && current.expiresAt > Date.now()) {
         return false
       }
 
-      if (retryAfterRelease && isUniqueConstraintError(error)) {
-        return this.tryAcquire(false)
+      if (!isUniqueConstraintError(error) || attempt >= migrationLockAcquireAttempts) {
+        throw error
       }
 
-      throw error
+      return this.tryAcquire(attempt + 1)
     }
   }
 

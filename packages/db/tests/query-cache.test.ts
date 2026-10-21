@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
@@ -12,7 +13,11 @@ import {
   type DatabaseContext, type DatabaseLogger, type DatabaseDependencyInvalidationEvent,
 } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
-import type { DatabaseMutationEvent } from '../src/cache'
+import { invalidateQueryCacheDependencies, type DatabaseMutationEvent, type RemoteDatabaseDependencyInvalidation } from '../src/cache'
+
+function remoteInvalidation(dependencies: readonly string[]) {
+  return { id: randomUUID(), connectionName: 'main', dependencies }
+}
 
 const users = defineTable('users', {
   id: column.id(), name: column.string(), status: column.string(), score: column.integer(),
@@ -251,6 +256,98 @@ describe('native database and cache integration', () => {
     unsubscribe()
     await DB.table(users).where('id', 1).update({ score: 12 })
     expect(received).toEqual(['failing', 'healthy', 'healthy'])
+    expect(await DB.table(users).where('id', 1).value('score')).toBe(12)
+  })
+
+  it('publishes each committed invalidation as JSON without the local context id', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    onTestFinished(unsubscribe)
+    await DB.transaction(async tx => {
+      await tx.table(users).where('id', 1).update({ score: 11 })
+      expect(published).toEqual([])
+    })
+
+    await expect.poll(() => published.length).toBe(1)
+    expect(published[0]).toEqual({ id: expect.any(String), connectionName: 'main', dependencies: ['db:main:users'] })
+    expect(JSON.parse(JSON.stringify(published[0]))).toEqual(published[0])
+    expect(JSON.stringify(published[0])).not.toContain('contextId')
+  })
+
+  it('does not publish an invalidation whose dependencies include no table keys', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    onTestFinished(unsubscribe)
+
+    await invalidateQueryCacheDependencies(db, ['custom:orders'])
+    await delay(20)
+
+    expect(published).toEqual([])
+  })
+
+  it('publishes an invalidation that includes a table key, with only the table keys', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    onTestFinished(unsubscribe)
+
+    await invalidateQueryCacheDependencies(db, ['custom:orders', 'db:main:users'])
+
+    await expect.poll(() => published.length).toBe(1)
+    expect(published[0]).toEqual({ id: expect.any(String), connectionName: 'main', dependencies: ['db:main:users'] })
+  })
+
+  it('ignores a received remote invalidation that carries no table keys', async () => {
+    const received: string[][] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
+    onTestFinished(unsubscribe)
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation([]))
+
+    expect(received).toEqual([])
+  })
+
+  it('dispatches received remote invalidations to local listeners without publishing them again', async () => {
+    const published: RemoteDatabaseDependencyInvalidation[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(invalidation => { published.push(invalidation) })
+    onTestFinished(unsubscribe)
+    const received: string[][] = []
+    queryCacheInternals.onDatabaseDependencyInvalidated(event => { received.push([...event.dependencies]) })
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation(['db:main:users']))
+
+    expect(received).toEqual([['db:main:users']])
+    expect(published).toEqual([])
+  })
+
+  it('drops this process cached results for a received remote invalidation', async () => {
+    expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([10, 20])
+    await adapter.execute('UPDATE users SET score = 99 WHERE id = 1')
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation(['db:main:users']))
+
+    expect(await DB.table(users).orderBy('id').cache(60).pluck('score')).toEqual([99, 20])
+  })
+
+  it('drops a received table-level invalidation for cached queries that filter on a column', async () => {
+    expect(await DB.table(users).where('id', 1).cache(60).value('score')).toBe(10)
+    await adapter.execute('UPDATE users SET score = 99 WHERE id = 1')
+
+    await queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation(remoteInvalidation(['db:main:users']))
+
+    expect(await DB.table(users).where('id', 1).cache(60).value('score')).toBe(99)
+  })
+
+  it('reports a failing publisher without failing the committed write', async () => {
+    const reports: Array<{ readonly error: unknown, readonly context: HoloErrorReportContext }> = []
+    errorReportingInternals.configure({ report: (error, context) => { reports.push({ error, context }) } })
+    onTestFinished(() => { errorReportingInternals.configure(undefined) })
+    const publisherError = new Error('broker unavailable')
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(() => { throw publisherError })
+    onTestFinished(unsubscribe)
+
+    await DB.table(users).where('id', 1).update({ score: 12 })
+
+    await expect.poll(() => reports).toEqual([{ error: publisherError, context: { capability: 'db', operation: 'cache.invalidationPublisher' } }])
     expect(await DB.table(users).where('id', 1).value('score')).toBe(12)
   })
 
