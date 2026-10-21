@@ -21,7 +21,7 @@ import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQ
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
-import { collectRelationKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { createModelCollection, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -288,10 +288,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       .select(primaryKey as never)
       .where(primaryKey, 'in', chunk)
       .get<Record<string, unknown>>())
-    const storedKeys = [...new Set(storedRows.map(row => row[primaryKey]))]
+    const storedKeys = distinctStoredKeys(storedRows.map(row => row[primaryKey]))
     const entities = await loadRelationKeyChunks(storedKeys, false, chunk => this.query()
       .where(primaryKey, 'in', chunk)
       .get())
+    this.attachCollection(entities)
     return this.createCollection(entities)
   }
 

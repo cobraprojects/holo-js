@@ -231,6 +231,47 @@ describe('bounded relation loading', () => {
     expect(found.map(code => code.get('label')).sort()).toEqual(['one', 'zero-one'])
   })
 
+  it('binds every findMany entity to the full result so automatic eager loading covers all of them', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    const posts = defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() })
+    await createTestTable(db, users)
+    await createTestTable(db, posts)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+    await db.table(posts).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, userId: index + 1, title: `post ${index + 1}` })))
+
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      name: 'AutomaticUser',
+      automaticEagerLoading: true,
+      relations: { posts: hasMany(() => Post, 'userId') },
+    })
+    User.preventLazyLoading(false)
+    User.automaticallyEagerLoadRelationships(true)
+
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+    await (found[0] as unknown as Record<string, Promise<unknown>>).posts
+
+    expect(found.every(user => user.hasRelation('posts'))).toBe(true)
+  })
+
+  it('returns one row per stored binary primary key when case-equal buffers fall into different findMany chunks', async () => {
+    const db = openSQLite()
+    const blobs = defineTable('blobs', { key: column.blob().primaryKey(), label: column.string() })
+    await createTestTable(db, blobs)
+    await db.table(blobs).insert([
+      { key: Buffer.from('abc'), label: 'stored' },
+      ...Array.from({ length: 255 }, (_, index) => ({ key: Buffer.from(`row-${index}`), label: `row ${index}` })),
+    ])
+
+    const Blob = defineModelFromTable(blobs)
+    const keys = [Buffer.from('abc'), ...Array.from({ length: 255 }, (_, index) => Buffer.from(`row-${index}`)), Buffer.from('abc')]
+    const found = await Blob.findMany(keys)
+
+    expect(found).toHaveLength(256)
+    expect(found.filter(entity => Buffer.from(entity.get('key') as Uint8Array).equals(Buffer.from('abc')))).toHaveLength(1)
+  })
+
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {
     const queries: QueryStartLog[] = []
     const db = openSQLite({ onQueryStart: entry => queries.push(entry) })

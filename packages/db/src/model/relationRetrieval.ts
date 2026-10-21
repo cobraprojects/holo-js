@@ -1,5 +1,6 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
+import { valuesAreEqual } from './entityRuntime'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { SelectQueryPlan } from '../query/ast'
@@ -38,6 +39,20 @@ function padRelationKeys(keys: readonly unknown[]): unknown[] {
 export function singleStatementRelationKeys(values: readonly unknown[]): unknown[] {
   const keys = [...new Set(values)]
   return keys.length <= RELATION_KEY_CHUNK_SIZE ? padRelationKeys(keys) : keys
+}
+
+export function distinctStoredKeys(values: readonly unknown[]): unknown[] {
+  const distinct: unknown[] = []
+  const seenPrimitives = new Set<unknown>()
+  for (const value of values) {
+    if (value !== null && typeof value === 'object') {
+      if (!distinct.some(existing => valuesAreEqual(existing, value))) distinct.push(value)
+    } else if (!seenPrimitives.has(value)) {
+      seenPrimitives.add(value)
+      distinct.push(value)
+    }
+  }
+  return distinct
 }
 
 export function integerKeysToInline(
