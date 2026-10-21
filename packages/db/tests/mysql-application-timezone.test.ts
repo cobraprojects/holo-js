@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
-import { createDatabase, createDialect } from '../src'
+import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
 
 const liveMySQLConfig = {
   host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
@@ -59,6 +59,70 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
         await adapter.execute(`DROP TABLE IF EXISTS ${source}`)
         await adapter.execute(`DROP TABLE IF EXISTS ${copy}`)
         await db.disconnect()
+      }
+    })
+  })
+
+  it('saves an unchanged TIMESTAMP from the repeated fall-back hour back to the instant it was stored at', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const db = createDatabase({ adapter, dialect: createDialect('mysql') })
+      const table = `holo_fallback_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, instant TIMESTAMP(3) NOT NULL)`)
+        const firstOccurrence = new Date('2024-11-03T05:30:00Z')
+        await db.executeCompiled({ sql: `INSERT INTO ${table} (id, instant) VALUES (?, ?)`, bindings: [1, firstOccurrence] })
+
+        const [read] = (await db.queryCompiled({ sql: `SELECT instant FROM ${table} WHERE id = ?`, bindings: [1] })).rows
+        expect(read!.instant).toEqual(firstOccurrence)
+
+        await db.executeCompiled({ sql: `UPDATE ${table} SET instant = ? WHERE id = ?`, bindings: [read!.instant, 1] })
+        expect((await adapter.query<{ seconds: number }>(`SELECT CAST(UNIX_TIMESTAMP(instant) AS SIGNED) AS seconds FROM ${table} WHERE id = 1`)).rows)
+          .toEqual([{ seconds: firstOccurrence.getTime() / 1000 }])
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await db.disconnect()
+      }
+    })
+  })
+
+  it('reads a TIMESTAMP stored at the later repeated-hour instant one hour early, because the wall-clock text is the same for both', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1 } })
+      const table = `holo_fallback_later_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, instant TIMESTAMP(3) NOT NULL)`)
+        await adapter.execute(`INSERT INTO ${table} VALUES (1, '2024-11-03 01:30:00.000-05:00')`)
+        expect((await adapter.query<{ seconds: number }>(`SELECT CAST(UNIX_TIMESTAMP(instant) AS SIGNED) AS seconds FROM ${table} WHERE id = 1`)).rows)
+          .toEqual([{ seconds: 1730615400 }])
+        const [read] = (await adapter.query<{ instant: Date }>(`SELECT instant FROM ${table} WHERE id = 1`)).rows
+        expect(read!.instant).toEqual(new Date('2024-11-03T05:30:00Z'))
+      } finally {
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
+  it('writes Date values through a typed model in app.timezone, not as UTC wall-clock text', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const table = `holo_model_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME(3) NOT NULL, instant TIMESTAMP(3) NOT NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('mysql') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.datetime(), instant: column.timestamp() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'at', 'instant'] })
+        const value = new Date('2026-11-15T12:00:00Z')
+        await Model.create({ id: 1, at: value, instant: value })
+
+        expect((await adapter.query<{ at: string, seconds: number }>(
+          `SELECT DATE_FORMAT(at, '%Y-%m-%d %H:%i:%s') AS at, CAST(UNIX_TIMESTAMP(instant) AS SIGNED) AS seconds FROM ${table} WHERE id = 1`,
+        )).rows).toEqual([{ at: '2026-11-15 07:00:00', seconds: value.getTime() / 1000 }])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
       }
     })
   })

@@ -81,7 +81,7 @@ export function createCoreNotificationStore(
     DB.table(tableName, connectionName),
     query,
   )
-  const currentTimestamp = (): string => serializeAuthTimestamp(new Date(), DB.connection(connectionName).getDriver())
+  const currentTimestamp = (): Date | string => serializeAuthTimestamp(new Date(), DB.connection(connectionName).getDriver())
   const unreadQuery = (query: CoreNotificationQuery): TableQueryBuilder<string> => scopedQuery(query).whereNull('read_at')
 
   const createPage = async (

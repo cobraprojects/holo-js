@@ -114,7 +114,7 @@ mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
 
 Without the tables, queries fail, and the reason is reported through `exceptions.report`.
 
-A `Date` value is written as wall-clock time in `app.timezone`, and a `date` reads back as a `Date` at midnight in that zone. To receive the stored strings instead, set `dateStrings` or `typeCast: false` on the connection. The strings are already in `app.timezone`, and `Date` values are still written in it.
+A `Date` value is written as wall-clock time in `app.timezone`, and a `date` reads back as a `Date` at midnight in that zone. In the hour that repeats when clocks fall back, a `timestamp` stored at the later instant reads back an hour early, because MySQL shows both instants with the same wall-clock time. To receive the stored strings instead, set `dateStrings` or `typeCast: false` on the connection. The strings are already in `app.timezone`, and `Date` values are still written in it.
 
 Objects you pass to `createMySQLAdapter()` as `client`, `pool`, or `createPool` are used as they are. Holo doesn't convert their dates or set their session time zone, so set their `time_zone` and date options yourself.
 

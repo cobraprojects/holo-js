@@ -5,14 +5,10 @@ import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 import type { AuthMultiFactorVerificationState, EmailVerificationTokenStore, PasswordResetTokenStore } from '@holo-js/auth'
 import { importBundledRuntimeModule } from '../runtimeModule'
 import { createCoreSessionRevocationStore } from './authSessionRevocations'
-import { column, normalizeDialectWriteValue, connectionAsyncContext, DB, Entity, ModelRepository, TableQueryBuilder, TransactionError, type DatabaseContext } from '@holo-js/db'
+import { connectionAsyncContext, DB, Entity, ModelRepository, TableQueryBuilder, TransactionError, type DatabaseContext } from '@holo-js/db'
 
-const authTimestampColumn = column.timestamp().toDefinition({ name: 'timestamp' })
-
-export function serializeAuthTimestamp(value: Date, driver: string): string {
-  return driver === 'mysql'
-    ? String(normalizeDialectWriteValue('mysql', authTimestampColumn, value.toISOString()))
-    : value.toISOString()
+export function serializeAuthTimestamp(value: Date, driver: string): Date | string {
+  return driver === 'mysql' ? value : value.toISOString()
 }
 
 export function normalizeDateValue(value: unknown): Date {

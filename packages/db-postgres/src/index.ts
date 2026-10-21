@@ -49,7 +49,7 @@ function applicationTypes(base: TypeParserSource, timeZone: string): TypeParserS
         return (value: string) => parseCalendarDate(value, timeZone) ?? base.getTypeParser(oid, format)(value)
       }
       if (format === 'text' && oid === 1114) {
-        return (value: string) => parseWallClockTimestamp(value, timeZone) ?? base.getTypeParser(oid, format)(value)
+        return (value: string) => parseWallClockTimestamp(value, timeZone, 'later') ?? base.getTypeParser(oid, format)(value)
       }
       return base.getTypeParser(oid, format)
     },

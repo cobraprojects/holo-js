@@ -60,7 +60,9 @@ function offsetMillisAt(instant: Date, timeZone: string): number {
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000
 
-function instantOfWallClock(wall: WallClock, timeZone: string): Date {
+export type WallClockAmbiguity = 'earlier' | 'later'
+
+function instantOfWallClock(wall: WallClock, timeZone: string, ambiguity: WallClockAmbiguity): Date {
   const local = utcMillisOf(wall)
   const offsets = [...new Set([
     offsetMillisAt(new Date(local - DAY_MILLIS), timeZone),
@@ -70,7 +72,7 @@ function instantOfWallClock(wall: WallClock, timeZone: string): Date {
     .map(offset => local - offset)
     .filter(instant => offsetMillisAt(new Date(instant), timeZone) === local - instant)
   if (valid.length > 0) {
-    return new Date(Math.max(...valid))
+    return new Date(ambiguity === 'earlier' ? Math.min(...valid) : Math.max(...valid))
   }
 
   return new Date(local - offsetMillisAt(new Date(local - DAY_MILLIS), timeZone))
@@ -96,10 +98,10 @@ export function parseCalendarDate(value: string, timeZone: string): Date | undef
     minute: 0,
     second: 0,
     millisecond: 0,
-  }, timeZone)
+  }, timeZone, 'later')
 }
 
-export function parseWallClockTimestamp(value: string, timeZone: string): Date | undefined {
+export function parseWallClockTimestamp(value: string, timeZone: string, ambiguity: WallClockAmbiguity): Date | undefined {
   const match = WALL_CLOCK_TIMESTAMP.exec(value)
   if (!match) return undefined
 
@@ -111,7 +113,7 @@ export function parseWallClockTimestamp(value: string, timeZone: string): Date |
     minute: Number(match[5]),
     second: Number(match[6]),
     millisecond: Number((match[7] ?? '').padEnd(3, '0').slice(0, 3)),
-  }, timeZone)
+  }, timeZone, ambiguity)
 }
 
 export function formatWallClock(instant: Date, timeZone: string): string {

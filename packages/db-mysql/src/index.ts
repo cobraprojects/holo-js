@@ -96,7 +96,7 @@ function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
     if (stringTypes.has(field.type.toLowerCase()) || ZERO_DATE_PART.test(value)) return value
     const timeZone = holoRuntimeInternals.getApplicationTimezone()
     if (field.type === 'DATE') return parseCalendarDate(value, timeZone) ?? value
-    return parseWallClockTimestamp(value, timeZone) ?? value
+    return parseWallClockTimestamp(value, timeZone, 'earlier') ?? value
   }
 }
 
