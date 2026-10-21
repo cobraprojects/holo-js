@@ -201,7 +201,9 @@ export default defineDatabaseConfig({
 })
 ```
 
-Available hooks: `onQueryStart`, `onQuerySuccess`, `onQueryError`, `onTransactionStart`, `onTransactionCommit`, `onTransactionRollback`, `onMigrationStart`, `onMigrationSuccess`, `onMigrationError`, `onSeederStart`, `onSeederSuccess`, and `onSeederError`. The `sql` field is redacted unless `security.debugSqlInLogs` is on.
+Available hooks: `onQueryStart`, `onQuerySuccess`, `onQueryError`, `onTransactionStart`, `onTransactionCommit`, `onTransactionRollback`, `onMigrationStart`, `onMigrationSuccess`, `onMigrationError`, `onSeederStart`, `onSeederSuccess`, and `onSeederError`. The `sql` field is redacted unless `security.debugSqlInLogs` is on. A hook can run its own queries on the same connection. Queries a hook runs don't trigger the query hooks again. A slow `onQueryStart` still delays the query it observes.
+
+Inside a transaction, a query logger hook must not await queries started outside that transaction. The transaction holds its connection until the hook returns, so a hook that waits for an outside query waits forever. Keep hooks inside a transaction to logging, or to queries issued through the transaction itself.
 
 ## The DB facade
 
