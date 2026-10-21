@@ -1375,7 +1375,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       entries.delete(socketRef)
     }
     removePresenceSocketRefsLocal(appId, channel, deadSocketRefs, excludeSocketId)
-    for (const socket of connectedSockets.values()) {
+    for (const socket of listSubscribedSockets(appId, channel)) {
       const socketRef = createNodeSocketRef(scaling.nodeId, socket.socketId)
       const member = socket.presenceMembers.get(channel)
       if (member && !entries.has(socketRef) && isLiveOwnPresenceSocket(socket, appId, channel)) {
@@ -1383,6 +1383,14 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }
     }
     return entries
+  }
+
+  function listSubscribedSockets(appId: string, channel: string): SocketState[] {
+    const socketIds = channels.get(composeSubscriptionKey(appId, channel)) ?? new Set<string>()
+    return [...socketIds].flatMap(socketId => {
+      const socket = connectedSockets.get(socketId)
+      return socket ? [socket] : []
+    })
   }
 
   function isLiveOwnPresenceSocket(socket: SocketState, appId: string, channel: string): boolean {
@@ -1424,7 +1432,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       await publishScalingPresenceMemberRemoved(app, channel, socketId, member)
       await scaling.adapter.hashDelete(presenceKey, socketRef)
     }
-    for (const socket of [...connectedSockets.values()]) {
+    for (const socket of listSubscribedSockets(app.appId, channel)) {
       const socketRef = createNodeSocketRef(scaling.nodeId, socket.socketId)
       const member = socket.presenceMembers.get(channel)
       if (member === undefined || !isLiveOwnPresenceSocket(socket, app.appId, channel)) {
@@ -1445,8 +1453,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       await publishScalingPresenceMemberAdded(app, channel, socket.socketId, member)
       socket.presencePublicationPending.delete(channel)
     }
-    const hasLiveSubscriber = [...connectedSockets.values()].some(socket => {
-      return socket.active && socket.app.appId === app.appId && socket.subscribedChannels.has(channel)
+    const hasLiveSubscriber = listSubscribedSockets(app.appId, channel).some(socket => {
+      return isLiveOwnPresenceSocket(socket, app.appId, channel)
     })
     return remainingOwnEntries > 0 || hasLiveSubscriber
   }
