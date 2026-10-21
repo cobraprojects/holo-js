@@ -1,6 +1,6 @@
 import { expect, it, onTestFinished } from 'vitest'
 import { query } from '../src'
-import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { configureRealtimeRuntime, realtimeRuntimeInternals, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
 it('rejects a remote invalidation whose dependencies are not a list of strings', async () => {
@@ -219,4 +219,32 @@ it('runs nothing from a refresh queue that a reset cancels, even when the next r
 
   expect([...runs.keys()].sort()).toEqual(startedBeforeReset)
   expect(nextRuns.length).toBe(nextBefore)
+}, 30_000)
+
+it('drops a stale remote refresh whose slot was granted before a reset, even when the replacement runtime registers the same key', async () => {
+  const { db } = await openRealtimeDatabase()
+  let staleRuns = 0
+  const stale = query({
+    name: 'records.stale',
+    access: 'public',
+    handler: async () => {
+      staleRuns += 1
+      return { records: await db.table('records').orderBy('id').get() }
+    },
+  })
+  await subscribeRealtimeQuery(stale)
+  const state = realtimeRuntimeInternals.getRuntimeState()
+  const [staleKey] = [...state.queryEntries.keys()]
+  const staleEntry = staleKey ? state.queryEntries.get(staleKey) : undefined
+  if (!staleKey || !staleEntry) throw new Error('No subscription was registered')
+  const before = staleRuns
+
+  const pendingRefresh = realtimeRuntimeInternals.refreshRemoteEntry(staleKey)
+  resetRealtimeRuntime()
+  configureRealtimeRuntime({ db: () => db })
+  state.queryEntries.set(staleKey, staleEntry)
+  await pendingRefresh
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  expect(staleRuns).toBe(before)
 }, 30_000)

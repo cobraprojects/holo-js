@@ -297,7 +297,7 @@ function releaseRemoteRefreshSlot(generation: number): void {
   activeRemoteRefreshes -= 1
 }
 
-async function refreshRemoteEntry(refreshKey: string): Promise<void> {
+export async function refreshRemoteEntry(refreshKey: string): Promise<void> {
   const running = getRuntimeState().refreshes.get(refreshKey)
   if (running?.running) {
     running.pending = true
@@ -307,13 +307,11 @@ async function refreshRemoteEntry(refreshKey: string): Promise<void> {
 
   const generation = remoteRefreshGeneration
   const acquired = await acquireRemoteRefreshSlot()
-  if (!acquired) {
+  if (!acquired || generation !== remoteRefreshGeneration) {
     return
   }
 
-  if (generation === remoteRefreshGeneration) {
-    queuedRemoteRefreshKeys.delete(refreshKey)
-  }
+  queuedRemoteRefreshKeys.delete(refreshKey)
   if (!getRuntimeState().queryEntries.has(refreshKey)) {
     remoteRefreshLastRunAt.delete(refreshKey)
     releaseRemoteRefreshSlot(generation)
