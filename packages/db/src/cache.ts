@@ -472,8 +472,16 @@ export function hasActiveDatabaseDependencyCollector(): boolean {
   return typeof databaseDependencyCollector.getStore() !== 'undefined'
 }
 
-function runWithoutDatabaseDependencyCollection<TValue>(callback: () => TValue): TValue {
-  return databaseDependencyCollector.exit(callback)
+type QueryCacheSource = <TSource>(source: () => TSource | Promise<TSource>) => TSource | Promise<TSource>
+
+export function runQueryCacheOperation<TValue>(
+  operation: (runSource: QueryCacheSource) => TValue | Promise<TValue>,
+): TValue | Promise<TValue> {
+  const collector = databaseDependencyCollector.getStore()
+  const runSource: QueryCacheSource = source => (
+    collector ? databaseDependencyCollector.run(collector, source) : source()
+  )
+  return databaseDependencyCollector.exit(() => operation(runSource))
 }
 
 export function recordDatabaseQueryDependencies(dependencies: readonly string[] | undefined): void {
@@ -2187,7 +2195,7 @@ export async function invalidateQueryCacheDependencies(
   const invalidate = async () => {
     const bridge = getDatabaseQueryCacheBridge()
     await evictThenNotify(
-      () => bridge?.invalidateDependencies(dependencies),
+      () => runQueryCacheOperation(() => bridge?.invalidateDependencies(dependencies)),
       async () => {
         const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
         const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
@@ -2256,7 +2264,6 @@ export const queryCacheInternals = {
   resolveQueryCacheDependencies,
   resolveQueryCacheKey,
   resetDatabaseDependencyInvalidationListeners,
-  runWithoutDatabaseDependencyCollection,
   supportsAutomaticPredicateInvalidation,
   supportsAutomaticQueryCacheInvalidation,
 }

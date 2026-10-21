@@ -17,7 +17,6 @@ import {
   createRuntimeConnectionOptions,
   driverErrorCodes,
   isDatabaseDeadlockError,
-  queryCacheInternals,
   TableQueryBuilder,
   type DatabaseContext,
   type DatabaseContextOptions,
@@ -310,7 +309,7 @@ async function withDatabaseCacheTableGuard<TValue>(
   callback: () => Promise<TValue>,
 ): Promise<TValue> {
   try {
-    return await queryCacheInternals.runWithoutDatabaseDependencyCollection(callback)
+    return await callback()
   } catch (error) {
     normalizeDatabaseCacheTableError(error, tableName, lockTableName)
   }
@@ -526,7 +525,7 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
       sleep,
       ownerFactory,
     ).block(1, async () => {
-      return queryCacheInternals.runWithoutDatabaseDependencyCollection(() => connection.transaction(async (tx) => {
+      return connection.transaction(async (tx) => {
         const entry = await readEntry(tx, entryTableName, key, now())
         const currentValue = entry.state === 'hit'
           ? deserializeCacheValue<unknown>(entry.value.payload)
@@ -543,7 +542,7 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
           expiresAt: entry.state === 'hit' ? (entry.value.expires_at ?? undefined) : undefined,
         })
         return nextValue
-      }))
+      })
     })
 
     if (result === false) {

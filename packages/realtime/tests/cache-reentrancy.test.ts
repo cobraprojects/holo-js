@@ -4,9 +4,9 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { onDatabaseDependencyInvalidated, registerDatabaseDriverFactory } from '@holo-js/db'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
-import { afterEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import { cacheDbInternals, createDatabaseCacheDriver } from '../../cache-db/src'
-import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
+import cache, { configureCacheRuntime, defineCacheKey, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
 import { realtimeServerInternals, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
@@ -99,6 +99,24 @@ it('refreshes a cached realtime query once for a remote invalidation whose refre
   expect(runs - before).toBe(1)
 })
 
+it('refreshes a live query that reads the cache store directly when a later cache write changes the value', async () => {
+  await openRealtimeDatabase()
+  await openCacheDatabaseStore()
+  const themeKey = defineCacheKey<string>('theme')
+  await cache.put(themeKey, 'light', 60)
+  const theme = query({
+    name: 'theme.current',
+    access: 'public',
+    handler: async () => ({ theme: await cache.get(themeKey) }),
+  })
+  const subscription = await subscribeRealtimeQuery(theme)
+  expect(subscription.current.data).toEqual({ theme: 'light' })
+
+  await settleWithin(cache.put(themeKey, 'dark', 60), 2_000)
+
+  await expect.poll(() => subscription.current.data, { timeout: 2_000 }).toEqual({ theme: 'dark' })
+})
+
 it('refreshes a memory-cached realtime query for a remote write', async () => {
   const { adapter, db } = await openRealtimeDatabase()
   configureCacheRuntime({
@@ -150,36 +168,69 @@ it('settles a refresh whose own handler writes a table the refresh reads, and ru
   expect(runs - before).toBe(2)
 })
 
+function createDeferred() {
+  let resolve: () => void = () => undefined
+  const promise = new Promise<void>((next) => { resolve = next })
+  return { promise, resolve }
+}
+
+async function advanceFakeTimersUntil(done: () => boolean, description: string): Promise<void> {
+  for (let turn = 0; !done(); turn += 1) {
+    if (turn === 1000) throw new Error(`Timed out waiting for ${description}.`)
+    await new Promise(resolve => setImmediate(resolve))
+    if (done()) return
+    vi.advanceTimersByTime(10)
+  }
+}
+
 it('settles when a refresh writes its cache row into a write batch that is still pending', async () => {
   const { db } = await openRealtimeDatabase()
   await openCacheDatabaseStore()
   let holding = false
   let reachedHold = false
-  let releaseHeld: () => void = () => undefined
-  const held = new Promise<void>(resolve => { releaseHeld = resolve })
+  let released = false
+  const held = createDeferred()
+  const cacheWriteJoined = createDeferred()
   const cachedScore = query({
     name: 'records.heldCachedScore',
     access: 'public',
     handler: async () => {
       if (holding) {
         reachedHold = true
-        await held
+        await held.promise
       }
-      const [row] = await db.table('records').where('id', 1).cache({ ttl: 60 }).get<{ score: number | null }>()
+      const [row] = await db.table('records').where('id', 1).get<{ score: number | null }>()
+      await cache.put('realtime:pending-batch', row?.score ?? null, 60)
       return { score: row?.score ?? null }
     },
   })
   const subscription = await subscribeRealtimeQuery(cachedScore)
   holding = true
   onTestFinished(onDatabaseDependencyInvalidated((event) => {
-    if (reachedHold && event.dependencies.includes('db:main:records')) releaseHeld()
+    if (reachedHold && !released && event.dependencies.includes('db:main:records')) {
+      released = true
+      held.resolve()
+    } else if (released && event.dependencies.includes('db:cache:cache')) {
+      cacheWriteJoined.resolve()
+    }
   }))
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  onTestFinished(() => { vi.useRealTimers() })
 
   const firstWrite = db.table('records').where('id', 1).update({ score: 55 })
-  await expect.poll(() => reachedHold, { timeout: 2_000 }).toBe(true)
-  const secondWrite = db.table('records').where('id', 1).update({ score: 56 })
+  let firstSettled = false
+  void Promise.resolve(firstWrite).then(() => { firstSettled = true })
+  await advanceFakeTimersUntil(() => reachedHold, 'the first refresh to reach its hold')
 
-  await settleWithin(secondWrite, 2_000)
-  await settleWithin(firstWrite, 2_000)
-  await expect.poll(() => subscription.current.data, { timeout: 2_000 }).toEqual({ score: 56 })
+  const secondWrite = db.table('records').where('id', 1).update({ score: 56 })
+  let secondSettled = false
+  void Promise.resolve(secondWrite).then(() => { secondSettled = true })
+  await advanceFakeTimersUntil(() => released, 'the second write to reach the realtime listener')
+  await cacheWriteJoined.promise
+
+  await advanceFakeTimersUntil(
+    () => firstSettled && secondSettled && JSON.stringify(subscription.current.data) === JSON.stringify({ score: 56 }),
+    'the second write to settle and the subscriber to receive its result',
+  )
+  expect(subscription.current.data).toEqual({ score: 56 })
 })
