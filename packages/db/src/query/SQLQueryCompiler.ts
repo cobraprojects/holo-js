@@ -162,7 +162,7 @@ export class SQLQueryCompiler {
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
     const lockOf = plan.lockSourceOnly === true
-      ? (plan.source.alias ? this.quoteIdentifier(plan.source.alias) : this.compileTableReference(plan.source.tableName))
+      ? this.quoteIdentifier(plan.source.alias ?? plan.source.tableName.slice(plan.source.tableName.lastIndexOf('.') + 1))
       : undefined
     const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode, lockOf) : ''
     const lockClause = compiledLockClause ? ` ${compiledLockClause}` : ''

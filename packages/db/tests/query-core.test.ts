@@ -1740,11 +1740,12 @@ describe('query core slice', () => {
     expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
       .toBe('SELECT * FROM "posts" FOR SHARE OF "posts"')
     expect(mysql.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
-      .toBe('SELECT * FROM `posts` FOR UPDATE OF `posts`')
-    expect(mysql.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
-      .toBe('SELECT * FROM `posts` FOR SHARE OF `posts`')
+      .toBe('SELECT * FROM `posts` FOR UPDATE')
     expect(mysql.compile(withLockMode(createSelectQueryPlan(source), 'share')).sql)
       .toBe('SELECT * FROM `posts` LOCK IN SHARE MODE')
+    const qualified = { kind: 'table' as const, tableName: 'analytics.posts' }
+    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(qualified), 'update'))).sql)
+      .toBe('SELECT * FROM "analytics"."posts" FOR UPDATE OF "posts"')
   })
 
   it('keeps dialect-specific compilers aligned on shared SQL planning rules', () => {
