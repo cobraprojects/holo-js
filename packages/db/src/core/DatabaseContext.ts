@@ -522,12 +522,21 @@ export class DatabaseContext {
     entry: TransactionLog,
     error: unknown,
   ): Promise<void> {
+    let compensationFailure: { error: unknown } | undefined
     try {
       await transaction?._runAfterRollbackCallbacks(this)
     } catch (compensationError) {
-      throw new AggregateError([error, compensationError], 'Transaction failed and rollback compensation failed.')
-    } finally {
+      compensationFailure = { error: compensationError }
+    }
+
+    try {
       await this._logger?.onTransactionRollback?.({ ...entry, error })
+    } catch (logError) {
+      if (!compensationFailure) throw logError
+    }
+
+    if (compensationFailure) {
+      throw new AggregateError([error, compensationFailure.error], 'Transaction failed and rollback compensation failed.')
     }
   }
 

@@ -461,6 +461,23 @@ describe('transaction nesting and commit integrity', () => {
     }
   }, 5_000)
 
+  it.each(drivers)('keeps the compensation failure when the logger also fails on %s', async driver => {
+    const { db, table } = await openDatabase(driver, {
+      logger: { onTransactionRollback: () => { throw new Error('logger failed') } },
+    })
+
+    const failure = await db.transaction(async tx => {
+      tx.afterRollback(() => { throw new Error('compensation failed') })
+      await tx.table(table).insert({ id: 1, name: 'Failed' })
+      throw new Error('callback failed')
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect((failure as AggregateError).errors).toHaveLength(2)
+    expect((failure as AggregateError).errors[0]).toEqual(new Error('callback failed'))
+    expect((failure as AggregateError).errors[1]).toBeInstanceOf(TransactionError)
+  }, 5_000)
+
   it.each(drivers)('reports a root rollback once when a rollback callback fails after a successful rollback on %s', async driver => {
     const rolledBack: Array<{ scope: string, depth: number, error?: unknown }> = []
     const { db, table } = await openDatabase(driver, {
