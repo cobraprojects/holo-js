@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { compileDialectDefaultLiteral } from '../src'
 
 describe('schema default literals', () => {
@@ -15,7 +16,18 @@ describe('schema default literals', () => {
     expect(compileDialectDefaultLiteral('sqlite', 3.5)).toBe('3.5')
     expect(compileDialectDefaultLiteral('postgres', null)).toBe('NULL')
     expect(compileDialectDefaultLiteral('mysql', 'O\'Reilly')).toBe('\'O\'\'Reilly\'')
-    expect(compileDialectDefaultLiteral('postgres', new Date('2025-01-02T03:04:05.000Z'))).toBe('\'2025-01-02T03:04:05.000Z\'')
+    expect(compileDialectDefaultLiteral('postgres', new Date('2025-01-02T03:04:05.000Z'))).toBe('\'2025-01-02T03:04:05.000+00:00\'')
     expect(compileDialectDefaultLiteral('mysql', { enabled: true, count: 2 })).toBe('\'{"enabled":true,"count":2}\'')
+  })
+
+  it('writes PostgreSQL and MySQL Date defaults as wall-clock time in app.timezone', () => {
+    configureConfigRuntime({ app: { timezone: 'America/New_York' } } as never)
+    try {
+      const instant = new Date('2025-01-02T03:04:05.000Z')
+      expect(compileDialectDefaultLiteral('postgres', instant)).toBe('\'2025-01-01T22:04:05.000-05:00\'')
+      expect(compileDialectDefaultLiteral('mysql', instant)).toBe('\'2025-01-01 22:04:05.000\'')
+    } finally {
+      resetConfigRuntime()
+    }
   })
 })
