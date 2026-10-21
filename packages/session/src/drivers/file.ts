@@ -64,7 +64,10 @@ function getFlashPath(recordPath: string): string {
   return `${recordPath}.flash`
 }
 
-const lockPresentError = Object.assign(new Error('File session lock is present'), { code: 'EEXIST' })
+function lockPresentError(lockPath: string): Error {
+  return Object.assign(new Error(`[@holo-js/session] File session lock "${lockPath}" is present.`), { code: 'EEXIST' })
+}
+
 const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const BUSY_FILE_RETRY_MS = 1_000
 const RECORD_LOCK_RELEASE_RETRY_MS = 1_000
@@ -351,6 +354,10 @@ async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirector
   return release
 }
 
+async function hasRecordLock(lockPath: string): Promise<boolean> {
+  return await lstat(lockPath).then(() => true, () => false)
+}
+
 async function acquireRecordLockBefore(
   recordPath: string,
   makeDirectory: MakeDirectory,
@@ -380,7 +387,7 @@ async function acquireRecordLockBefore(
         throw acquireTimeoutError(recordPath, uncontendedFailure)
       }
       try {
-        if (await lstat(lockPath).then(() => true, () => false)) throw lockPresentError
+        if (await hasRecordLock(lockPath)) throw lockPresentError(lockPath)
         await rename(pendingPath, lockPath)
         acquired = true
       } catch (error) {
