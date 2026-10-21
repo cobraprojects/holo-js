@@ -472,6 +472,10 @@ export function hasActiveDatabaseDependencyCollector(): boolean {
   return typeof databaseDependencyCollector.getStore() !== 'undefined'
 }
 
+function runWithoutDatabaseDependencyCollection<TValue>(callback: () => TValue): TValue {
+  return databaseDependencyCollector.exit(callback)
+}
+
 export function recordDatabaseQueryDependencies(dependencies: readonly string[] | undefined): void {
   if (!dependencies || dependencies.length === 0) {
     return
@@ -2252,6 +2256,7 @@ export const queryCacheInternals = {
   resolveQueryCacheDependencies,
   resolveQueryCacheKey,
   resetDatabaseDependencyInvalidationListeners,
+  runWithoutDatabaseDependencyCollection,
   supportsAutomaticPredicateInvalidation,
   supportsAutomaticQueryCacheInvalidation,
 }
