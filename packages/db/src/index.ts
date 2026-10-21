@@ -241,7 +241,11 @@ export type {
   EmptyScopeMap,
   ModelRelationPath,
   RelatedColumnNameForRelationPath,
+  ModelRelationName,
   RelationConstraintDefinition,
+  RelationConstraintFor,
+  RelationConstraintMap,
+  RelationNameConstraintMapGuarded,
 } from './model'
 export type {
   AnyModelDefinition,
