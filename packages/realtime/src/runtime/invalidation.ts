@@ -163,7 +163,7 @@ function scheduleRefreshKey(refreshKey: string): Promise<void> {
 
   if (refresh.running) {
     refresh.pending = true
-    return refresh.running
+    return Promise.resolve()
   }
 
   refresh.running = drainRefresh(refreshKey, refresh)
