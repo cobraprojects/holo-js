@@ -490,6 +490,214 @@ it('removes a presence member whose disconnect delete failed on the next lease r
   expect(liveSent.some(message => message.event === 'pusher_internal:subscription_succeeded')).toBe(true)
 })
 
+function createPresenceLeaseHarness() {
+  const leases = new Map<string, string>()
+  const hashes = new Map<string, Map<string, string>>()
+  const subscribers = new Set<(payload: string) => void>()
+  const bus = {
+    deliver: async (payload: string) => { for (const deliver of [...subscribers]) deliver(payload) },
+    subscribe: async (_channel: string, onMessage: (payload: string) => void) => {
+      subscribers.add(onMessage)
+      return () => { subscribers.delete(onMessage) }
+    },
+  }
+  const createNode = (nodeId: string) => {
+    const control: { leaseGate?: Promise<void>, publishGate?: Promise<void>, hashGate?: Promise<void>, failNextPublish: boolean, heldPublishes: number, heldHashWrites: number } = { failNextPublish: false, heldPublishes: 0, heldHashWrites: 0 }
+    const runtime = createBroadcastWorkerRuntime({
+      config: normalizeBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } } }),
+      channelAuth: { resolveUser: ({ headers }) => ({ id: headers.get('x-test-user') ?? 'anonymous' }), definitions: [defineChannel('room.1', { type: 'presence', authorize: user => ({ id: (user as { id: string }).id }) })] },
+      scaling: {
+        driver: 'redis', connection: 'shared', nodeId, eventChannel: 'events',
+        liveness: { leaseTtlMs: 60_000, refreshIntervalMs: 400 },
+        adapter: {
+          publish: async (_channel: string, payload: string) => {
+            if (control.publishGate) {
+              control.heldPublishes += 1
+              await control.publishGate
+            }
+            if (control.failNextPublish) {
+              control.failNextPublish = false
+              throw new Error('Redis connection lost')
+            }
+            await bus.deliver(payload)
+          },
+          subscribe: bus.subscribe,
+          hashSet: async (key, field, value) => {
+            if (control.hashGate) {
+              control.heldHashWrites += 1
+              await control.hashGate
+            }
+            hashes.set(key, new Map([...(hashes.get(key) ?? []), [field, value]]))
+          },
+          hashGetAll: async key => Object.fromEntries(hashes.get(key) ?? []),
+          hashDelete: async (key, field) => { hashes.get(key)?.delete(field) },
+          setWithExpiry: async (key, value) => {
+            await control.leaseGate
+            leases.set(key, value)
+          },
+          exists: async key => leases.has(key),
+          close: async () => {},
+        },
+      },
+    })
+    onTestFinished(() => runtime.close())
+    return { runtime, control }
+  }
+  const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
+  const subscribe = JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } })
+  const connect = (runtime: ReturnType<typeof createNode>['runtime'], socketId: string, user: string) => {
+    const sent: Array<{ event: string, channel?: string, data: string }> = []
+    runtime.connectWebSocket({ socketId, app, headers: new Headers({ 'x-test-user': user }), send: payload => sent.push(JSON.parse(payload)), close: () => {}, bufferedAmount: () => 0 })
+    return sent
+  }
+  const removedIds = (sent: Array<{ event: string, data: string }>) => sent.filter(message => message.event === 'pusher_internal:member_removed').map(message => (JSON.parse(message.data) as { user_id: string }).user_id)
+  const addedIds = (sent: Array<{ event: string, data: string }>) => sent.filter(message => message.event === 'pusher_internal:member_added').map(message => (JSON.parse(message.data) as { id: string }).id)
+  const presenceFields = () => [...hashes.values()].flatMap(members => [...members.keys()]).sort()
+  const expireLease = (nodeId: string) => {
+    for (const [key, value] of leases) {
+      if (value === nodeId) leases.delete(key)
+    }
+  }
+  const rosterOf = (sent: Array<{ event: string, data: string }>) => {
+    const succeeded = sent.find(message => message.event === 'pusher_internal:subscription_succeeded')
+    return (JSON.parse(succeeded!.data) as { presence: { ids: string[] } }).presence.ids.slice().sort()
+  }
+  const replayedRoster = (sent: Array<{ event: string, data: string }>) => {
+    let members = new Set<string>()
+    for (const message of sent) {
+      if (message.event === 'pusher_internal:subscription_succeeded') members = new Set((JSON.parse(message.data) as { presence: { ids: string[] } }).presence.ids)
+      if (message.event === 'pusher_internal:member_added') members.add((JSON.parse(message.data) as { id: string }).id)
+      if (message.event === 'pusher_internal:member_removed') members.delete((JSON.parse(message.data) as { user_id: string }).user_id)
+    }
+    return [...members].sort()
+  }
+  return { createNode, connect, subscribe, removedIds, addedIds, presenceFields, expireLease, rosterOf, replayedRoster }
+}
+
+it('re-publishes live presence members after a stalled node recovers its lapsed lease without ghosts or duplicate joins', async () => {
+  const harness = createPresenceLeaseHarness()
+  const node = harness.createNode('node-a')
+  const observer = harness.createNode('node-b')
+  harness.connect(node.runtime, '8.1', 'ghost-user')
+  await node.runtime.receiveWebSocketMessage('8.1', harness.subscribe)
+  const liveSent = harness.connect(node.runtime, '8.2', 'live-user')
+  await node.runtime.receiveWebSocketMessage('8.2', harness.subscribe)
+  const observerSent = harness.connect(observer.runtime, '9.1', 'observer')
+  await observer.runtime.receiveWebSocketMessage('9.1', harness.subscribe)
+  expect(harness.rosterOf(observerSent)).toEqual(['ghost-user', 'live-user', 'observer'])
+
+  let resume = (): void => {}
+  node.control.leaseGate = new Promise<void>(resolve => { resume = resolve })
+  harness.expireLease('node-a')
+  await expect.poll(() => harness.removedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+  expect(harness.presenceFields()).toEqual(['node-b:9.1'])
+
+  resume()
+  await expect.poll(() => harness.presenceFields()).toEqual(['node-a:8.1', 'node-a:8.2', 'node-b:9.1'])
+  await expect.poll(() => harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+  await new Promise(resolve => setTimeout(resolve, 1_000))
+  expect(harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+  expect(harness.addedIds(liveSent)).toEqual(['observer'])
+
+  node.runtime.disconnectWebSocket('8.1')
+  await expect.poll(() => harness.presenceFields()).toEqual(['node-a:8.2', 'node-b:9.1'])
+  const lateSent = harness.connect(observer.runtime, '9.2', 'late-user')
+  await observer.runtime.receiveWebSocketMessage('9.2', harness.subscribe)
+  expect(harness.rosterOf(lateSent)).toEqual(['late-user', 'live-user', 'observer'])
+})
+
+it('retries a presence re-publish that failed during lease recovery', async () => {
+  const reports: unknown[] = []
+  errorReportingInternals.configure({ report: error => { reports.push(error) } })
+  onTestFinished(() => { errorReportingInternals.configure(undefined) })
+  const harness = createPresenceLeaseHarness()
+  const node = harness.createNode('node-a')
+  const observer = harness.createNode('node-b')
+  harness.connect(node.runtime, '8.1', 'ghost-user')
+  await node.runtime.receiveWebSocketMessage('8.1', harness.subscribe)
+  harness.connect(node.runtime, '8.2', 'live-user')
+  await node.runtime.receiveWebSocketMessage('8.2', harness.subscribe)
+  const observerSent = harness.connect(observer.runtime, '9.1', 'observer')
+  await observer.runtime.receiveWebSocketMessage('9.1', harness.subscribe)
+
+  let resume = (): void => {}
+  node.control.leaseGate = new Promise<void>(resolve => { resume = resolve })
+  harness.expireLease('node-a')
+  await expect.poll(() => harness.removedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+
+  node.control.failNextPublish = true
+  resume()
+  await expect.poll(() => reports.length).toBeGreaterThan(0)
+  await expect.poll(() => harness.presenceFields()).toEqual(['node-a:8.1', 'node-a:8.2', 'node-b:9.1'])
+  await expect.poll(() => harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+  await new Promise(resolve => setTimeout(resolve, 1_000))
+  expect(harness.addedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+})
+
+it('does not re-publish a member whose socket disconnects while lease recovery is publishing an earlier member', async () => {
+  const harness = createPresenceLeaseHarness()
+  const node = harness.createNode('node-a')
+  const observer = harness.createNode('node-b')
+  harness.connect(node.runtime, '8.1', 'ghost-user')
+  await node.runtime.receiveWebSocketMessage('8.1', harness.subscribe)
+  harness.connect(node.runtime, '8.2', 'live-user')
+  await node.runtime.receiveWebSocketMessage('8.2', harness.subscribe)
+  const observerSent = harness.connect(observer.runtime, '9.1', 'observer')
+  await observer.runtime.receiveWebSocketMessage('9.1', harness.subscribe)
+
+  let resume = (): void => {}
+  node.control.leaseGate = new Promise<void>(resolve => { resume = resolve })
+  harness.expireLease('node-a')
+  await expect.poll(() => harness.removedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+
+  let releasePublish = (): void => {}
+  node.control.publishGate = new Promise<void>(resolve => { releasePublish = resolve })
+  resume()
+  await expect.poll(() => node.control.heldPublishes).toBeGreaterThan(0)
+  node.runtime.disconnectWebSocket('8.2')
+  releasePublish()
+  node.control.publishGate = undefined
+
+  await expect.poll(() => harness.presenceFields()).toEqual(['node-a:8.1', 'node-b:9.1'])
+  await new Promise(resolve => setTimeout(resolve, 1_000))
+  expect(harness.addedIds(observerSent).sort()).toEqual(['ghost-user'])
+  const lateSent = harness.connect(observer.runtime, '9.2', 'late-user')
+  await observer.runtime.receiveWebSocketMessage('9.2', harness.subscribe)
+  expect(harness.rosterOf(lateSent)).toEqual(['ghost-user', 'late-user', 'observer'])
+})
+
+
+it('keeps a recovering member in peer rosters when a peer rebuilds its roster while the recovery hash write is pending', async () => {
+  const harness = createPresenceLeaseHarness()
+  const node = harness.createNode('node-a')
+  const observer = harness.createNode('node-b')
+  harness.connect(node.runtime, '8.1', 'ghost-user')
+  await node.runtime.receiveWebSocketMessage('8.1', harness.subscribe)
+  harness.connect(node.runtime, '8.2', 'live-user')
+  await node.runtime.receiveWebSocketMessage('8.2', harness.subscribe)
+  const observerSent = harness.connect(observer.runtime, '9.1', 'observer')
+  await observer.runtime.receiveWebSocketMessage('9.1', harness.subscribe)
+
+  let resume = (): void => {}
+  node.control.leaseGate = new Promise<void>(resolve => { resume = resolve })
+  harness.expireLease('node-a')
+  await expect.poll(() => harness.removedIds(observerSent).sort()).toEqual(['ghost-user', 'live-user'])
+
+  let releaseHashWrite = (): void => {}
+  node.control.hashGate = new Promise<void>(resolve => { releaseHashWrite = resolve })
+  resume()
+  await expect.poll(() => node.control.heldHashWrites).toBeGreaterThan(0)
+  const peerSent = harness.connect(observer.runtime, '9.2', 'peer-user')
+  await observer.runtime.receiveWebSocketMessage('9.2', harness.subscribe)
+  expect(harness.rosterOf(peerSent)).toEqual(['observer', 'peer-user'])
+
+  releaseHashWrite()
+  node.control.hashGate = undefined
+  await expect.poll(() => harness.presenceFields()).toEqual(['node-a:8.1', 'node-a:8.2', 'node-b:9.1', 'node-b:9.2'])
+  await new Promise(resolve => setTimeout(resolve, 1_000))
+  expect(harness.replayedRoster(observerSent)).toEqual(['ghost-user', 'live-user', 'observer', 'peer-user'])
+})
+
 it('publishes an accepted whisper that is still in flight before shutdown closes the scaling adapter', async () => {
   const events: string[] = []
   let releaseWhisper = (): void => {}
