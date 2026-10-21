@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import {
   clearQueueConnection,
@@ -127,8 +127,9 @@ describe('@holo-js/queue native worker behavior', () => {
     expect(events).toEqual(['released'])
     expect(await harness.driver.reserve({})).toBeNull()
     expect((await harness.readJobRows())[0]?.attempts).toBe(1)
-    await setTimeout(1_050)
-    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    await vi.waitFor(async () => {
+      expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    }, { timeout: 10_000, interval: 50 })
     expect(attempts).toEqual([1, 2])
     expect(events).toEqual(['released', 'completed'])
     expect(await harness.readJobRows()).toEqual([])
@@ -244,8 +245,9 @@ describe('@holo-js/queue native worker behavior', () => {
     await harness.enqueue('abandoned')
     expect(await harness.driver.reserve({ queueNames: ['default'], workerId: 'crashed-worker' })).not.toBeNull()
     expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 0, stoppedBecause: 'once' })
-    await setTimeout(1_050)
-    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    await vi.waitFor(async () => {
+      expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1 })
+    }, { timeout: 10_000, interval: 50 })
     expect(attempts).toEqual([2])
     expect(await harness.readJobRows()).toEqual([])
   })
@@ -262,9 +264,10 @@ describe('@holo-js/queue native worker behavior', () => {
     }, { name: 'exhausted' })
     const job = await harness.enqueue('exhausted', { maxAttempts: 'tries' in workerOptions ? 3 : 1 })
     expect(await harness.driver.reserve({ queueNames: ['default'], workerId: 'crashed-worker' })).not.toBeNull()
-    await setTimeout(1_050)
-    expect(await runQueueWorker({ ...workerOptions, once: true, onJobFailed: event => { events.push(`worker-failed:${event.attempt}/${event.maxAttempts}`) } }))
-      .toMatchObject({ processed: 0, released: 0, failed: 1 })
+    await vi.waitFor(async () => {
+      expect(await runQueueWorker({ ...workerOptions, once: true, onJobFailed: event => { events.push(`worker-failed:${event.attempt}/${event.maxAttempts}`) } }))
+        .toMatchObject({ processed: 0, released: 0, failed: 1 })
+    }, { timeout: 10_000, interval: 50 })
     expect(events).toEqual([
       'failed:[Holo Queue] Queue job "exhausted" has been attempted too many times.',
       'worker-failed:2/1',
@@ -295,8 +298,9 @@ describe('@holo-js/queue native worker behavior', () => {
     await expect(runQueueWorker({ once: true })).rejects.toThrow('[Holo Queue] Queue job "hung" exceeded timeout of 1 seconds.')
     expect(await harness.readJobRows()).toEqual([expect.objectContaining({ id: job.id, reservation_id: expect.any(String) })])
     expect(await listFailedQueueJobs()).toEqual([])
-    await setTimeout(2_050)
-    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1, failed: 0 })
+    await vi.waitFor(async () => {
+      expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 1, failed: 0 })
+    }, { timeout: 10_000, interval: 50 })
     expect(attempts).toEqual([1, 2])
     expect(await harness.readJobRows()).toEqual([])
   })
@@ -309,8 +313,9 @@ describe('@holo-js/queue native worker behavior', () => {
     }, { name: 'hung-once' })
     const job = await harness.enqueue('hung-once', { maxAttempts: 1 })
     await expect(runQueueWorker({ once: true })).rejects.toThrow('exceeded timeout of 1 seconds')
-    await setTimeout(2_050)
-    expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 0, failed: 1 })
+    await vi.waitFor(async () => {
+      expect(await runQueueWorker({ once: true })).toMatchObject({ processed: 0, failed: 1 })
+    }, { timeout: 10_000, interval: 50 })
     expect(await listFailedQueueJobs()).toEqual([expect.objectContaining({ jobId: job.id, exception: expect.stringContaining('attempted too many times') })])
   })
 

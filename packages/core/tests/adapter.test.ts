@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -27,6 +27,10 @@ const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/
 const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
 const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []
+const backdateFile = (filePath: string) => {
+  const past = new Date(Date.now() - 60_000)
+  return utimes(filePath, past, past)
+}
 type FetchInput = Request | URL | string
 type StrictStorageRuntime = {
   getItemRaw(key: string): Promise<Uint8Array | ArrayBuffer | Buffer | null>
@@ -740,7 +744,7 @@ export default defineStorageConfig({ defaultDisk: 'local', disks: { local: { dri
 
     expect(first.config.app.name).toBe('Adapter App')
 
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+    await backdateFile(configPath)
 
     await writeFile(configPath, `
 import { defineAppConfig } from ${configEntry}
@@ -847,7 +851,7 @@ export default defineJob({
 
     await expect(Queue.dispatchSync('report', {})).resolves.toBe('first')
 
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+    await backdateFile(join(root, 'server/jobs/report.ts'))
 
     await writeFile(join(root, 'server/jobs/report.ts'), `
 import { defineJob } from '@holo-js/queue'
@@ -933,7 +937,7 @@ export default defineModel(defineGeneratedTable('users', { id: column.id(), emai
 
     await expect(DB.table('users').where('email', 'first@app.test').exists()).resolves.toBe(true)
     expect((await DB.table('users').where('email', 'first@app.test').first())?.password).not.toBe('secret')
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+    await backdateFile(join(root, 'server/models/User.ts'))
 
     await writeFile(join(root, 'server/models/User.ts'), `
 import { column, defineGeneratedTable, defineModel } from '@holo-js/db'

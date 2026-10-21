@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { createBroadcastWorkerRuntime, defineChannel, normalizeBroadcastConfig, workerInternals, type BroadcastChannelAuthRuntimeBindings, type BroadcastRealtimeRuntimeBindings } from '../src'
 
 const app = { connection: 'main', appId: 'main', key: 'main-key', secret: 'main-secret' }
@@ -331,8 +331,9 @@ it('disconnects every slow presence subscriber when one departure notifies them 
 
   buffered = 4 * 1024 * 1024 + 1
   expect(() => runtime.disconnectWebSocket('leaver.1')).not.toThrow()
-  await new Promise(resolve => setTimeout(resolve, 0))
-  expect(runtime.getStats().connectionCount).toBe(0)
+  await vi.waitFor(() => {
+    expect(runtime.getStats().connectionCount).toBe(0)
+  })
 })
 
 it('disconnects a slow consumer whose buffered output exceeds the bound and delivers nothing further to it', async () => {

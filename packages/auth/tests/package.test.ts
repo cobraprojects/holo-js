@@ -3072,7 +3072,9 @@ describe('@holo-js/auth package runtime', () => {
     const initialRecord = (await runtime.sessionStore.read(established.sessionId))
     expect(initialRecord).toBeDefined()
 
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await vi.waitFor(() => {
+      expect(Date.now()).toBeGreaterThan(initialRecord!.lastActivityAt.getTime())
+    })
 
     const resolvedUser = await user()
     const refreshedRecord = (await runtime.sessionStore.read(established.sessionId))

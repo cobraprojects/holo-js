@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
 import {
   configureEnvRuntime,
   env,
@@ -44,9 +44,9 @@ export default { owner: env('HOLO_EVALUATION_OWNER'), direct: process.env.HOLO_E
     preferCache: false,
     processEnv: { HOLO_EVALUATION_OWNER: 'first' },
   })
-  while (process.env.HOLO_EVALUATION_OWNER !== 'first') {
-    await new Promise(resolve => setTimeout(resolve, 1))
-  }
+  await vi.waitFor(() => {
+    expect(process.env.HOLO_EVALUATION_OWNER).toBe('first')
+  }, { timeout: 10_000, interval: 1 })
   const [firstConfig, secondConfig] = await Promise.all([
     loading,
     loadConfigDirectory<{ services: { owner: string, direct: string } }>(second, { preferCache: false }),

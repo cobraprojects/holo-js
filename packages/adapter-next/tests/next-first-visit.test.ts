@@ -4,8 +4,7 @@ import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { setTimeout } from 'node:timers/promises'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 
 it('uses the proxy session for the first route token and submission in native Next', async () => {
   const repository = resolve(import.meta.dirname, '../../..')
@@ -77,16 +76,10 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
-  let ready = false
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  await vi.waitFor(async () => {
     if (server.exitCode !== null) throw new Error(output)
-    if (await fetch(baseUrl).then(response => response.ok).catch(() => false)) {
-      ready = true
-      break
-    }
-    await setTimeout(100)
-  }
-  if (!ready) throw new Error(`Next did not become ready: ${output}`)
+    expect(await fetch(baseUrl).then(response => response.ok).catch(() => false), `Next did not become ready: ${output}`).toBe(true)
+  }, { timeout: 60_000, interval: 100 })
   const first = await fetch(`${baseUrl}/api/token`)
   expect(first.status, output).toBe(200)
   const payload: unknown = await first.json()

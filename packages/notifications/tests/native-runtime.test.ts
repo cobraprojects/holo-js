@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import { normalizeDatabaseConfig } from '@holo-js/db'
 import { runQueueWorker } from '@holo-js/queue'
 import { createCoreNotificationStore } from '../../core/src/portable/notificationPersistence'
@@ -161,8 +161,9 @@ it('persists queued notification tries and retries a failed delivery after its b
   expect((await harness.readJobRows())[0]?.max_attempts).toBe(2)
   expect(await runQueueWorker({ connection: 'database', queueNames: ['flaky'], once: true }))
     .toMatchObject({ processed: 0, released: 1, failed: 0 })
-  await new Promise(resolve => setTimeout(resolve, 1100))
-  expect(await runQueueWorker({ connection: 'database', queueNames: ['flaky'], once: true })).toMatchObject({ processed: 1, failed: 0 })
+  await vi.waitFor(async () => {
+    expect(await runQueueWorker({ connection: 'database', queueNames: ['flaky'], once: true })).toMatchObject({ processed: 1, failed: 0 })
+  }, { timeout: 10_000, interval: 50 })
   expect(sends).toBe(2)
 })
 

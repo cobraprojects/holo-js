@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { setTimeout } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CacheDriverContract } from '@holo-js/cache'
 import { createSchemaService, registerDatabaseDriverFactory, TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
@@ -152,8 +151,7 @@ async function insertFillerLocks(connection: DatabaseContext, lockTable: string)
 }
 
 async function waitForBlockedPrune(control: DatabaseContext, driver: ServerDriver, lockTable: string): Promise<void> {
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
+  await vi.waitFor(async () => {
     const result = driver === 'mysql'
       ? await control.queryCompiled({
           sql: 'SELECT COUNT(*) AS waiting FROM information_schema.processlist WHERE COMMAND = ? AND INFO LIKE ?',
@@ -165,12 +163,10 @@ async function waitForBlockedPrune(control: DatabaseContext, driver: ServerDrive
           bindings: [`DELETE%${lockTable}%`],
           source: 'test:cache-db:deadlock',
         })
-    if (Number(result.rows[0]?.waiting) > 0) {
-      return
+    if (!(Number(result.rows[0]?.waiting) > 0)) {
+      throw new Error(`No ${driver} session blocked on the expired-lock prune of ${lockTable}.`)
     }
-    await setTimeout(5)
-  }
-  throw new Error(`No ${driver} session blocked on the expired-lock prune of ${lockTable}.`)
+  }, { timeout: 15_000, interval: 5 })
 }
 
 function deferred(): { readonly promise: Promise<void>, readonly resolve: () => void } {
