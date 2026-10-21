@@ -127,6 +127,26 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
     })
   })
 
+  it('rejects zoned text with an impossible calendar value instead of writing a different instant', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const table = `holo_mysql_invalid_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME(3) NOT NULL, instant TIMESTAMP(3) NOT NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('mysql') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.datetime(), instant: column.timestamp() })
+        const Model = defineModel(typed, { primaryKey: 'id', timestamps: false, fillable: ['id', 'at', 'instant'] })
+
+        await expect(Model.create({ id: 1, at: '2025-02-30T03:04:05Z', instant: '2025-02-30T03:04:05Z' } as never)).rejects.toThrow()
+        expect((await adapter.query<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`)).rows).toEqual([{ count: 0 }])
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
   it('keeps a TIMESTAMP as the same instant across a daylight saving change in app.timezone', async () => {
     await withAppTimezone('America/New_York', async () => {
       const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
