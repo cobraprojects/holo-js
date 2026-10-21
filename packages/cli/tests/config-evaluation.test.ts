@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { configureEnvRuntime, env, loadConfigDirectory } from '@holo-js/config'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { upsertQueuePackageDependency } from '../src/project/scaffold/dependencies'
 import { loadProjectConfig } from '../src/project/config'
 
@@ -36,9 +36,9 @@ export default { owner: process.env.HOLO_EVALUATION_QUEUE_DRIVER }
 `)
 
   const loading = loadConfigDirectory(other, { processEnv: { HOLO_EVALUATION_QUEUE_DRIVER: 'database' } })
-  while (process.env.HOLO_EVALUATION_QUEUE_DRIVER !== 'database') {
-    await new Promise(resolve => setTimeout(resolve, 1))
-  }
+  await vi.waitFor(() => {
+    expect(process.env.HOLO_EVALUATION_QUEUE_DRIVER).toBe('database')
+  }, { timeout: 5000, interval: 1 })
   await Promise.all([loading, upsertQueuePackageDependency(root)])
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
     dependencies: Record<string, string>
@@ -74,9 +74,9 @@ export default { owner: process.env.HOLO_EVALUATION_PROJECT_PATH }
   const loading = loadConfigDirectory<{ services: { owner: string } }>(other, {
     processEnv: { HOLO_EVALUATION_PROJECT_PATH: 'first' },
   })
-  while (process.env.HOLO_EVALUATION_PROJECT_PATH !== 'first') {
-    await new Promise(resolve => setTimeout(resolve, 1))
-  }
+  await vi.waitFor(() => {
+    expect(process.env.HOLO_EVALUATION_PROJECT_PATH).toBe('first')
+  }, { timeout: 5000, interval: 1 })
   const [first, second] = await Promise.all([loading, loadProjectConfig(root)])
   expect(first.custom.services.owner).toBe('first')
   expect(second.config.paths).toMatchObject({ models: 'second', migrations: 'second' })
