@@ -199,6 +199,27 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.release).toBeUndefined()
   })
 
+  it('polls a visibly held lock without retrying the rename', async () => {
+    const holder = startAcquisition('holder')
+    await settleHolderOperation(holder.ready)
+    const asleep = nextSleep()
+    const waiter = startAcquisition('waiter')
+    await asleep
+    const attemptsWhileHeld = renameAttempts('waiter')
+
+    await advanceTo(waiter, Date.now() + COARSE_STEP_MS)
+    expect(renameAttempts('waiter')).toBe(attemptsWhileHeld)
+    expect(waiter.settled).toBe(false)
+
+    await releaseAcquisition(holder)
+    await tickUntil(waiter, () => waiter.settled)
+    expect(waiter.error).toBeUndefined()
+    expect(waiter.release).toBeDefined()
+    expect(renameAttempts('waiter')).toBeGreaterThan(attemptsWhileHeld)
+
+    await releaseAcquisition(waiter)
+  })
+
   it('restarts the stall deadline when the lock changes hands', async () => {
     const first = startAcquisition('first')
     await settleHolderOperation(first.ready)
@@ -214,9 +235,8 @@ describe('file session lock handover under a fake clock', () => {
     await releaseAcquisition(first)
     const second = startAcquisition('second')
     await settleHolderOperation(second.ready)
-    const attemptsAtHandover = renameAttempts('waiter')
-    await tickUntil(waiter, () => renameAttempts('waiter') > attemptsAtHandover)
-    expect(renameAttempts('waiter')).toBeGreaterThan(attemptsAtHandover)
+    await advanceTo(waiter, Date.now() + COARSE_STEP_MS)
+    expect(waiter.settled).toBe(false)
 
     await advanceTo(waiter, startedAt + 7_000)
     expect(waiter.settled).toBe(false)
