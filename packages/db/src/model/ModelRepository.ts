@@ -275,15 +275,14 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return this.createCollection([])
     }
 
-    if (!isKeySeparableQuery(this.query())) {
-      const query = this.query()
+    const scoped = this.query()
+    if (!isKeySeparableQuery(scoped)) {
       const integerKeys = integerKeysToInline(keys, this.definition.table.columns[primaryKey])
       return integerKeys
-        ? query[whereIntegerKeysIn](integerKeys).get()
-        : query.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
+        ? scoped[whereIntegerKeysIn](integerKeys).get()
+        : scoped.where(primaryKey, 'in', singleStatementRelationKeys(keys)).get()
     }
 
-    const scoped = this.query()
     const storedRows = await loadRelationKeyChunks(keys, false, chunk => scoped
       .getTableQueryBuilder()
       .select(primaryKey as never)

@@ -18,6 +18,8 @@ import {
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
 import { canonicalStoredKey } from '../src/model/entityRuntime'
+import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
+import { queryCacheInternals } from '../src'
 import { createTestTable } from './support/schema'
 
 function openSQLite(logger?: { onQueryStart(entry: QueryStartLog): void }) {
@@ -338,6 +340,97 @@ describe('bounded relation loading', () => {
     const found = await Doc.findMany(keys)
 
     expect(found).toHaveLength(256)
+  })
+
+  it('runs a global scope once for a chunked findMany regardless of chunk count', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let invocations = 0
+    const User = defineModelFromTable(users, {
+      globalScopes: { counted: query => {
+        invocations += 1
+        return query
+      } },
+    })
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(invocations).toBe(1)
+  })
+
+  it('runs a global scope once for a single-statement findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 10 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let invocations = 0
+    const User = defineModelFromTable(users, {
+      globalScopes: { counted: query => {
+        invocations += 1
+        return query.limit(5)
+      } },
+    })
+    expect(await User.findMany(Array.from({ length: 10 }, (_, index) => index + 1))).toHaveLength(5)
+
+    expect(invocations).toBe(1)
+  })
+
+  it('uses a global scope cache key for one statement instead of sharing it across findMany chunks', async () => {
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users, {
+      globalScopes: { shared: query => query.cache({ key: 'users.findMany.shared', ttl: 60 }) },
+    })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(300)
+  })
+
+  it('excludes soft-deleted rows from a chunked findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string(), deleted_at: column.string().nullable() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}`, deleted_at: index === 0 ? '2026-01-01' : null })))
+
+    const User = defineModelFromTable(users, { softDeletes: true })
+    const found = await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(found).toHaveLength(299)
+    expect(found.some(user => user.get('id') === 1)).toBe(false)
+  })
+
+  it('fires the retrieved observer once per returned row of a chunked findMany', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    let retrieved = 0
+    const User = defineModelFromTable(users, { observers: [{ retrieved() { retrieved += 1 } }] })
+    await User.findMany(Array.from({ length: 300 }, (_, index) => index + 1))
+
+    expect(retrieved).toBe(300)
+  })
+
+  it('records the chunked findMany result in an active database dependency collector', async () => {
+    const db = openSQLite()
+    const users = defineTable('users', { id: column.id(), name: column.string() })
+    await createTestTable(db, users)
+    await db.table(users).insert(Array.from({ length: 300 }, (_, index) => ({ id: index + 1, name: `user ${index + 1}` })))
+
+    const User = defineModelFromTable(users)
+    const collected = await queryCacheInternals.collectDatabaseQueryDependencies(() => User.findMany(Array.from({ length: 300 }, (_, index) => index + 1)))
+
+    expect(collected.value).toHaveLength(300)
+    expect(collected.dependencies.length).toBeGreaterThan(0)
   })
 
   it('pads ModelCollection.toQuery key lists up to 256 to a power-of-two IN size', async () => {

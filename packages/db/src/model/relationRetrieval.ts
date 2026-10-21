@@ -1,5 +1,6 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
+import { hasQueryCache } from '../query/TableQueryBuilder'
 import { canonicalStoredKey } from './entityRuntime'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
@@ -15,8 +16,10 @@ export function collectRelationKeys<TTable extends TableDefinition>(entities: re
 }
 
 export function isKeySeparableQuery<TTable extends TableDefinition>(query: ModelQueryBuilder<TTable>): boolean {
-  const plan = query.getTableQueryBuilder().getPlan()
-  return typeof plan.limit !== 'number'
+  const tableQuery = query.getTableQueryBuilder()
+  const plan = tableQuery.getPlan()
+  return !tableQuery[hasQueryCache]()
+    && typeof plan.limit !== 'number'
     && typeof plan.offset !== 'number'
     && plan.orderBy.length === 0
     && plan.groupBy.length === 0
