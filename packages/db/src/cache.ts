@@ -855,35 +855,16 @@ async function receiveRemoteDatabaseDependencyInvalidation(
   )
 }
 
-type InvalidationStep = { readonly failed: false } | { readonly failed: true, readonly error: unknown }
-
-async function attemptInvalidationStep(step: () => Promise<void> | void): Promise<InvalidationStep> {
-  try {
-    await step()
-    return { failed: false }
-  } catch (error) {
-    return { failed: true, error }
-  }
-}
-
 async function evictThenNotify(
   evict: () => Promise<void> | void,
   notify: () => Promise<void> | void,
 ): Promise<void> {
-  const eviction = await attemptInvalidationStep(evict)
-  const notification = await attemptInvalidationStep(notify)
-  if (eviction.failed && notification.failed) {
-    throw new AggregateError([eviction.error, notification.error], '[@holo-js/db] Cache eviction and realtime notification both failed.')
+  try {
+    await evict()
+  } catch (error) {
+    reportError(error, { capability: 'db', operation: 'cache.invalidateDependencies' })
   }
-
-  if (eviction.failed) {
-    reportError(eviction.error, { capability: 'db', operation: 'cache.invalidateDependencies' })
-    return
-  }
-
-  if (notification.failed) {
-    throw notification.error
-  }
+  await notify()
 }
 
 async function notifyDatabaseDependencyInvalidationListeners(
