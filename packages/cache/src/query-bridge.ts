@@ -167,6 +167,16 @@ type PendingDependencyTable = {
   readonly driverName: string | undefined
 }
 
+type WatchedInvalidationToken = {
+  generation: number
+  watchers: number
+}
+
+type InvalidationWatch = {
+  invalidated(): boolean
+  release(): void
+}
+
 function pendingDependencyTableKey(table: string, driverName: string | undefined): string {
   return `${driverName ?? ''}\u0000${table}`
 }
@@ -188,6 +198,50 @@ export function createCacheQueryBridge(
 
   const pendingDependencyTables = new Map<string, PendingDependencyTable>()
   let dependencyTableDrain: Promise<void> | undefined
+
+  // Only tokens that an in-flight fill watches have a generation. Invalidations for anything else
+  // bump nothing, so the map cannot grow with every row token written.
+  const watchedInvalidationTokens = new Map<string, WatchedInvalidationToken>()
+
+  function bumpInvalidationGenerations(tokens: readonly string[]): void {
+    for (const token of tokens) {
+      const watched = watchedInvalidationTokens.get(token)
+      if (watched) {
+        watched.generation += 1
+      }
+    }
+  }
+
+  // Each token an eviction pass could match against this dependency: the dependency itself and every
+  // ":"-delimited prefix, which is how a table token covers its row and mutation tokens.
+  function invalidationTokensCovering(dependency: CacheDependencyDescriptor): string[] {
+    const tokens = [dependency]
+    for (let index = dependency.indexOf(':'); index !== -1; index = dependency.indexOf(':', index + 1)) {
+      tokens.push(dependency.slice(0, index))
+    }
+    return tokens
+  }
+
+  function watchInvalidations(dependencies: readonly CacheDependencyDescriptor[] = []): InvalidationWatch {
+    const watches = [...new Set(dependencies.flatMap(invalidationTokensCovering))].map((token) => {
+      const watched = watchedInvalidationTokens.get(token) ?? { generation: 0, watchers: 0 }
+      watched.watchers += 1
+      watchedInvalidationTokens.set(token, watched)
+      return { token, watched, generation: watched.generation }
+    })
+
+    return Object.freeze({
+      invalidated: () => watches.some(({ watched, generation }) => watched.generation !== generation),
+      release: () => {
+        for (const { token, watched } of watches) {
+          watched.watchers -= 1
+          if (watched.watchers === 0) {
+            watchedInvalidationTokens.delete(token)
+          }
+        }
+      },
+    })
+  }
 
   return Object.freeze({
     async get<TValue>(key: CacheKeyInput<TValue>, options?: { driver?: string }): Promise<TValue | null> {
@@ -223,16 +277,26 @@ export function createCacheQueryBridge(
       const indexedKey = createIndexedKey(key, options.driver)
 
       const refreshValue = async (normalizedTtl: NormalizedFlexibleTtl): Promise<Awaited<TValue>> => {
-        const value = await callback()
-        const envelope = createFlexibleEnvelope(normalizedTtl, value)
-        await writeCacheEntry(
-          key,
-          envelope,
-          normalizedTtl.staleSeconds,
-          options.driver,
-        )
-        await syncDependencies(indexedKey, options.dependencies)
-        return value
+        const watch = watchInvalidations(options.dependencies)
+        try {
+          const value = await callback()
+          const envelope = createFlexibleEnvelope(normalizedTtl, value)
+          await writeCacheEntry(
+            key,
+            envelope,
+            normalizedTtl.staleSeconds,
+            options.driver,
+          )
+          await syncDependencies(indexedKey, options.dependencies)
+          // An invalidation that ran during the read may have finished its eviction pass before the
+          // registration above, so that pass could not see this entry. Remove it here instead.
+          if (watch.invalidated()) {
+            await forgetCacheEntry(key, options.driver, dependencyIndex)
+          }
+          return value
+        } finally {
+          watch.release()
+        }
       }
 
       return resolveFlexibleCachedValue<Awaited<TValue>>({
@@ -249,12 +313,14 @@ export function createCacheQueryBridge(
       dependencies: readonly CacheDependencyDescriptor[],
       options?: { driver?: string },
     ): Promise<void> {
+      bumpInvalidationGenerations(dependencies)
       await invalidateIndexedDependencies(dependencies, options)
     },
     async invalidateDependencyTables(
       tables: readonly string[],
       options?: { driver?: string },
     ): Promise<void> {
+      bumpInvalidationGenerations(tables)
       if (!dependencyIndex.listDependencies) {
         if (!warnedMissingListDependencies) {
           warnedMissingListDependencies = true
