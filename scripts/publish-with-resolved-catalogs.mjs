@@ -177,7 +177,7 @@ export function probeProcessGroup(pgid, readers) {
   for (let pass = 0; pass < processGroupProbePasses; pass++) {
     const current = readProcessGroupPass(pgid, readers)
     if (current.live) return 'live'
-    if (previous && sameProcessGroupMembers(previous, current)) return 'gone'
+    if (previous?.complete && current.complete && sameProcessGroupMembers(previous, current)) return 'gone'
     previous = current
   }
 
@@ -186,14 +186,18 @@ export function probeProcessGroup(pgid, readers) {
 
 function readProcessGroupPass(pgid, readers) {
   const members = new Map()
-  for (const pid of readers.listPids()) {
-    const member = readers.readGroupMember(pid, pgid)
-    if (!member) continue
-    if (member.live) return { live: true, members }
-    members.set(pid, member.startTime)
+  try {
+    for (const pid of readers.listPids()) {
+      const member = readers.readGroupMember(pid, pgid)
+      if (!member) continue
+      if (member.live) return { live: true, complete: true, members }
+      members.set(pid, member.startTime)
+    }
+  } catch {
+    return { live: false, complete: false, members }
   }
 
-  return { live: false, members }
+  return { live: false, complete: true, members }
 }
 
 function sameProcessGroupMembers(left, right) {
@@ -202,8 +206,26 @@ function sameProcessGroupMembers(left, right) {
   return [...left.members].every(([pid, startTime]) => right.members.get(pid) === startTime)
 }
 
-function readLinuxProcessStat(path) {
-  return parseLinuxProcessStat(readFileSync(path, 'utf8'))
+function isProcVanished(error) {
+  return error.code === 'ENOENT' || error.code === 'ESRCH'
+}
+
+function readOptionalProcFile(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (error) {
+    if (isProcVanished(error)) return null
+    throw error
+  }
+}
+
+function readOptionalProcDirectory(path) {
+  try {
+    return readdirSync(path)
+  } catch (error) {
+    if (isProcVanished(error)) return null
+    throw error
+  }
 }
 
 const linuxProcessReaders = {
@@ -211,23 +233,20 @@ const linuxProcessReaders = {
     return readdirSync('/proc').filter(entry => /^\d+$/.test(entry))
   },
   readGroupMember(pid, pgid) {
-    let leader
-    let taskIds
-    try {
-      leader = readLinuxProcessStat(join('/proc', pid, 'stat'))
-      taskIds = readdirSync(join('/proc', pid, 'task'))
-    } catch {
-      return null
-    }
+    const stat = readOptionalProcFile(join('/proc', pid, 'stat'))
+    if (stat === null) return null
+
+    const leader = parseLinuxProcessStat(stat)
     if (leader.pgrp !== pgid) return null
 
-    const live = taskIds.some((taskId) => {
-      try {
-        return readLinuxProcessStat(join('/proc', pid, 'task', taskId, 'stat')).state !== 'Z'
-      } catch {
-        return false
-      }
-    })
+    const taskIds = readOptionalProcDirectory(join('/proc', pid, 'task'))
+    if (taskIds === null) return null
+
+    let live = false
+    for (const taskId of taskIds) {
+      const taskStat = readOptionalProcFile(join('/proc', pid, 'task', taskId, 'stat'))
+      if (taskStat !== null && parseLinuxProcessStat(taskStat).state !== 'Z') live = true
+    }
     return { startTime: leader.startTime, live }
   },
 }

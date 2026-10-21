@@ -456,6 +456,8 @@ function fakeProcessGroupReaders(passes) {
     },
     readGroupMember(pid, pgid) {
       const member = passes[index][pid]
+      if (member === 'unreadable') throw Object.assign(new Error('EACCES'), { code: 'EACCES' })
+      if (member === 'vanished') return null
       return member && member.pgrp === pgid ? { startTime: member.startTime, live: member.live } : null
     },
   }
@@ -509,6 +511,26 @@ test('a group whose member identities never settle is reported as unsettled inst
   const third = { 101: zombie(4000, 3) }
 
   assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([first, second, third])), 'unsettled')
+})
+
+test('a group member whose procfs read fails on every pass never settles as gone', () => {
+  const pass = { 101: zombie(4000, 1), 102: 'unreadable' }
+
+  assert.notEqual(probeProcessGroup(4000, fakeProcessGroupReaders([pass, pass, pass])), 'gone')
+})
+
+test('a pass with a failed procfs read does not count toward two agreeing passes', () => {
+  const unreadable = { 101: zombie(4000, 1), 102: 'unreadable' }
+  const complete = { 101: zombie(4000, 1) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([unreadable, complete, complete])), 'gone')
+})
+
+test('a group member that vanished and is absent from the next listing settles as gone', () => {
+  const first = { 101: zombie(4000, 1), 102: 'vanished' }
+  const second = { 101: zombie(4000, 1) }
+
+  assert.equal(probeProcessGroup(4000, fakeProcessGroupReaders([first, second, second])), 'gone')
 })
 
 function processHasExited(pid) {
