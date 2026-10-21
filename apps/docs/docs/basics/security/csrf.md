@@ -4,7 +4,7 @@ Cross-site request forgery (CSRF) protection stops other websites from submittin
 
 ## Quick start
 
-With the [security middleware](/basics/security/#register-the-middleware) registered and `csrf.enabled: true`, add the token to your form as a hidden field:
+With the [security middleware](/basics/security/#register-the-middleware) registered, CSRF checks are on by default. Add the token to your form as a hidden field:
 
 ```ts [src/routes/contact/+page.server.ts]
 import { csrf } from '@holo-js/security'
@@ -206,7 +206,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 | Option | Default | Description |
 |---|---|---|
-| `enabled` | `false` (the generated config sets `true`) | Turns CSRF checks on. You can also write `csrf: true`. |
+| `enabled` | `true` | Turns CSRF checks on. Set `false` to turn them off. You can also write `csrf: true` or `csrf: false`. |
 | `field` | `'_token'` | Form field name for the token. |
 | `header` | `'X-CSRF-TOKEN'` | Header name for the token. |
 | `cookie` | `'XSRF-TOKEN'` | Readable cookie that holds the encrypted session token. |

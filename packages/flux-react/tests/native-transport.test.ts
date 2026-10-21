@@ -2,7 +2,7 @@ import { jsx } from 'react/jsx-runtime'
 import { expect, it } from 'vitest'
 import { configureFluxClient } from '@holo-js/flux'
 import { startNativeTransport } from '../../flux/tests/support/native-transport'
-import { useFluxConnectionStatus, useFluxNotification, useFluxPresence, useFluxPublic } from '../src'
+import { useFlux, useFluxConnectionStatus, useFluxNotification, useFluxPresence, useFluxPublic } from '../src'
 
 it('receives native notifications and broadcasts once across rerenders and cleans up on unmount', async () => {
   const transport = await startNativeTransport()
@@ -149,5 +149,24 @@ it('stops native delivery when an application invokes its explicit cleanup callb
   await expect.poll(() => transport.subscriptions()).toBe(0)
   await transport.publish('After cleanup')
   expect(received).toEqual(['Before cleanup'])
+  await act(async () => renderer?.unmount())
+})
+
+it('calls onError when the real worker refuses a private channel the hook subscribes to', async () => {
+  const transport = await startNativeTransport({ authorizeOrders: () => false })
+  const errors: string[] = []
+  function Probe() {
+    useFlux('orders.1', 'order.shipped', () => {}, { client: transport.client, onError: error => errors.push(error.message) })
+    return null
+  }
+  const { act, create } = await import('react-test-renderer')
+  let renderer: ReturnType<typeof create> | undefined
+  await act(async () => {
+    renderer = create(jsx(Probe, {}))
+    await transport.client.connect()
+  })
+  await expect.poll(() => errors).toEqual([
+    '[@holo-js/flux] Subscription to orders.1 was refused: Unable to authorize the channel subscription.',
+  ])
   await act(async () => renderer?.unmount())
 })

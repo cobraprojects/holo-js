@@ -1,6 +1,5 @@
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { setTimeout } from 'node:timers/promises'
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   CapabilityError, CompilerError, ConfigurationError, DB, DatabaseError,
   HydrationError, ModelNotFoundException, RelationError, SchemaError, SecurityError,
@@ -116,14 +115,16 @@ describe('native database contexts', () => {
     const first = await openDatabase('sqlite', { connectionName: 'first' })
     const second = await openDatabase('postgres', { connectionName: 'second' })
     configureDB(createConnectionManager({ defaultConnection: 'first', connections: { first: first.db, second: second.db } }))
+    let resolveSecondSettled = () => {}
+    const secondSettled = new Promise<void>(resolve => { resolveSecondSettled = resolve })
     await Promise.all([
       DB.connection('first').transaction(async () => {
-        await setTimeout(10)
+        await secondSettled
         await DB.table(first.table).insert({ id: 1, name: 'First' })
       }),
       DB.connection('second').transaction(async () => {
         await DB.table(second.table).insert({ id: 1, name: 'Second' })
-      }),
+      }).finally(() => resolveSecondSettled()),
     ])
     expect(await first.db.table(first.table).pluck('name')).toEqual(['First'])
     expect(await second.db.table(second.table).pluck('name')).toEqual(['Second'])
@@ -170,13 +171,15 @@ describe('native database contexts', () => {
   })
 
   it('times out and aborts native PostgreSQL work without poisoning later reads', async () => {
-    const { db, table } = await openDatabase('postgres')
+    const starts: string[] = []
+    const { db, table } = await openDatabase('postgres', { logger: { onQueryStart() { starts.push('start') } } })
     const sql = 'SELECT pg_sleep(0.1)'
     await expect(db.queryCompiled({ sql, bindings: [] }, { timeoutMs: 10 })).rejects.toMatchObject({ code: 'DRIVER_OPERATION_TIMEOUT' })
+    starts.length = 0
     const controller = new AbortController()
     const pending = db.queryCompiled({ sql, bindings: [] }, { signal: controller.signal })
     const rejection = expect(pending).rejects.toMatchObject({ code: 'DRIVER_OPERATION_ABORTED' })
-    await setTimeout(10)
+    await vi.waitFor(() => expect(starts).toHaveLength(1))
     controller.abort('cancel active')
     await rejection
     await db.table(table).insert({ id: 1, name: 'Healthy' })

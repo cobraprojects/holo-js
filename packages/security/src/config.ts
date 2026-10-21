@@ -182,7 +182,7 @@ export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION = 'default'
 export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX = 'holo:rate-limit:'
 
 const DEFAULT_SECURITY_CSRF_CONFIG: Readonly<NormalizedHoloSecurityCsrfConfig> = Object.freeze({
-  enabled: false,
+  enabled: true,
   field: DEFAULT_SECURITY_CSRF_FIELD,
   header: DEFAULT_SECURITY_CSRF_HEADER,
   cookie: DEFAULT_SECURITY_CSRF_COOKIE,

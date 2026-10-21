@@ -1,7 +1,7 @@
 {
   "name": "@holo-js/kernel",
   "version": "0.3.28",
-  "description": "Holo-JS Framework - dependency-free contracts, plugins, and runtime lifecycle",
+  "description": "Holo-JS Framework - contracts, plugins, and runtime lifecycle",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -62,9 +62,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
+  "dependencies": {
+    "file-type": "catalog:"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
-    "file-type": "catalog:",
     "sharp": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
@@ -74,13 +76,9 @@
     "node": "^22.14.0 || ^24.0.0 || ^26.0.0"
   },
   "peerDependencies": {
-    "file-type": "catalog:",
     "sharp": "catalog:"
   },
   "peerDependenciesMeta": {
-    "file-type": {
-      "optional": true
-    },
     "sharp": {
       "optional": true
     }

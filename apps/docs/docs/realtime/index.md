@@ -125,7 +125,7 @@ With several app servers or queue workers, turn on [Redis scaling](/broadcasting
 npx holo install realtime
 ```
 
-This creates `server/realtime/`, adds `@holo-js/realtime` together with the [broadcasting](/broadcasting/) packages it uses, and sets up your framework. You don't install `@holo-js/broadcast` or Flux separately.
+This creates `server/realtime/`, adds `@holo-js/realtime` together with the [broadcasting](/broadcasting/) packages it uses, and sets up your framework. You don't install `@holo-js/broadcast` or Flux separately. When the server refuses a channel that a browser subscribes to, Flux passes the refusal to the channel's error callback. See [Subscription errors](/broadcasting/client#subscription-errors).
 
 Live updates travel through the broadcast WebSocket worker, which needs a `holo` connection in `config/broadcast.ts`. If your app doesn't have that file yet, also run:
 

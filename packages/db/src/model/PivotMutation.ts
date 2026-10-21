@@ -52,7 +52,8 @@ export class PivotMutation {
   }
 
   private async mutate(kind: 'attach' | 'sync' | 'toggle', ids: unknown, attributes: Attributes = {}, detachMissing = false): Promise<Result> {
-    const entries = this.normalize(ids, attributes)
+    const normalized = this.normalize(ids, attributes)
+    const entries = kind === 'attach' ? normalized : this.dedupe(normalized)
     for (const entry of entries) this.validate(entry.attributes)
     const result: Result = { attached: [], detached: [], updated: [] }
     if (kind !== 'sync' && entries.length === 0) return result
@@ -147,6 +148,10 @@ export class PivotMutation {
       }))
     }
     return [{ id: ids, attributes: { ...attributes } }]
+  }
+
+  private dedupe(entries: readonly Entry[]): Entry[] {
+    return [...new Map(entries.map(entry => [String(entry.id), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {

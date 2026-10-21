@@ -52,21 +52,22 @@ export function isTemporaryLocalStorageRequest(config: HoloStorageRuntimeConfig,
 export function resolveTemporaryLocalStorageRequest(
   projectRoot: string,
   config: HoloStorageRuntimeConfig,
-  url: URL,
+  routedUrl: URL,
+  visitorUrl: URL,
   appKey: string | undefined,
   method = 'GET',
 ): { disk: LocalDisk, absolutePath: string } | null {
-  if (!appKey || !['GET', 'HEAD'].includes(method) || !isTemporaryLocalStorageRequest(config, url)) return null
-  if (url.searchParams.size !== 2) return null
-  const expires = url.searchParams.get('expires')
-  const suppliedSignature = url.searchParams.get('signature')
+  if (!appKey || !['GET', 'HEAD'].includes(method) || !isTemporaryLocalStorageRequest(config, routedUrl)) return null
+  if (visitorUrl.searchParams.size !== 2) return null
+  const expires = visitorUrl.searchParams.get('expires')
+  const suppliedSignature = visitorUrl.searchParams.get('signature')
   if (!expires || !/^[1-9]\d*$/u.test(expires) || !Number.isSafeInteger(Number(expires)) || Number(expires) <= Math.floor(Date.now() / 1000)) return null
   if (!suppliedSignature || !/^[a-f0-9]{64}$/u.test(suppliedSignature)) return null
-  if (!timingSafeEqual(Buffer.from(suppliedSignature, 'hex'), signature(url, expires, appKey))) return null
+  if (!timingSafeEqual(Buffer.from(suppliedSignature, 'hex'), signature(visitorUrl, expires, appKey))) return null
   const prefix = `${config.routePrefix.replace(/\/+$/u, '')}/${temporaryRouteSegment}/`
   let segments: string[]
   try {
-    segments = url.pathname.slice(prefix.length).split('/').map(decodeURIComponent)
+    segments = routedUrl.pathname.slice(prefix.length).split('/').map(decodeURIComponent)
   } catch {
     return null
   }

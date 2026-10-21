@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import {
@@ -93,8 +93,9 @@ describe('native database and cache integration', () => {
     expect((await query.first())?.get('created_at')).toEqual(new Date('2026-01-01'))
     await adapter.execute("UPDATE users SET name = 'After expiry' WHERE id = 1")
     expect((await query.first())?.get('name')).toBe('Ava')
-    await delay(1200)
-    expect((await query.first())?.get('name')).toBe('After expiry')
+    await vi.waitFor(async () => {
+      expect((await query.first())?.get('name')).toBe('After expiry')
+    }, { timeout: 1200, interval: 20 })
   })
 
   it('shares concurrent cache misses without issuing duplicate database reads', async () => {
@@ -110,13 +111,7 @@ describe('native database and cache integration', () => {
     await adapter.execute("UPDATE users SET name = 'Refreshed' WHERE id = 1")
     await delay(1100)
     expect((await query.first())?.name).toBe('Ava')
-    const deadline = Date.now() + 2000
-    let name
-    do {
-      await delay(20)
-      name = (await query.first())?.name
-    } while (name !== 'Refreshed' && Date.now() < deadline)
-    expect(name).toBe('Refreshed')
+    await vi.waitFor(async () => expect((await query.first())?.name).toBe('Refreshed'), { timeout: 2000, interval: 20 })
   })
 
   it('invalidates cached lists after inserts, updates, upserts, conflicting inserts, and deletes', async () => {

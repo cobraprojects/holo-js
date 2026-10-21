@@ -7,12 +7,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map() }))
+const tornLeaseReads = vi.hoisted(() => ({ armed: false }))
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof FsPromises>()
   const { windowsFsOverrides } = await import('./support/windows-fs')
-  return { ...actual, ...windowsFsOverrides(actual, windowsFs) }
+  return {
+    ...actual,
+    ...windowsFsOverrides(actual, windowsFs),
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const contents = await actual.readFile(...args)
+      if (!tornLeaseReads.armed || !String(args[0]).includes('owner.')) return contents
+      tornLeaseReads.armed = false
+      return String(contents).replace(/[^\n]/g, ' ')
+    },
+  }
 })
 
 type Driver = typeof SessionModule.fileSessionDriverInternals
@@ -21,6 +31,10 @@ let root: string
 let recordPath: string
 let lockPath: string
 const reports: unknown[] = []
+
+function leasePrefix(path: string): string {
+  return join(path, 'owner.')
+}
 
 async function loadProcess(): Promise<Driver> {
   vi.resetModules()
@@ -39,35 +53,38 @@ describe('released file locks across processes', () => {
   })
 
   afterEach(async () => {
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedUnlinkPrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
+    windowsFs.ioErrorRenamePrefixes.clear()
+    windowsFs.ioErrorUnlinkPrefixes.clear()
     await rm(root, { force: true, recursive: true })
   })
 
   it('reclaims through the published released marker and keeps no state in the releasing process', async () => {
     const releasing = await loadProcess()
     const holder = await releasing.acquireRecordLock(recordPath, mkdir)
-    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
     await holder()
     expect(reports).toHaveLength(1)
     expect(releasing.heldRecordLockTokens.size).toBe(0)
 
-    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedRenamePrefixes.clear()
     const successor = await loadProcess()
     await (await successor.acquireRecordLock(recordPath, mkdir))()
     expect(successor.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
-  it('reclaims its own lease after the release could neither unlink nor publish, and keeps no state', async () => {
+  it('reclaims its own lease after the release could neither move it aside nor publish, and keeps no state', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)
-    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
     windowsFs.blockedWritePrefixes.add(lockPath)
     await holder()
     expect(owner.heldRecordLockTokens.size).toBe(0)
     expect(await readdir(lockPath)).toHaveLength(1)
 
-    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
     await (await owner.acquireRecordLock(recordPath, mkdir))()
     expect(owner.heldRecordLockTokens.size).toBe(0)
@@ -79,7 +96,7 @@ describe('released file locks across processes', () => {
     const holders: Array<() => Promise<void>> = []
     for (const path of paths) holders.push(await owner.acquireRecordLock(path, mkdir))
 
-    windowsFs.blockedUnlinkPrefixes.add(root)
+    for (const path of paths) windowsFs.blockedRenamePrefixes.add(leasePrefix(`${path}.lock`))
     windowsFs.blockedWritePrefixes.add(root)
     await Promise.all(holders.map(release => release()))
     expect(owner.heldRecordLockTokens.size).toBe(0)
@@ -88,23 +105,23 @@ describe('released file locks across processes', () => {
     await Promise.all(owner.pendingRecordLockReleaseRetries)
     expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
 
-    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
     for (const path of paths) await (await owner.acquireRecordLock(path, mkdir))()
     expect(owner.heldRecordLockTokens.size).toBe(0)
     expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
   }, 15_000)
 
-  it('an I/O error on unlink rejects the release, keeps no held state, and the owner reclaims after recovery', async () => {
+  it('an I/O error while moving the lease aside rejects the release, keeps no held state, and the owner reclaims after recovery', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)
-    windowsFs.ioErrorUnlinkPrefixes.add(lockPath)
+    windowsFs.ioErrorRenamePrefixes.add(leasePrefix(lockPath))
     windowsFs.blockedWritePrefixes.add(lockPath)
     await expect(holder()).rejects.toMatchObject({ code: 'EIO' })
     expect(owner.heldRecordLockTokens.size).toBe(0)
     expect(await readdir(lockPath)).toHaveLength(1)
 
-    windowsFs.ioErrorUnlinkPrefixes.clear()
+    windowsFs.ioErrorRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
     await (await owner.acquireRecordLock(recordPath, mkdir))()
     expect(owner.heldRecordLockTokens.size).toBe(0)
@@ -124,14 +141,14 @@ describe('released file locks across processes', () => {
   it('reports that other processes must wait when the release cannot be published, and schedules one retry', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)
-    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
     windowsFs.blockedWritePrefixes.add(lockPath)
     await holder()
 
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
     expect(owner.pendingRecordLockReleaseRetries.size).toBe(1)
-    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
     await Promise.all(owner.pendingRecordLockReleaseRetries)
   }, 15_000)
@@ -139,7 +156,7 @@ describe('released file locks across processes', () => {
   it('lets another process reclaim the lease once a scheduled retry publishes the release', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)
-    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
     windowsFs.blockedWritePrefixes.add(lockPath)
     await holder()
 
@@ -147,7 +164,7 @@ describe('released file locks across processes', () => {
     await Promise.all(owner.pendingRecordLockReleaseRetries)
     expect(owner.pendingRecordLockReleaseRetries.size).toBe(0)
 
-    windowsFs.blockedUnlinkPrefixes.clear()
+    windowsFs.blockedRenamePrefixes.clear()
     const other = await loadProcess()
     await (await other.acquireRecordLock(recordPath, mkdir))()
     expect(other.heldRecordLockTokens.size).toBe(0)
@@ -162,6 +179,24 @@ describe('released file locks across processes', () => {
     expect(owner.heldRecordLockTokens.size).toBe(1)
 
     await holder()
+    expect(owner.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
+  it('takes over when a waiter first reads a torn released lease at its final size', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    const waiter = owner.acquireRecordLock(recordPath, mkdir)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    tornLeaseReads.armed = true
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    windowsFs.blockedUnlinkPrefixes.add(lockPath)
+    await holder()
+    windowsFs.blockedRenamePrefixes.clear()
+    windowsFs.blockedUnlinkPrefixes.clear()
+
+    const release = await waiter
+    expect(tornLeaseReads.armed).toBe(false)
+    await release()
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 

@@ -6,6 +6,7 @@ import { createNuxtAuthorizationError } from '../authorization-error'
 import { connectionAddress } from '../server/connection-address'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { requestUrlInternals } from '@holo-js/kernel'
+import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { H3Event } from 'h3'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from '#imports'
 
@@ -32,6 +33,11 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
       createError: createNuxtAuthorizationError,
     },
   })
+  let projectPending = true
+  const markProjectSettled = () => {
+    projectPending = false
+  }
+  const projectSettled = project.then(markProjectSettled, markProjectSettled)
 
   const onRequest = nitroApp.h3App.options.onRequest
   nitroApp.h3App.options.onRequest = async (event) => {
@@ -39,11 +45,22 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     return await onRequest?.(event)
   }
 
-  nitroApp.hooks.hook('close', async () => {
+  const shutdownProject = async () => {
+    let report: ReturnType<typeof captureErrorReporter> | undefined
     try {
-      await (await project).runtime.shutdown()
-    } catch {
+      const { runtime } = await project
+      report = captureErrorReporter()
+      await runtime.shutdown()
+    } catch (error) {
+      (report ?? captureErrorReporter())(error, { capability: 'nuxt', operation: 'shutdown' })
+    }
+  }
+
+  nitroApp.hooks.hook('close', async () => {
+    if (projectPending) {
+      void projectSettled.then(shutdownProject)
       return
     }
+    await shutdownProject()
   })
 })

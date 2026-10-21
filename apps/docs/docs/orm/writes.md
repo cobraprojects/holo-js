@@ -108,9 +108,7 @@ await Post.where('status', 'draft')
   .update({ status: 'archived' })
 ```
 
-::: warning
-Query updates and deletes run a single SQL statement. They don't fire model events and don't change `updated_at` for you. Use `chunkById()` and save each model when you need either.
-:::
+On a model with timestamps, the query methods `update()`, `updateJson()`, `increment()`, and `decrement()` set `updated_at` to the current time unless you pass your own value, as Laravel does. Each call still runs a single SQL statement and doesn't fire model events. Use `chunkById()` and save each model when you need the events.
 
 ### Increment and decrement
 
@@ -178,7 +176,7 @@ await Product.query().upsert(
 )
 ```
 
-Like other query writes, this skips model events.
+On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
 ## Track changes
 
@@ -237,7 +235,7 @@ await Session.where('expires_at', '<', new Date()).delete()
 
 ## Soft delete and restore
 
-When a model has [soft deletes](/orm/#soft-deletes) enabled, `delete()` sets `deleted_at` instead of removing the row. This applies to instance, key, and query deletes.
+When a model has [soft deletes](/orm/#soft-deletes) enabled, `delete()` sets `deleted_at` instead of removing the row. This applies to instance, key, and query deletes. On a model with timestamps, the soft delete and the restore also set `updated_at` to the same time. `restore()` on a model also saves its unsaved changes, as Laravel does. `forceDelete()` removes the row and doesn't write `updated_at`. Instance writes follow the model's global scopes: a row that a scope hides is not changed, and the call does nothing for it.
 
 ```ts
 await post.delete()

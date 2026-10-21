@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { linkInstalledDependenciesForPackage } from '../../../tests/support/published-package'
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
@@ -24,6 +25,11 @@ async function runPackageBuild(): Promise<{ outDir: string }> {
     packageBuildPromise = (async () => {
       const packageRoot = await createTempBuildRoot('storage')
       const outDir = join(packageRoot, 'dist')
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: join(packageRoot, 'node_modules'),
+        packageJsonPath: join(packageDir, 'package.json'),
+      })
 
       execFileSync('bun', ['run', 'build'], {
         cwd: packageDir,

@@ -171,6 +171,63 @@ export default defineDatabaseConfig({
     expect(nuxt.options.runtimeConfig).not.toHaveProperty('db')
   })
 
+  it('keeps build-time database credentials out of the Nuxt build options', async () => {
+    const root = await createProject()
+    await writeFile(join(root, '.env'), 'DB_PASSWORD=build-time-db-secret\n', 'utf8')
+    await writeFile(join(root, 'config/database.ts'), `
+import { env } from ${packageEntry}
+import { defineDatabaseConfig } from ${databaseEntry}
+
+export default defineDatabaseConfig({
+  defaultConnection: 'primary',
+  connections: {
+    primary: {
+      driver: 'postgres',
+      url: 'postgresql://db.internal/main',
+      password: env('DB_PASSWORD'),
+    },
+  },
+})
+`, 'utf8')
+
+    const { module } = await loadAdapterModule()
+    const nuxt = await createNuxtHarness(root)
+
+    await module.setup({}, nuxt)
+
+    const serializedOptions = JSON.stringify({
+      runtimeConfig: nuxt.options.runtimeConfig,
+      nitro: nuxt.options.nitro,
+    })
+    expect(serializedOptions).not.toContain('build-time-db-secret')
+  })
+
+  it('keeps storage disk credentials out of the Nuxt build-time storage options', async () => {
+    const { adapterNuxtInternals } = await import('../src/module')
+    const options = adapterNuxtInternals.toStorageModuleOptions({
+      storage: {
+        defaultDisk: 'uploads',
+        routePrefix: '/storage',
+        disks: {
+          uploads: {
+            driver: 's3',
+            bucket: 'uploads',
+            region: 'us-east-1',
+            accessKeyId: 'build-time-access-key',
+            secretAccessKey: 'build-time-storage-secret',
+            sessionToken: 'build-time-session-token',
+          },
+        },
+      },
+    } as unknown as Parameters<typeof adapterNuxtInternals.toStorageModuleOptions>[0])
+
+    const serializedOptions = JSON.stringify(options)
+    expect(options.disks).toMatchObject({ uploads: { driver: 's3', bucket: 'uploads', region: 'us-east-1' } })
+    expect(serializedOptions).not.toContain('build-time-access-key')
+    expect(serializedOptions).not.toContain('build-time-storage-secret')
+    expect(serializedOptions).not.toContain('build-time-session-token')
+  })
+
   it('falls back to default config values when config files are absent', async () => {
     const root = await createProject()
     const { module } = await loadAdapterModule()

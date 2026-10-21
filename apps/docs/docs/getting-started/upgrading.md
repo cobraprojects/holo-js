@@ -25,6 +25,22 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
 - When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
 
+### Temporary URLs behind a proxy
+
+Public and temporary storage URLs read the scheme, host, port, and path prefix from forwarded headers only when `trustedProxies` lists the proxy, as [`resolveRequestUrl()`](/basics/security/cors-and-proxies#read-the-public-url) does. Before, the Nuxt storage route accepted `X-Forwarded-Proto` from any client, and the other forwarded headers were ignored.
+
+If your Nuxt or SvelteKit app runs behind a proxy that terminates TLS and serves temporary URLs, list the proxy:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['10.0.0.1'],
+})
+```
+
+Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
+
 ### Realtime subscription isolation
 
 Server subscriptions now authorize and execute independently, including subscriptions to the same query and arguments. No query definition or subscribe call changes are required. Check that each definition's `access` and handler restrict results to its caller; anonymous callers are rejected by authenticated definitions. Refreshes retain the caller’s authentication credentials and database without retaining a completed transaction. Mutation patches and backfill batches stay within the originating database. Size database capacity for one initial execution and independent refreshes per server subscription. Browser client store sharing is unchanged.
@@ -69,6 +85,10 @@ Factories and `holo seed` now run without mass-assignment guards, as in Laravel.
 ### Error reporting
 
 Errors Holo catches in background work, such as failing queue hooks, background cache refreshes, auth cleanup, and broadcast worker messages, now go through one reporter. Without configuration they are still written to the console, now with `console.error` and a `[holo:<capability>] <operation>` prefix instead of the previous per-package messages. To send them to your error tracker, add `exceptions.report` and, optionally, `exceptions.dontReport` to `config/app.ts`, and use `report(error)` from `@holo-js/core` for errors you handle yourself. See [Reporting errors](/basics/errors#reporting-errors).
+
+### Next.js servers close Holo resources on shutdown
+
+When a Next.js server receives `SIGINT` or `SIGTERM`, it now starts closing Holo's database, Redis, queue, and other connections right away, then exits once the close finishes or 30 seconds after the signal. Requests still running at that point can fail if they use those connections, so remove the server from your load balancer before you send the signal. Give your process manager at least 30 seconds to stop the server. For example, set `terminationGracePeriodSeconds` in Kubernetes or `TimeoutStopSec` in systemd. Nuxt already closed Holo resources on shutdown and now reports a failed close through `exceptions.report`. No code changes are required. See [Stop the server](/deployment/#stop-the-server).
 
 ### Unexpected SvelteKit errors
 
@@ -160,6 +180,10 @@ aws s3api list-objects-v2 --bucket "$bucket" --query "Contents[?contains(Key, '%
 Local disks also change to exact names; see [Local file names](#local-file-names). If you call the low-level `getKeys()` on an S3 disk, it now returns `:`-separated keys in the same format as local disks.
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
+
+### S3 uploads now carry a Content-Type
+
+S3 uploads now carry a `Content-Type`, taken from the file's first bytes or its extension. Before, S3 stored every object as `binary/octet-stream`, so browsers downloaded it. New uploads of browser-renderable types, such as images, PDF, text, and JSON, now display inline when a public bucket or CDN serves them. HTML, SVG, and XML are still stored as `application/octet-stream`, so they keep downloading. Existing objects are unchanged. See [Content types](/storage/s3#content-types).
 
 ### Local file names
 
@@ -389,11 +413,28 @@ The `memory` driver keeps at most 10,000 keys per process and never evicts a liv
 The CSRF token now lives in the visitor's [session](/basics/session), as in Laravel. The `XSRF-TOKEN` cookie carries that session token encrypted, and a token copied from another browser or planted by a subdomain no longer matches.
 
 - **Tokens reissue after upgrading.** The first unsafe request each browser sends after the upgrade gets `419`, because its session has no token yet. The next page load stores a token in the session and issues a new `XSRF-TOKEN` cookie.
-- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf` without Auth, add `@holo-js/session` to your dependencies. Without a `config/session.ts`, Holo uses the default file session store.
+- **Install `@holo-js/session`.** CSRF protection needs it, so `holo install security` now adds it. If your app enables `csrf`, or leaves it on by default, without Auth, add `@holo-js/session` to your dependencies. Without it, the app fails at startup with `Session support requires @holo-js/session to be installed.` Without a `config/session.ts`, Holo uses the default file session store.
 - **Send the session cookie.** Visitors without a session get one on their first page load. Scripts and tests that post with only the `XSRF-TOKEN` cookie must also send the `holo_session` cookie (or your `session.cookie.name`).
 - **`X-XSRF-TOKEN` is also accepted.** `_token` and `X-CSRF-TOKEN` still accept the plain token or the cookie value, so existing `fetch` calls keep working. The new `X-XSRF-TOKEN` header accepts the cookie value, as in Laravel.
 - **Custom session stores need `setDataIfAbsent`.** The token is written with one atomic store call, so a rotation or logout that runs at the same moment can't bring back the old session. Built-in file, database and Redis stores support it. A custom store must add `setDataIfAbsent(sessionId, key, value)` before CSRF-protected pages load. Return `{ found: false }` for a missing or expired session without recreating it. Otherwise, preserve an existing key or insert the value if absent, then return `{ found: true, value: storedValue }`. For the reserved `_token` key, treat a non-string or empty value as absent and replace it atomically; preserve a valid token initialized by another request. Keep the session's other data and expiry unchanged.
 - **`useForm` keeps server-rendered tokens.** A `_token` field already in the form, such as one from `csrf.input()`, is no longer replaced by the cookie value. With `csrf.endpoint`, the fetched token is sent in the `csrf.header` header from `config/security.ts` instead of always `X-CSRF-TOKEN`, and the cookie value is no longer added as `_token`. If the configured header is `X-XSRF-TOKEN`, the fetched token goes in `csrf.field` instead; that header accepts only encrypted cookie values.
+
+### CSRF checks are on by default
+
+`csrf.enabled` now defaults to `true`, as in Laravel's `web` group. A `config/security.ts` that has no `csrf` block checks every unsafe request (`POST`, `PUT`, `PATCH`, `DELETE`). Before, the default was off. Apps created with `holo new` or `holo install security` already set `csrf.enabled: true` and don't change.
+
+- **Unsafe requests without a token get `419`.** Forms and `fetch` calls that don't send the token, such as `csrf.input()`, `useForm`, or the `X-CSRF-TOKEN` header, now fail. Routes that receive webhooks or API calls from other clients can be listed in `csrf.except`.
+- **Opt out with `enabled: false`.** Set it to restore the old behavior for the whole app. This removes forgery protection, so prefer `except` for the routes that need it.
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  csrf: {
+    enabled: false,
+  },
+})
+```
 
 ### CSRF endpoints for separate frontends
 
@@ -418,6 +459,15 @@ The sign-in state cookie is marked `Secure` when `session.cookie.secure` is `tru
 ### Sessions don't cross between 0.3 and 0.4
 
 Sessions written by 0.4 aren't readable by 0.3, because a session no longer stores a copy of the user. A mixed-version rolling deploy, or a rollback to 0.3 after deploying 0.4, signs users out. Deploy 0.4 to every instance at once, or accept that users sign in once more after a rollback.
+
+### Redis sessions use one key per session
+
+Each Redis session is its own key: the store's `prefix`, then `holo:session:`, then the session ID. Sessions spread across a Redis Cluster, and they never sit under a bare session ID.
+
+- **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
+- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
+- **Set a `prefix` to share a Redis database.** Holo's `holo:session:` namespace keeps session keys apart from other data, and a `prefix` separates apps that use the same database.
+- **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry. Under heavy concurrent writes to the same session, rotation falls back to reading the latest state, copying it, and deleting the old key without a check. A write or flash value that lands between that final read and the delete can be lost or kept on both IDs.
 
 ### Verification resend requires a signed-in user
 
@@ -500,6 +550,24 @@ Check three behaviors when you upgrade:
 ### MySQL `ssl` with a connection URL
 
 A MySQL connection that sets `ssl` next to `url` now uses that setting, which adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests. Before, the setting was ignored when `url` was set. Before you deploy, check that the server accepts the connection with `ssl` and that its certificate is trusted, or remove `ssl` if the connection should not use it.
+
+### Query writes set updated_at
+
+On a model with timestamps, these query writes now set `updated_at` to the current time unless you pass your own value: `update()`, `updateJson()`, `increment()`, and `decrement()`. Query `upsert()` sets `created_at` and `updated_at` on new rows, and sets `updated_at` on conflict when you list columns to update. On a soft-delete model, query and instance `delete()` and `restore()` set `updated_at` together with `deleted_at`. Before, all of these left `updated_at` unchanged. Instance `restore()` also saves the model's unsaved changes, as Laravel's restore does, so a changed attribute or primary key is written when you restore.
+
+Check code that reads `updated_at` to find changed rows, such as a "recently updated" list, a cache key, or a sync cursor. Rows you write from now on change `updated_at`; existing rows keep their stored values. `forceDelete()` and the table builder (`DB.table()`) don't change. Use the table builder for a write that must leave `updated_at` alone. See [Query updates](/orm/writes#update-many-rows).
+
+### Password hashing cost
+
+New password digests use scrypt with N = 2^15, r = 8, p = 3, up from N = 2^14, r = 8, p = 1. Each hash takes about 6 times as much CPU, because N doubles and p triples, and uses about 32 MiB of memory.
+
+A process runs at most four password hashes at once, so later logins queue instead of exhausting memory. Budget for this on small or constrained hosts.
+
+No migration is needed. A digest made with the old settings still verifies. A successful login replaces it with a new digest for the built-in database providers. A custom provider keeps its old digest until the user changes their password. See [Authentication](/auth/).
+
+### Dev server exits non-zero on a port conflict
+
+`holo dev` now exits with a non-zero status when another `holo dev` for the same project is already running. Before, it exited 0 and left the first server running. A port already in use by another process has always exited non-zero, and it still does, now with the port named. `holo dev` never stops a process for you. Update any CI script or wrapper that treated a second `holo dev` as success. To replace a running server, stop it first, using the PID in the message.
 
 ## Earlier 0.3.x releases
 

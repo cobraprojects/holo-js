@@ -514,6 +514,56 @@ describe('remember me', () => {
     await expect(getSessionRuntime().take(challenge.id, 'challenge')).resolves.toBe(true)
   })
 
+  it('reports the configured provider for a guard restored request-only beside another guard\'s pending challenge', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    const challenge = await getSessionRuntime().create({
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          userId: 1,
+          user: { id: 1, email: 'ava@app.test' },
+          authenticatedAt: new Date().toISOString(),
+          multiFactorChallengeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+    })
+    browser.receive(getSessionRuntime().sessionCookie(challenge.id))
+
+    await expect(browser.request(async () => [
+      await auth.guard('admin').check(),
+      await auth.guard('admin').provider(),
+    ])).resolves.toEqual([true, 'users'])
+  })
+
+  it('reports the configured provider for a guard restored through a read-only request beside a shared session', async () => {
+    const browser = new Browser()
+    await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))
+    browser.expireSession()
+    await browser.request(() => auth.loginUsingId(1))
+
+    const current = authRuntimeInternals.getRuntimeBindings()
+    const requestContext = createAsyncAuthContext()
+    authRuntimeInternals.configureRuntime({
+      ...current,
+      context: {
+        ...requestContext,
+        getRequestCookie: (name: string) => browser.cookies.get(name),
+        canAppendResponseCookie: () => false,
+      },
+    })
+    try {
+      await expect(requestContext.run(async () => [
+        await auth.guard('admin').check(),
+        await auth.guard('admin').provider(),
+      ])).resolves.toEqual([true, 'users'])
+    } finally {
+      authRuntimeInternals.configureRuntime(current)
+    }
+  })
+
   it.each([true, false])('keeps the browser on a pending multi-factor challenge when the restored guard logs out (async context: %s)', async (scoped) => {
     const browser = new Browser()
     await browser.request(() => auth.guard('admin').loginUsingId(1, { remember: true }))

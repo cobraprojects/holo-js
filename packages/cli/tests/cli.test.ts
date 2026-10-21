@@ -1,13 +1,13 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
@@ -338,6 +338,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     join(root, 'packages'),
     Object.keys(workspaceCatalog).filter(name => name.startsWith('@holo-js/')),
   )
+  // The built runtime loads each package's optional peers from that package's own location, as an app install provides them.
+  for (const { directory } of packages) {
+    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { peerDependencies?: Record<string, string> }
+    for (const peerName of Object.keys(manifest.peerDependencies ?? {})) {
+      const peer = packages.find(({ name }) => name === peerName)
+      if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
+    }
+  }
   for (const { name, directory } of packages) {
     const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
     expect(build.status, build.stderr || build.stdout).toBe(0)
@@ -3309,6 +3317,7 @@ export default defineCacheConfig({
         '@holo-js/kernel': 'catalog:',
         '@holo-js/panels': 'workspace:*',
         '@holo-js/security': 'catalog:',
+        '@holo-js/session': 'catalog:',
         next: expectedNextPackageRange,
       },
     }
@@ -3321,6 +3330,48 @@ export default defineSecurityConfig({})
 
     await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(false)
     await expect(readFile(join(projectRoot, 'package.json'), 'utf8').then(JSON.parse)).resolves.toEqual(packageJson)
+  }, 60000)
+
+  it('adds session for a security config that exports a plain object without importing @holo-js/security', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default {}\n')
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toMatchObject({
+      '@holo-js/security': expectedHoloPackageRange,
+      '@holo-js/session': expectedHoloPackageRange,
+    })
+  }, 60000)
+
+  it('keeps an existing session dependency for a security config that exports a plain object', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/security': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default {}\n')
+
+    await projectInternals.syncManagedDriverDependencies(projectRoot)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/session']).toBe(expectedHoloPackageRange)
+  }, 60000)
+
+  it('does not require session when a plain security config turns csrf off', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default { csrf: { enabled: false } }\n')
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies
+    expect(dependencies['@holo-js/security']).toBe(expectedHoloPackageRange)
+    expect(dependencies['@holo-js/session']).toBeUndefined()
   }, 60000)
 
   it('syncs lazy optional holo packages from config and discovery registry entries', async () => {
@@ -7135,11 +7186,11 @@ export default {
     expect(collectMultiStringFlag({ o: 'users' }, 'only', 'o')).toEqual(['users'])
     expect(collectMultiStringFlag({ only: '   ' }, 'only')).toBeUndefined()
     expect(createRuntimeInvocation('/tmp/holo-runtime-worker.mjs')).toEqual({
-      command: 'node',
+      command: process.execPath,
       args: ['/tmp/holo-runtime-worker.mjs'],
     })
     expect(createRuntimeInvocation('/tmp/holo-runtime-worker.ts')).toEqual({
-      command: 'node',
+      command: process.execPath,
       args: ['--experimental-strip-types', '/tmp/holo-runtime-worker.ts'],
     })
     const largeRuntimeOutputSize = 1024 * 1024 + 1024
@@ -7159,6 +7210,14 @@ export default {
     })
     expect(missingRuntimeOutput.status).not.toBe(0)
     expect(missingRuntimeOutput.error).toBeInstanceOf(Error)
+    const builtRuntimeWorker = createRuntimeInvocation(fileURLToPath(new URL('../dist/runtime-worker.mjs', import.meta.url)))
+    const oversizedRuntimePayload = await runRuntimeInvocation(builtRuntimeWorker.command, builtRuntimeWorker.args, {
+      cwd: process.cwd(),
+      env: process.env,
+      input: JSON.stringify({ kind: 'probe', runtimeConfig: { db: { default: 'sqlite', connections: {} } }, padding: 'x'.repeat(256 * 1024) }),
+    })
+    expect(oversizedRuntimePayload.stderr).not.toContain('Runtime payload is missing database configuration.')
+    expect(oversizedRuntimePayload.stderr).toContain('Driver "sqlite" is not registered')
     expect(inferRuntimeMigrationName('file:///tmp/2026_01_01_000001_create_sessions_table.js')).toBe('2026_01_01_000001_create_sessions_table')
     expect(() => inferRuntimeMigrationName('file:///tmp/create_sessions_table.js')).toThrow(
       'Registered migration "file:///tmp/create_sessions_table.js" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.',
@@ -9106,11 +9165,12 @@ export default {
 
     const generatedTsconfigPath = join(projectRoot, '.holo-js/generated/tsconfig.json')
     const generatedRegistryPath = join(projectRoot, '.holo-js/generated/registry.json')
-    const firstTsconfigStat = await stat(generatedTsconfigPath)
     const firstRegistryStat = await stat(generatedRegistryPath)
     const firstRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+    const pastTime = new Date(Date.now() - 60_000)
+    await utimes(generatedTsconfigPath, pastTime, pastTime)
+    const backdatedTsconfigMtime = (await stat(generatedTsconfigPath)).mtimeMs
 
     await (async () => {
       await runProjectPrepare(projectRoot)
@@ -9120,7 +9180,7 @@ export default {
     const secondRegistryStat = await stat(generatedRegistryPath)
     const secondRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
-    expect(secondTsconfigStat.mtimeMs).toBe(firstTsconfigStat.mtimeMs)
+    expect(secondTsconfigStat.mtimeMs).toBe(backdatedTsconfigMtime)
     expect(secondRegistryStat.mtimeMs).toBeGreaterThanOrEqual(firstRegistryStat.mtimeMs)
     expect(typeof firstRegistry.generatedAt).toBe('string')
     expect(typeof secondRegistry.generatedAt).toBe('string')

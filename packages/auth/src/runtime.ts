@@ -922,6 +922,44 @@ function dummyPasswordDigest(hasher: AuthPasswordHasher): Promise<string> {
   return digest
 }
 
+const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+
+type RehashPasswordIfUnchanged = (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
+
+function getRehashPasswordIfUnchanged(adapter: ErasedAuthProviderAdapter): RehashPasswordIfUnchanged | undefined {
+  const capability: unknown = Reflect.get(adapter, REHASH_PASSWORD_IF_UNCHANGED)
+  return typeof capability === 'function' ? capability as RehashPasswordIfUnchanged : undefined
+}
+
+async function rehashPasswordAfterLogin({
+  adapter,
+  user,
+  password,
+  digest,
+  hasher,
+}: {
+  readonly adapter: ErasedAuthProviderAdapter
+  readonly user: unknown
+  readonly password: string
+  readonly digest: string | null | undefined
+  readonly hasher: AuthPasswordHasher
+}): Promise<void> {
+  const rehashIfUnchanged = getRehashPasswordIfUnchanged(adapter)
+  if (!digest || !adapter.update || !rehashIfUnchanged) {
+    return
+  }
+
+  try {
+    if (!await resolveNeedsPasswordRehash(hasher, digest)) {
+      return
+    }
+
+    await rehashIfUnchanged.call(adapter, user, digest, await hasher.hash(password))
+  } catch (error) {
+    reportError(error, { capability: 'auth', operation: 'password.rehashOnLogin' })
+  }
+}
+
 async function verifyCredentialsForProvider(
   providerName: string,
   adapter: ErasedAuthProviderAdapter,
@@ -939,6 +977,13 @@ async function verifyCredentialsForProvider(
       return null
     }
 
+    await rehashPasswordAfterLogin({
+      adapter,
+      user,
+      password: credentials.password,
+      digest: passwordHash,
+      hasher: bindings.passwordHasher,
+    })
     timebox.returnEarly()
     return user
   }, AUTH_TIMEBOX_MILLISECONDS)
@@ -3171,7 +3216,7 @@ export async function providerForGuard(guardName: string): Promise<string | null
 
   const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
 
-  return resolveSessionPayloadProvider(payload!)
+  return payload ? resolveSessionPayloadProvider(payload) : guard.provider
 }
 
 export async function hashPassword(password: string): Promise<string> {

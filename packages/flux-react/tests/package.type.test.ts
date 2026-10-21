@@ -99,7 +99,7 @@ describe('@holo-js/flux-react typing', () => {
       })
       const priv = useFluxPrivate('orders.{orderId}', 'flux.react.orders.shipped', payload => {
         expectTypeOf(payload).toEqualTypeOf<{ orderId: string, shippedAt: string }>()
-      }, { client })
+      }, { client, onError: error => expectTypeOf(error).toEqualTypeOf<Error>() })
       const presence = useFluxPresence('chat.{roomId}', {
         onHere(members) {
           expectTypeOf(members).toEqualTypeOf<readonly {
