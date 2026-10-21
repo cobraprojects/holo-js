@@ -127,6 +127,8 @@ type MediaRelationCallbackMethod
     | 'orWhereHas'
     | 'whereDoesntHave'
     | 'orWhereDoesntHave'
+    | 'whereRelation'
+    | 'orWhereRelation'
     | 'withWhereHas'
     | 'withCount'
     | 'withExists'
@@ -148,6 +150,8 @@ type MediaEnabledQueryBuilder<
         ? MediaEnabledRelationColumnAggregate<TBuilder, TCollectionName, TConversionName>
     : K extends 'whereHas' | 'orWhereHas' | 'whereDoesntHave' | 'orWhereDoesntHave'
       ? MediaEnabledRelationFilter<TBuilder, TCollectionName, TConversionName>
+    : K extends 'whereRelation' | 'orWhereRelation'
+      ? MediaEnabledRelationColumnFilter<TBuilder, TCollectionName, TConversionName>
     : K extends 'withWhereHas'
       ? MediaEnabledWithWhereHas<TBuilder, TCollectionName, TConversionName>
     : MediaEnabledFunction<TBuilder[K], TCollectionName, TConversionName>
@@ -287,6 +291,19 @@ type MediaEnabledRelationFilter<
   ? <TPath extends MediaRelationPath<TRelations>>(
       relation: TPath,
       constraint?: RelationConstraintFor<TRelations, TPath>,
+    ) => MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
+  : never
+
+type MediaEnabledRelationColumnFilter<
+  TBuilder,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded, infer TScopes extends Readonly<Record<string, unknown>>>
+  ? <TRelationPath extends MediaRelationPath<TRelations>>(
+      relation: TRelationPath,
+      column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+      operator: unknown,
+      value?: unknown,
     ) => MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TCollectionName, TConversionName>
   : never
 

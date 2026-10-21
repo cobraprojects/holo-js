@@ -184,3 +184,39 @@ it('restricts aggregate helpers to top-level relation names', () => {
     User.query().withExists()
   }
 })
+
+it('types whereRelation and orWhereRelation columns against the related media model', () => {
+  if (false) {
+    User.whereRelation('posts', 'title', '=', 'Hello')
+    User.orWhereRelation('posts', 'title', '=', 'Hello')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.whereRelation('posts', 'body', '=', 'Hello')
+    // @ts-expect-error body is a comments column, not a posts column
+    User.orWhereRelation('posts', 'body', '=', 'Hello')
+    User.query().whereRelation('posts.comments', 'body', '=', 'Hello')
+    User.query().orWhereRelation('posts.comments', 'body', '=', 'Hello')
+    // @ts-expect-error title is a posts column, not a comments column
+    User.whereRelation('posts.comments', 'title', '=', 'Hello')
+    // @ts-expect-error title is a posts column, not a comments column
+    User.query().orWhereRelation('posts.comments', 'title', '=', 'Hello')
+    // @ts-expect-error nope is not a column of posts
+    User.whereRelation('posts', 'nope', '=', 'Hello')
+    // @ts-expect-error missing is not a relation of users
+    User.whereRelation('missing', 'title', '=', 'Hello')
+  }
+})
+
+it('keeps media-enabled callbacks after whereRelation', () => {
+  if (false) {
+    User.query()
+      .whereRelation('posts', 'title', '=', 'Hello')
+      .with('posts', (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      })
+    User.query()
+      .orWhereRelation('posts', 'title', '=', 'Hello')
+      .with('posts', (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      })
+  }
+})
