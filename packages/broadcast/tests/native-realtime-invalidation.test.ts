@@ -67,7 +67,7 @@ async function writeFromAnotherProcess(filename: string, score: number, redisPor
 async function startScoresWorker(
   db: Awaited<ReturnType<typeof openScoresDatabase>>['db'],
   redisPort: number,
-  options: { readonly nodeId?: string, readonly appId?: string, readonly key?: string, readonly databaseInvalidation?: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>['databaseInvalidation'] } = {},
+  options: { readonly nodeId?: string, readonly appId?: string, readonly key?: string, readonly scalingConnection?: string, readonly databaseInvalidation?: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>['databaseInvalidation'] } = {},
 ) {
   const scores = query({
     name: 'scores.current',
@@ -77,16 +77,17 @@ async function startScoresWorker(
       return { score: row?.score }
     },
   })
+  const scalingConnection = options.scalingConnection ?? 'shared'
   const port = await reservePort()
   const worker = await startBroadcastWorker({
     config: normalizeBroadcastConfig({
       default: 'main',
       connections: { main: { driver: 'holo', appId: options.appId ?? 'app', key: options.key ?? 'key', secret: 'secret', options: { host: '127.0.0.1', port, scheme: 'http' } } },
-      worker: { host: '127.0.0.1', port, scaling: { driver: 'redis', connection: 'shared' } },
+      worker: { host: '127.0.0.1', port, scaling: { driver: 'redis', connection: scalingConnection } },
     }),
     redis: normalizeRedisConfig({
-      default: 'shared',
-      connections: { shared: { host: '127.0.0.1', port: redisPort } },
+      default: scalingConnection,
+      connections: { [scalingConnection]: { host: '127.0.0.1', port: redisPort } },
     }),
     ...(options.nodeId === undefined ? {} : { nodeId: options.nodeId }),
     realtime: {
@@ -558,4 +559,86 @@ it('gives no remote receives in either of two embedded workers that share a proc
 
   expect(receivedByA).toEqual([])
   expect(receivedByB).toEqual([])
+}, 30_000)
+
+it('delivers a remote invalidation on one scaling connection when a worker on another connection uses its node id', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const receivedByA: unknown[] = []
+  const receivedByB: unknown[] = []
+  const bridgeA = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const bridgeB = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  await startScoresWorker(db, redisPort, {
+    nodeId: 'node-x',
+    scalingConnection: 'alpha',
+    databaseInvalidation: {
+      connect: bridgeA.connect,
+      receive: async invalidation => {
+        receivedByA.push(invalidation)
+        await bridgeA.receive(invalidation)
+      },
+    },
+  })
+  await startScoresWorker(db, redisPort, {
+    scalingConnection: 'beta',
+    databaseInvalidation: {
+      connect: bridgeB.connect,
+      receive: async invalidation => {
+        receivedByB.push(invalidation)
+        await bridgeB.receive(invalidation)
+      },
+    },
+  })
+
+  await client.publish('holo:broadcast:scaling:beta:events', JSON.stringify({
+    type: 'database-invalidation',
+    originNodeId: 'node-x',
+    appId: 'app',
+    invalidation: { connectionName: 'main', dependencies: ['db:main:scores'] },
+  }))
+
+  await expect.poll(() => receivedByB.length).toBe(1)
+  expect(receivedByA).toEqual([])
+}, 30_000)
+
+it('suppresses a worker\'s own echo on its scaling connection while still delivering other nodes on that connection', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const client = redis.clients[0]
+  if (!client) throw new Error('No native Redis client available')
+  const receivedByA: unknown[] = []
+  const bridgeA = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  await startScoresWorker(db, redisPort, {
+    nodeId: 'node-x',
+    scalingConnection: 'alpha',
+    databaseInvalidation: {
+      connect: bridgeA.connect,
+      receive: async invalidation => {
+        receivedByA.push(invalidation)
+        await bridgeA.receive(invalidation)
+      },
+    },
+  })
+
+  await client.publish('holo:broadcast:scaling:alpha:events', JSON.stringify({
+    type: 'database-invalidation',
+    originNodeId: 'node-x',
+    appId: 'app',
+    invalidation: { connectionName: 'main', dependencies: ['db:main:echo'] },
+  }))
+  await client.publish('holo:broadcast:scaling:alpha:events', JSON.stringify({
+    type: 'database-invalidation',
+    originNodeId: 'node-y',
+    appId: 'app',
+    invalidation: { connectionName: 'main', dependencies: ['db:main:sentinel'] },
+  }))
+
+  await expect.poll(() => receivedByA.length).toBe(1)
+  expect(receivedByA).toEqual([{ connectionName: 'main', dependencies: ['db:main:sentinel'] }])
 }, 30_000)

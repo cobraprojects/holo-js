@@ -613,10 +613,17 @@ function getProcessScalingNodeId(): string {
   return processScalingNodeId
 }
 
+// Node IDs are only unique per scaling connection: a node on another connection may reuse an explicit
+// node ID, so local origins are scoped to the event channel Redis isolates the connection by.
 const localScalingOriginCounts = new Map<string, number>()
 
-function registerLocalScalingOrigin(nodeId: string): () => void {
-  localScalingOriginCounts.set(nodeId, (localScalingOriginCounts.get(nodeId) ?? 0) + 1)
+function resolveLocalScalingOriginKey(eventChannel: string, nodeId: string): string {
+  return `${eventChannel}\u0000${nodeId}`
+}
+
+function registerLocalScalingOrigin(eventChannel: string, nodeId: string): () => void {
+  const key = resolveLocalScalingOriginKey(eventChannel, nodeId)
+  localScalingOriginCounts.set(key, (localScalingOriginCounts.get(key) ?? 0) + 1)
   let released = false
   return () => {
     if (released) {
@@ -624,18 +631,19 @@ function registerLocalScalingOrigin(nodeId: string): () => void {
     }
 
     released = true
-    const remaining = (localScalingOriginCounts.get(nodeId) ?? 1) - 1
+    const remaining = (localScalingOriginCounts.get(key) ?? 1) - 1
     if (remaining > 0) {
-      localScalingOriginCounts.set(nodeId, remaining)
+      localScalingOriginCounts.set(key, remaining)
       return
     }
 
-    localScalingOriginCounts.delete(nodeId)
+    localScalingOriginCounts.delete(key)
   }
 }
 
-function isLocalScalingOrigin(originNodeId: string): boolean {
-  return originNodeId === getProcessScalingNodeId() || localScalingOriginCounts.has(originNodeId)
+function isLocalScalingOrigin(eventChannel: string, originNodeId: string): boolean {
+  return originNodeId === getProcessScalingNodeId()
+    || localScalingOriginCounts.has(resolveLocalScalingOriginKey(eventChannel, originNodeId))
 }
 
 function resolveScalingEventChannel(connection: string): string {
@@ -1882,7 +1890,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (message.type === 'database-invalidation') {
-      if (typeof message.originNodeId === 'string' && isLocalScalingOrigin(message.originNodeId)) {
+      if (scaling && typeof message.originNodeId === 'string' && isLocalScalingOrigin(scaling.eventChannel, message.originNodeId)) {
         return
       }
 
@@ -2353,7 +2361,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   let closing: Promise<void> | undefined
-  const unregisterLocalScalingOrigin = scaling ? registerLocalScalingOrigin(scaling.nodeId) : undefined
+  const unregisterLocalScalingOrigin = scaling ? registerLocalScalingOrigin(scaling.eventChannel, scaling.nodeId) : undefined
   async function closeRuntime(): Promise<void> {
     unregisterLocalScalingOrigin?.()
   if (livenessTimer !== undefined) {
