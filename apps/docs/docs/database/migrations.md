@@ -341,7 +341,7 @@ await schema.disableForeignKeyConstraints()
 
 ### withoutForeignKeyConstraints()
 
-Runs a callback with foreign key checks turned off, then turns them back on, even when the callback throws. Every query in the callback runs on one connection.
+Runs a callback with foreign key checks turned off, then turns them back on, even when the callback throws. Every query in the callback runs on one connection. A query that runs while a transaction started in the callback is open waits for that transaction to finish, so it is never rolled back with it.
 
 ```ts
 await schema.withoutForeignKeyConstraints(async () => {

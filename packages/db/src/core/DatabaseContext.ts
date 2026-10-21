@@ -7,7 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { currentPinnedConnection, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
+import { currentPinnedConnection, isPinnedConnectionHeld, serializeOnPinnedConnection } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -776,6 +776,11 @@ export class DatabaseContext {
     runner: () => Promise<TResult>,
     options?: DatabaseOperationOptions,
   ): Promise<TResult> {
+    const pinned = currentPinnedConnection(this._adapter)
+    if (pinned && !isPinnedConnectionHeld(pinned)) {
+      return serializeOnPinnedConnection(pinned, () => this._runLogged(kind, statement, runner, options))
+    }
+
     this._assertValidOperationOptions(options)
     const start = Date.now()
     const scheduled = await this._runtime.scheduler.schedule({
