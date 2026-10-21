@@ -66,6 +66,43 @@ describe('native csrf middleware', () => {
     expect(await response.json()).toEqual({ token: sessions.tokens.get('guest-1') })
   })
 
+  it('enforces CSRF when the security config omits the csrf block', async () => {
+    configureSecurityRuntime({
+      config: {},
+      csrfSigningKey: 'native-middleware-test-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
+    })
+    const cookie = 'browser=browser-a'
+    const denied = await nextCsrfProtection()(new NextRequest('https://app.test/api/login', {
+      method: 'POST', headers: { cookie },
+    }))
+    expect(denied?.status).toBe(419)
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler(() => 'handled'))
+    const nuxtDenied = await toWebHandler(app)(new Request('https://app.test/api/login', {
+      method: 'POST', headers: { cookie },
+    }))
+    expect(nuxtDenied.status).toBe(419)
+    const broadcastAuth = await nextCsrfProtection()(new NextRequest('https://app.test/broadcasting/auth', {
+      method: 'POST', headers: { cookie },
+    }))
+    expect(broadcastAuth).toBeUndefined()
+  })
+
+  it('leaves CSRF checks off when the csrf block sets enabled to false', async () => {
+    configureSecurityRuntime({
+      config: { csrf: { enabled: false } },
+      csrfSigningKey: 'native-middleware-test-key',
+      csrfSession: memoryCsrfSessions({ 'browser-a': 'session-token' }),
+    })
+    const allowed = await nextCsrfProtection()(new NextRequest('https://app.test/api/login', {
+      method: 'POST', headers: { cookie: 'browser=browser-a' },
+    }))
+    expect(allowed?.status).toBe(200)
+    expect(allowed?.headers.get('x-middleware-next')).toBe('1')
+  })
+
   it('serves credentialed CORS preflight and preserves CORS headers on CSRF rejection', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({ csrf: { enabled: true } }),

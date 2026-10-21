@@ -3309,6 +3309,7 @@ export default defineCacheConfig({
         '@holo-js/kernel': 'catalog:',
         '@holo-js/panels': 'workspace:*',
         '@holo-js/security': 'catalog:',
+        '@holo-js/session': 'catalog:',
         next: expectedNextPackageRange,
       },
     }
@@ -3321,6 +3322,48 @@ export default defineSecurityConfig({})
 
     await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(false)
     await expect(readFile(join(projectRoot, 'package.json'), 'utf8').then(JSON.parse)).resolves.toEqual(packageJson)
+  }, 60000)
+
+  it('adds session for a security config that exports a plain object without importing @holo-js/security', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default {}\n')
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toMatchObject({
+      '@holo-js/security': expectedHoloPackageRange,
+      '@holo-js/session': expectedHoloPackageRange,
+    })
+  }, 60000)
+
+  it('keeps an existing session dependency for a security config that exports a plain object', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/security': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default {}\n')
+
+    await projectInternals.syncManagedDriverDependencies(projectRoot)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/session']).toBe(expectedHoloPackageRange)
+  }, 60000)
+
+  it('does not require session when a plain security config turns csrf off', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
+    await writeProjectFile(projectRoot, 'config/security.ts', 'export default { csrf: { enabled: false } }\n')
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies
+    expect(dependencies['@holo-js/security']).toBe(expectedHoloPackageRange)
+    expect(dependencies['@holo-js/session']).toBeUndefined()
   }, 60000)
 
   it('syncs lazy optional holo packages from config and discovery registry entries', async () => {

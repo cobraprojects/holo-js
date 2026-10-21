@@ -395,6 +395,8 @@ describe('@holo-js/security package surface', () => {
       csrf: { enabled: true },
       rateLimit: { driver: 'file', file: { path: './limits' }, limiters: { login: { maxAttempts: 5, key } } },
     })
+    expect(normalizeSecurityConfig({}).csrf).toMatchObject({ enabled: true })
+    expect(normalizeSecurityConfig({ csrf: { enabled: false } }).csrf).toMatchObject({ enabled: false })
     expect(() => normalizeSecurityConfig({ csrf: { except: [' '] } })).toThrow('csrf except entry at index 0 must be a non-empty string')
     expect(() => normalizeSecurityConfig({ rateLimit: { driver: 'invalid' as never } })).toThrow('Unsupported rate limit driver "invalid"')
     expect(() => normalizeSecurityConfig({ rateLimit: { driver: 'redis' } })).toThrow('without top-level Redis config')
