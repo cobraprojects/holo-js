@@ -46,12 +46,10 @@ import type {
   ModelUpdatePayload,
   ModelRelationName,
   ModelRelationPath,
-  RelatedColumnNameOfRelation,
   RelatedColumnNameForRelationPath,
   RelationConstraintFor,
   RelationConstraintMap,
   RelationNameConstraintMap,
-  RelationNameConstraintRecord,
   UniqueIdRuntimeConfig,
 } from './types'
 import type { StaticModelApi } from './staticModelApi'
@@ -665,17 +663,17 @@ function createStaticModelApi<
         ? this.query().withExists(first, ...rest)
         : this.query().withExists(first)
     },
-    withSum<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withSum(first, column, ...rest)
+    withSum(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
+      return this.query().withSum(first as never, column as never, ...rest)
     },
-    withAvg<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withAvg(first, column, ...rest)
+    withAvg(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
+      return this.query().withAvg(first as never, column as never, ...rest)
     },
-    withMin<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withMin(first, column, ...rest)
+    withMin(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
+      return this.query().withMin(first as never, column as never, ...rest)
     },
-    withMax<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withMax(first, column, ...rest)
+    withMax(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
+      return this.query().withMax(first as never, column as never, ...rest)
     },
     has(relation: ModelRelationPath<TRelations>) {
       return this.query().has(relation)
