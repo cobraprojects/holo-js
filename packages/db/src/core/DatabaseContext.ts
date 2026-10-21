@@ -7,7 +7,7 @@ import { ModelRepository } from '../model/ModelRepository'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
-import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
+import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
 import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler } from './QueryScheduler'
@@ -790,9 +790,10 @@ export class DatabaseContext {
     this._assertValidOperationOptions(options)
     const start = Date.now()
     const pinned = currentPinnedConnection(this._adapter)
-    if (pinned) assertPinnedStatementAllowed(pinned)
+    const restore = isPinnedRestoreStatement(options)
+    if (pinned) assertPinnedStatementAllowed(pinned, restore)
     const submit = (): Promise<TResult> => {
-      const leave = pinned ? enterPinnedStatement(pinned) : undefined
+      const leave = pinned ? enterPinnedStatement(pinned, restore) : undefined
       let pending: Promise<TResult>
       try {
         pending = runner()

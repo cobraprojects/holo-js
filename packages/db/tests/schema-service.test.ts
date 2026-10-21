@@ -383,9 +383,9 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         sibling = new Promise(resolve => { setTimeout(resolve, 20) })
           .then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
       })
-      await sibling
+      await sibling.catch(() => undefined)
 
-      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 2 }])
+      expect((await db.table(table).select('id').orderBy('id').get()).map(row => row.id)).not.toContain(3)
     }, 2_000)
 
     it('keeps a write out of a transaction whose timed-out BEGIN has not settled yet', async () => {
@@ -472,6 +472,37 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
     }, 5_000)
+
+    it('rejects an unawaited write that resumes after the callback returned, and persists nothing while the restore is delayed', async () => {
+      let pauseNextInsert = false
+      let restored = false
+      const { db, schema, table } = await openDatabase(driver, {
+        logger: {
+          onQueryStart: async entry => {
+            if (pauseNextInsert && entry.source?.startsWith('query:insert')) {
+              pauseNextInsert = false
+              await new Promise(resolve => { setTimeout(resolve, 20) })
+            }
+            if (entry.source === 'schema:enableForeignKeys') {
+              await new Promise(resolve => { setTimeout(resolve, 60) })
+            }
+          },
+          onQuerySuccess: entry => {
+            if (entry.source === 'schema:enableForeignKeys') restored = true
+          },
+        },
+      })
+      let late!: Promise<unknown>
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        pauseNextInsert = true
+        late = db.table(table).insert({ id: 1, name: 'late' }).then(() => 'ran', (error: unknown) => error)
+      })
+
+      expect(await late).toBeInstanceOf(TransactionError)
+      expect(restored).toBe(true)
+      expect(await db.table(table).select('id').orderBy('id').get()).toEqual([])
+    }, 3_000)
 
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TransactionError } from '../core/errors'
-import type { DriverAdapter } from '../core/types'
+import type { DatabaseOperationOptions, DriverAdapter } from '../core/types'
 
 export type PinnedConnection = {
   active: boolean
@@ -33,7 +33,19 @@ export function runPinnedConnection<T>(adapter: DriverAdapter, callback: () => P
   }))
 }
 
-export function assertPinnedStatementAllowed(pinned: PinnedConnection): void {
+const pinnedRestoreStatement: unique symbol = Symbol('pinnedRestoreStatement')
+
+export const pinnedRestoreOptions: DatabaseOperationOptions & { readonly [pinnedRestoreStatement]: true } = { [pinnedRestoreStatement]: true }
+
+export function isPinnedRestoreStatement(options: DatabaseOperationOptions | undefined): boolean {
+  return (options as Partial<typeof pinnedRestoreOptions> | undefined)?.[pinnedRestoreStatement] === true
+}
+
+export function assertPinnedStatementAllowed(pinned: PinnedConnection, restore: boolean): void {
+  if (restore) return
+  if (pinned.closed) {
+    throw new TransactionError('A query ran after the callback of withoutForeignKeyConstraints() returned, so it could run with foreign-key checks off. Await every query before the callback returns.')
+  }
   if (pinned.transaction && !pinnedTransactionScopes.getStore()?.has(pinned.transaction)) {
     throw new TransactionError(
       'A query on the connection held by withoutForeignKeyConstraints() ran while a transaction on that connection was still open, so it would have joined that transaction. Await the transaction before running other queries, or run the query inside the transaction.',
@@ -41,8 +53,8 @@ export function assertPinnedStatementAllowed(pinned: PinnedConnection): void {
   }
 }
 
-export function enterPinnedStatement(pinned: PinnedConnection): () => void {
-  assertPinnedStatementAllowed(pinned)
+export function enterPinnedStatement(pinned: PinnedConnection, restore: boolean): () => void {
+  assertPinnedStatementAllowed(pinned, restore)
   pinned.inFlight += 1
   return () => {
     pinned.inFlight -= 1
