@@ -72,7 +72,7 @@ it('types named scopes inside whereHas-family and with callbacks against the rel
     })
     User.query().with({
       posts: (query) => {
-        // @ts-expect-error the related model has no scope named named
+        // @ts-expect-error the related model has no scope named `named`
         query.named('Ada')
       },
     })
@@ -83,6 +83,18 @@ it('types named scopes inside whereHas-family and with callbacks against the rel
         expectTypeOf(query.published).toEqualTypeOf<() => PostQuery>()
       },
     })
+  }
+})
+
+it('rejects scope definitions that do not return a query builder', () => {
+  if (false) {
+    const Counter = defineModel(users, {
+      scopes: {
+        tally: (query: ModelQueryBuilder<typeof users>) => 5,
+      },
+    })
+    // @ts-expect-error a scope must return a query builder, so its method has no builder return type
+    Counter.tally()
   }
 })
 

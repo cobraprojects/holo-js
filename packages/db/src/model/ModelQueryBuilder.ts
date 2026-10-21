@@ -182,7 +182,7 @@ class ModelQueryBuilderBase<
   }
 
   applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    const query = scope(this.self())
+    const query = scope(this.asScopedBuilder())
     const predicates = query.tableQuery.getPlan().predicates
     return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       query.repository,
@@ -243,7 +243,7 @@ class ModelQueryBuilderBase<
     if (typeof columnOrCallback === 'function') {
       const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
-        return this.self()
+        return this.asScopedBuilder()
       }
 
       return this.clone(this.tableQuery.where(query => this.replayNestedPredicates(query, predicates)))
@@ -264,7 +264,7 @@ class ModelQueryBuilderBase<
     if (typeof columnOrCallback === 'function') {
       const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
-        return this.self()
+        return this.asScopedBuilder()
       }
 
       return this.clone(this.tableQuery.orWhere(query => this.replayNestedPredicates(query, predicates)))
@@ -278,7 +278,7 @@ class ModelQueryBuilderBase<
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
-      return this.self()
+      return this.asScopedBuilder()
     }
 
     return this.clone(this.tableQuery.whereNot(query => this.replayNestedPredicates(query, predicates)))
@@ -289,7 +289,7 @@ class ModelQueryBuilderBase<
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
-      return this.self()
+      return this.asScopedBuilder()
     }
 
     return this.clone(this.tableQuery.orWhereNot(query => this.replayNestedPredicates(query, predicates)))
@@ -371,10 +371,10 @@ class ModelQueryBuilderBase<
     defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (value) {
-      return this.resolveBuilder(callback(this.self(), value))
+      return this.resolveBuilder(callback(this.asScopedBuilder(), value))
     }
 
-    return this.resolveBuilder(defaultCallback?.(this.self(), value))
+    return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
   unless<TValue>(
@@ -383,10 +383,10 @@ class ModelQueryBuilderBase<
     defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (!value) {
-      return this.resolveBuilder(callback(this.self(), value))
+      return this.resolveBuilder(callback(this.asScopedBuilder(), value))
     }
 
-    return this.resolveBuilder(defaultCallback?.(this.self(), value))
+    return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
   orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
@@ -946,7 +946,7 @@ class ModelQueryBuilderBase<
 
   dump(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.getTableQueryBuilder().dump()
-    return this.self()
+    return this.asScopedBuilder()
   }
 
   cache(
@@ -1501,12 +1501,12 @@ class ModelQueryBuilderBase<
     return entities.length
   }
 
-  private self(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  private asScopedBuilder(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   private resolveBuilder(result: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return result instanceof ModelQueryBuilderBase ? result as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> : this.self()
+    return result instanceof ModelQueryBuilderBase ? result as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> : this.asScopedBuilder()
   }
 
   private clone(tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>, softDeleteMode = this.softDeleteMode): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
