@@ -57,11 +57,13 @@ it('creates a collection from entities of the repository model', () => {
 
 it('rejects foreign-model entities in saveMany before any row is written', async () => {
   const db = await setupMembersTable()
-  const Member = defineModel(members, { name: 'Member' })
+  const Member = defineModel(members, { name: 'Member', fillable: ['name'] })
   const Visitor = defineModel(members, { name: 'Visitor' })
+  const memberRepository = ModelRepository.from(Member)
+  const owned = memberRepository.make({ name: 'Bea' })
   const foreign = ModelRepository.from(Visitor).hydrate({ id: 1, name: 'Ada' })
 
-  await expect(ModelRepository.from(Member).saveMany([foreign])).rejects.toThrow(HydrationError)
+  await expect(memberRepository.saveMany([owned, foreign])).rejects.toThrow(HydrationError)
   expect(await db.table('collection_owner_members').count()).toBe(0)
 })
 
@@ -105,14 +107,14 @@ it('keeps the owning model on a collection derived by fresh()', async () => {
   expect(() => derived.toQuery()).toThrow('Cannot create a Member collection from a Visitor entity.')
 })
 
-it('builds a query from an owned empty collection', async () => {
-  const db = await setupMembersTable()
-  await db.table('collection_owner_members').insert([{ id: 1, name: 'Ada' }])
+it('throws from toQuery() on an owned empty collection', async () => {
+  await setupMembersTable()
   const Member = defineModel(members, { name: 'Member' })
   const memberRepository = ModelRepository.from(Member)
+  const empty = await memberRepository.query().where('id', 99).get()
 
-  expect(await memberRepository.createCollection([]).toQuery().get()).toHaveLength(0)
-  expect(await (await memberRepository.query().where('id', 99).get()).toQuery().get()).toHaveLength(0)
+  expect(() => memberRepository.createCollection([]).toQuery()).toThrow('Cannot create a query from an empty model collection.')
+  expect(() => empty.toQuery()).toThrow('Cannot create a query from an empty model collection.')
 })
 
 it('keeps the owner out of array keys and serialization', () => {

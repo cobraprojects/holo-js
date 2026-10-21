@@ -144,22 +144,17 @@ export function createModelCollection<
       })
     },
     toQuery(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes> {
+      const first = collection[0]
+      if (!first) {
+        throw new HydrationError('Cannot create a query from an empty model collection.')
+      }
+
       const owner = getModelCollectionOwner(collection) as CollectionRepository<TTable, TRelations, TScopes> | undefined
-      let repo: CollectionRepository<TTable, TRelations, TScopes>
       if (owner) {
         assertEntitiesBelongTo(collection, owner)
-        repo = owner
-      } else {
-        const first = collection[0]
-        if (!first) {
-          throw new HydrationError('Cannot create a query from an empty model collection.')
-        }
-        repo = getRepository(first)
       }
+      const repo = owner ?? getRepository(first)
       const keys = this.modelKeys()
-      if (keys.length === 0) {
-        return repo.query().whereNull(repo.definition.primaryKey as never).whereNotNull(repo.definition.primaryKey as never) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
-      }
       const integerKeys = integerKeysToInline(keys, repo.definition.table.columns[repo.definition.primaryKey])
       if (integerKeys) {
         return repo.query()[whereIntegerKeysIn](integerKeys) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>

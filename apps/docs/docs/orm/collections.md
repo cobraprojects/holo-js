@@ -80,7 +80,7 @@ const drafts = await Post.where('status', 'draft').get()
 await drafts.toQuery().update({ status: 'archived' })
 ```
 
-A collection returned by a query keeps its model, so `toQuery()` on an empty result builds a query that matches no rows. A collection built from plain items with `createModelCollection()` throws on `toQuery()` when it is empty.
+`toQuery()` throws on an empty collection, so check `length` first if the collection might be empty.
 
 The query keeps the model's named scopes, so `drafts.toQuery().published()` type-checks when `Post` defines a `published` scope.
 
@@ -313,7 +313,7 @@ return users.toJSON()
 
 ### toQuery()
 
-Builds a model query limited to the primary keys in the collection. It matches no rows when the collection is empty and came from a query. It throws on an empty collection built from plain items, and on a collection that holds an entity from another model.
+Builds a model query limited to the primary keys in the collection. It throws on an empty collection.
 
 ```ts
 await drafts.toQuery().update({ status: 'archived' })
