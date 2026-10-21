@@ -399,11 +399,11 @@ export class ModelQueryBuilder<
   // TLoaded is dropped so the type does not claim relations are loaded when
   // the excluded scope may have been the one that added them.
   withoutGlobalScope(name: string): ModelQueryBuilder<TTable, TRelations> {
-    return this.repository.queryWithoutGlobalScope(name) as ModelQueryBuilder<TTable, TRelations>
+    return this.repository.queryWithoutGlobalScope(name, this.tableQuery.getPlan().lockSourceOnly === true) as ModelQueryBuilder<TTable, TRelations>
   }
 
   withoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable, TRelations> {
-    return this.repository.queryWithoutGlobalScopes(names) as ModelQueryBuilder<TTable, TRelations>
+    return this.repository.queryWithoutGlobalScopes(names, this.tableQuery.getPlan().lockSourceOnly === true) as ModelQueryBuilder<TTable, TRelations>
   }
 
   limit(value?: number): ModelQueryBuilder<TTable, TRelations, TLoaded> {

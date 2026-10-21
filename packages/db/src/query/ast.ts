@@ -215,6 +215,7 @@ export interface SelectQueryPlan {
   readonly having: readonly QueryHavingClause[]
   readonly orderBy: readonly QueryOrderBy[]
   readonly lockMode?: QueryLockMode
+  readonly lockSourceOnly?: boolean
   readonly limit?: number
   readonly offset?: number
 }
@@ -508,6 +509,13 @@ export function withLockMode(
   return Object.freeze({
     ...plan,
     lockMode,
+  })
+}
+
+export function withLockSourceOnly(plan: SelectQueryPlan): SelectQueryPlan {
+  return Object.freeze({
+    ...plan,
+    lockSourceOnly: true,
   })
 }
 

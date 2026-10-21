@@ -161,7 +161,10 @@ export class SQLQueryCompiler {
     const orderClause = plan.orderBy.length === 0
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
-    const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode) : ''
+    const lockOf = plan.lockSourceOnly === true
+      ? (plan.source.alias ? this.quoteIdentifier(plan.source.alias) : this.compileTableReference(plan.source.tableName))
+      : undefined
+    const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode, lockOf) : ''
     const lockClause = compiledLockClause ? ` ${compiledLockClause}` : ''
     const limitClause = typeof plan.limit === 'number' ? ` LIMIT ${plan.limit}` : ''
     const offsetClause = typeof plan.offset === 'number' ? ` OFFSET ${plan.offset}` : ''
@@ -715,7 +718,7 @@ export class SQLQueryCompiler {
     throw new CompilerError('The active dialect does not support vector similarity clauses.')
   }
 
-  protected compileLockClause(_lockMode: QueryLockMode): string {
+  protected compileLockClause(_lockMode: QueryLockMode, _lockOf?: string): string {
     throw new CompilerError('The active dialect does not support pessimistic lock clauses.')
   }
 

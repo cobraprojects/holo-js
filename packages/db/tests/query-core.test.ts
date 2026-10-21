@@ -25,7 +25,7 @@ import {
  } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
-import { createUpsertQueryPlan, type QueryJsonUpdateOperation } from '../src/query/ast'
+import { createUpsertQueryPlan, withLockMode, withLockSourceOnly, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -1723,6 +1723,29 @@ describe('query core slice', () => {
     expect(await DB.table(users).value('name')).toBe(payload)
   })
 
+
+  it('locks only the source table in source-scoped lock plans per dialect', () => {
+    const postgres = new PostgresQueryCompiler(
+      identifier => `"${identifier}"`,
+      index => `$${index}`,
+    )
+    const mysql = new MySQLQueryCompiler(
+      identifier => `\`${identifier}\``,
+      () => '?',
+    )
+    const source = { kind: 'table' as const, tableName: 'posts' }
+
+    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toBe('SELECT * FROM "posts" FOR UPDATE OF "posts"')
+    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toBe('SELECT * FROM "posts" FOR SHARE OF "posts"')
+    expect(mysql.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toBe('SELECT * FROM `posts` FOR UPDATE OF `posts`')
+    expect(mysql.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toBe('SELECT * FROM `posts` FOR SHARE OF `posts`')
+    expect(mysql.compile(withLockMode(createSelectQueryPlan(source), 'share')).sql)
+      .toBe('SELECT * FROM `posts` LOCK IN SHARE MODE')
+  })
 
   it('keeps dialect-specific compilers aligned on shared SQL planning rules', () => {
     const postgres = new PostgresQueryCompiler(

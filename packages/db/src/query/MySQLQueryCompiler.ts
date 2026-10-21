@@ -23,7 +23,11 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return `LATERAL ${subquery} ${this.quoteIdentifier(alias)}`
   }
 
-  protected override compileLockClause(lockMode: QueryLockMode): string {
+  protected override compileLockClause(lockMode: QueryLockMode, lockOf?: string): string {
+    if (lockOf !== undefined) {
+      return `${lockMode === 'update' ? 'FOR UPDATE' : 'FOR SHARE'} OF ${lockOf}`
+    }
+
     return lockMode === 'update' ? 'FOR UPDATE' : 'LOCK IN SHARE MODE'
   }
 
