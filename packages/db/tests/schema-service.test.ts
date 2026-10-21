@@ -415,6 +415,31 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 3 }])
     }, 5_000)
 
+    it('keeps a pinned scope on one connection in place when a concurrent scope on another connection exits', async () => {
+      const first = await openDatabase(driver)
+      const second = await openDatabase(driver)
+      let secondTransactionOpen!: () => void
+      const transactionOpen = new Promise<void>(resolve => { secondTransactionOpen = resolve })
+      let firstExited!: () => void
+      const exited = new Promise<void>(resolve => { firstExited = resolve })
+
+      await second.schema.withoutForeignKeyConstraints(async () => {
+        const transaction = second.db.transaction(async tx => {
+          await tx.table(second.table).insert({ id: 1, name: 'open' })
+          secondTransactionOpen()
+          await exited
+          throw new Error('second failed')
+        })
+        await transactionOpen
+        await first.schema.withoutForeignKeyConstraints(async () => undefined)
+        firstExited()
+        await expect(second.db.table(second.table).insert({ id: 2, name: 'plain' })).rejects.toBeInstanceOf(TransactionError)
+        await expect(transaction).rejects.toThrow('second failed')
+      })
+
+      expect(await second.db.table(second.table).select('id').orderBy('id').get()).toEqual([])
+    }, 5_000)
+
     if (driver !== 'sqlite') {
       it('applies foreign-key relaxation to every query in a scoped callback and restores pooled connections', async () => {
         const { db, schema } = await openDatabase(driver)
