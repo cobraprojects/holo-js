@@ -193,6 +193,18 @@ describe('native database contexts', () => {
     expect(observed).toEqual([1])
   })
 
+  it('runs a start logger hook inside a transaction so it can query the same connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source !== 'observed') return
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await db.transaction(tx => tx.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' }))
+    expect(observed).toEqual([1])
+  })
+
   it('lets a pending start logger hook wait on a query issued on the same connection', async () => {
     let releaseHook = () => {}
     const hookReleased = new Promise<void>(resolve => { releaseHook = resolve })
