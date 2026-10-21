@@ -22,6 +22,7 @@ import type {
   SelectQueryPlan,
   UpdateQueryPlan,
 } from './ast'
+import { ONE_OF_MANY_AGGREGATE_ALIAS } from './ast'
 
 type IdentifierQuoter = (identifier: string) => string
 type PlaceholderFactory = (index: number) => string
@@ -161,7 +162,7 @@ export class SQLQueryCompiler {
     const orderClause = plan.orderBy.length === 0
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
-    const lockOf = plan.lockSourceOnly === true
+    const lockOf = plan.joins.some(join => join.alias === ONE_OF_MANY_AGGREGATE_ALIAS)
       ? this.quoteIdentifier(plan.source.alias ?? plan.source.tableName.slice(plan.source.tableName.lastIndexOf('.') + 1))
       : undefined
     const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode, lockOf) : ''

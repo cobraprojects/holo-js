@@ -36,7 +36,7 @@ function compileSqliteJsonEquality(
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
-  protected override compileLockClause(_lockMode: QueryLockMode, _lockOf?: string): string {
+  protected override compileLockClause(_lockMode: QueryLockMode): string {
     return ''
   }
 

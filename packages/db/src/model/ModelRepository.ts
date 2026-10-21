@@ -17,7 +17,7 @@ import {
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
-import { createSelectQueryPlan, createTableSource, withLockMode, withLockSourceOnly, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { ONE_OF_MANY_AGGREGATE_ALIAS, withLockMode, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity, getEntityKeyForSave } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { PivotMutation } from './PivotMutation'
@@ -214,16 +214,16 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return this.createQuery(false, false, true)
   }
 
-  queryWithoutGlobalScope(name: string, lockSourceOnly = false): ModelQueryBuilder<TTable> {
-    return this.createQuery(true, true, true, new Set([name]), lockSourceOnly)
+  queryWithoutGlobalScope(name: string): ModelQueryBuilder<TTable> {
+    return this.createQuery(true, true, true, new Set([name]))
   }
 
-  queryWithoutGlobalScopes(names?: readonly string[], lockSourceOnly = false): ModelQueryBuilder<TTable> {
+  queryWithoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable> {
     if (names && names.length > 0) {
-      return this.createQuery(true, true, true, new Set(names), lockSourceOnly)
+      return this.createQuery(true, true, true, new Set(names))
     }
 
-    return this.createQuery(false, false, true, new Set(), lockSourceOnly)
+    return this.createQuery(false, false, true)
   }
 
   newQueryWithoutRelationships(): ModelQueryBuilder<TTable> {
@@ -2022,15 +2022,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
-    lockSourceOnly = false,
   ): ModelQueryBuilder<TTable> {
     let query = new ModelQueryBuilder(
       this,
-      new TableQueryBuilder(
-        this.definition.table,
-        this.getConnection(),
-        lockSourceOnly ? withLockSourceOnly(createSelectQueryPlan(createTableSource(this.definition.table))) : undefined,
-      ),
+      new TableQueryBuilder(this.definition.table, this.getConnection()),
     )
 
     const deletedAtColumn = this.getDeletedAtColumn()
@@ -2398,9 +2393,8 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     relation: RelationDefinition,
     repository: ModelRepository,
     constraint?: RelationConstraint,
-    lockSourceOnly = false,
   ): ModelQueryBuilder {
-    const query = repository.createQuery(true, true, true, new Set(), lockSourceOnly)
+    const query = repository.query()
     const relationConstraint = relation.constraint
     const relationResult = relationConstraint?.(query)
     const constrained = relationResult instanceof ModelQueryBuilder ? relationResult : query
@@ -3144,7 +3138,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     constraint?: RelationConstraint,
   ): ModelQueryBuilder {
     const relatedTable = related.definition.table.tableName
-    const latestAlias = '__holo_latest'
+    const latestAlias = ONE_OF_MANY_AGGREGATE_ALIAS
     const latestKey = '__holo_latest_key'
     const latestValue = '__holo_latest_value'
     const constrainedSource = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder().reorder().limit().offset()
@@ -3158,7 +3152,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const latestQuery = relation.aggregate === 'max'
       ? latestGroups.addSelectMax(latestValue, relation.aggregateColumn)
       : latestGroups.addSelectMin(latestValue, relation.aggregateColumn)
-    const outer = this.applyRelationConstraint(relation, related, constraint, true)
+    const outer = this.applyRelationConstraint(relation, related, constraint)
     const projected = outer.getTableQueryBuilder().getPlan().selections.length > 0
     const scopedOuter = relation.kind === 'morphOneOfMany'
       ? outer.where(`${relatedTable}.${relation.morphTypeColumn}`, this.getMorphTypeValue())

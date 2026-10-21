@@ -25,7 +25,7 @@ import {
  } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
-import { createUpsertQueryPlan, withLockMode, withLockSourceOnly, type QueryJsonUpdateOperation } from '../src/query/ast'
+import { createUpsertQueryPlan, ONE_OF_MANY_AGGREGATE_ALIAS, withJoin, withLockMode, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -1724,7 +1724,7 @@ describe('query core slice', () => {
   })
 
 
-  it('locks only the source table in source-scoped lock plans per dialect', () => {
+  it('locks only the source table when a one-of-many aggregate is joined, per dialect', () => {
     const postgres = new PostgresQueryCompiler(
       identifier => `"${identifier}"`,
       index => `$${index}`,
@@ -1733,19 +1733,29 @@ describe('query core slice', () => {
       identifier => `\`${identifier}\``,
       () => '?',
     )
+    const aggregate = createSelectQueryPlan({ kind: 'table', tableName: 'posts' })
+    const joinAggregate = (plan: ReturnType<typeof createSelectQueryPlan>) => withJoin(plan, {
+      type: 'inner',
+      subquery: aggregate,
+      alias: ONE_OF_MANY_AGGREGATE_ALIAS,
+      leftColumn: 'posts.id',
+      operator: '=',
+      rightColumn: `${ONE_OF_MANY_AGGREGATE_ALIAS}.id`,
+    })
     const source = { kind: 'table' as const, tableName: 'posts' }
 
-    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
-      .toBe('SELECT * FROM "posts" FOR UPDATE OF "posts"')
-    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
-      .toBe('SELECT * FROM "posts" FOR SHARE OF "posts"')
-    expect(mysql.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
-      .toBe('SELECT * FROM `posts` FOR UPDATE')
-    expect(mysql.compile(withLockMode(createSelectQueryPlan(source), 'share')).sql)
-      .toBe('SELECT * FROM `posts` LOCK IN SHARE MODE')
-    const qualified = { kind: 'table' as const, tableName: 'analytics.posts' }
-    expect(postgres.compile(withLockSourceOnly(withLockMode(createSelectQueryPlan(qualified), 'update'))).sql)
-      .toBe('SELECT * FROM "analytics"."posts" FOR UPDATE OF "posts"')
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toMatch(/ FOR UPDATE OF "posts"$/)
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toMatch(/ FOR SHARE OF "posts"$/)
+    expect(mysql.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'update'))).sql)
+      .toMatch(/ FOR UPDATE$/)
+    expect(mysql.compile(joinAggregate(withLockMode(createSelectQueryPlan(source), 'share'))).sql)
+      .toMatch(/ LOCK IN SHARE MODE$/)
+    expect(postgres.compile(withLockMode(createSelectQueryPlan({ kind: 'table', tableName: 'analytics.posts' }), 'update')).sql)
+      .toBe('SELECT * FROM "analytics"."posts" FOR UPDATE')
+    expect(postgres.compile(joinAggregate(withLockMode(createSelectQueryPlan({ kind: 'table', tableName: 'analytics.posts' }), 'update'))).sql)
+      .toMatch(/ FOR UPDATE OF "posts"$/)
   })
 
   it('keeps dialect-specific compilers aligned on shared SQL planning rules', () => {

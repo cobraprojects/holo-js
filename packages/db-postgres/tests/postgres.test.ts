@@ -356,6 +356,46 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     }
   }, 30_000)
 
+  it.each(['lockForUpdate', 'sharedLock'] as const)('loads one-of-many relations when a %s constraint returns a fresh builder on PostgreSQL', async lockMethod => {
+    const suffix = randomUUID().replaceAll('-', '_')
+    const usersTable = `holo_one_of_many_fresh_users_${suffix}`
+    const postsTable = `holo_one_of_many_fresh_posts_${suffix}`
+    const adapter = createPostgresAdapter({
+      config: livePostgresConfig,
+    })
+    const Post = defineModel(defineGeneratedTable(postsTable, {
+      id: column.id(),
+      user_id: column.integer(),
+      score: column.integer(),
+    }), { timestamps: false })
+    const User = defineModel(defineGeneratedTable(usersTable, {
+      id: column.id(),
+      name: column.string(),
+    }), {
+      timestamps: false,
+      relations: { topScorePost: latestOfMany(() => Post, 'user_id', 'id', 'score') },
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter, dialect: createDialect('postgres') } },
+    }))
+
+    try {
+      await adapter.execute(`CREATE TABLE ${usersTable} (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+      await adapter.execute(`CREATE TABLE ${postsTable} (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, score INTEGER NOT NULL)`)
+      await adapter.execute(`INSERT INTO ${usersTable} VALUES (1, 'Mohamed'), (2, 'Amina')`)
+      await adapter.execute(`INSERT INTO ${postsTable} VALUES (10, 1, 5), (11, 1, 9), (12, 2, 3)`)
+
+      const users = await User.with('topScorePost', () => Post.query()[lockMethod]()).orderBy('id').get()
+      expect(users.map(user => user.getRelation<Entity<TableDefinition>>('topScorePost')?.get('id'))).toEqual([11, 12])
+    } finally {
+      await adapter.execute(`DROP TABLE IF EXISTS ${usersTable}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${postsTable}`)
+      await adapter.disconnect()
+      resetDB()
+    }
+  }, 30_000)
+
   it.each((['union', 'unionAll'] as const).flatMap(operation => [
     { operation, selection: 'id' as const, attribute: 'id' },
     { operation, selection: 'id as other' as const, attribute: 'other' },

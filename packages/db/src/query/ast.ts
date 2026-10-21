@@ -15,6 +15,7 @@ export type QueryOperator
 
 export type QueryDirection = 'asc' | 'desc'
 export type QueryLockMode = 'update' | 'share'
+export const ONE_OF_MANY_AGGREGATE_ALIAS = '__holo_latest'
 export type QueryJoinType = 'inner' | 'left' | 'right' | 'cross'
 
 export interface QuerySource {
@@ -215,7 +216,6 @@ export interface SelectQueryPlan {
   readonly having: readonly QueryHavingClause[]
   readonly orderBy: readonly QueryOrderBy[]
   readonly lockMode?: QueryLockMode
-  readonly lockSourceOnly?: boolean
   readonly limit?: number
   readonly offset?: number
 }
@@ -509,13 +509,6 @@ export function withLockMode(
   return Object.freeze({
     ...plan,
     lockMode,
-  })
-}
-
-export function withLockSourceOnly(plan: SelectQueryPlan): SelectQueryPlan {
-  return Object.freeze({
-    ...plan,
-    lockSourceOnly: true,
   })
 }
 
