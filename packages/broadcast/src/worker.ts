@@ -2380,7 +2380,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   let closing: Promise<void> | undefined
-  let shuttingDown = false
+  let isShuttingDown = false
   async function closeRuntime(): Promise<void> {
   if (livenessTimer !== undefined) {
     clearInterval(livenessTimer)
@@ -2433,7 +2433,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         throw new Error(`[@holo-js/broadcast] Socket id "${connection.socketId}" is already connected.`)
       }
 
-      if (shuttingDown) {
+      if (isShuttingDown) {
         connection.close(1001, 'Worker shutdown')
         return
       }
@@ -2556,7 +2556,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       })
     },
     close(): Promise<void> {
-      shuttingDown = true
+      isShuttingDown = true
       closing ??= closeRuntime()
       return closing
     },

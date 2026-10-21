@@ -15,14 +15,19 @@ async function reservePort(): Promise<number> {
   return address.port
 }
 
-async function startBunWorker(port: number, options: { readonly worker: string, readonly heartbeatIntervalMs?: number }) {
+async function connectionCount(baseUrl: string): Promise<number> {
+  return (await (await fetch(`${baseUrl}/stats`)).json() as { connectionCount: number }).connectionCount
+}
+
+async function startBunWorker(options: { readonly port: number, readonly worker?: Record<string, unknown>, readonly heartbeatIntervalMs?: number }) {
   const workerModule = new URL('../src/index.ts', import.meta.url).href
+  const workerConfig = JSON.stringify({ host: '127.0.0.1', port: options.port, statsEnabled: true, ...options.worker })
   const child = spawn('bun', ['--eval', `
     import { normalizeBroadcastConfig, startBroadcastWorker } from ${JSON.stringify(workerModule)}
     const worker = await startBroadcastWorker({ config: normalizeBroadcastConfig({
       default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret' } },
-      worker: { host: '127.0.0.1', port: ${port}, statsEnabled: true, ${options.worker} }
-    }), heartbeatIntervalMs: ${options.heartbeatIntervalMs ?? 'undefined'} })
+      worker: ${workerConfig}
+    }), heartbeatIntervalMs: ${JSON.stringify(options.heartbeatIntervalMs)} })
     console.log('ready')
     for await (const chunk of Bun.stdin.stream()) { await worker.stop(); break }
   `], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -52,7 +57,7 @@ async function startBunWorker(port: number, options: { readonly worker: string, 
 
 it('serves HTTP and WebSockets with the real Bun runtime, enforcing origins and message limits', async () => {
   const port = await reservePort()
-  const worker = await startBunWorker(port, { worker: 'allowedOrigins: [\'https://app.example.test\'], maxMessageBytes: 512' })
+  const worker = await startBunWorker({ port, worker: { allowedOrigins: ['https://app.example.test'], maxMessageBytes: 512 } })
   const baseUrl = `http://127.0.0.1:${port}`
   expect((await fetch(`${baseUrl}/health`)).status).toBe(200)
   expect((await fetch(`${baseUrl}/app/unknown`)).status).toBe(401)
@@ -70,14 +75,14 @@ it('serves HTTP and WebSockets with the real Bun runtime, enforcing origins and 
   const closed = once(socket, 'close')
   socket.send('x'.repeat(513))
   expect((await closed)[0]).toBe(1009)
-  await expect.poll(async () => (await (await fetch(`${baseUrl}/stats`)).json()).connectionCount).toBe(0)
+  await expect.poll(() => connectionCount(baseUrl)).toBe(0)
   await worker.stop()
 }, 15_000)
 
 it('pings Bun sockets and terminates the ones that stop answering, while sockets that answer stay open', async () => {
   const heartbeatIntervalMs = 100
   const port = await reservePort()
-  const worker = await startBunWorker(port, { worker: '', heartbeatIntervalMs })
+  const worker = await startBunWorker({ port, heartbeatIntervalMs })
   const baseUrl = `http://127.0.0.1:${port}`
   const silent = new WebSocket(`ws://127.0.0.1:${port}/app/main-key`, { autoPong: false })
   onTestFinished(() => silent.terminate())
@@ -87,10 +92,10 @@ it('pings Bun sockets and terminates the ones that stop answering, while sockets
   const silentClosed = once(silent, 'close')
 
   expect((await silentClosed)[0]).toBe(1006)
-  await expect.poll(async () => (await (await fetch(`${baseUrl}/stats`)).json()).connectionCount).toBe(1)
+  await expect.poll(() => connectionCount(baseUrl)).toBe(1)
   await new Promise(resolve => setTimeout(resolve, heartbeatIntervalMs * 5))
   expect(answering.readyState).toBe(WebSocket.OPEN)
-  await expect.poll(async () => (await (await fetch(`${baseUrl}/stats`)).json()).connectionCount).toBe(1)
+  await expect.poll(() => connectionCount(baseUrl)).toBe(1)
   answering.terminate()
   await worker.stop()
 }, 15_000)
