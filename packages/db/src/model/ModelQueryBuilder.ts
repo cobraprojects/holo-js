@@ -1,4 +1,4 @@
-import { HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import {
   createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
@@ -42,6 +42,7 @@ import type {
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
+import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
 import type {
   EntityWithLoaded,
   ModelAttributeKey,
@@ -118,13 +119,34 @@ export const whereIntegerKeysIn = Symbol('whereIntegerKeysIn')
 export const withoutRelationLoads = Symbol('withoutRelationLoads')
 export const loadRelationsOn = Symbol('loadRelationsOn')
 
-export class ModelQueryBuilder<
+type ModelScopeFunction = (query: object, ...args: readonly unknown[]) => unknown
+
+const MODEL_QUERY_BUILDER_RESERVED_NAMES: readonly string[] = [
+  'then',
+  'repository',
+  'tableQuery',
+  'eagerLoads',
+  'relationFilters',
+  'aggregateLoads',
+  'queryCasts',
+  'scopePredicates',
+  'softDeleteMode',
+]
+
+export function assertModelScopeNameAvailable(name: string): void {
+  if (name in ModelQueryBuilderBase.prototype || MODEL_QUERY_BUILDER_RESERVED_NAMES.includes(name)) {
+    throw new ConfigurationError(`Model scope "${name}" conflicts with a ModelQueryBuilder member of the same name.`)
+  }
+}
+
+class ModelQueryBuilderBase<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
   TLoaded = unknown,
+  TScopes extends ModelScopesDefinition = EmptyScopeMap,
 > {
   constructor(
-    private readonly repository: ModelRepository<TTable>,
+    private readonly repository: ModelRepository<TTable, TScopes>,
     private readonly tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
     private readonly eagerLoads: readonly EagerLoad[] = [],
     private readonly relationFilters: readonly RelationFilter[] = [],
@@ -132,7 +154,14 @@ export class ModelQueryBuilder<
     private readonly queryCasts: Readonly<Record<string, ModelCastDefinition>> = {},
     private readonly scopePredicates: TableQueryPredicates<TTable> = [],
     private readonly softDeleteMode: 'with' | 'without' | 'only' = 'with',
-  ) {}
+  ) {
+    const scopes = this.repository.definition.scopes as Readonly<Record<string, ModelScopeFunction>>
+    for (const [name, scope] of Object.entries(scopes)) {
+      Object.defineProperty(this, name, {
+        value: (...args: readonly unknown[]) => scope(this, ...args),
+      })
+    }
+  }
 
   getConnection(): DatabaseContext {
     return this.tableQuery.getConnection()
@@ -157,11 +186,11 @@ export class ModelQueryBuilder<
     return query
   }
 
-  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const query = scope(this)
+  applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    const query = scope(this.asScopedBuilder())
     const predicates = query.tableQuery.getPlan().predicates
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
-      query.repository,
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
+      this.repository,
       query.tableQuery.withPredicates([]),
       query.eagerLoads,
       query.relationFilters,
@@ -169,18 +198,18 @@ export class ModelQueryBuilder<
       query.queryCasts,
       [...query.scopePredicates, ...(predicates.length > 0 ? [{ kind: 'group' as const, predicates }] : [])],
       query.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   private collectNestedPredicates(
-    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
   ): TableQueryPredicates<TTable> {
-    const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+    const nested = new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
     const callbackResult = callback(nested)
-    const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
+    const result = callbackResult instanceof ModelQueryBuilderBase ? callbackResult : nested
     return result.getTableQueryBuilder().getPlan().predicates
   }
 
@@ -203,23 +232,23 @@ export class ModelQueryBuilder<
     return next
   }
 
-  from(table: string): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  from(table: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.from(table) as unknown as TableQueryBuilder<TTable, Record<string, unknown>>)
   }
 
   where(
-    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  where(column: ModelColumnName<TTable> | ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded>
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  where(column: ModelColumnName<TTable> | ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   where(
-    columnOrCallback: ModelColumnName<TTable> | ModelJsonColumnPath<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
+    columnOrCallback: ModelColumnName<TTable> | ModelJsonColumnPath<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
     operator?: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (typeof columnOrCallback === 'function') {
       const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
-        return this
+        return this.asScopedBuilder()
       }
 
       return this.clone(this.tableQuery.where(query => this.replayNestedPredicates(query, predicates)))
@@ -229,18 +258,18 @@ export class ModelQueryBuilder<
   }
 
   orWhere(
-    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  orWhere(column: ModelColumnName<TTable> | ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded>
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  orWhere(column: ModelColumnName<TTable> | ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   orWhere(
-    columnOrCallback: ModelColumnName<TTable> | ModelJsonColumnPath<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
+    columnOrCallback: ModelColumnName<TTable> | ModelJsonColumnPath<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
     operator?: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (typeof columnOrCallback === 'function') {
       const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
-        return this
+        return this.asScopedBuilder()
       }
 
       return this.clone(this.tableQuery.orWhere(query => this.replayNestedPredicates(query, predicates)))
@@ -250,22 +279,22 @@ export class ModelQueryBuilder<
   }
 
   whereNot(
-    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
-      return this
+      return this.asScopedBuilder()
     }
 
     return this.clone(this.tableQuery.whereNot(query => this.replayNestedPredicates(query, predicates)))
   }
 
   orWhereNot(
-    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
-      return this
+      return this.asScopedBuilder()
     }
 
     return this.clone(this.tableQuery.orWhereNot(query => this.replayNestedPredicates(query, predicates)))
@@ -273,25 +302,25 @@ export class ModelQueryBuilder<
 
   whereExists<TSubTable extends TableDefinition>(
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereExists(this.normalizeExistsSubquery(subquery)))
   }
 
   orWhereExists<TSubTable extends TableDefinition>(
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereExists(this.normalizeExistsSubquery(subquery)))
   }
 
   whereNotExists<TSubTable extends TableDefinition>(
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotExists(this.normalizeExistsSubquery(subquery)))
   }
 
   orWhereNotExists<TSubTable extends TableDefinition>(
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereNotExists(this.normalizeExistsSubquery(subquery)))
   }
 
@@ -299,7 +328,7 @@ export class ModelQueryBuilder<
     column: ModelColumnName<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'in' | 'not in' | 'like',
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereSub(column as never, operator, this.normalizeExistsSubquery(subquery)))
   }
 
@@ -307,97 +336,93 @@ export class ModelQueryBuilder<
     column: ModelColumnName<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'in' | 'not in' | 'like',
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereSub(column as never, operator, this.normalizeExistsSubquery(subquery)))
   }
 
   whereInSub<TSubTable extends TableDefinition>(
     column: ModelColumnName<TTable>,
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereInSub(column as never, this.normalizeExistsSubquery(subquery)))
   }
 
   whereNotInSub<TSubTable extends TableDefinition>(
     column: ModelColumnName<TTable>,
     subquery: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotInSub(column as never, this.normalizeExistsSubquery(subquery)))
   }
 
-  whereNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNull(column as never))
   }
 
-  orWhereNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereNull(column as never))
   }
 
-  whereNotNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereNotNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotNull(column as never))
   }
 
-  orWhereNotNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereNotNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereNotNull(column as never))
   }
 
   when<TValue>(
     value: TValue,
-    callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>, TValue>,
-    defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>, TValue>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
+    defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (value) {
-      const result = callback(this, value)
-      return result instanceof ModelQueryBuilder ? result : this
+      return this.resolveBuilder(callback(this.asScopedBuilder(), value))
     }
 
-    const result = defaultCallback?.(this, value)
-    return result instanceof ModelQueryBuilder ? result : this
+    return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
   unless<TValue>(
     value: TValue,
-    callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>, TValue>,
-    defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>, TValue>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
+    defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>, TValue>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     if (!value) {
-      const result = callback(this, value)
-      return result instanceof ModelQueryBuilder ? result : this
+      return this.resolveBuilder(callback(this.asScopedBuilder(), value))
     }
 
-    const result = defaultCallback?.(this, value)
-    return result instanceof ModelQueryBuilder ? result : this
+    return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
-  orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orderBy(column as never, direction))
   }
 
-  latest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  latest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.latest(column as never))
   }
 
-  oldest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  oldest(column: ModelColumnName<TTable> = 'created_at' as ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.oldest(column as never))
   }
 
-  inRandomOrder(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  inRandomOrder(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.inRandomOrder())
   }
 
-  reorder(column?: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  reorder(column?: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.reorder(column as never, direction))
   }
 
-  lock(mode: 'update' | 'share'): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  lock(mode: 'update' | 'share'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.lock(mode))
   }
 
-  lockForUpdate(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  lockForUpdate(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.lockForUpdate())
   }
 
-  sharedLock(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  sharedLock(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.sharedLock())
   }
 
@@ -406,41 +431,41 @@ export class ModelQueryBuilder<
   // aggregateLoads / queryCasts from those injected by the excluded scope.
   // TLoaded is dropped so the type does not claim relations are loaded when
   // the excluded scope may have been the one that added them.
-  withoutGlobalScope(name: string): ModelQueryBuilder<TTable, TRelations> {
-    return this.repository.queryWithoutGlobalScope(name) as ModelQueryBuilder<TTable, TRelations>
+  withoutGlobalScope(name: string): ModelQueryBuilder<TTable, TRelations, unknown, TScopes> {
+    return this.repository.queryWithoutGlobalScope(name) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   }
 
-  withoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable, TRelations> {
-    return this.repository.queryWithoutGlobalScopes(names) as ModelQueryBuilder<TTable, TRelations>
+  withoutGlobalScopes(names?: readonly string[]): ModelQueryBuilder<TTable, TRelations, unknown, TScopes> {
+    return this.repository.queryWithoutGlobalScopes(names) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   }
 
-  limit(value?: number): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  limit(value?: number): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.limit(value))
   }
 
-  offset(value?: number): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  offset(value?: number): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.offset(value))
   }
 
-  skip(value: number): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  skip(value: number): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.offset(value)
   }
 
-  take(value: number): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  take(value: number): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.limit(value)
   }
 
-  forPage(page: number, perPage = 15): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  forPage(page: number, perPage = 15): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.forPage(page, perPage))
   }
 
-  select(...columns: readonly ModelSelectableColumn<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  select(...columns: readonly ModelSelectableColumn<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(
       (this.tableQuery as TableQueryBuilder<TableDefinition, Record<string, unknown>>).select(...columns) as TableQueryBuilder<TTable, Record<string, unknown>>,
     )
   }
 
-  addSelect(...columns: readonly ModelSelectableColumn<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  addSelect(...columns: readonly ModelSelectableColumn<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(
       (this.tableQuery as TableQueryBuilder<TableDefinition, Record<string, unknown>>).addSelect(...columns) as TableQueryBuilder<TTable, Record<string, unknown>>,
     )
@@ -449,23 +474,23 @@ export class ModelQueryBuilder<
   selectSub<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
     alias: string,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.selectSub(this.normalizeExistsSubquery(query), alias))
   }
 
   addSelectSub<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
     alias: string,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.addSelectSub(this.normalizeExistsSubquery(query), alias))
   }
 
-  distinct(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  distinct(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.distinct())
   }
 
-  withCasts(casts: Record<string, ModelCastDefinition>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+  withCasts(casts: Record<string, ModelCastDefinition>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       this.tableQuery,
       this.eagerLoads,
@@ -477,23 +502,23 @@ export class ModelQueryBuilder<
       }),
       this.scopePredicates,
       this.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   whereColumn(
     column: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     compareTo: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereColumn(column as never, operator, compareTo as never))
   }
 
-  whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereIn(column as never, values))
   }
 
-  [withoutRelationLoads](): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+  [withoutRelationLoads](): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       this.tableQuery,
       [],
@@ -502,7 +527,7 @@ export class ModelQueryBuilder<
       this.queryCasts,
       this.scopePredicates,
       this.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   async [loadRelationsOn](entities: readonly Entity<TTable, TRelations>[]): Promise<void> {
@@ -514,48 +539,48 @@ export class ModelQueryBuilder<
     this.recordCollectionRelationAggregateObservations(collection)
   }
 
-  [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  [whereIntegerKeysIn](values: readonly (number | bigint)[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.withPredicates([
       ...this.tableQuery.getPlan().predicates,
       { kind: 'integer-in', boolean: 'and', column: this.repository.definition.primaryKey, values },
     ]))
   }
 
-  whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotIn(column as never, values))
   }
 
   whereBetween(
     column: ModelColumnName<TTable>,
     range: readonly [unknown, unknown],
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereBetween(column as never, range))
   }
 
   whereNotBetween(
     column: ModelColumnName<TTable>,
     range: readonly [unknown, unknown],
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotBetween(column as never, range))
   }
 
-  whereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereLike(column as never, pattern))
   }
 
-  orWhereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereLike(column as never, pattern))
   }
 
-  whereAny(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereAny(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereAny(columns as never, operator, value))
   }
 
-  whereAll(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereAll(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereAll(columns as never, operator, value))
   }
 
-  whereNone(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereNone(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNone(columns as never, operator, value))
   }
 
@@ -564,7 +589,7 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.join(table, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -573,7 +598,7 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.leftJoin(table, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -582,11 +607,11 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.rightJoin(table, leftColumn as never, operator, rightColumn as never))
   }
 
-  crossJoin(table: string): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  crossJoin(table: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.crossJoin(table))
   }
 
@@ -596,7 +621,7 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.joinSub(this.normalizeExistsSubquery(query), alias, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -606,7 +631,7 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.leftJoinSub(this.normalizeExistsSubquery(query), alias, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -616,37 +641,37 @@ export class ModelQueryBuilder<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.rightJoinSub(this.normalizeExistsSubquery(query), alias, leftColumn as never, operator, rightColumn as never))
   }
 
   joinLateral<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
     alias: string,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.joinLateral(this.normalizeExistsSubquery(query), alias))
   }
 
   leftJoinLateral<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
     alias: string,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.leftJoinLateral(this.normalizeExistsSubquery(query), alias))
   }
 
   union<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.union(this.normalizeExistsSubquery(query)))
   }
 
   unionAll<TSubTable extends TableDefinition>(
     query: SubqueryBuilder<TSubTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.unionAll(this.normalizeExistsSubquery(query)))
   }
 
-  groupBy(...columns: readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  groupBy(...columns: readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const tableQuery = this.tableQuery as TableQueryBuilder<TTable, Record<string, unknown>> & {
       groupBy: (...args: readonly string[]) => TableQueryBuilder<TTable, Record<string, unknown>>
     }
@@ -655,63 +680,63 @@ export class ModelQueryBuilder<
     )
   }
 
-  having(expression: string, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  having(expression: string, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.having(expression, operator, value))
   }
 
-  havingBetween(expression: string, range: readonly [unknown, unknown]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  havingBetween(expression: string, range: readonly [unknown, unknown]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.havingBetween(expression, range))
   }
 
-  unsafeWhere(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  unsafeWhere(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.unsafeWhere(sql, bindings))
   }
 
-  orUnsafeWhere(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orUnsafeWhere(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orUnsafeWhere(sql, bindings))
   }
 
-  whereDate(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereDate(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereDate(column as never, operator, value))
   }
 
-  whereMonth(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereMonth(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereMonth(column as never, operator, value))
   }
 
-  whereDay(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereDay(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereDay(column as never, operator, value))
   }
 
-  whereYear(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereYear(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereYear(column as never, operator, value))
   }
 
-  whereTime(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereTime(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereTime(column as never, operator, value))
   }
 
-  whereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereJson(columnPath as never, operator, value))
   }
 
-  orWhereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereJson(columnPath as never, operator, value))
   }
 
-  whereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereJsonContains(columnPath as never, value))
   }
 
-  orWhereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereJsonContains(columnPath as never, value))
   }
 
-  whereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  whereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereJsonLength(columnPath as never, operator, value))
   }
 
-  orWhereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orWhereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereJsonLength(columnPath as never, operator, value))
   }
 
@@ -719,7 +744,7 @@ export class ModelQueryBuilder<
     columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[],
     value: string,
     options: { mode?: 'natural' | 'boolean' } = {},
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereFullText(columns as never, value, options))
   }
 
@@ -727,7 +752,7 @@ export class ModelQueryBuilder<
     columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[],
     value: string,
     options: { mode?: 'natural' | 'boolean' } = {},
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereFullText(columns as never, value, options))
   }
 
@@ -735,7 +760,7 @@ export class ModelQueryBuilder<
     column: ModelColumnName<TTable>,
     vector: readonly number[],
     minSimilarity = 0,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereVectorSimilarTo(column as never, vector, minSimilarity))
   }
 
@@ -743,26 +768,26 @@ export class ModelQueryBuilder<
     column: ModelColumnName<TTable>,
     vector: readonly number[],
     minSimilarity = 0,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereVectorSimilarTo(column as never, vector, minSimilarity))
   }
 
-  unsafeOrderBy(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  unsafeOrderBy(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.unsafeOrderBy(sql, bindings))
   }
 
-  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
-  with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraintFor<TRelations, TPath>): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
-  with<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
+  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>, TScopes>
+  with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraintFor<TRelations, TPath>): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes>
+  with<TConstraints extends RelationConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>, TScopes>
   with(
     first: ModelRelationPath<TRelations> | RelationConstraintRecord<TRelations> | readonly ModelRelationPath<TRelations>[],
     second?: ModelRelationPath<TRelations> | RelationConstraint,
     ...rest: readonly ModelRelationPath<TRelations>[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- return type varies per overload
-  ): ModelQueryBuilder<TTable, TRelations, any> {
+  ): ModelQueryBuilder<TTable, TRelations, any, TScopes> {
     const specs = this.normalizeEagerLoads(first, second, rest)
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       this.tableQuery,
       this.mergeEagerLoads(specs),
@@ -771,54 +796,54 @@ export class ModelQueryBuilder<
       this.queryCasts,
       this.scopePredicates,
       this.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
-  has(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  has(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: false, boolean: 'and' })
   }
 
-  orHas(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orHas(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: false, boolean: 'or' })
   }
 
   whereHas<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
     constraint?: RelationConstraintFor<TRelations, TPath>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  whereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  whereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: false, constraint, boolean: 'and' })
   }
 
   orWhereHas<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
     constraint?: RelationConstraintFor<TRelations, TPath>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  orWhereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  orWhereHas(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: false, constraint, boolean: 'or' })
   }
 
-  doesntHave(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  doesntHave(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: true, boolean: 'and' })
   }
 
-  orDoesntHave(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  orDoesntHave(relation: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: true, boolean: 'or' })
   }
 
   whereDoesntHave<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
     constraint?: RelationConstraintFor<TRelations, TPath>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  whereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  whereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: true, constraint, boolean: 'and' })
   }
 
   orWhereDoesntHave<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
     constraint?: RelationConstraintFor<TRelations, TPath>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  orWhereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  orWhereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withRelationFilter({ relation, negate: true, constraint, boolean: 'or' })
   }
 
@@ -827,7 +852,7 @@ export class ModelQueryBuilder<
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.whereHas(relation, query => query.where(column, operator, value))
   }
 
@@ -836,7 +861,7 @@ export class ModelQueryBuilder<
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.orWhereHas(relation, query => query.where(column, operator, value))
   }
 
@@ -846,7 +871,7 @@ export class ModelQueryBuilder<
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphRelationFilter(relation, types, column, operator, value, 'and')
   }
 
@@ -856,92 +881,92 @@ export class ModelQueryBuilder<
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphRelationFilter(relation, types, column, operator, value, 'or')
   }
 
   whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
     relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyBelongsToFilter(relatedEntity, relationName, 'and')
   }
 
   orWhereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
     relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyBelongsToFilter(relatedEntity, relationName, 'or')
   }
 
   whereMorphedTo(
     relation: ModelRelationPath<TRelations>,
     target: MorphTypeSelector,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphedToFilter(relation, target, false, 'and')
   }
 
   orWhereMorphedTo(
     relation: ModelRelationPath<TRelations>,
     target: MorphTypeSelector,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphedToFilter(relation, target, false, 'or')
   }
 
   whereNotMorphedTo(
     relation: ModelRelationPath<TRelations>,
     target: MorphTypeSelector,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphedToFilter(relation, target, true, 'and')
   }
 
   orWhereNotMorphedTo(
     relation: ModelRelationPath<TRelations>,
     target: MorphTypeSelector,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyMorphedToFilter(relation, target, true, 'or')
   }
 
   withWhereHas<TPath extends ModelRelationPath<TRelations>>(
     relation: TPath,
     constraint?: RelationConstraintFor<TRelations, TPath>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes> {
     return (constraint
       ? this.whereHas(relation, constraint).with(relation, constraint)
-      : this.whereHas(relation).with(relation)) as ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
+      : this.whereHas(relation).with(relation)) as ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>, TScopes>
   }
 
-  withCount(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withCount<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withCount(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withCount<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   withCount(
     first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationName<TRelations>[]
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('count', first, rest))
   }
 
-  withExists(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded>
-  withExists<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  withExists(...relations: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withExists<TConstraints extends RelationNameConstraintMapGuarded<TRelations, TConstraints>>(relations: TConstraints): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   withExists(
     first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>,
     ...rest: readonly ModelRelationName<TRelations>[]
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
   }
 
-  withSum<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withSum<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('sum', first, column, rest))
   }
 
-  withAvg<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withAvg<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('avg', first, column, rest))
   }
 
-  withMin<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMin<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('min', first, column, rest))
   }
 
-  withMax<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withMax<TRelationName extends ModelRelationName<TRelations>>(first: TRelationName | RelationNameConstraintRecord<TRelations>, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeColumnAggregateLoads('max', first, column, rest))
   }
 
@@ -953,14 +978,14 @@ export class ModelQueryBuilder<
     return this.getTableQueryBuilder().debug()
   }
 
-  dump(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  dump(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.getTableQueryBuilder().dump()
-    return this
+    return this.asScopedBuilder()
   }
 
   cache(
     config: QueryCacheTtlInput | QueryCacheConfig,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.cache(config))
   }
 
@@ -1482,15 +1507,15 @@ export class ModelQueryBuilder<
     return this.getTableQueryBuilder().delete()
   }
 
-  withTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery, 'with')
   }
 
-  onlyTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  onlyTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery, 'only')
   }
 
-  withoutTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  withoutTrashed(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery, 'without')
   }
 
@@ -1510,8 +1535,16 @@ export class ModelQueryBuilder<
     return entities.length
   }
 
-  private clone(tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>, softDeleteMode = this.softDeleteMode): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+  private asScopedBuilder(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  }
+
+  private resolveBuilder(result: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return result instanceof ModelQueryBuilderBase ? result as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> : this.asScopedBuilder()
+  }
+
+  private clone(tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>, softDeleteMode = this.softDeleteMode): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       tableQuery,
       this.eagerLoads,
@@ -1520,19 +1553,19 @@ export class ModelQueryBuilder<
       this.queryCasts,
       this.scopePredicates,
       softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   private normalizeExistsSubquery<TSubTable extends TableDefinition>(
     subquery: SubqueryBuilder<TSubTable>,
   ): TableQueryBuilder<TableDefinition, Record<string, unknown>> {
-    return subquery instanceof ModelQueryBuilder
+    return subquery instanceof ModelQueryBuilderBase
       ? subquery.getTableQueryBuilder()
       : subquery
   }
 
-  private withRelationFilter(filter: RelationFilter): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+  private withRelationFilter(filter: RelationFilter): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       this.repository.applyRelationExistenceFilter(this.tableQuery, filter),
       this.eagerLoads,
@@ -1541,17 +1574,17 @@ export class ModelQueryBuilder<
       this.queryCasts,
       this.scopePredicates,
       this.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
-  private withAggregateLoads(specs: readonly AggregateLoad[]): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  private withAggregateLoads(specs: readonly AggregateLoad[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const merged = new Map<string, AggregateLoad>()
 
     for (const load of [...this.aggregateLoads, ...specs]) {
       merged.set(`${load.kind}:${load.relation}:${load.column ?? ''}:${load.alias ?? ''}`, load)
     }
 
-    return new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+    return new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
       this.tableQuery,
       this.eagerLoads,
@@ -1560,7 +1593,7 @@ export class ModelQueryBuilder<
       this.queryCasts,
       this.scopePredicates,
       this.softDeleteMode,
-    )
+    ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
   private normalizeEagerLoads(
@@ -1656,7 +1689,7 @@ export class ModelQueryBuilder<
     target: MorphTypeSelector,
     negate: boolean,
     boolean: 'and' | 'or',
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.assertMorphToRelation(relationName)
 
     if (target === null) {
@@ -1684,7 +1717,7 @@ export class ModelQueryBuilder<
     operator: unknown,
     value: unknown,
     boolean: 'and' | 'or',
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.assertMorphToRelation(relation)
     return this.withRelationFilter({
       relation,
@@ -1816,7 +1849,7 @@ export class ModelQueryBuilder<
     relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName: ModelRelationPath<TRelations> | undefined,
     boolean: 'and' | 'or',
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     const resolvedRelationName = this.resolveBelongsToRelationName(relatedEntity, relationName)
     const relation = this.resolveBelongsToRelation(relatedEntity, resolvedRelationName)
     const ownerValue = relatedEntity.get(relation.ownerKey as never)
@@ -2066,11 +2099,11 @@ export class ModelQueryBuilder<
 
     let query = related.query()
     const relationResult = relation.constraint?.(query)
-    query = relationResult instanceof ModelQueryBuilder ? relationResult : query
+    query = relationResult instanceof ModelQueryBuilderBase ? relationResult as typeof query : query
 
     if (constraint) {
       const result = constraint(query)
-      query = result instanceof ModelQueryBuilder ? result : query
+      query = result instanceof ModelQueryBuilderBase ? result as typeof query : query
     }
 
     const plan = query.getTableQueryBuilder().getPlan()
@@ -2131,3 +2164,31 @@ export class ModelQueryBuilder<
   }
 
 }
+
+export type ModelQueryBuilder<
+  TTable extends TableDefinition = TableDefinition,
+  TRelations extends RelationMap = RelationMap,
+  TLoaded = unknown,
+  TScopes extends ModelScopesDefinition = EmptyScopeMap,
+> = ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>
+  & ModelScopeMethods<TTable, TScopes, TRelations, TLoaded>
+
+export interface ModelQueryBuilderConstructor {
+  new <
+    TTable extends TableDefinition = TableDefinition,
+    TRelations extends RelationMap = RelationMap,
+    TLoaded = unknown,
+    TScopes extends ModelScopesDefinition = EmptyScopeMap,
+  >(
+    repository: ModelRepository<TTable, TScopes>,
+    tableQuery: TableQueryBuilder<TTable, Record<string, unknown>>,
+    eagerLoads?: readonly EagerLoad[],
+    relationFilters?: readonly RelationFilter[],
+    aggregateLoads?: readonly AggregateLoad[],
+    queryCasts?: Readonly<Record<string, ModelCastDefinition>>,
+    scopePredicates?: TableQueryPredicates<TTable>,
+    softDeleteMode?: 'with' | 'without' | 'only',
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+}
+
+export const ModelQueryBuilder = ModelQueryBuilderBase as unknown as ModelQueryBuilderConstructor

@@ -48,9 +48,20 @@ const posts = await Post.published()
   .paginate(15)
 ```
 
-::: tip
-Scopes are methods on the model, not on a query in progress. `Post.published().popular()` doesn't work. When you often need two scopes together, write one scope that applies both conditions.
-:::
+Scopes are also methods on every query builder for the model, so they chain after other query methods, in either order:
+
+```ts
+const posts = await Post.query()
+  .where('category_id', categoryId)
+  .published()
+  .get()
+
+const popular = await Post.published().popular().get()
+```
+
+Inside relation callbacks, such as `whereHas('posts', query => query.published())` or `with('posts', query => query.published())`, the query is typed against the related model, so that model's scopes are available there too.
+
+A scope name can't match a query builder method, such as `where` or `count`, or one of the builder's internal properties. Defining the model throws for such a name. See [Scope names](/getting-started/upgrading#scope-names-must-not-match-builder-methods).
 
 ### Scopes with parameters
 
