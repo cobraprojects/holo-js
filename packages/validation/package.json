@@ -37,7 +37,6 @@
   },
   "dependencies": {
     "@holo-js/kernel": "catalog:",
-    "file-type": "catalog:",
     "valibot": "catalog:"
   },
   "devDependencies": {

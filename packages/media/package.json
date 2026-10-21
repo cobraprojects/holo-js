@@ -41,7 +41,6 @@
     "@holo-js/kernel": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/storage": "catalog:",
-    "file-type": "catalog:",
     "sharp": "catalog:"
   },
   "devDependencies": {

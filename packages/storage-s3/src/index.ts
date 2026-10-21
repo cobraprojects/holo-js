@@ -1,8 +1,11 @@
 import { createHash, createHmac } from 'node:crypto'
+import { inspectFileContent } from '@holo-js/kernel/file-content'
 import type { StorageBackend } from '@holo-js/storage/runtime'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
 const storedValueMarker = '__holo_storage_s3_value_v1'
+const DEFAULT_CONTENT_TYPE = 'application/octet-stream'
+const documentMimeTypesRenderedInline = /^(?:text\/html|text\/xml|image\/svg\+xml|application\/(?:[\w.-]+\+)?xml)$/u
 const MINIMUM_MULTIPART_PART_BYTES = 5 * 1024 * 1024
 const MAXIMUM_MULTIPART_PART_BYTES = 64 * 1024 * 1024
 const MULTIPART_PARTS_PER_SIZE = 10
@@ -215,6 +218,11 @@ function toBodyBytes(value?: DriverValue): Uint8Array | undefined {
   }
 
   return value
+}
+
+async function resolveContentType(key: string, body?: DriverValue): Promise<string> {
+  const { mimeType } = await inspectFileContent(toBodyBytes(body) ?? new Uint8Array(), normalizeKey(key))
+  return mimeType && !documentMimeTypesRenderedInline.test(mimeType) ? mimeType : DEFAULT_CONTENT_TYPE
 }
 
 function createSignedRequest(
@@ -480,6 +488,16 @@ function multipartUrl(options: ResolvedS3DriverOptions, key: string, uploadId?: 
   return url
 }
 
+async function startMultipartUpload(
+  options: ResolvedS3DriverOptions,
+  key: string,
+  contentType: string,
+): Promise<string> {
+  const start = await s3Fetch(options, 'POST', multipartUrl(options, key), undefined, { 'content-type': contentType })
+  if (!start) throw createDriverError('Multipart upload initialization failed.')
+  return parseUploadId(await start.text())
+}
+
 function concatenateChunks(chunks: readonly Uint8Array[], size: number): Uint8Array {
   const result = new Uint8Array(size)
   let offset = 0
@@ -554,13 +572,14 @@ async function conditionallyPutEmptyObject(
   options: ResolvedS3DriverOptions,
   key: string,
   overwrite: boolean,
+  contentType: string,
 ): Promise<void> {
   const response = await sendSignedRequest(
     options,
     'PUT',
     resolveObjectUrl(options, key),
     new Uint8Array(),
-    overwrite ? undefined : { 'if-none-match': '*' },
+    { 'content-type': contentType, ...(overwrite ? {} : { 'if-none-match': '*' }) },
   )
   await response.body?.cancel()
   if (response.status === 409 || response.status === 412) throw destinationExistsError()
@@ -698,11 +717,12 @@ export default function createS3Driver(input: S3DriverOptions) {
     },
     async setItem(key: string, value: unknown) {
       const options = getOptions()
-      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), serializeStoredValue(value))
+      const body = serializeStoredValue(value)
+      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), body, { 'content-type': await resolveContentType(key, body) })
     },
     async setItemRaw(key: string, value: DriverValue) {
       const options = getOptions()
-      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)
+      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value, { 'content-type': await resolveContentType(key, value) })
     },
     async setItemStream(
       key: string,
@@ -712,18 +732,17 @@ export default function createS3Driver(input: S3DriverOptions) {
       const options = getOptions()
       let uploadId: string | undefined
       try {
-        const start = await s3Fetch(options, 'POST', multipartUrl(options, key))
-        if (!start) throw createDriverError('Multipart upload initialization failed.')
-        uploadId = parseUploadId(await start.text())
         const etags: string[] = []
         let part: Uint8Array | undefined
         let bufferedBytes = 0
 
         const flush = async (): Promise<void> => {
-          if (!part || bufferedBytes === 0 || !uploadId) return
+          if (!part || bufferedBytes === 0) return
+          const body = part.subarray(0, bufferedBytes)
           const partNumber = etags.length + 1
           if (partNumber > MAXIMUM_MULTIPART_PARTS) throw createDriverError('Multipart upload exceeds the S3 part limit.')
-          etags.push(await uploadMultipartPart(options, key, uploadId, partNumber, part.subarray(0, bufferedBytes)))
+          uploadId ??= await startMultipartUpload(options, key, await resolveContentType(key, body))
+          etags.push(await uploadMultipartPart(options, key, uploadId, partNumber, body))
           part = undefined
           bufferedBytes = 0
         }
@@ -741,10 +760,8 @@ export default function createS3Driver(input: S3DriverOptions) {
         }
 
         await flush()
-        if (etags.length === 0) {
-          await abortMultipartUpload(options, key, uploadId)
-          uploadId = undefined
-          await conditionallyPutEmptyObject(options, key, request.overwrite)
+        if (!uploadId) {
+          await conditionallyPutEmptyObject(options, key, request.overwrite, await resolveContentType(key))
           return
         }
 
