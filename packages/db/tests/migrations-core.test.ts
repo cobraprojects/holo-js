@@ -1,4 +1,3 @@
-import { setTimeout } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
@@ -146,10 +145,12 @@ describe('native migration workflows', () => {
 
   it('rejects duplicate registration and overlapping operations on the same native connection', async () => {
     const db = createConnection()
+    let releaseUp = () => {}
+    const upReleased = new Promise<void>(resolve => { releaseUp = resolve })
     const migration = defineMigration({
       name: '2026_01_01_000001_delayed',
       async up({ schema }) {
-        await setTimeout(20)
+        await upReleased
         await schema.createTable('delayed_records', table => { table.id() })
       },
     })
@@ -158,7 +159,11 @@ describe('native migration workflows', () => {
     expect(() => defineMigration({ name: 'invalid', async up() {} })).toThrow(ConfigurationError)
     expect(() => createMigrationService(db, [defineMigration({ async up() {} })])).toThrow('resolved migration name')
     const running = migrator.migrate()
-    await expect(createMigrationService(db).rollback()).rejects.toThrow(DatabaseError)
+    try {
+      await expect(createMigrationService(db).rollback()).rejects.toThrow(DatabaseError)
+    } finally {
+      releaseUp()
+    }
     await running
     expect(await createSchemaService(db).hasTable('delayed_records')).toBe(true)
     await expect(migrator.planSquash(' ')).rejects.toThrow('non-empty string')
