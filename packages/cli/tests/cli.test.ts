@@ -338,6 +338,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     join(root, 'packages'),
     Object.keys(workspaceCatalog).filter(name => name.startsWith('@holo-js/')),
   )
+  // The built runtime loads each package's optional peers from that package's own location, as an app install provides them.
+  for (const { directory } of packages) {
+    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { peerDependencies?: Record<string, string> }
+    for (const peerName of Object.keys(manifest.peerDependencies ?? {})) {
+      const peer = packages.find(({ name }) => name === peerName)
+      if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
+    }
+  }
   for (const { name, directory } of packages) {
     const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
     expect(build.status, build.stderr || build.stdout).toBe(0)

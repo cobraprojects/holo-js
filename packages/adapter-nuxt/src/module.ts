@@ -598,13 +598,19 @@ async function ensureModelRegistryTypesPlaceholder(path: string): Promise<void> 
   }
 }
 
+const STORAGE_CREDENTIAL_KEYS = new Set(['accessKeyId', 'secretAccessKey', 'sessionToken'])
+
+function withoutStorageCredentials(disk: StorageDiskConfig): StorageDiskConfig {
+  return Object.fromEntries(Object.entries(disk).filter(([key]) => !STORAGE_CREDENTIAL_KEYS.has(key))) as StorageDiskConfig
+}
+
 function toStorageModuleOptions(
   loaded: LoadedHoloConfig<HoloConfigMap>,
 ): StorageModuleOptions {
   return {
     defaultDisk: loaded.storage.defaultDisk,
     routePrefix: loaded.storage.routePrefix,
-    disks: { ...loaded.storage.disks },
+    disks: Object.fromEntries(Object.entries(loaded.storage.disks).map(([name, disk]) => [name, withoutStorageCredentials(disk)])),
   }
 }
 

@@ -202,6 +202,8 @@ export default defineAppConfig({
 | `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
 | `realtime` | `subscription.onData`, `subscription.onPatch`, `subscription.onError` |
 | `sveltekit` | `handleError` (unexpected errors when your `hooks.server.ts` has no `handleError`) |
+| `next` | `shutdown` (closing Holo's connections when the server stops) |
+| `nuxt` | `shutdown` (closing Holo's connections when the server stops) |
 
 `report` can be `async`. Holo doesn't wait for it, and a reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
 
