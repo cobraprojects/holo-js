@@ -98,7 +98,7 @@ export function canonicalStoredKey(value: unknown): unknown {
 }
 
 function canonicalObjectKey(value: object | null): unknown {
-  if (value === null) {
+  if (value === null || !(Array.isArray(value) || isPlainObject(value))) {
     return value
   }
 
