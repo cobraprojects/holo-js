@@ -85,7 +85,6 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
         const started = Date.now()
         await release()
         slowestRelease = Math.max(slowestRelease, Date.now() - started)
-        if (process.env.H98_TIMING === '1') process.stderr.write(`H98 test-release index=${index} ms=${Date.now() - started} queue=${queue.length}\n`) // H98-DEBUG
         longestQueue = Math.max(longestQueue, queue.length)
       }
     } finally {

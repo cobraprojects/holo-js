@@ -49,36 +49,7 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - name: Test native file session locking
         working-directory: packages/session
-        continue-on-error: true # H98-DEBUG
-        env:
-          H98_TIMING: '1' # H98-DEBUG
         run: bun run test:platform
-      # H98-DEBUG-START (temporary experiments; remove before the fix lands)
-      - name: H98 sequential platform files
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: packages/session
-        env:
-          H98_TIMING: '1'
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/file-lock.test.ts tests/file-lock-busy.test.ts tests/file-lock-handover.test.ts tests/file-lock-released.test.ts tests/file-lock-young-release.test.ts --pool forks --maxWorkers 1 --reporter=json
-      - name: H98 handover alone
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: packages/session
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/file-lock-handover.test.ts --pool forks --reporter=json
-      - name: H98 young-release alone
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: packages/session
-        env:
-          H98_TIMING: '1'
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/file-lock-young-release.test.ts --pool forks --reporter=json
-      - name: H98 others in parallel without young-release
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: packages/session
-        run: node ../../node_modules/vitest/vitest.mjs --run tests/file-lock.test.ts tests/file-lock-busy.test.ts tests/file-lock-handover.test.ts tests/file-lock-released.test.ts --pool forks --reporter=json
-      # H98-DEBUG-END
       - name: Test native package loading and server lifecycle
         working-directory: packages/cli
         run: bun run test:platform
