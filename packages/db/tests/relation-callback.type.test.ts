@@ -320,3 +320,16 @@ it('keeps generic relation maps forwarded into object-form aggregate helpers', (
     void forwardAggregates
   }
 })
+
+it('allows an explicit alias key with its base relation, and rejects keys outside the selected relation', () => {
+  if (false) {
+    User.withSum<'posts as total'>({
+      'posts as total': () => {},
+      posts: () => {},
+    }, 'user_id')
+    // @ts-expect-error comments is not the selected relation, so it cannot share the posts column
+    User.withSum<'posts as total'>({ 'posts as total': () => {}, comments: () => {} }, 'user_id')
+    // @ts-expect-error comments is not the selected relation, even under the explicit name
+    Activity.withMax<'posts'>({ posts: () => {}, comments: () => {} }, 'id')
+  }
+})

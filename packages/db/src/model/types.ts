@@ -412,7 +412,7 @@ export type AggregateRelationKey<TRelations extends RelationMap>
   = ModelRelationName<TRelations> | `${ModelRelationName<TRelations>} as ${string}`
 
 export type AggregateRelationConstraintMap<TRelations extends RelationMap, TKey extends string> = {
-  readonly [K in TKey]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
+  readonly [K in TKey | `${AggregateRelationName<TKey>}` | `${AggregateRelationName<TKey>} as ${string}`]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
 }
 
 export type AggregateRelatedColumnNameOfKeys<TRelations extends RelationMap, TKey extends string>
