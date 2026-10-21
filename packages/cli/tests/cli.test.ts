@@ -3309,6 +3309,7 @@ export default defineCacheConfig({
         '@holo-js/kernel': 'catalog:',
         '@holo-js/panels': 'workspace:*',
         '@holo-js/security': 'catalog:',
+        '@holo-js/session': 'catalog:',
         next: expectedNextPackageRange,
       },
     }
