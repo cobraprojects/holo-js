@@ -170,6 +170,120 @@ describe('native database contexts', () => {
     expect(errors.map(entry => entry.kind)).toEqual(['query', 'execute'])
   })
 
+  it('runs a start logger hook outside the scheduler slot so it can query its own connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source !== 'observed') return
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' })
+    expect(observed).toEqual([1])
+  })
+
+  it('runs an error logger hook outside the scheduler slot so it can query its own connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryError() {
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await expect(db.queryCompiled({ sql: 'SELECT * FROM missing_table', bindings: [] })).rejects.toMatchObject({ code: 'DRIVER_QUERY_ERROR' })
+    expect(observed).toEqual([1])
+  })
+
+  it('runs a start logger hook inside a transaction so it can query the same connection', async () => {
+    const observed: unknown[] = []
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source !== 'observed') return
+        observed.push((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value)
+      },
+    } })
+    await db.transaction(tx => tx.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' }))
+    expect(observed).toEqual([1])
+  })
+
+  it('lets a pending start logger hook wait on a query issued on the same connection', async () => {
+    let releaseHook = () => {}
+    const hookReleased = new Promise<void>(resolve => { releaseHook = resolve })
+    const { db } = await openDatabase('sqlite', { logger: {
+      async onQueryStart(entry) {
+        if (entry.source === 'observed') await hookReleased
+      },
+    } })
+    const observed = db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'observed' })
+    expect((await db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] })).rows[0]?.value).toBe(1)
+    releaseHook()
+    expect((await observed).rows[0]?.value).toBe(2)
+  })
+
+  it('does not run query logger hooks for queries issued inside a query error hook', async () => {
+    let errorHookCalls = 0
+    const { db } = await openDatabase('sqlite', {
+      concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
+      logger: {
+        async onQueryError() {
+          errorHookCalls += 1
+          if (errorHookCalls > 5) return
+          await new Promise(resolve => { setImmediate(resolve) })
+          await Promise.allSettled([
+            db.queryCompiled({ sql: 'SELECT 1 AS value', bindings: [] }),
+            db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [] }),
+          ])
+        },
+      },
+    })
+    await expect(db.queryCompiled({ sql: 'SELECT * FROM missing_table', bindings: [] })).rejects.toMatchObject({ code: 'DRIVER_QUERY_ERROR' })
+    expect(errorHookCalls).toBe(1)
+  })
+
+  it('admits a query from outside a transaction behind it instead of rejecting it', async () => {
+    const { db, table } = await openDatabase('sqlite', { concurrency: { maxConcurrentQueries: 1, queueLimit: 0 } })
+    let enteredTransaction = () => {}
+    let finishTransaction = () => {}
+    const entered = new Promise<void>(resolve => { enteredTransaction = resolve })
+    const finished = new Promise<void>(resolve => { finishTransaction = resolve })
+    const holding = db.transaction(async tx => {
+      await tx.table(table).insert({ id: 1, name: 'Held' })
+      enteredTransaction()
+      await finished
+    })
+    await entered
+    const outside = db.table(table).count()
+    finishTransaction()
+    await holding
+    expect(await outside).toBe(1)
+  })
+
+  it('reports a query rejected by the queue limit to the start and error hooks, in that order', async () => {
+    const events: string[] = []
+    const { db } = await openDatabase('postgres', {
+      concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
+      logger: {
+        onQueryStart(entry) { if (entry.source === 'test:rejected') events.push(`start:${entry.source}`) },
+        onQueryError(entry) { if (entry.source === 'test:rejected') events.push(entry.error instanceof DatabaseError ? `error:${entry.error.code}` : 'error') },
+      },
+    })
+    let enteredTransaction = () => {}
+    let finishTransaction = () => {}
+    const entered = new Promise<void>(resolve => { enteredTransaction = resolve })
+    const finished = new Promise<void>(resolve => { finishTransaction = resolve })
+    const holding = db.transaction(async () => {
+      enteredTransaction()
+      await finished
+    })
+    await entered
+    try {
+      await expect(db.queryCompiled({ sql: 'SELECT 2 AS value', bindings: [], source: 'test:rejected' })).rejects.toThrow('queue')
+    } finally {
+      finishTransaction()
+      await holding
+    }
+    expect(events).toEqual(['start:test:rejected', 'error:QUERY_SCHEDULER_BACKPRESSURE'])
+  })
+
   it('times out and aborts native PostgreSQL work without poisoning later reads', async () => {
     const starts: string[] = []
     const { db, table } = await openDatabase('postgres', { logger: { onQueryStart() { starts.push('start') } } })

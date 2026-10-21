@@ -21,6 +21,7 @@ import type {
   RealtimeMutationDefinitionMetadata,
   RealtimeQueryDefinitionMetadata,
 } from './contracts'
+import { createRealtimeDatabaseInvalidationBridge } from './runtime/invalidation-bridge'
 
 export type RealtimeServerOptions = {
   readonly projectRoot: string
@@ -375,6 +376,7 @@ export async function handleRealtimeMutationRequest(
 
 export const realtimeServerInternals = {
   collectRealtimeFiles,
+  createRealtimeDatabaseInvalidationBridge,
   findDefinitionInModule,
   normalizeRequestName,
   readRealtimeRequest,

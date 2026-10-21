@@ -21,10 +21,18 @@ import type {
   RefreshDelivery,
 } from './state'
 
+function isRegisteredQueryEntry(entry: { readonly refreshKey: string }): boolean {
+  return getRuntimeState().queryEntries.get(entry.refreshKey) === entry
+}
+
 export async function deliverRefreshData<TDefinition extends RealtimeQueryDefinitionMetadata>(
   entry: ActiveQueryEntry<TDefinition>,
   delivery: RefreshDelivery<TDefinition>,
 ): Promise<void> {
+  if (!isRegisteredQueryEntry(entry)) {
+    return
+  }
+
   const dependenciesChanged = !areDependencySetsEqual(entry.dependencies, delivery.result.dependencies)
   if (dependenciesChanged) {
     updateQueryEntryDependencies(
@@ -95,6 +103,10 @@ export async function deliverRefreshError(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   error: unknown,
 ): Promise<void> {
+  if (!isRegisteredQueryEntry(entry)) {
+    return
+  }
+
   if (!getRuntimeState().subscriptions.has(entry.refreshKey)) return
   try {
     await entry.options.onError?.(error)

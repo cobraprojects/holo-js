@@ -11,7 +11,7 @@ import type {
   RealtimeSubscription,
 } from '../contracts'
 import { resolveArgs, runWithExecutionOptions } from './execution'
-import { ensureDatabaseSubscription } from './invalidation'
+import { ensureDatabaseSubscription, scheduleSubscriptionRefresh, takeInitialRefreshRequest } from './invalidation'
 import { deleteSubscription, detachDatabaseSubscriptionIfIdle, createQueryEntry } from './query-entry'
 import {
   getRuntimeState,
@@ -63,8 +63,12 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     try {
       await subscriptionOptions.onData?.(entry.current)
     } catch (error) {
+      takeInitialRefreshRequest(refreshKey)
       deleteSubscription(subscription.id)
       throw error
+    }
+    if (takeInitialRefreshRequest(refreshKey)) {
+      void scheduleSubscriptionRefresh(subscription)
     }
 
     return Object.freeze({

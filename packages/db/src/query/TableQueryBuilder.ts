@@ -5,6 +5,7 @@ import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
   hasDatabaseDependencyInvalidationListeners,
+  hasDatabaseDependencyInvalidationPublisher,
   invalidateQueryCacheDependencies,
   createDatabaseMutationEvent,
   createDatabaseQueryFallbackObservation,
@@ -2545,7 +2546,7 @@ export class TableQueryBuilder<
     previousRows?: readonly Readonly<Record<string, unknown>>[],
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
-    if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners) {
+    if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
 
@@ -2590,7 +2591,7 @@ export class TableQueryBuilder<
     capturedRows?: CapturedMutationRows,
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
-    if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners) {
+    if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
 
