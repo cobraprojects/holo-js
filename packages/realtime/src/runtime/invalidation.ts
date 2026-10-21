@@ -1,6 +1,9 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
+  parseDatabaseDependency,
+  readDatabaseDependencyInvalidationMetadata,
   createMutationIndex,
   createSingleEventMutationIndex,
   parseInvalidationEvent,
@@ -248,6 +251,184 @@ async function refreshParsedInvalidations(events: readonly ParsedInvalidationEve
   })])
 }
 
+const REMOTE_REFRESH_CONCURRENCY = 4
+const REMOTE_REFRESH_MIN_INTERVAL_MS = 100
+let activeRemoteRefreshes = 0
+let remoteRefreshGeneration = 0
+const remoteRefreshWaiters: Array<(acquired: boolean) => void> = []
+const queuedRemoteRefreshKeys = new Set<string>()
+const remoteRefreshLastRunAt = new Map<string, number>()
+const remoteRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const tableInvalidationGenerations = new Map<string, number>()
+const initialRefreshRequests = new Set<string>()
+
+export function snapshotTableInvalidationGenerations(): ReadonlyMap<string, number> {
+  return new Map(tableInvalidationGenerations)
+}
+
+export function hasTableInvalidationSince(
+  snapshot: ReadonlyMap<string, number>,
+  dependencies: readonly string[],
+): boolean {
+  return dependencies.some(dependency => {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    return tableKey !== undefined && (tableInvalidationGenerations.get(tableKey) ?? 0) !== (snapshot.get(tableKey) ?? 0)
+  })
+}
+
+export function requestInitialRefresh(refreshKey: string): void {
+  initialRefreshRequests.add(refreshKey)
+}
+
+export function takeInitialRefreshRequest(refreshKey: string): boolean {
+  return initialRefreshRequests.delete(refreshKey)
+}
+
+export function forgetRemoteRefreshSchedule(refreshKey: string): void {
+  const timer = remoteRefreshTimers.get(refreshKey)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    remoteRefreshTimers.delete(refreshKey)
+  }
+  remoteRefreshLastRunAt.delete(refreshKey)
+  queuedRemoteRefreshKeys.delete(refreshKey)
+}
+
+export function hasRemoteRefreshSchedule(refreshKey: string): boolean {
+  return remoteRefreshTimers.has(refreshKey)
+    || remoteRefreshLastRunAt.has(refreshKey)
+    || queuedRemoteRefreshKeys.has(refreshKey)
+}
+
+export function resetRemoteRefreshSchedule(): void {
+  tableInvalidationGenerations.clear()
+  initialRefreshRequests.clear()
+  remoteRefreshGeneration += 1
+  activeRemoteRefreshes = 0
+  for (const waiter of remoteRefreshWaiters.splice(0)) {
+    waiter(false)
+  }
+  for (const timer of remoteRefreshTimers.values()) {
+    clearTimeout(timer)
+  }
+  remoteRefreshTimers.clear()
+  remoteRefreshLastRunAt.clear()
+  queuedRemoteRefreshKeys.clear()
+}
+
+function acquireRemoteRefreshSlot(): Promise<boolean> {
+  if (activeRemoteRefreshes < REMOTE_REFRESH_CONCURRENCY) {
+    activeRemoteRefreshes += 1
+    return Promise.resolve(true)
+  }
+
+  return new Promise<boolean>(resolve => remoteRefreshWaiters.push(resolve))
+}
+
+function releaseRemoteRefreshSlot(generation: number): void {
+  if (generation !== remoteRefreshGeneration) {
+    return
+  }
+
+  const next = remoteRefreshWaiters.shift()
+  if (next) {
+    next(true)
+    return
+  }
+
+  activeRemoteRefreshes -= 1
+}
+
+export async function refreshRemoteEntry(refreshKey: string): Promise<void> {
+  const running = getRuntimeState().refreshes.get(refreshKey)
+  if (running?.running) {
+    running.pending = true
+    queuedRemoteRefreshKeys.delete(refreshKey)
+    return
+  }
+
+  const generation = remoteRefreshGeneration
+  const acquired = await acquireRemoteRefreshSlot()
+  if (!acquired || generation !== remoteRefreshGeneration) {
+    return
+  }
+
+  queuedRemoteRefreshKeys.delete(refreshKey)
+  if (!getRuntimeState().queryEntries.has(refreshKey)) {
+    remoteRefreshLastRunAt.delete(refreshKey)
+    releaseRemoteRefreshSlot(generation)
+    return
+  }
+
+  remoteRefreshLastRunAt.set(refreshKey, Date.now())
+  try {
+    await scheduleRefreshKey(refreshKey)
+  } finally {
+    releaseRemoteRefreshSlot(generation)
+  }
+}
+
+function scheduleDeferredRemoteRefresh(refreshKey: string, delayMs: number): void {
+  const timer = setTimeout(() => {
+    remoteRefreshTimers.delete(refreshKey)
+    if (queuedRemoteRefreshKeys.has(refreshKey)) {
+      return
+    }
+
+    queuedRemoteRefreshKeys.add(refreshKey)
+    refreshRemoteEntry(refreshKey).catch((error: unknown) => {
+      reportError(error, { capability: 'realtime', operation: 'subscription.remoteRefresh' })
+    })
+  }, delayMs)
+  remoteRefreshTimers.set(refreshKey, timer)
+}
+
+async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly string[]): Promise<void> {
+  const state = getRuntimeState()
+  if (state.queryEntries.size === 0) {
+    return
+  }
+
+  const tableKeys = new Set(tableDependencies)
+  const refreshKeys = new Set<string>()
+  for (const [dependency, entryKeys] of state.dependencySubscribers) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey === undefined || !tableKeys.has(tableKey)) {
+      continue
+    }
+
+    for (const entryKey of entryKeys) {
+      const entry = state.queryEntries.get(entryKey)
+      if (entry) {
+        refreshKeys.add(entry.refreshKey)
+      }
+    }
+  }
+
+  const refreshes: Promise<void>[] = []
+  for (const refreshKey of refreshKeys) {
+    if (remoteRefreshTimers.has(refreshKey)) {
+      continue
+    }
+
+    const now = Date.now()
+    const lastRunAt = remoteRefreshLastRunAt.get(refreshKey)
+    if (lastRunAt !== undefined && now - lastRunAt < REMOTE_REFRESH_MIN_INTERVAL_MS) {
+      scheduleDeferredRemoteRefresh(refreshKey, lastRunAt + REMOTE_REFRESH_MIN_INTERVAL_MS - now)
+      continue
+    }
+
+    if (queuedRemoteRefreshKeys.has(refreshKey)) {
+      continue
+    }
+
+    queuedRemoteRefreshKeys.add(refreshKey)
+    refreshes.push(refreshRemoteEntry(refreshKey))
+  }
+
+  await Promise.all(refreshes)
+}
+
 export async function handleDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
   events?: readonly DatabaseDependencyInvalidationEventWithMutations[],
@@ -274,15 +455,22 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
   }
 
   try {
-    const event = batch.events[0]
-    if (batch.events.length === 1 && event) {
-      await handleDatabaseInvalidation(event)
-    } else {
-      await handleDatabaseInvalidation({
-        connectionName: '',
-        dependencies: EMPTY_TABLE_DEPENDENCIES,
-      }, batch.events)
-    }
+    const remoteEvents = batch.events.filter(event => readDatabaseDependencyInvalidationMetadata(event) === undefined)
+    const localEvents = batch.events.filter(event => readDatabaseDependencyInvalidationMetadata(event) !== undefined)
+    const localEvent = localEvents[0]
+    await Promise.all([
+      localEvents.length === 1 && localEvent
+        ? handleDatabaseInvalidation(localEvent)
+        : localEvents.length > 0
+          ? handleDatabaseInvalidation({
+              connectionName: '',
+              dependencies: EMPTY_TABLE_DEPENDENCIES,
+            }, localEvents)
+          : undefined,
+      remoteEvents.length > 0
+        ? refreshSubscriptionsForRemoteTables(remoteEvents.flatMap(event => event.dependencies))
+        : undefined,
+    ])
     batch.deferred.resolve(undefined)
   } catch (error) {
     batch.deferred.reject(error)
@@ -292,6 +480,12 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
 export async function handleBatchedDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEventWithMutations,
 ): Promise<void> {
+  for (const dependency of event.dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey !== undefined) {
+      tableInvalidationGenerations.set(tableKey, (tableInvalidationGenerations.get(tableKey) ?? 0) + 1)
+    }
+  }
   const state = getRuntimeState()
   if (state.queryEntries.size === 0) {
     return

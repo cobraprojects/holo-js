@@ -47,6 +47,7 @@ import {
   connectionAsyncContext,
   configureDB,
   DB,
+  queryCacheInternals,
   parseDatabaseDriver,
   registerDatabaseDriverFactory,
   resetDB,
@@ -259,6 +260,9 @@ type SecurityResources = {
 }
 
 type SessionRedisConnections = ManagedResources<SessionRedisAdapterConfig, SessionRedisAdapter>
+type DatabaseInvalidationSenderConfig = Parameters<BroadcastModule['workerInternals']['createScalingInvalidationSender']>[0]
+type DatabaseInvalidationSender = ReturnType<BroadcastModule['workerInternals']['createScalingInvalidationSender']>
+type DatabaseInvalidationSenders = ManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>
 
 type SessionRedisAdapterModule = Pick<typeof SessionRedisFeature,
   | 'createSessionRedisAdapter'
@@ -280,6 +284,7 @@ type BroadcastModule = Pick<typeof BroadcastFeature,
   | 'broadcastRaw'
   | 'broadcastRuntimeInternals'
   | 'resetBroadcastRuntime'
+  | 'workerInternals'
 >
 
 const CORE_BROADCAST_PUBLISHER_MARKER = Symbol.for('holo-js.core.broadcast.publisher')
@@ -389,7 +394,7 @@ const {
   getRuntimeState,
   restoreOptionalSubsystemRuntimeBindings,
   snapshotOptionalSubsystemRuntimeBindings,
-} = createRuntimeStateAccessors<HoloRuntime, SecurityResources, SessionRedisConnections>()
+} = createRuntimeStateAccessors<HoloRuntime, SecurityResources, SessionRedisConnections, DatabaseInvalidationSenders>()
 
 function getSecurityResources(): SecurityResources {
   const state = getRuntimeState()
@@ -757,6 +762,40 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   } catch (error) {
     return rethrowAfterCleanup(error, () => redisConnections.discard(), 'Session acquisition and cleanup failed.')
   }
+}
+
+function getDatabaseInvalidationSenders(): DatabaseInvalidationSenders {
+  const state = getRuntimeState()
+  state.databaseInvalidationSenders ??= createManagedResources<DatabaseInvalidationSenderConfig, DatabaseInvalidationSender>()
+  return state.databaseInvalidationSenders
+}
+
+async function configureDatabaseInvalidationScaling(
+  broadcastModule: BroadcastModule | undefined,
+  loadedConfig: LoadedHoloConfig,
+): Promise<void> {
+  const state = getRuntimeState()
+  const senders = getDatabaseInvalidationSenders()
+  const scaling = broadcastModule ? loadedConfig.broadcast.worker.scaling : undefined
+  const appIds = broadcastModule ? broadcastModule.workerInternals.resolveBroadcastAppIds(loadedConfig.broadcast) : []
+  let unsubscribe: (() => void) | undefined
+  if (broadcastModule && scaling && appIds.length > 0) {
+    const lease = await senders.acquire(
+      { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis, appIds },
+      broadcastModule.workerInternals.createScalingInvalidationSender,
+    ).catch(async (error: unknown): Promise<never> => {
+      await senders.discard()
+      throw error
+    })
+    unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
+      await lease.hold(() => lease.value.publish(invalidation))
+    })
+  }
+
+  const previous = state.databaseInvalidationUnsubscribe
+  state.databaseInvalidationUnsubscribe = unsubscribe
+  previous?.()
+  await senders.commit()
 }
 
 function createCoreNotificationBroadcaster(
@@ -1642,6 +1681,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       await broadcastModule.broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
     }
   }
+  await configureDatabaseInvalidationScaling(broadcastModule, loadedConfig)
 
   const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
   const notificationsModule = notificationsConfigured
@@ -1905,6 +1945,14 @@ async function disposeOptionalHoloSubsystems(): Promise<void> {
     },
     async () => (await loadNotificationsModule())?.resetNotificationsRuntime(),
     async () => (await loadBroadcastModule(false, projectRoot))?.resetBroadcastRuntime(),
+    async () => {
+      const state = getRuntimeState()
+      state.databaseInvalidationUnsubscribe?.()
+      state.databaseInvalidationUnsubscribe = undefined
+      const senders = state.databaseInvalidationSenders
+      state.databaseInvalidationSenders = undefined
+      await senders?.dispose()
+    },
     async () => (await loadMailModule())?.resetMailRuntime(),
     () => resetOptionalStorageRuntime(),
     async () => {

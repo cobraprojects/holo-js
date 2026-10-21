@@ -103,6 +103,8 @@ Holo only sees writes made through Holo. Changes from raw SQL clients, other app
 The list of which entries depend on which tables lives in each server process's memory. If you run several servers or workers against a shared Redis or database cache, a write on one server doesn't clear entries another server cached. Those entries stay until their TTL ends. Keep TTLs short in that setup, or clear keys yourself.
 :::
 
+Remote writes reach only [Broadcast workers](/broadcasting/production#run-several-workers). With Broadcast Redis scaling on, a write in another process clears the cached results for the tables it changed inside each worker, and refreshes the Realtime queries that read those tables. Your web app and queue processes don't receive these invalidations. A shared value store, Redis or database, isn't enough on its own, because each process keeps its own dependency index and no shared index ships with Holo. For cross-process consistency, evict on write with `cache.forget()`, or keep TTLs short. A cache store that supplies its own dependency index must implement `listDependencies()` for worker invalidation to work. Without it, the worker logs one warning and keeps the entries until their TTL ends.
+
 ## When results are not cached
 
 - Queries with `lockForUpdate()` or `sharedLock()` always hit the database.

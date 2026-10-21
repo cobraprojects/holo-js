@@ -117,6 +117,8 @@ npx holo broadcast:work
 
 Click **Rename** and every open page showing the list updates.
 
+With several app servers or queue workers, turn on [Redis scaling](/broadcasting/production#run-several-workers) for the broadcast worker. A rename saved by any of them refreshes the open pages that read the post, on every worker.
+
 ## Install
 
 ```bash

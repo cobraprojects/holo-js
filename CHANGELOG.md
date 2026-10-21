@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Realtime queries refresh when a write commits in any process, not only in the Broadcast worker that holds the subscription, when Broadcast uses Redis scaling. Before, a write from your web app, a queue worker, or another worker did not refresh live queries. Each committed query-builder or model write that changes a table is published to the scaling channel once per registered publisher (each scaling worker and the app runtime's sender). Receivers apply each write once, by its write ID. Raw SQL statements don't publish. See [Run several workers](apps/docs/docs/broadcasting/production.md#run-several-workers).
 - Next.js servers start closing Holo's database, Redis, queue, and other connections as soon as they receive `SIGINT` or `SIGTERM`, and exit once the close completes or 30 seconds after the signal, whichever comes first. Before, the process exited without closing them.
 - Failed Nuxt shutdowns are reported through `exceptions.report` with capability `nuxt` and operation `shutdown`, and failed Next.js shutdowns with capability `next`. Before, Nuxt dropped these errors silently.
 - Nuxt builds no longer keep storage disk credentials in build-time state, so `nuxt build` has no database or storage secrets to write out.

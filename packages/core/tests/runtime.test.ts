@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { symlinkPackageDependency } from '../../../tests/support/published-package'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,13 +8,16 @@ import { once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { startRedisService } from '../../session/tests/support/redis'
+import { normalizeRedisConfig } from '@holo-js/kernel'
+import { realtimeServerInternals } from '../../realtime/src/server'
 import { config, loadConfigDirectory, useConfig } from '@holo-js/config'
 import {
   createSchemaService,
   DB,
   getDatabaseDriverFactory,
+  queryCacheInternals,
 } from '@holo-js/db'
 import {
   broadcastRaw,
@@ -318,6 +322,63 @@ export default defineRedisConfig({
   },
 })
 `, 'utf8')
+}
+
+async function writeScalingInvalidationConfig(root: string, redisDb: number, scalingConnection = 'shared'): Promise<void> {
+  await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: ${scalingRedisPort}, db: ${redisDb} } } })
+`)
+  await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
+export default defineBroadcastConfig({
+  default: 'main',
+  connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } } },
+  worker: { host: '127.0.0.1', port: 6001, scaling: { driver: 'redis', connection: '${scalingConnection}' } },
+})
+`)
+}
+
+type ScalingRedisClient = Awaited<ReturnType<typeof startRedisService>>['clients'][number]
+
+
+let scalingRedisPort = 0
+
+async function createScalingInvalidationProject(): Promise<{
+  readonly root: string
+  readonly client: ScalingRedisClient
+  readonly connections: () => Promise<number>
+  readonly baseline: number
+}> {
+  const service = await startRedisService()
+  const client = service.clients[0]
+  const port = service.ports[0]
+  if (!client || !port) throw new Error('The native Redis service did not start')
+  scalingRedisPort = port
+  const connections = async () => String(await client.client('LIST')).trim().split('\n').length
+  const baseline = await connections()
+  const root = await createProject()
+  await writeBaseConfig(root)
+  await writeScalingInvalidationConfig(root, 0)
+  return { root, client, connections, baseline }
+}
+
+async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly appIds: () => string[][], readonly close: () => void }> {
+  const listener = client.duplicate()
+  const appIds: string[][] = []
+  listener.on('message', (_channel: string, message: string) => {
+    const parsed = JSON.parse(message) as { type?: string, appIds?: string[] }
+    if (parsed.type === 'database-invalidation') appIds.push(parsed.appIds ?? [])
+  })
+  await listener.subscribe('holo:broadcast:scaling:shared:events')
+  return { count: () => appIds.length, appIds: () => [...appIds], close: () => { listener.disconnect() } }
+}
+
+async function publishThroughRegisteredPublisher(): Promise<void> {
+  const candidates = queryCacheInternals.getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
+  if (candidates.length === 0) throw new Error('No database invalidation publisher is registered')
+  const invalidation = { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:scores'] }
+  for (const candidate of candidates) await candidate.publisher(invalidation)
 }
 
 async function createRedisSecurityProject(): Promise<{
@@ -3621,6 +3682,190 @@ export default defineSessionConfig({ driver: 'primary', stores: {
     await resetHoloRuntime()
     await expect.poll(connections).toBe(baseline)
   })
+
+  it('reuses the database invalidation sender across an unchanged reconfiguration and opens no new Redis connection', async () => {
+    const { root, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    const opened = await connections()
+    expect(opened).toBeGreaterThan(baseline)
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    expect(await connections()).toBe(opened)
+    await publishThroughRegisteredPublisher()
+    expect(await connections()).toBe(opened)
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  })
+
+  it('lets an in-flight database invalidation publish finish before the replaced sender closes', async () => {
+    const { root, client, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await client.client('PAUSE', '2000', 'ALL')
+    const inFlight = publishThroughRegisteredPublisher()
+    let settled = false
+    inFlight.then(() => { settled = true }, () => { settled = true })
+
+    await writeScalingInvalidationConfig(root, 1)
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    await expect(inFlight).resolves.toBeUndefined()
+    await expect.poll(() => settled, { timeout: 5_000 }).toBe(true)
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
+    await resetHoloRuntime()
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
+  }, 30_000)
+
+  it('disposes the database invalidation sender and unregisters its publisher on reset', async () => {
+    const { root, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    expect(await connections()).toBeGreaterThan(baseline)
+
+    await resetHoloRuntime()
+
+    await expect.poll(connections).toBe(baseline)
+    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+  })
+
+  it('disposes the database invalidation sender and unregisters its publisher when a reconfiguration removes the broadcast config', async () => {
+    const { root, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    expect(await connections()).toBeGreaterThan(baseline)
+
+    await rm(join(root, 'config/broadcast.ts'))
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+
+    await expect.poll(connections).toBe(baseline)
+    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(false)
+    await resetHoloRuntime()
+  })
+
+  it('delivers publishes made before, during, and after a reconfiguration that replaces the sender, each exactly once', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count).toBe(1)
+    await writeScalingInvalidationConfig(root, 1)
+
+    await client.client('PAUSE', '1500', 'ALL')
+    const beforeSwap = publishThroughRegisteredPublisher()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    expect(queryCacheInternals.hasDatabaseDependencyInvalidationPublisher()).toBe(true)
+    const afterSwap = publishThroughRegisteredPublisher()
+    await Promise.all([beforeSwap, afterSwap])
+
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(3)
+    await resetHoloRuntime()
+  }, 30_000)
+
+  it('publishes through a Redis user limited to PUBLISH on the scaling channel', async () => {
+    const { root, client, connections, baseline } = await createScalingInvalidationProject()
+    await client.acl('SETUSER', 'publish-only', 'on', '>publish-only-secret', '~*', '&holo:broadcast:scaling:*', '+publish')
+    await writeRedisConfig(root, `
+import { defineRedisConfig } from ${kernelPackageEntry}
+export default defineRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: ${scalingRedisPort}, db: 0, username: 'publish-only', password: 'publish-only-secret' } } })
+`)
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
+    counter.close()
+    await resetHoloRuntime()
+    await expect.poll(connections).toBe(baseline)
+  }, 30_000)
+
+  it('keeps publishing through an embedded worker when a reconfiguration removes the core sender registered before it', async () => {
+    const { root, client, connections, baseline } = await createScalingInvalidationProject()
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    const reservation = createServer()
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
+    const address = reservation.address()
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+    if (!address || typeof address === 'string') throw new Error('No worker port available')
+    const worker = await startBroadcastWorker({
+      config: normalizeBroadcastConfig({
+        default: 'main',
+        connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { host: '127.0.0.1', port: address.port, scheme: 'http', useTLS: false } } },
+        worker: { host: '127.0.0.1', port: address.port, scaling: { driver: 'redis', connection: 'shared' } },
+      }),
+      redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: scalingRedisPort, db: 0 } } }),
+      realtime: {
+        databaseInvalidation: realtimeServerInternals.createRealtimeDatabaseInvalidationBridge(),
+        query: async () => { throw new Error('No query is registered') },
+        mutate: async () => { throw new Error('No mutation is registered') },
+        subscribe: async () => { throw new Error('No subscription is registered') },
+      },
+    })
+    let workerStopped = false
+    const stopWorker = async () => {
+      if (workerStopped) return
+      workerStopped = true
+      await worker.stop()
+    }
+    onTestFinished(stopWorker)
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+
+    await rm(join(root, 'config/broadcast.ts'))
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(counter.count()).toBe(1)
+    counter.close()
+    await stopWorker()
+    await resetHoloRuntime()
+    await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
+  }, 30_000)
+
+  it('sends invalidations under every Holo app id the broadcast config serves', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
+export default defineBroadcastConfig({
+  default: 'second',
+  connections: {
+    first: { driver: 'holo', appId: 'app-first', key: 'key-first', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } },
+    second: { driver: 'holo', appId: 'app-second', key: 'key-second', secret: 'secret', options: { host: '127.0.0.1', port: 6001, scheme: 'http', useTLS: false } },
+  },
+  worker: { host: '127.0.0.1', port: 6001, scaling: { driver: 'redis', connection: 'shared' } },
+})
+`)
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
+    expect(counter.appIds()).toEqual([['app-first', 'app-second']])
+    await resetHoloRuntime()
+  }, 30_000)
+
+  it('keeps the previous publisher working when a reconfiguration to an unusable scaling connection fails', async () => {
+    const { root, client } = await createScalingInvalidationProject()
+    const counter = await countScalingInvalidations(client)
+    onTestFinished(() => counter.close())
+    await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count).toBe(1)
+    await writeScalingInvalidationConfig(root, 0, 'missing')
+
+    await expect(reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow()
+
+    await publishThroughRegisteredPublisher()
+    await expect.poll(counter.count, { timeout: 5_000 }).toBe(2)
+    await resetHoloRuntime()
+  }, 30_000)
 
   it('closes Redis session clients opened before a failed session acquisition and never promotes them on a later reconfiguration', async () => {
     const service = await startRedisService()
