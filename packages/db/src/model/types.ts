@@ -405,20 +405,52 @@ export type RelatedTableOfRelation<TRelation extends RelationDefinition>
 export type RelatedColumnNameOfRelation<TRelation extends RelationDefinition>
   = ModelAttributeKey<RelatedTableOfRelation<TRelation>>
 
-export type AggregateRelationName<TKey extends string>
-  = TKey extends `${infer TName} as ${string}` ? TName : TKey
+type AggregateWhitespace
+  = ' ' | '\t' | '\n' | '\v' | '\f' | '\r' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
+    | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' ' | ' '
+    | ' ' | '　' | '﻿'
 
-export type AggregateRelationKey<TRelations extends RelationMap>
-  = ModelRelationName<TRelations> | `${ModelRelationName<TRelations>} as ${string}`
+type TrimAggregateStart<TValue extends string>
+  = TValue extends `${AggregateWhitespace}${infer TRest}` ? TrimAggregateStart<TRest> : TValue
+
+type TrimAggregateEnd<TValue extends string>
+  = TValue extends `${infer TRest}${AggregateWhitespace}` ? TrimAggregateEnd<TRest> : TValue
+
+type FirstAggregateWord<TValue extends string, TWord extends string = ''>
+  = TValue extends `${infer TChar}${infer TRest}`
+    ? TChar extends AggregateWhitespace
+      ? [TWord, TRest]
+      : FirstAggregateWord<TRest, `${TWord}${TChar}`>
+    : [TWord, '']
+
+type AggregateKeyParts<TKey extends string>
+  = TrimAggregateStart<TrimAggregateEnd<TKey>> extends infer TTrimmed extends string
+    ? FirstAggregateWord<TTrimmed> extends [infer TRelation extends string, infer TRest extends string]
+      ? FirstAggregateWord<TrimAggregateStart<TRest>> extends [infer TKeyword extends string, infer TTail extends string]
+        ? Lowercase<TKeyword> extends 'as'
+          ? TrimAggregateStart<TTail> extends infer TAlias extends string
+            ? TAlias extends ''
+              ? { readonly relation: TTrimmed }
+              : { readonly relation: TRelation, readonly alias: TAlias }
+            : never
+          : { readonly relation: TTrimmed }
+        : never
+      : never
+    : never
+
+export type AggregateRelationName<TKey extends string>
+  = AggregateKeyParts<TKey> extends { readonly relation: infer TRelation extends string } ? TRelation : never
 
 export type AggregateRelationConstraintMap<TRelations extends RelationMap, TKey extends string> = {
-  readonly [K in TKey | `${AggregateRelationName<TKey>}` | `${AggregateRelationName<TKey>} as ${string}`]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
+  readonly [K in TKey | AggregateRelationName<TKey> | `${AggregateRelationName<TKey>} as ${string}`]?: RelationConstraintFor<TRelations, AggregateRelationName<K>>
 }
 
 export type AggregateRelatedColumnNameOfKeys<TRelations extends RelationMap, TKey extends string>
   = [TKey] extends [never]
     ? Extract<RelatedColumnNameOfRelation<TRelations[ModelRelationName<TRelations>]>, string>
-    : Extract<RelatedColumnNameOfRelation<TRelations[Extract<AggregateRelationName<TKey>, ModelRelationName<TRelations>>]>, string>
+    : [Exclude<AggregateRelationName<TKey>, ModelRelationName<TRelations>>] extends [never]
+      ? Extract<RelatedColumnNameOfRelation<TRelations[Extract<AggregateRelationName<TKey>, ModelRelationName<TRelations>>]>, string>
+      : never
 
 export type RelatedColumnNameForRelationPath<
   TRelations extends RelationMap,

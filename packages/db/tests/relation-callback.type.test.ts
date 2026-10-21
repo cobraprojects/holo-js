@@ -333,3 +333,35 @@ it('allows an explicit alias key with its base relation, and rejects keys outsid
     Activity.withMax<'posts'>({ posts: () => {}, comments: () => {} }, 'id')
   }
 })
+
+it('accepts the alias keyword in any case and with any whitespace, as the runtime does', () => {
+  if (false) {
+    User.withSum({
+      'posts AS total': (query) => {
+        expectTypeOf(query).toEqualTypeOf<PostQuery>()
+      },
+    }, 'user_id')
+    User.withSum({ 'posts As total': () => {} }, 'title')
+    User.withMax({ 'posts   as   total': () => {} }, 'id')
+    User.withSum<'posts AS total'>({ 'posts AS total': () => {} }, 'title')
+    User.withSum({ '  posts\tAs\ntotal  ': () => {} }, 'user_id')
+    Activity.withSum({ 'posts   as   total': () => {}, 'comments AS c': () => {} }, 'id')
+    // @ts-expect-error body is not a posts column, under any spelling of the alias
+    User.withSum({ 'posts AS total': () => {} }, 'body')
+    // @ts-expect-error body is not a posts column, under any spelling of the alias
+    User.withMin({ 'posts   as   total': () => {} }, 'body')
+  }
+})
+
+it('rejects an invalid relation under every spelling of the alias keyword', () => {
+  if (false) {
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ 'missing AS total': () => {} }, 'title')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ 'missing As total': () => {} }, 'title')
+    // @ts-expect-error missing is not a relation of users
+    User.withSum({ 'missing   as   total': () => {} }, 'title')
+    // @ts-expect-error missing is not a relation of users, under an explicit argument
+    User.withSum<'missing AS total'>({ 'missing AS total': () => {} }, 'title')
+  }
+})
