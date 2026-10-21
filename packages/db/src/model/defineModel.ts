@@ -96,6 +96,14 @@ type SharedModelDefinitionFields<
   'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
 >
 
+function snapshotModelScopes<TScopes extends ModelScopesDefinition>(scopes: TScopes): TScopes {
+  for (const name of Object.keys(scopes)) {
+    assertModelScopeNameAvailable(name)
+  }
+
+  return Object.freeze({ ...scopes })
+}
+
 function createSharedModelDefinitionFields<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
@@ -121,7 +129,7 @@ function createSharedModelDefinitionFields<
     hasExplicitFillable: typeof options.fillable !== 'undefined',
     guarded: Object.freeze([...(options.guarded ?? [])]),
     hasExplicitGuarded: typeof options.guarded !== 'undefined',
-    scopes: (options.scopes ?? {}) as TScopes,
+    scopes: snapshotModelScopes((options.scopes ?? {}) as TScopes),
     globalScopes: { ...(options.globalScopes ?? {}) },
     relations,
     casts: { ...(options.casts ?? {}) },
@@ -901,7 +909,6 @@ function createStaticModelApi<
   } as StaticModelApi<TTable, TScopes, TRelations>
 
   for (const [name, scope] of Object.entries(definition.scopes)) {
-    assertModelScopeNameAvailable(name)
     const scoped = scope as (query: ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, ...args: readonly unknown[]) => ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
     ;(model as Record<string, unknown>)[name] = (...args: readonly unknown[]) => scoped(model.query(), ...args)
   }

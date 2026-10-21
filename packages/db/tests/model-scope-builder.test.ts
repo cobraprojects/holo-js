@@ -139,4 +139,28 @@ describe('named scopes on ModelQueryBuilder instances', () => {
       })).toThrow(`Model scope "${name}" conflicts with a ModelQueryBuilder member`)
     }
   })
+
+  it('keeps the scopes captured at definition, whatever happens to the original object', () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+
+    const snapshotted = defineTable('scope_builder_snapshot', { id: column.id(), status: column.string() })
+    const scopes = {
+      published: (query: ModelQueryBuilder<typeof snapshotted>) => query.where('status', 'published'),
+    }
+    const Snapshot = defineModelFromTable(snapshotted, { scopes })
+
+    Object.assign(scopes, {
+      draft: (query: ModelQueryBuilder<typeof snapshotted>) => query.where('status', 'draft'),
+      then: (query: ModelQueryBuilder<typeof snapshotted>) => query,
+    })
+
+    expect(Object.isFrozen(Snapshot.definition.scopes)).toBe(true)
+    expect(Object.keys(Snapshot.definition.scopes)).toEqual(['published'])
+    expect(Reflect.get(Snapshot, 'draft')).toBeUndefined()
+    expect(Reflect.get(Snapshot.query(), 'draft')).toBeUndefined()
+    expect(Reflect.get(Snapshot.query(), 'then')).toBeUndefined()
+  })
 })
