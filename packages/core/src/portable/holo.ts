@@ -777,11 +777,11 @@ async function configureDatabaseInvalidationScaling(
   const state = getRuntimeState()
   const senders = getDatabaseInvalidationSenders()
   const scaling = broadcastModule ? loadedConfig.broadcast.worker.scaling : undefined
-  const appId = broadcastModule ? broadcastModule.workerInternals.resolveDefaultBroadcastAppId(loadedConfig.broadcast) : undefined
+  const appIds = broadcastModule ? broadcastModule.workerInternals.resolveBroadcastAppIds(loadedConfig.broadcast) : []
   let unsubscribe: (() => void) | undefined
-  if (broadcastModule && scaling && appId !== undefined) {
+  if (broadcastModule && scaling && appIds.length > 0) {
     const lease = await senders.acquire(
-      { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis, appId },
+      { config: scaling, queue: loadedConfig.queue, redis: loadedConfig.redis, appIds },
       broadcastModule.workerInternals.createScalingInvalidationSender,
     ).catch(async (error: unknown): Promise<never> => {
       await senders.discard()
@@ -789,7 +789,7 @@ async function configureDatabaseInvalidationScaling(
     })
     unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => {
       await lease.hold(() => lease.value.publish(invalidation))
-    }, lease.value.publisherScope)
+    })
   }
 
   const previous = state.databaseInvalidationUnsubscribe

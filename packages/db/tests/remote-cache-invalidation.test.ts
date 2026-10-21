@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime, type CacheDriverContract, type CacheDriverPutInput } from '../../cache/src'
@@ -57,7 +58,7 @@ function createInstrumentedIndex(forgetDelayMs: number) {
 }
 
 function remoteTableInvalidation(table: string) {
-  return queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ connectionName: 'main', dependencies: [`db:main:${table}`] })
+  return queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ id: randomUUID(), connectionName: 'main', dependencies: [`db:main:${table}`] })
 }
 
 // A query fill writes its rows to the cache only after its database read has returned, so

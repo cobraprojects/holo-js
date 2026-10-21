@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { symlinkPackageDependency } from '../../../tests/support/published-package'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -362,12 +363,12 @@ async function createScalingInvalidationProject(): Promise<{
   return { root, client, connections, baseline }
 }
 
-async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly appIds: () => string[], readonly close: () => void }> {
+async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ readonly count: () => number, readonly appIds: () => string[][], readonly close: () => void }> {
   const listener = client.duplicate()
-  const appIds: string[] = []
+  const appIds: string[][] = []
   listener.on('message', (_channel: string, message: string) => {
-    const parsed = JSON.parse(message) as { type?: string, appId?: string }
-    if (parsed.type === 'database-invalidation') appIds.push(String(parsed.appId))
+    const parsed = JSON.parse(message) as { type?: string, appIds?: string[] }
+    if (parsed.type === 'database-invalidation') appIds.push(parsed.appIds ?? [])
   })
   await listener.subscribe('holo:broadcast:scaling:shared:events')
   return { count: () => appIds.length, appIds: () => [...appIds], close: () => { listener.disconnect() } }
@@ -375,9 +376,9 @@ async function countScalingInvalidations(client: ScalingRedisClient): Promise<{ 
 
 async function publishThroughRegisteredPublisher(): Promise<void> {
   const candidates = queryCacheInternals.getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
-  const publisher = candidates[candidates.length - 1]?.publisher
-  if (!publisher) throw new Error('No database invalidation publisher is registered')
-  await publisher({ connectionName: 'main', dependencies: ['db:main:scores'] })
+  if (candidates.length === 0) throw new Error('No database invalidation publisher is registered')
+  const invalidation = { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:scores'] }
+  for (const candidate of candidates) await candidate.publisher(invalidation)
 }
 
 async function createRedisSecurityProject(): Promise<{
@@ -3826,7 +3827,7 @@ export default defineRedisConfig({ default: 'shared', connections: { shared: { h
     await expect.poll(connections, { timeout: 10_000 }).toBe(baseline)
   }, 30_000)
 
-  it('sends invalidations under the app id of the default broadcast connection', async () => {
+  it('sends invalidations under every Holo app id the broadcast config serves', async () => {
     const { root, client } = await createScalingInvalidationProject()
     await writeBroadcastConfig(root, `
 import { defineBroadcastConfig } from ${broadcastPackageEntry}
@@ -3846,7 +3847,7 @@ export default defineBroadcastConfig({
     await publishThroughRegisteredPublisher()
 
     await expect.poll(counter.count, { timeout: 5_000 }).toBe(1)
-    expect(counter.appIds()).toEqual(['app-second'])
+    expect(counter.appIds()).toEqual([['app-first', 'app-second']])
     await resetHoloRuntime()
   }, 30_000)
 

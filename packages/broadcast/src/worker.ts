@@ -264,26 +264,17 @@ type BroadcastScalingPresenceMemberRemovedMessage = {
 type BroadcastScalingDatabaseInvalidationMessage = {
   readonly type: 'database-invalidation'
   readonly originNodeId: string
-  readonly appId: string
+  readonly appIds: readonly string[]
   readonly invalidation: unknown
 }
 
-function createScalingDatabaseInvalidationPayload(originNodeId: string, appId: string, invalidation: unknown): string {
+function createScalingDatabaseInvalidationPayload(originNodeId: string, appIds: readonly string[], invalidation: unknown): string {
   return JSON.stringify({
     type: 'database-invalidation',
     originNodeId,
-    appId,
+    appIds,
     invalidation,
   } satisfies BroadcastScalingDatabaseInvalidationMessage)
-}
-
-function resolveDefaultBroadcastAppId(config: NormalizedHoloBroadcastConfig): string | undefined {
-  const connection = config.connections[config.default]
-  if (!connection || connection.driver !== 'holo' || !('appId' in connection)) {
-    return undefined
-  }
-
-  return connection.appId
 }
 
 function resolveBroadcastAppIds(config: NormalizedHoloBroadcastConfig): readonly string[] {
@@ -613,47 +604,8 @@ function getProcessScalingNodeId(): string {
   return processScalingNodeId
 }
 
-// Node IDs are only unique per scaling connection: a node on another connection may reuse an explicit
-// node ID, so local origins are scoped to the event channel Redis isolates the connection by.
-const localScalingOriginCounts = new Map<string, number>()
-
-function resolveLocalScalingOriginKey(eventChannel: string, nodeId: string): string {
-  return `${eventChannel}\u0000${nodeId}`
-}
-
-function registerLocalScalingOrigin(eventChannel: string, nodeId: string): () => void {
-  const key = resolveLocalScalingOriginKey(eventChannel, nodeId)
-  localScalingOriginCounts.set(key, (localScalingOriginCounts.get(key) ?? 0) + 1)
-  let released = false
-  return () => {
-    if (released) {
-      return
-    }
-
-    released = true
-    const remaining = (localScalingOriginCounts.get(key) ?? 1) - 1
-    if (remaining > 0) {
-      localScalingOriginCounts.set(key, remaining)
-      return
-    }
-
-    localScalingOriginCounts.delete(key)
-  }
-}
-
-function isLocalScalingOrigin(eventChannel: string, originNodeId: string): boolean {
-  return originNodeId === getProcessScalingNodeId()
-    || localScalingOriginCounts.has(resolveLocalScalingOriginKey(eventChannel, originNodeId))
-}
-
 function resolveScalingEventChannel(connection: string): string {
   return `holo:broadcast:scaling:${connection}:events`
-}
-
-// A database invalidation is published once per app on each channel, because each app's remote workers
-// accept only their own app's messages. Registrations for the same app and channel coalesce into one.
-function resolveDatabaseInvalidationPublisherScope(eventChannel: string, appId: string): string {
-  return `${eventChannel}\u0000${appId}`
 }
 
 function resolvePresenceHashKey(connection: string, appId: string, channel: string): string {
@@ -1238,12 +1190,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const currentTime = (): number => options.now?.() ?? performance.now()
   const startedAt = currentTime()
   const servedAppIds = resolveBroadcastAppIds(options.config)
-  const databaseInvalidationAppId = resolveDefaultBroadcastAppId(options.config)
-  const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && databaseInvalidationAppId !== undefined
-    ? options.realtime.databaseInvalidation.connect(
-      invalidation => publishScalingDatabaseInvalidation(invalidation),
-      resolveDatabaseInvalidationPublisherScope(scaling.eventChannel, databaseInvalidationAppId),
-    )
+  const disconnectDatabaseInvalidation = scaling && options.realtime?.databaseInvalidation && servedAppIds.length > 0
+    ? options.realtime.databaseInvalidation.connect(invalidation => publishScalingDatabaseInvalidation(invalidation))
     : undefined
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
@@ -1845,11 +1793,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   async function publishScalingDatabaseInvalidation(invalidation: unknown): Promise<void> {
-    if (!scaling || databaseInvalidationAppId === undefined) {
+    if (!scaling || servedAppIds.length === 0) {
       return
     }
 
-    await scaling.adapter.publish(scaling.eventChannel, createScalingDatabaseInvalidationPayload(scaling.nodeId, databaseInvalidationAppId, invalidation))
+    await scaling.adapter.publish(scaling.eventChannel, createScalingDatabaseInvalidationPayload(scaling.nodeId, servedAppIds, invalidation))
   }
 
   async function publishScalingPresenceMemberAdded(
@@ -1899,11 +1847,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (message.type === 'database-invalidation') {
-      if (scaling && typeof message.originNodeId === 'string' && isLocalScalingOrigin(scaling.eventChannel, message.originNodeId)) {
-        return
-      }
-
-      if (typeof message.appId !== 'string' || !servedAppIds.includes(message.appId)) {
+      if (!Array.isArray(message.appIds) || !message.appIds.some(appId => servedAppIds.includes(appId))) {
         return
       }
 
@@ -2370,9 +2314,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   let closing: Promise<void> | undefined
-  const unregisterLocalScalingOrigin = scaling ? registerLocalScalingOrigin(scaling.eventChannel, scaling.nodeId) : undefined
   async function closeRuntime(): Promise<void> {
-    unregisterLocalScalingOrigin?.()
   if (livenessTimer !== undefined) {
     clearInterval(livenessTimer)
   }
@@ -2892,8 +2834,8 @@ function createScalingInvalidationSender(input: {
   readonly config: NormalizedBroadcastWorkerScalingConfig
   readonly queue?: NormalizedHoloQueueConfig
   readonly redis?: NormalizedHoloRedisConfig
-  readonly appId: string
-}): { readonly publisherScope: string, publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
+  readonly appIds: readonly string[]
+}): { publish(invalidation: unknown): Promise<void>, close(): Promise<void> } {
   const connectionName = resolveScalingConnectionName(input.config.connection, input.queue, input.redis)
   const redisConnection = resolveRedisScalingConnection(input.queue, connectionName, input.redis)
   const eventChannel = resolveScalingEventChannel(connectionName)
@@ -2909,10 +2851,9 @@ function createScalingInvalidationSender(input: {
   }
 
   return {
-    publisherScope: resolveDatabaseInvalidationPublisherScope(eventChannel, input.appId),
     async publish(invalidation) {
       const scalingAdapter = await openAdapter()
-      await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appId, invalidation))
+      await scalingAdapter.publish(eventChannel, createScalingDatabaseInvalidationPayload(nodeId, input.appIds, invalidation))
     },
     async close() {
       const opened = adapter
@@ -2926,7 +2867,6 @@ export const workerInternals = {
   buildWorkerApps,
   createScalingInvalidationSender,
   resolveBroadcastAppIds,
-  resolveDefaultBroadcastAppId,
   createScalingNodeId,
   createRedisScalingAdapter,
   createPusherSignature,

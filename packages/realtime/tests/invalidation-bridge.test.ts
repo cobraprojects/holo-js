@@ -1,9 +1,14 @@
+import { randomUUID } from 'node:crypto'
 import { expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
 import { configureRealtimeRuntime, realtimeRuntimeInternals, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
+
+function remoteInvalidation(dependencies: readonly string[]) {
+  return { id: randomUUID(), connectionName: 'main', dependencies }
+}
 
 it('rejects a remote invalidation whose dependencies are not a list of strings', async () => {
   await openRealtimeDatabase()
@@ -18,9 +23,9 @@ it('attaches a later bridge without replacing the registered publisher, and a di
   const published: string[] = []
   const first = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   const second = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const disconnectFirst = first.connect(async () => { published.push('first') }, 'holo:broadcast:scaling:shared:events')
+  const disconnectFirst = first.connect(async () => { published.push('first') })
   onTestFinished(() => disconnectFirst())
-  const disconnectSecond = second.connect(async () => { published.push('second') }, 'holo:broadcast:scaling:shared:events')
+  const disconnectSecond = second.connect(async () => { published.push('second') })
   disconnectSecond()
 
   await db.table('records').where('id', 1).update({ score: 1 })
@@ -52,7 +57,7 @@ it('refreshes a table-wide and a column-level subscription exactly once for one 
   const before = { ...runs }
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
 
-  await bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  await bridge.receive(remoteInvalidation(['db:main:records']))
 
   expect(runs.tableWide - before.tableWide).toBe(1)
   expect(runs.columnLevel - before.columnLevel).toBe(1)
@@ -86,7 +91,7 @@ it('coalesces a burst of remote invalidations for one table and limits concurren
   maxActive = 0
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
 
-  await Promise.all(Array.from({ length: 10 }, () => bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })))
+  await Promise.all(Array.from({ length: 10 }, () => bridge.receive(remoteInvalidation(['db:main:records']))))
   await new Promise(resolve => setTimeout(resolve, 600))
 
   for (const [name, count] of runs) {
@@ -116,7 +121,7 @@ it('limits a sustained remote write loop to about one refresh per 100 ms and alw
 
   for (let value = 1; value <= 50; value += 1) {
     await adapter.execute(`UPDATE records SET score = ${value} WHERE id = 1`)
-    received.push(bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] }))
+    received.push(bridge.receive(remoteInvalidation(['db:main:records'])))
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   await Promise.all(received)
@@ -144,7 +149,7 @@ it('keeps a remote refresh after a reset that happens while stuck remote refresh
   }
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   blocking = true
-  void bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  void bridge.receive(remoteInvalidation(['db:main:records']))
   await new Promise(resolve => setTimeout(resolve, 100))
 
   resetRealtimeRuntime()
@@ -164,7 +169,7 @@ it('keeps a remote refresh after a reset that happens while stuck remote refresh
   const before = fresh
   await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
 
-  void bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  void bridge.receive(remoteInvalidation(['db:main:records']))
   await new Promise(resolve => setTimeout(resolve, 300))
   release()
 
@@ -194,7 +199,7 @@ it('runs nothing from a refresh queue that a reset cancels, even when the next r
   runs.clear()
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   blocking = true
-  void bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  void bridge.receive(remoteInvalidation(['db:main:records']))
   await new Promise(resolve => setTimeout(resolve, 100))
   const startedBeforeReset = [...runs.keys()].sort()
   expect(startedBeforeReset.length).toBe(4)
@@ -266,8 +271,8 @@ it('forgets a subscription\'s remote refresh schedule and cancels its deferred r
   const [refreshKey] = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.keys()]
   if (!refreshKey) throw new Error('No subscription was registered')
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  await bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
-  void bridge.receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  await bridge.receive(remoteInvalidation(['db:main:records']))
+  void bridge.receive(remoteInvalidation(['db:main:records']))
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(realtimeRuntimeInternals.hasRemoteRefreshSchedule(refreshKey)).toBe(true)
 
@@ -312,7 +317,7 @@ it('refreshes a subscription whose initial query overlapped a remote invalidatio
   })
   await held.read
   await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
-  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive(remoteInvalidation(['db:main:records']))
   held.release()
   await subscribing
 
@@ -372,7 +377,7 @@ it('still refreshes a live query and reports the error when a remote invalidatio
   })
   await adapter.execute('UPDATE records SET score = 77 WHERE id = 1')
 
-  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive({ connectionName: 'main', dependencies: ['db:main:records'] })
+  await realtimeServerInternals.createRealtimeDatabaseInvalidationBridge().receive(remoteInvalidation(['db:main:records']))
 
   await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
   expect(reports.map(report => (report.error as Error).message)).toContain('dependency index unavailable')

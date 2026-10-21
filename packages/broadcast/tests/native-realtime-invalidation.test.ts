@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
@@ -67,7 +68,7 @@ async function writeFromAnotherProcess(filename: string, score: number, redisPor
 async function startScoresWorker(
   db: Awaited<ReturnType<typeof openScoresDatabase>>['db'],
   redisPort: number,
-  options: { readonly nodeId?: string, readonly appId?: string, readonly key?: string, readonly scalingConnection?: string, readonly databaseInvalidation?: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>['databaseInvalidation'] } = {},
+  options: { readonly nodeId?: string, readonly appId?: string, readonly secondaryAppId?: string, readonly logDefault?: boolean, readonly redisDb?: number, readonly key?: string, readonly scalingConnection?: string, readonly databaseInvalidation?: NonNullable<Parameters<typeof startBroadcastWorker>[0]['realtime']>['databaseInvalidation'] } = {},
 ) {
   const scores = query({
     name: 'scores.current',
@@ -81,13 +82,17 @@ async function startScoresWorker(
   const port = await reservePort()
   const worker = await startBroadcastWorker({
     config: normalizeBroadcastConfig({
-      default: 'main',
-      connections: { main: { driver: 'holo', appId: options.appId ?? 'app', key: options.key ?? 'key', secret: 'secret', options: { host: '127.0.0.1', port, scheme: 'http' } } },
+      default: options.logDefault ? 'log' : 'main',
+      connections: {
+        main: { driver: 'holo' as const, appId: options.appId ?? 'app', key: options.key ?? 'key', secret: 'secret', options: { host: '127.0.0.1', port, scheme: 'http' } },
+        ...(options.secondaryAppId === undefined ? {} : { secondary: { driver: 'holo' as const, appId: options.secondaryAppId, key: 'key-secondary', secret: 'secret', options: { host: '127.0.0.1', port, scheme: 'http' } } }),
+        ...(options.logDefault ? { log: { driver: 'log' as const } } : {}),
+      },
       worker: { host: '127.0.0.1', port, scaling: { driver: 'redis', connection: scalingConnection } },
     }),
     redis: normalizeRedisConfig({
       default: scalingConnection,
-      connections: { [scalingConnection]: { host: '127.0.0.1', port: redisPort } },
+      connections: { [scalingConnection]: { host: '127.0.0.1', port: redisPort, ...(options.redisDb === undefined ? {} : { db: options.redisDb }) } },
     }),
     ...(options.nodeId === undefined ? {} : { nodeId: options.nodeId }),
     realtime: {
@@ -194,9 +199,9 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
   const sender = workerInternals.createScalingInvalidationSender({
     config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
     redis: redisConfig,
-    appId: 'app',
+    appIds: ['app'],
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
@@ -222,9 +227,11 @@ it('publishes one invalidation per mutation and does not refresh from its own wr
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  await expect.poll(() => messages.filter(message => JSON.parse(message).type === 'database-invalidation').length).toBe(1)
+  await expect.poll(() => publishedWriteIds(messages).length).toBe(2)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(messages.filter(message => JSON.parse(message).type === 'database-invalidation')).toHaveLength(1)
+  const writeIds = publishedWriteIds(messages)
+  expect(writeIds).toHaveLength(2)
+  expect(new Set(writeIds).size).toBe(1)
   expect(received).toEqual([])
 }, 30_000)
 
@@ -242,25 +249,16 @@ it('does not refresh from its own write when the worker has an explicit node id 
   const sender = workerInternals.createScalingInvalidationSender({
     config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
     redis: redisConfig,
-    appId: 'app',
+    appIds: ['app'],
   })
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(async () => {
     unsubscribeSender()
     await sender.close()
   })
-  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const received: unknown[] = []
-  await startScoresWorker(db, redisPort, {
-    nodeId: 'worker-explicit',
-    databaseInvalidation: {
-      connect: bridge.connect,
-      receive: async invalidation => {
-        received.push(invalidation)
-        await bridge.receive(invalidation)
-      },
-    },
-  })
+  const applied: unknown[] = []
+  onTestFinished(queryCacheInternals.onDatabaseDependencyInvalidated(event => { applied.push(event) }))
+  await startScoresWorker(db, redisPort, { nodeId: 'worker-explicit' })
   const client = redis.clients[0]
   if (!client) throw new Error('No native Redis client available')
   const subscriber = client.duplicate()
@@ -271,11 +269,20 @@ it('does not refresh from its own write when the worker has an explicit node id 
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  await expect.poll(() => messages.filter(message => JSON.parse(message).type === 'database-invalidation').length).toBe(1)
+  await expect.poll(() => publishedWriteIds(messages).length).toBe(2)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(messages.filter(message => JSON.parse(message).type === 'database-invalidation')).toHaveLength(1)
-  expect(received).toEqual([])
+  const writeIds = publishedWriteIds(messages)
+  expect(writeIds).toHaveLength(2)
+  expect(new Set(writeIds).size).toBe(1)
+  expect(applied).toHaveLength(1)
 }, 30_000)
+
+function publishedWriteIds(messages: readonly string[]): string[] {
+  return messages
+    .map(message => JSON.parse(message) as { type: string, invalidation?: { id?: string } })
+    .filter(parsed => parsed.type === 'database-invalidation')
+    .map(parsed => parsed.invalidation?.id ?? '')
+}
 
 async function subscribeToScalingEvents(redis: Awaited<ReturnType<typeof startRedisService>>) {
   const client = redis.clients[0]
@@ -291,7 +298,7 @@ async function subscribeToScalingEvents(redis: Awaited<ReturnType<typeof startRe
   return invalidations
 }
 
-function createScalingSender(redisPort: number) {
+function createScalingSender(redisPort: number, appId = 'app') {
   const config = normalizeBroadcastConfig({
     default: 'main',
     connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
@@ -300,7 +307,7 @@ function createScalingSender(redisPort: number) {
   const sender = workerInternals.createScalingInvalidationSender({
     config: config.worker.scaling as Exclude<typeof config.worker.scaling, false>,
     redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: redisPort } } }),
-    appId: 'app',
+    appIds: [appId],
   })
   onTestFinished(() => sender.close())
   return sender
@@ -312,7 +319,7 @@ it('keeps publishing once per mutation after the worker stops when the app sende
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(unsubscribeSender)
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
@@ -325,7 +332,7 @@ it('keeps publishing once per mutation after the worker stops when the app sende
   expect(invalidations).toHaveLength(1)
 }, 30_000)
 
-it('publishes once per mutation when the worker starts first and the app sender is registered after it, and keeps publishing after the worker stops', async () => {
+it('publishes once per registered publisher when the worker starts first and the app sender is registered after it, and keeps publishing after the worker stops', async () => {
   const { db } = await openScoresDatabase()
   const redis = await startRedisService()
   const redisPort = redis.ports[0]
@@ -333,17 +340,18 @@ it('publishes once per mutation when the worker starts first and the app sender 
   const worker = await startScoresWorker(db, redisPort)
   const invalidations = await subscribeToScalingEvents(redis)
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(unsubscribeSender)
 
   await db.table('scores').where('id', 1).update({ score: 8 })
-  await expect.poll(() => invalidations.length).toBe(1)
-  await worker.stop()
-  await db.table('scores').where('id', 1).update({ score: 9 })
 
   await expect.poll(() => invalidations.length).toBe(2)
+  await worker.stop()
+  await db.table('scores').where('id', 1).update({ score: 9 })
+  await expect.poll(() => invalidations.length).toBe(3)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(invalidations).toHaveLength(2)
+  expect(invalidations).toHaveLength(3)
+  expect(new Set(invalidations.map(invalidation => (invalidation as { id: string }).id)).size).toBe(2)
 }, 30_000)
 
 it('leaves no publisher registered and no Redis connection open when the worker cannot bind its port', async () => {
@@ -521,44 +529,25 @@ it('keeps publishing exactly once after the first of two embedded workers stops'
   expect(invalidations).toHaveLength(1)
 }, 30_000)
 
-it('gives no remote receives in either of two embedded workers that share a process with a write from one of them', async () => {
+it('applies a write once in the process that made it, however many embedded workers and senders published it', async () => {
   const { db } = await openScoresDatabase()
   const redis = await startRedisService()
   const redisPort = redis.ports[0]
   if (!redisPort) throw new Error('No native Redis port available')
   const sender = createScalingSender(redisPort)
-  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
   onTestFinished(unsubscribeSender)
-  const receivedByA: unknown[] = []
-  const receivedByB: unknown[] = []
-  const bridgeA = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const bridgeB = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  await startScoresWorker(db, redisPort, {
-    nodeId: 'worker-a',
-    databaseInvalidation: {
-      connect: bridgeA.connect,
-      receive: async invalidation => {
-        receivedByA.push(invalidation)
-        await bridgeA.receive(invalidation)
-      },
-    },
-  })
-  await startScoresWorker(db, redisPort, {
-    nodeId: 'worker-b',
-    databaseInvalidation: {
-      connect: bridgeB.connect,
-      receive: async invalidation => {
-        receivedByB.push(invalidation)
-        await bridgeB.receive(invalidation)
-      },
-    },
-  })
+  const applied: unknown[] = []
+  onTestFinished(queryCacheInternals.onDatabaseDependencyInvalidated(event => { applied.push(event) }))
+  await startScoresWorker(db, redisPort, { nodeId: 'worker-a' })
+  await startScoresWorker(db, redisPort, { nodeId: 'worker-b' })
 
   await db.table('scores').where('id', 1).update({ score: 7 })
   await new Promise(resolve => setTimeout(resolve, 500))
 
-  expect(receivedByA).toEqual([])
-  expect(receivedByB).toEqual([])
+  // The local write notifies local listeners once. Its copies from the sender and both workers carry the
+  // same write id, so none of them is applied again.
+  expect(applied).toHaveLength(1)
 }, 30_000)
 
 it('delivers a remote invalidation on one scaling connection when a worker on another connection uses its node id', async () => {
@@ -597,8 +586,8 @@ it('delivers a remote invalidation on one scaling connection when a worker on an
   await client.publish('holo:broadcast:scaling:beta:events', JSON.stringify({
     type: 'database-invalidation',
     originNodeId: 'node-x',
-    appId: 'app',
-    invalidation: { connectionName: 'main', dependencies: ['db:main:scores'] },
+    appIds: ['app'],
+    invalidation: { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:scores'] },
   }))
 
   await expect.poll(() => receivedByB.length).toBe(1)
@@ -629,18 +618,18 @@ it('suppresses a worker\'s own echo on its scaling connection while still delive
   await client.publish('holo:broadcast:scaling:alpha:events', JSON.stringify({
     type: 'database-invalidation',
     originNodeId: 'node-x',
-    appId: 'app',
-    invalidation: { connectionName: 'main', dependencies: ['db:main:echo'] },
+    appIds: ['app'],
+    invalidation: { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:echo'] },
   }))
   await client.publish('holo:broadcast:scaling:alpha:events', JSON.stringify({
     type: 'database-invalidation',
     originNodeId: 'node-y',
-    appId: 'app',
-    invalidation: { connectionName: 'main', dependencies: ['db:main:sentinel'] },
+    appIds: ['app'],
+    invalidation: { id: randomUUID(), connectionName: 'main', dependencies: ['db:main:sentinel'] },
   }))
 
   await expect.poll(() => receivedByA.length).toBe(1)
-  expect(receivedByA).toEqual([{ connectionName: 'main', dependencies: ['db:main:sentinel'] }])
+  expect(receivedByA).toEqual([{ id: expect.any(String), connectionName: 'main', dependencies: ['db:main:sentinel'] }])
 }, 30_000)
 
 async function subscribeToScalingChannels(redis: Awaited<ReturnType<typeof startRedisService>>, connections: readonly string[]) {
@@ -669,7 +658,7 @@ it('publishes one write once to each scaling connection when two embedded worker
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  const expected = { connectionName: 'main', dependencies: ['db:main:scores'] }
+  const expected = { id: expect.any(String), connectionName: 'main', dependencies: ['db:main:scores'] }
   await expect.poll(() => invalidations.get('holo:broadcast:scaling:alpha:events')?.length).toBe(1)
   await expect.poll(() => invalidations.get('holo:broadcast:scaling:beta:events')?.length).toBe(1)
   await new Promise(resolve => setTimeout(resolve, 300))
@@ -688,9 +677,12 @@ it('publishes one write once when two embedded workers register on the same scal
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  await expect.poll(() => invalidations.get('holo:broadcast:scaling:shared:events')?.length).toBe(1)
+  const writeIdsOnShared = () => (invalidations.get('holo:broadcast:scaling:shared:events') ?? []).map(invalidation => (invalidation as { id: string }).id)
+  await expect.poll(() => writeIdsOnShared().length).toBe(2)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(invalidations.get('holo:broadcast:scaling:shared:events')).toHaveLength(1)
+  const writeIds = writeIdsOnShared()
+  expect(writeIds).toHaveLength(2)
+  expect(new Set(writeIds).size).toBe(1)
 }, 30_000)
 
 it('keeps publishing to the other scaling connection after the worker on one connection stops', async () => {
@@ -711,7 +703,7 @@ it('keeps publishing to the other scaling connection after the worker on one con
   expect(invalidations.get('holo:broadcast:scaling:beta:events')).toHaveLength(1)
 }, 30_000)
 
-async function startInvalidationListenerProcess(redisPort: number, appId: string): Promise<{ readonly received: unknown[] }> {
+async function startInvalidationListenerProcess(redisPort: number, appId: string, redisDb = 0): Promise<{ readonly applied: unknown[] }> {
   const port = await reservePort()
   const child = spawn(process.execPath, [
     '--import',
@@ -721,24 +713,25 @@ async function startInvalidationListenerProcess(redisPort: number, appId: string
     String(redisPort),
     String(port),
     appId,
+    String(redisDb),
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
   onTestFinished(() => { child.kill('SIGKILL') })
   let childErrors = ''
   child.stderr.on('data', chunk => { childErrors += String(chunk) })
   const lines = createInterface({ input: child.stdout })
   onTestFinished(() => lines.close())
-  const received: unknown[] = []
+  const applied: unknown[] = []
   await new Promise<void>((resolve, reject) => {
     lines.on('line', line => {
       if (line === 'ready') {
         resolve()
-      } else if (line.startsWith('received ')) {
-        received.push(JSON.parse(line.slice('received '.length)))
+      } else if (line.startsWith('applied ')) {
+        applied.push(JSON.parse(line.slice('applied '.length)))
       }
     })
     child.once('exit', () => reject(new Error(childErrors || 'Invalidation listener exited before startup')))
   })
-  return { received }
+  return { applied }
 }
 
 it('delivers one write once to each app\'s remote workers when embedded workers for two apps share a scaling connection', async () => {
@@ -753,11 +746,11 @@ it('delivers one write once to each app\'s remote workers when embedded workers 
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  await expect.poll(() => listenerA.received.length).toBe(1)
-  await expect.poll(() => listenerB.received.length).toBe(1)
+  await expect.poll(() => listenerA.applied.length).toBe(1)
+  await expect.poll(() => listenerB.applied.length).toBe(1)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(listenerA.received).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
-  expect(listenerB.received).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+  expect(listenerA.applied).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+  expect(listenerB.applied).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
 }, 60_000)
 
 it('delivers one write once to a remote worker when two embedded workers for the same app share a scaling connection', async () => {
@@ -771,8 +764,114 @@ it('delivers one write once to a remote worker when two embedded workers for the
 
   await db.table('scores').where('id', 1).update({ score: 7 })
 
-  await expect.poll(() => listener.received.length).toBe(1)
+  await expect.poll(() => listener.applied.length).toBe(1)
   await new Promise(resolve => setTimeout(resolve, 300))
-  expect(listener.received).toHaveLength(1)
+  expect(listener.applied).toHaveLength(1)
+}, 60_000)
+
+it('delivers a write to a remote worker for a non-default Holo connection of an embedded worker', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listener = await startInvalidationListenerProcess(redisPort, 'app-b')
+  await startScoresWorker(db, redisPort, { appId: 'app-a', secondaryAppId: 'app-b' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listener.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listener.applied).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+}, 60_000)
+
+it('delivers a write to a remote worker when the embedded worker\'s default connection is a log connection', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listener = await startInvalidationListenerProcess(redisPort, 'app-a')
+  await startScoresWorker(db, redisPort, { appId: 'app-a', logDefault: true })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listener.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listener.applied).toEqual([{ connectionName: 'main', dependencies: ['db:main:scores'] }])
+}, 60_000)
+
+it('applies a write once in each of two remote workers on different Redis databases that share a connection name and app', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listenerOnDbZero = await startInvalidationListenerProcess(redisPort, 'app-a', 0)
+  const listenerOnDbOne = await startInvalidationListenerProcess(redisPort, 'app-a', 1)
+  await startScoresWorker(db, redisPort, { appId: 'app-a', redisDb: 0 })
+  await startScoresWorker(db, redisPort, { appId: 'app-a', redisDb: 1 })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listenerOnDbZero.applied.length).toBe(1)
+  await expect.poll(() => listenerOnDbOne.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listenerOnDbZero.applied).toHaveLength(1)
+  expect(listenerOnDbOne.applied).toHaveLength(1)
+}, 60_000)
+
+it('applies a write once in each remote worker when one embedded worker serves two apps', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listenerA = await startInvalidationListenerProcess(redisPort, 'app-a')
+  const listenerB = await startInvalidationListenerProcess(redisPort, 'app-b')
+  await startScoresWorker(db, redisPort, { appId: 'app-a', secondaryAppId: 'app-b' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listenerA.applied.length).toBe(1)
+  await expect.poll(() => listenerB.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listenerA.applied).toHaveLength(1)
+  expect(listenerB.applied).toHaveLength(1)
+}, 60_000)
+
+it('applies a write once when a core-style sender and a worker bridge publish it on one transport', async () => {
+  const { db } = await openScoresDatabase()
+  const redis = await startRedisService()
+  const redisPort = redis.ports[0]
+  if (!redisPort) throw new Error('No native Redis port available')
+  const listener = await startInvalidationListenerProcess(redisPort, 'app-a')
+  const sender = createScalingSender(redisPort, 'app-a')
+  const unsubscribeSender = queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
+  onTestFinished(unsubscribeSender)
+  await startScoresWorker(db, redisPort, { appId: 'app-a' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listener.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listener.applied).toHaveLength(1)
+}, 60_000)
+
+it('applies a write once in each of two remote workers on different Redis servers that share a connection name and app', async () => {
+  const { db } = await openScoresDatabase()
+  const redisA = await startRedisService()
+  const redisB = await startRedisService()
+  const portA = redisA.ports[0]
+  const portB = redisB.ports[0]
+  if (!portA || !portB) throw new Error('No native Redis port available')
+  const listenerOnA = await startInvalidationListenerProcess(portA, 'app-a')
+  const listenerOnB = await startInvalidationListenerProcess(portB, 'app-a')
+  await startScoresWorker(db, portA, { appId: 'app-a' })
+  await startScoresWorker(db, portB, { appId: 'app-a' })
+
+  await db.table('scores').where('id', 1).update({ score: 7 })
+
+  await expect.poll(() => listenerOnA.applied.length).toBe(1)
+  await expect.poll(() => listenerOnB.applied.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(listenerOnA.applied).toHaveLength(1)
+  expect(listenerOnB.applied).toHaveLength(1)
 }, 60_000)
 

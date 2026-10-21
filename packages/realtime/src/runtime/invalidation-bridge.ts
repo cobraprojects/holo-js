@@ -12,15 +12,16 @@ function isRemoteDatabaseDependencyInvalidation(value: unknown): value is Remote
     return false
   }
 
-  const candidate = value as { readonly connectionName?: unknown, readonly dependencies?: unknown }
-  return typeof candidate.connectionName === 'string'
+  const candidate = value as { readonly id?: unknown, readonly connectionName?: unknown, readonly dependencies?: unknown }
+  return typeof candidate.id === 'string'
+    && typeof candidate.connectionName === 'string'
     && isStringArray(candidate.dependencies)
 }
 
 export function createRealtimeDatabaseInvalidationBridge(): BroadcastDatabaseInvalidationBridge {
   return {
-    connect(publish, scope) {
-      return queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => { await publish(invalidation) }, scope)
+    connect(publish) {
+      return queryCacheInternals.onDatabaseDependencyInvalidationPublished(async invalidation => { await publish(invalidation) })
     },
     async receive(invalidation) {
       if (!isRemoteDatabaseDependencyInvalidation(invalidation)) {

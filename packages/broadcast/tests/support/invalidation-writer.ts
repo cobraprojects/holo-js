@@ -13,9 +13,9 @@ const broadcast = normalizeBroadcastConfig({
 const sender = workerInternals.createScalingInvalidationSender({
   config: broadcast.worker.scaling as Exclude<typeof broadcast.worker.scaling, false>,
   redis: normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: Number(redisPort) } } }),
-  appId,
+  appIds: [appId],
 })
-queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish, sender.publisherScope)
+queryCacheInternals.onDatabaseDependencyInvalidationPublished(sender.publish)
 
 const adapter = createSQLiteAdapter({ filename })
 const db = createDatabase({

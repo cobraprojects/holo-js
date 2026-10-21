@@ -1,6 +1,6 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { getRootDatabaseContext } from './core/contextOwnership'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
@@ -67,14 +67,14 @@ export type DatabaseDependencyInvalidationListener = (
 ) => void | Promise<void>
 
 export interface RemoteDatabaseDependencyInvalidation {
+  readonly id: string
   readonly connectionName: string
   readonly dependencies: readonly string[]
 }
 
-// One registration per publisher. Registrations that share a scope target the same transport, so only
-// the most recent one of a scope publishes; the others take over when it unregisters.
+// Every registered publisher sends each invalidation once on its own transport. Receivers drop the
+// duplicates by write ID, so correctness does not depend on which transports are shared.
 type DatabaseDependencyInvalidationPublisherCandidate = {
-  readonly scope: string
   readonly publisher: DatabaseDependencyInvalidationPublisher
 }
 
@@ -366,6 +366,7 @@ function getQueryCacheBridgeState(): {
   dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
   dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
   mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
+  recentDatabaseInvalidationIds?: Map<string, number>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoDbQueryCacheBridge__?: {
@@ -373,6 +374,7 @@ function getQueryCacheBridgeState(): {
       dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListenerInternal>
       dependencyInvalidationPublishers?: DatabaseDependencyInvalidationPublisherCandidate[]
       mutationPreviousRowsRequirements?: Map<DatabaseDependencyInvalidationListenerInternal, MutationPreviousRowsRequirement>
+      recentDatabaseInvalidationIds?: Map<string, number>
     }
   }
 
@@ -406,12 +408,9 @@ export function onDatabaseDependencyInvalidated(
   }
 }
 
-function onDatabaseDependencyInvalidationPublished(
-  publisher: DatabaseDependencyInvalidationPublisher,
-  scope: string,
-): () => void {
+function onDatabaseDependencyInvalidationPublished(publisher: DatabaseDependencyInvalidationPublisher): () => void {
   const state = getQueryCacheBridgeState()
-  const candidate: DatabaseDependencyInvalidationPublisherCandidate = { scope, publisher }
+  const candidate: DatabaseDependencyInvalidationPublisherCandidate = { publisher }
   state.dependencyInvalidationPublishers = [...(state.dependencyInvalidationPublishers ?? []), candidate]
 
   return () => {
@@ -820,12 +819,31 @@ export function hasDatabaseDependencyInvalidationPublisher(): boolean {
   return (getQueryCacheBridgeState().dependencyInvalidationPublishers?.length ?? 0) > 0
 }
 
-function activeDependencyInvalidationPublishers(): readonly DatabaseDependencyInvalidationPublisher[] {
-  const active = new Map<string, DatabaseDependencyInvalidationPublisher>()
-  for (const candidate of getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []) {
-    active.set(candidate.scope, candidate.publisher)
+// A write ID is recorded when this process applies it, so the copies that come back to this process
+// are dropped. Old IDs expire, and the set is bounded, so memory stays flat under sustained writes.
+const DATABASE_INVALIDATION_ID_TTL_MS = 60_000
+const DATABASE_INVALIDATION_ID_LIMIT = 10_000
+
+// Returns false when the ID was already applied within the TTL.
+function rememberDatabaseInvalidationId(id: string): boolean {
+  const state = getQueryCacheBridgeState()
+  state.recentDatabaseInvalidationIds ??= new Map<string, number>()
+  const recent = state.recentDatabaseInvalidationIds
+  const now = Date.now()
+  const seenAt = recent.get(id)
+  if (seenAt !== undefined && now - seenAt < DATABASE_INVALIDATION_ID_TTL_MS) {
+    return false
   }
-  return [...active.values()]
+
+  recent.delete(id)
+  recent.set(id, now)
+  for (const [recentId, recordedAt] of recent) {
+    if (recent.size <= DATABASE_INVALIDATION_ID_LIMIT && now - recordedAt < DATABASE_INVALIDATION_ID_TTL_MS) {
+      break
+    }
+    recent.delete(recentId)
+  }
+  return true
 }
 
 function publishDatabaseDependencyInvalidation(
@@ -851,6 +869,7 @@ function serializeDatabaseDependencyInvalidation(
   }
 
   return Object.freeze({
+    id: randomUUID(),
     connectionName: event.connectionName,
     dependencies: Object.freeze([...tableDependencies]),
   })
@@ -859,7 +878,7 @@ function serializeDatabaseDependencyInvalidation(
 async function receiveRemoteDatabaseDependencyInvalidation(
   invalidation: RemoteDatabaseDependencyInvalidation,
 ): Promise<void> {
-  if (invalidation.dependencies.length === 0) {
+  if (invalidation.dependencies.length === 0 || !rememberDatabaseInvalidationId(invalidation.id)) {
     return
   }
 
@@ -2166,18 +2185,19 @@ export async function invalidateQueryCacheDependencies(
     await evictThenNotify(
       () => bridge?.invalidateDependencies(dependencies),
       async () => {
-        const publishers = activeDependencyInvalidationPublishers()
+        const candidates = getQueryCacheBridgeState().dependencyInvalidationPublishers ?? []
         const hasLocalListeners = hasDatabaseDependencyInvalidationListeners()
-        if (publishers.length === 0 && !hasLocalListeners) {
+        if (candidates.length === 0 && !hasLocalListeners) {
           return
         }
 
         const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
         // Tags that are not table keys stay local: a remote worker can evict nothing for them.
         const remote = serializeDatabaseDependencyInvalidation(event)
-        if (remote.dependencies.length > 0) {
-          for (const publisher of publishers) {
-            publishDatabaseDependencyInvalidation(publisher, remote)
+        if (candidates.length > 0 && remote.dependencies.length > 0) {
+          rememberDatabaseInvalidationId(remote.id)
+          for (const candidate of candidates) {
+            publishDatabaseDependencyInvalidation(candidate.publisher, remote)
           }
         }
         if (hasLocalListeners) {
