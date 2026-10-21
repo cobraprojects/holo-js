@@ -7,6 +7,7 @@ import {
   hasDatabaseDependencyInvalidationListeners,
   hasDatabaseDependencyInvalidationPublisher,
   invalidateQueryCacheDependencies,
+  runQueryCacheOperation,
   createDatabaseMutationEvent,
   createDatabaseQueryFallbackObservation,
   createDatabaseQueryObservation,
@@ -1410,19 +1411,17 @@ export class TableQueryBuilder<
       ? `${cacheConfig.key}:${resolveQueryCacheKey(statement, this.connection.getConnectionName(), { ...cacheConfig, key: undefined })}`
       : resolveQueryCacheKey(statement, this.connection.getConnectionName(), cacheConfig)
 
-    if (cacheConfig.flexible) {
-      const rows = await bridge.flexible(
+    const flexible = cacheConfig.flexible
+    if (flexible) {
+      const rows = await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
-        cacheConfig.flexible,
-        async () => {
-          const rows = await this.queryRows<TRow>(statement)
-          return rows
-        },
+        flexible,
+        () => runSource(() => this.queryRows<TRow>(statement)),
         {
           driver: cacheConfig.driver,
           dependencies,
         },
-      )
+      ))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -1436,18 +1435,16 @@ export class TableQueryBuilder<
       throw new ConfigurationError('[@holo-js/db] Query cache config requires "ttl" or "flexible".')
     }
 
-    const rows = await bridge.flexible(
+    const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
+    const rows = await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
-      normalizeAtomicQueryCacheTtl(cacheConfig.ttl),
-      async () => {
-        const rows = await this.queryRows<TRow>(statement)
-        return rows
-      },
+      ttl,
+      () => runSource(() => this.queryRows<TRow>(statement)),
       {
         driver: cacheConfig.driver,
         dependencies,
       },
-    )
+    ))
     await this.recordCollectedQueryObservation(
       activeDependencyCollector && collectObservation,
       observationDependencies,
