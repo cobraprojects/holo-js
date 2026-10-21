@@ -383,9 +383,16 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         sibling = new Promise(resolve => { setTimeout(resolve, 20) })
           .then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
       })
-      await sibling.catch(() => undefined)
+      const siblingOutcome = await sibling.then(() => 'committed' as const, (error: unknown) => error)
+      const rows = (await db.table(table).select('id').orderBy('id').get()).map(row => row.id)
 
-      expect((await db.table(table).select('id').orderBy('id').get()).map(row => row.id)).not.toContain(3)
+      expect(rows).not.toContain(3)
+      if (siblingOutcome === 'committed') {
+        expect(rows).toContain(2)
+      } else {
+        expect(siblingOutcome).toBeInstanceOf(TransactionError)
+        expect(rows).not.toContain(2)
+      }
     }, 2_000)
 
     it('keeps a write out of a transaction whose timed-out BEGIN has not settled yet', async () => {
