@@ -445,13 +445,13 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/queue')
   }
 
-  const queueConfigUnreadable = queueConfigured && loaded.queue === undefined
-  const queueDriverPackagesOwnedByInstaller = new Set<string>(queueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
+  const isQueueConfigUnreadable = queueConfigured && loaded.queue === undefined
+  const queueDriverPackagesToPreserve = new Set<string>(isQueueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
 
   if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
     requiredPackages.add('@holo-js/queue')
 
-    if (queueConfigured && !queueConfigUnreadable) {
+    if (queueConfigured && !isQueueConfigUnreadable) {
       const queueConnections = Object.values(loaded.queue?.connections ?? {})
       if (queueConnections.some(connection => connection.driver === 'redis')) {
         requiredPackages.add('@holo-js/queue-redis')
@@ -530,7 +530,7 @@ export async function syncManagedDriverDependencies(
   }
 
   for (const packageName of removableManagedPackages) {
-    if (requiredPackages.has(packageName) || queueDriverPackagesOwnedByInstaller.has(packageName)) {
+    if (requiredPackages.has(packageName) || queueDriverPackagesToPreserve.has(packageName)) {
       continue
     }
 
@@ -568,7 +568,7 @@ async function upsertQueuePackageDependency(
     : driver === 'database' || typeof dependencies['@holo-js/queue-db'] !== 'undefined'
   const requiresQueueRedis = queueConfig
     ? queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
-    : driver === 'redis'
+    : driver === 'redis' || typeof dependencies['@holo-js/queue-redis'] !== 'undefined'
   const currentVersion = dependencies['@holo-js/queue']
   const currentQueueDbVersion = dependencies['@holo-js/queue-db']
   const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']

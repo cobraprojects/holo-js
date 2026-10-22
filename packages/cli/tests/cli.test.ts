@@ -1579,6 +1579,30 @@ export default defineAppConfig({
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
   })
 
+  it('keeps an installed redis queue package when config/queue.ts cannot be read', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/queue.ts', 'export default "keep-me"\n')
+    await writeProjectFile(projectRoot, '.env', 'APP_NAME=Fixture\n')
+    await writeProjectFile(projectRoot, '.env.example', 'APP_NAME=\n')
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+        esbuild: ESBUILD_PACKAGE_VERSION,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: false,
+    })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toMatchObject({
+      '@holo-js/queue-redis': expectedHoloPackageRange,
+    })
+  })
+
   it('reruns redis queue install without rewriting the manifest or requesting installs', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
