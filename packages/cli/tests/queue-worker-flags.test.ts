@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildQueueWorkArgs, runQueueWorkCommand } from '../src/queue'
+import { createInternalCommands } from '../src/cli'
+import { buildQueueWorkArgs } from '../src/queue'
 import { parseBackoffFlag } from '../src/parsing'
-import type { IoStreams } from '../src/cli-types'
+import type { CommandDefinition, InternalCommandContext, IoStreams } from '../src/cli-types'
+import type { QueueWorkerRunOptions } from '@holo-js/queue'
 
 function createIo(): IoStreams {
   const write = () => true
@@ -11,6 +13,12 @@ function createIo(): IoStreams {
     stdout: { write } as unknown as NodeJS.WriteStream,
     stderr: { write } as unknown as NodeJS.WriteStream,
   }
+}
+
+function findQueueWorkCommand(commands: readonly CommandDefinition[]): CommandDefinition {
+  const command = commands.find(entry => entry.name === 'queue:work')
+  if (!command) throw new Error('queue:work is not registered.')
+  return command
 }
 
 describe('queue:work --backoff', () => {
@@ -39,15 +47,25 @@ describe('queue:work --backoff', () => {
     expect(buildQueueWorkArgs({ tries: '2', backoff: '5,10' })).toEqual(['queue:work', '--tries', '2', '--backoff', '5,10'])
   })
 
-  it('passes the parsed backoff to the queue worker', async () => {
-    const received: unknown[] = []
-    await runQueueWorkCommand(createIo(), process.cwd(), { once: true, backoff: [5, 10], tries: 2 }, {
-      getEnvironment: async () => ({ cleanup: async () => {} }) as never,
-      runWorker: async options => {
-        received.push({ backoff: options.backoff, tries: options.tries })
-        return { processed: 0, released: 0, failed: 0, stoppedBecause: 'once' }
+  it('passes the parsed backoff and tries to the queue worker when queue:work runs', async () => {
+    const workerOptions: QueueWorkerRunOptions[] = []
+    const context: InternalCommandContext = {
+      ...createIo(),
+      projectRoot: process.cwd(),
+      registry: [],
+      loadProject: async () => {
+        throw new Error('loadProject should not be called')
       },
-    })
-    expect(received).toEqual([{ backoff: [5, 10], tries: 2 }])
+    }
+    const command = findQueueWorkCommand(createInternalCommands(context, undefined, {
+      runQueueWorkCommand: async (_io, _projectRoot, options) => {
+        workerOptions.push(options)
+      },
+    }))
+    const prepared = await command.prepare?.({ args: [], flags: { once: true, tries: '2', backoff: '5,10' } }, context)
+
+    await command.run({ projectRoot: process.cwd(), cwd: process.cwd(), args: [], flags: prepared?.flags ?? {}, loadProject: context.loadProject })
+
+    expect(workerOptions).toMatchObject([{ once: true, tries: 2, backoff: [5, 10] }])
   })
 })

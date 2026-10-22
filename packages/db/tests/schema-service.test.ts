@@ -205,16 +205,19 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { db, schema, table } = await openDatabase(driver)
       let transactionStarted!: () => void
       const started = new Promise<void>(resolve => { transactionStarted = resolve })
+      let releaseTransaction!: () => void
+      const held = new Promise<void>(resolve => { releaseTransaction = resolve })
 
       await schema.withoutForeignKeyConstraints(async () => {
         const failing = db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'rolled back' })
           transactionStarted()
-          await new Promise(resolve => { setTimeout(resolve, 20) })
+          await held
           throw new Error('transaction failed')
         })
         await started
         await expect(db.table(table).insert({ id: 2, name: 'plain' })).rejects.toBeInstanceOf(TransactionError)
+        releaseTransaction()
         await expect(failing).rejects.toThrow('transaction failed')
         await db.table(table).insert({ id: 3, name: 'after' })
       })
@@ -226,14 +229,15 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { db, schema, table } = await openDatabase(driver)
 
       await schema.withoutForeignKeyConstraints(async () => {
-        let outsideWrite!: Promise<unknown>
+        let transactionOpen!: () => void
+        const opened = new Promise<void>(resolve => { transactionOpen = resolve })
+        const outsideWrite = opened.then(() => db.table(table).insert({ id: 2, name: 'outside' }))
+        outsideWrite.catch(() => undefined)
         const transaction = db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'inside' })
+          transactionOpen()
           await outsideWrite
         })
-        outsideWrite = new Promise(resolve => { setTimeout(resolve, 30) })
-          .then(() => db.table(table).insert({ id: 2, name: 'outside' }))
-        outsideWrite.catch(() => undefined)
         await expect(transaction).rejects.toBeInstanceOf(TransactionError)
       })
 
@@ -256,7 +260,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         await expect(db.transaction(async tx => {
           await tx.table(table).insert({ id: 3, name: 'second' })
           releaseStray()
-          await new Promise(resolve => { setTimeout(resolve, 20) })
+          await strayOutcome
           throw new Error('second failed')
         })).rejects.toThrow('second failed')
         expect(await strayOutcome).toBeInstanceOf(TransactionError)
@@ -321,12 +325,22 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     })
 
     it('keeps a timed-out write counted until it reaches the connection, so a transaction cannot take it', async () => {
+      let releaseSlow!: () => void
+      const slowReleased = new Promise<void>(resolve => { releaseSlow = resolve })
+      let slowLanded!: () => void
+      const landed = new Promise<void>(resolve => { slowLanded = resolve })
+      let delayNextExecute = true
       const delaySubmission = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
         get(target, property) {
           if (property === 'execute') {
             return async (...args: Parameters<DriverAdapter['execute']>) => {
-              await new Promise(resolve => { setTimeout(resolve, 30) })
-              return target.execute(...args)
+              if (!delayNextExecute || !args[0].startsWith('insert into')) return target.execute(...args)
+              delayNextExecute = false
+              await slowReleased
+              await new Promise<void>(resolve => { setImmediate(resolve) })
+              const result = await target.execute(...args)
+              slowLanded()
+              return result
             }
           }
           return Reflect.get(target, property, target)
@@ -335,6 +349,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { db, schema, table } = await openDatabase(driver, {
         security: { allowUnsafeRawSql: true },
         wrapAdapter: delaySubmission,
+        logger: { onTransactionStart: () => { releaseSlow() } },
       })
       const placeholder = (index: number) => driver === 'postgres' ? `$${index}` : '?'
 
@@ -346,7 +361,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         await expect(slow).rejects.toThrow()
         await db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'transaction' })
-          await new Promise(resolve => { setTimeout(resolve, 80) })
+          await landed
           throw new Error('transaction failed')
         }).catch(() => undefined)
       })
@@ -371,9 +386,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
     it('does not let a transaction started from the restore query logger take a write the callback left running', async () => {
       let restoreLogged = false
+      let restoreStarted!: () => void
+      const restoring = new Promise<void>(resolve => { restoreStarted = resolve })
       let sibling!: Promise<unknown>
       const { db, schema, table } = await openDatabase(driver, {
         logger: {
+          onQueryStart: entry => {
+            if (entry.source === 'schema:enableForeignKeys') restoreStarted()
+          },
           onQuerySuccess: async entry => {
             if (restoreLogged || entry.source !== 'schema:enableForeignKeys') return
             restoreLogged = true
@@ -386,28 +406,28 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
 
       await schema.withoutForeignKeyConstraints(async () => {
-        sibling = new Promise(resolve => { setTimeout(resolve, 20) })
-          .then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
+        sibling = restoring.then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
         sibling.catch(() => undefined)
       })
       const siblingOutcome = await sibling.then(() => 'committed' as const, (error: unknown) => error)
       const rows = (await db.table(table).select('id').orderBy('id').get()).map(row => row.id)
 
+      expect(siblingOutcome).toBeInstanceOf(TransactionError)
+      expect(rows).not.toContain(2)
       expect(rows).not.toContain(3)
-      if (siblingOutcome === 'committed') {
-        expect(rows).toContain(2)
-      } else {
-        expect(siblingOutcome).toBeInstanceOf(TransactionError)
-        expect(rows).not.toContain(2)
-      }
     }, 2_000)
 
-    it('keeps a write out of a transaction whose timed-out BEGIN has not settled yet', async () => {
+    it('keeps a write out of a transaction whose aborted BEGIN has not settled yet', async () => {
+      let beginRunning!: () => void
+      const beginStarted = new Promise<void>(resolve => { beginRunning = resolve })
+      let releaseBegin!: () => void
+      const beginReleased = new Promise<void>(resolve => { releaseBegin = resolve })
       const delayBegin = (adapter: DriverAdapter): DriverAdapter => new Proxy(adapter, {
         get(target, property) {
           if (property === 'beginTransaction') {
             return async (...args: Parameters<DriverAdapter['beginTransaction']>) => {
-              await new Promise(resolve => { setTimeout(resolve, 30) })
+              beginRunning()
+              await beginReleased
               return target.beginTransaction(...args)
             }
           }
@@ -417,11 +437,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { db, schema, table } = await openDatabase(driver, { wrapAdapter: delayBegin })
 
       await schema.withoutForeignKeyConstraints(async () => {
+        const controller = new AbortController()
         const started = db.transaction(async tx => {
           await tx.table(table).insert({ id: 1, name: 'transaction' })
-        }, { timeoutMs: 5 }).then(() => undefined, (error: unknown) => error)
-        await new Promise(resolve => { setTimeout(resolve, 15) })
+        }, { signal: controller.signal }).then(() => undefined, (error: unknown) => error)
+        await beginStarted
+        controller.abort()
         await expect(db.table(table).insert({ id: 2, name: 'during begin' })).rejects.toBeInstanceOf(TransactionError)
+        releaseBegin()
         expect(await started).toBeInstanceOf(Error)
         await db.table(table).insert({ id: 3, name: 'after begin' })
       })
@@ -490,15 +513,20 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     it('rejects an unawaited write that resumes after the callback returned, and persists nothing while the restore is delayed', async () => {
       let pauseNextInsert = false
       let restored = false
+      let restoreStarted!: () => void
+      const restoring = new Promise<void>(resolve => { restoreStarted = resolve })
+      let lateSettled!: () => void
+      const lateDone = new Promise<void>(resolve => { lateSettled = resolve })
       const { db, schema, table } = await openDatabase(driver, {
         logger: {
           onQueryStart: async entry => {
             if (pauseNextInsert && entry.source?.startsWith('query:insert')) {
               pauseNextInsert = false
-              await new Promise(resolve => { setTimeout(resolve, 20) })
+              await restoring
             }
             if (entry.source === 'schema:enableForeignKeys') {
-              await new Promise(resolve => { setTimeout(resolve, 60) })
+              restoreStarted()
+              await lateDone
             }
           },
           onQuerySuccess: entry => {
@@ -511,6 +539,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.withoutForeignKeyConstraints(async () => {
         pauseNextInsert = true
         late = db.table(table).insert({ id: 1, name: 'late' }).then(() => 'ran', (error: unknown) => error)
+        late.then(() => lateSettled())
       })
 
       expect(await late).toBeInstanceOf(TransactionError)
@@ -519,49 +548,36 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     }, 3_000)
 
     it('leaves no abort listener or timer behind when queries reusing one signal are rejected at submission', async () => {
-      let pauseQueries = false
-      const delay = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
-      const guardTimers = new Set<unknown>()
-      const realSetTimeout = globalThis.setTimeout
-      const realClearTimeout = globalThis.clearTimeout
-      globalThis.setTimeout = ((handler: () => void, timeout?: number) => {
-        const handle = realSetTimeout(handler, timeout)
-        if (timeout === 60_000) guardTimers.add(handle)
-        return handle
-      }) as typeof setTimeout
-      globalThis.clearTimeout = ((handle?: Parameters<typeof clearTimeout>[0]) => {
-        guardTimers.delete(handle)
-        return realClearTimeout(handle)
-      }) as typeof clearTimeout
-      onTestFinished(() => {
-        globalThis.setTimeout = realSetTimeout
-        globalThis.clearTimeout = realClearTimeout
-        for (const handle of guardTimers) realClearTimeout(handle as ReturnType<typeof setTimeout>)
-      })
-
+      let restoreStarted!: () => void
+      const restoring = new Promise<void>(resolve => { restoreStarted = resolve })
+      let outcomesSettled: Promise<unknown> = Promise.resolve()
       const { db, schema } = await openDatabase(driver, {
         security: { allowUnsafeRawSql: true },
         logger: {
           onQueryStart: async entry => {
-            if (entry.source === 'schema:enableForeignKeys') await delay(80)
-            else if (pauseQueries && entry.kind === 'query') await delay(20)
+            if (entry.source === 'schema:enableForeignKeys') {
+              restoreStarted()
+              await outcomesSettled
+            } else if (entry.kind === 'query') {
+              await restoring
+            }
           },
         },
       })
       const controller = new AbortController()
       const listenersBefore = getEventListeners(controller.signal, 'abort').length
+      const timersBefore = process.getActiveResourcesInfo().filter(name => name === 'Timeout').length
 
       let outcomes!: Promise<unknown>[]
       await schema.withoutForeignKeyConstraints(async () => {
-        pauseQueries = true
         outcomes = Array.from({ length: 20 }, () => db.unsafeQuery(unsafeSql('select 1'), { signal: controller.signal, timeoutMs: 60_000 })
           .then(() => 'ran', (error: unknown) => error))
-        pauseQueries = false
+        outcomesSettled = Promise.all(outcomes)
       })
       for (const outcome of await Promise.all(outcomes)) expect(outcome).toBeInstanceOf(TransactionError)
 
       expect(getEventListeners(controller.signal, 'abort').length).toBe(listenersBefore)
-      expect(guardTimers.size).toBe(0)
+      expect(process.getActiveResourcesInfo().filter(name => name === 'Timeout').length).toBe(timersBefore)
     }, 5_000)
 
     it('rejects a query issued from a rollback hook after the rollback failed', async () => {
@@ -728,20 +744,24 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
 
       it('runs transactions started inside a scoped callback one at a time on the pinned connection', async () => {
-        const { db, schema, table } = await openDatabase(driver)
+        let requested = 0
+        let bothRequested!: () => void
+        const requests = new Promise<void>(resolve => { bothRequested = resolve })
+        const { db, schema, table } = await openDatabase(driver, {
+          logger: { onTransactionStart: () => { requested += 1; if (requested === 2) bothRequested() } },
+        })
         const state = driver === 'postgres'
           ? { sql: 'SELECT current_setting(\'session_replication_role\') AS state', bindings: [] }
           : { sql: 'SELECT @@SESSION.FOREIGN_KEY_CHECKS AS state', bindings: [] }
         const relaxed = driver === 'postgres' ? 'replica' : '0'
         const events: string[] = []
-        const pause = () => new Promise(resolve => { setTimeout(resolve, 20) })
 
         await schema.withoutForeignKeyConstraints(async () => {
           await Promise.all([
             db.transaction(async tx => {
               events.push('a:start')
               expect(String((await tx.queryCompiled(state)).rows[0]!.state)).toBe(relaxed)
-              await pause()
+              await requests
               await tx.table(table).insert({ id: 1, name: 'first' })
               events.push('a:end')
             }),

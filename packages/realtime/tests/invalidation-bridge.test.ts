@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
-import { configureRealtimeRuntime, realtimeRuntimeInternals, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
 function remoteInvalidation(dependencies: readonly string[]) {
@@ -228,7 +228,7 @@ it('runs nothing from a refresh queue that a reset cancels, even when the next r
   expect(nextRuns.length).toBe(nextBefore)
 }, 30_000)
 
-it('drops a stale remote refresh whose slot was granted before a reset, even when the replacement runtime registers the same key', async () => {
+it('drops a remote refresh granted a slot before a reset instead of running it in the replacement runtime', async () => {
   const { db } = await openRealtimeDatabase()
   let staleRuns = 0
   const stale = query({
@@ -240,23 +240,37 @@ it('drops a stale remote refresh whose slot was granted before a reset, even whe
     },
   })
   await subscribeRealtimeQuery(stale)
-  const state = realtimeRuntimeInternals.getRuntimeState()
-  const [staleKey] = [...state.queryEntries.keys()]
-  const staleEntry = staleKey ? state.queryEntries.get(staleKey) : undefined
-  if (!staleKey || !staleEntry) throw new Error('No subscription was registered')
-  const before = staleRuns
+  const beforeStale = staleRuns
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  onTestFinished(() => { vi.useRealTimers() })
 
-  const pendingRefresh = realtimeRuntimeInternals.refreshRemoteEntry(staleKey)
+  void bridge.receive(remoteInvalidation(['db:main:records']))
+  await new Promise(resolve => setImmediate(resolve))
+  expect(vi.getTimerCount()).toBe(1)
+  vi.advanceTimersByTime(10)
   resetRealtimeRuntime()
   configureRealtimeRuntime({ db: () => db })
-  state.queryEntries.set(staleKey, staleEntry)
-  await pendingRefresh
+  vi.useRealTimers()
+
+  let replacementRuns = 0
+  const replacement = query({
+    name: 'records.stale',
+    access: 'public',
+    handler: async () => {
+      replacementRuns += 1
+      return { records: await db.table('records').orderBy('id').get() }
+    },
+  })
+  await subscribeRealtimeQuery(replacement)
+  const beforeReplacementRefresh = replacementRuns
   await new Promise(resolve => setTimeout(resolve, 100))
 
-  expect(staleRuns).toBe(before)
+  expect(staleRuns).toBe(beforeStale)
+  expect(replacementRuns).toBe(beforeReplacementRefresh)
 }, 30_000)
 
-it('forgets a subscription\'s remote refresh schedule and cancels its deferred run when it unsubscribes', async () => {
+it('cancels a subscription\'s deferred remote refresh when it unsubscribes', async () => {
   const { db } = await openRealtimeDatabase()
   let runs = 0
   const scheduled = query({
@@ -268,20 +282,23 @@ it('forgets a subscription\'s remote refresh schedule and cancels its deferred r
     },
   })
   const subscription = await subscribeRealtimeQuery(scheduled)
-  const [refreshKey] = [...realtimeRuntimeInternals.getRuntimeState().queryEntries.keys()]
-  if (!refreshKey) throw new Error('No subscription was registered')
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
   await bridge.receive(remoteInvalidation(['db:main:records']))
+  expect(runs).toBe(2)
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  onTestFinished(() => { vi.useRealTimers() })
+
   void bridge.receive(remoteInvalidation(['db:main:records']))
-  await new Promise(resolve => setTimeout(resolve, 20))
-  expect(realtimeRuntimeInternals.hasRemoteRefreshSchedule(refreshKey)).toBe(true)
+  await new Promise(resolve => setImmediate(resolve))
+  vi.advanceTimersByTime(10)
+  expect(vi.getTimerCount()).toBe(1)
+  expect(runs).toBe(2)
 
   subscription.unsubscribe()
 
-  expect(realtimeRuntimeInternals.hasRemoteRefreshSchedule(refreshKey)).toBe(false)
-  const afterUnsubscribe = runs
-  await new Promise(resolve => setTimeout(resolve, 250))
-  expect(runs).toBe(afterUnsubscribe)
+  expect(vi.getTimerCount()).toBe(0)
+  vi.advanceTimersByTime(250)
+  expect(runs).toBe(2)
 }, 30_000)
 
 function createHeldScoreQuery(db: Awaited<ReturnType<typeof openRealtimeDatabase>>['db']) {

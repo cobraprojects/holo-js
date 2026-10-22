@@ -83,10 +83,6 @@ function getBucketPathForKeyHash(root: string, keyHash: string): string {
   return join(root, BUCKETS_DIRECTORY, keyHash.slice(0, 2), keyHash.slice(2, 4), `${keyHash}.json`)
 }
 
-function getBucketPath(root: string, key: string): string {
-  return getBucketPathForKeyHash(root, createBucketHash(key))
-}
-
 function serializeBucket(bucket: FileRateLimitBucket): string {
   return JSON.stringify({
     namespaceHash: bucket.namespaceHash,
@@ -500,15 +496,6 @@ async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
   }
 }
 
-async function listBucketPaths(bucketsRoot: string): Promise<string[]> {
-  const paths: string[] = []
-  for await (const path of bucketFilePaths(bucketsRoot)) {
-    paths.push(path)
-  }
-
-  return paths
-}
-
 function createSnapshot(
   key: string,
   bucket: FileRateLimitBucket,
@@ -777,25 +764,11 @@ function sweepOpenHandles(store: SecurityRateLimitStore): number {
 }
 
 export const fileRateLimitDriverInternals = {
-  createBucketHash,
+  getBucketLockPath,
   sweepInFlight,
   sweepMaxEntriesPerRun,
   sweepOpenHandles,
   sweepPeakHeldNames,
   sweepRunsStarted,
-  createSnapshot,
-  deleteBucket,
-  deserializeBucket,
-  getBucketPath,
-  isExpired,
-  listBucketPaths,
-  readBucket,
-  serializeBucket,
-  sleep,
-  getBucketLockPath,
-  acquireBucketLock,
-  reclaimStaleBucketLock,
-  removeOwnedBucketLock,
   withBucketLock,
-  writeBucket,
 }
