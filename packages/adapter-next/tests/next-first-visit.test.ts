@@ -1,10 +1,62 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { createServer } from 'node:net'
+import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
+
+// Runs a command in its own process group, so a build's worker processes die with it. The promise rejects at the
+// deadline, and the test-finished hook kills the group, so a hung build cannot outlive the test.
+function runProcess(
+  command: string,
+  args: readonly string[],
+  options: { cwd: string, env: NodeJS.ProcessEnv, deadlineMs: number },
+): Promise<{ code: number | null, output: string }> {
+  return new Promise((resolve, reject) => {
+    const posix = process.platform !== 'win32'
+    const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'], detached: posix })
+    let output = ''
+    const killGroup = () => {
+      if (child.exitCode !== null || child.signalCode !== null) return
+      try {
+        if (posix && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch {
+        child.kill('SIGKILL')
+      }
+    }
+    onTestFinished(killGroup)
+    const deadline = setTimeout(() => {
+      killGroup()
+      reject(new Error(`${args.join(' ')} did not finish within ${options.deadlineMs}ms.\n${output}`))
+    }, options.deadlineMs)
+    child.stdout.on('data', chunk => { output += chunk.toString() })
+    child.stderr.on('data', chunk => { output += chunk.toString() })
+    child.once('error', (error) => {
+      clearTimeout(deadline)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      clearTimeout(deadline)
+      resolve({ code, output })
+    })
+  })
+}
+
+function acceptsConnections(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = connect(port, '127.0.0.1')
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => {
+      socket.destroy()
+      resolve(false)
+    })
+  })
+}
 
 it('uses the proxy session for the first route token and submission in native Next', async () => {
   const repository = resolve(import.meta.dirname, '../../..')
@@ -56,14 +108,21 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await mkdir(resolve(path, '..'), { recursive: true })
     await writeFile(path, content)
   }
+  const nextBin = requireNext.resolve('next/dist/bin/next')
+  const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' }
+  // A production build compiles every route before the first request, so the request below does no on-demand compile.
+  // The build's deadline sits below the test budget, so a hung build fails with its output before the test times out.
+  const build = await runProcess(process.execPath, [nextBin, 'build', '--webpack'], { cwd: root, env, deadlineMs: 100_000 })
+  expect(build.code, build.output).toBe(0)
+  // Reserve the port only now, so a slow build cannot let another process claim it before `next start` binds.
   const portServer = createServer()
   await new Promise<void>(resolve => portServer.listen(0, '127.0.0.1', resolve))
   const address = portServer.address()
   if (!address || typeof address === 'string') throw new Error('Expected a TCP port')
   await new Promise<void>((resolve, reject) => portServer.close(error => error ? reject(error) : resolve()))
-  const server = spawn(process.execPath, [requireNext.resolve('next/dist/bin/next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', String(address.port)], {
+  const server = spawn(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', String(address.port)], {
     cwd: root,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'development' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -76,11 +135,12 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
+  // Readiness is the server accepting connections. An HTTP probe would also wait on a request-driven compile.
   await vi.waitUntil(async () => {
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
-    return fetch(baseUrl).then(response => response.ok).catch(() => false)
+    return acceptsConnections(address.port)
   }, { timeout: 60_000, interval: 100 }).catch(error => {
-    throw new Error(`Next did not become ready: ${output}`, { cause: error })
+    throw new Error(`Next did not start listening: ${output}`, { cause: error })
   })
   const first = await fetch(`${baseUrl}/api/token`)
   expect(first.status, output).toBe(200)
