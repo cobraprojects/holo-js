@@ -2422,6 +2422,7 @@ export const holoRuntimeInternals = {
   createCoreNotificationStore,
   createNotificationMailText,
   createCoreSessionStores,
+  createCsrfSessionAccessor,
   registerProjectAuthorizationDefinitions,
   resolveAuthorizationDefinitionExport,
   fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,
