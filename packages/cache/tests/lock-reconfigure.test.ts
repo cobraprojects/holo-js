@@ -1,6 +1,14 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { normalizeRedisConfig } from '@holo-js/kernel'
-import cache, { configureCacheRuntime, resetCacheRuntime, type CacheDriverContract } from '../src'
+import cache, {
+  CacheDriverResolutionError,
+  configureCacheRuntime,
+  resetCacheRuntime,
+  type CacheDriverContract,
+} from '../src'
 import { cacheRedisInternals } from '../src/redis'
 
 const DISPOSE = Symbol.for('holo.cache.driver.dispose')
@@ -68,8 +76,31 @@ it('does not run lock operations on the old store after the cache store is recon
   await vi.waitUntil(() => events.includes('first:dispose'))
 
   await expect(lock.release()).rejects.toThrow(/replaced/)
-  await expect(lock.get()).rejects.toThrow(/replaced/)
+  await expect(lock.get()).rejects.toBeInstanceOf(CacheDriverResolutionError)
   expect(events).toEqual(['first:get', 'first:dispose'])
+})
+
+it.each(['memory', 'file'] as const)('rejects a %s store lock used after the cache store is reconfigured', async (kind) => {
+  const directory = await mkdtemp(join(tmpdir(), 'holo-cache-lock-'))
+  onTestFinished(() => rm(directory, { recursive: true, force: true }))
+  onTestFinished(resetCacheRuntime)
+  const configure = (): void => {
+    configureCacheRuntime({
+      config: kind === 'file'
+        ? { default: 'file', drivers: { file: { driver: 'file', path: directory } } }
+        : { default: 'memory', drivers: { memory: { driver: 'memory' } } },
+    })
+  }
+  configure()
+
+  const lock = cache.lock('work', 10)
+  expect(await lock.get()).toBe(true)
+
+  configure()
+
+  await expect(lock.release()).rejects.toBeInstanceOf(CacheDriverResolutionError)
+  await expect(lock.get()).rejects.toBeInstanceOf(CacheDriverResolutionError)
+  expect(await cache.lock('fresh', 10).get()).toBe(true)
 })
 
 it('does not open a driver for a lock taken before the cache store was reconfigured and first used after', async () => {
@@ -80,8 +111,8 @@ it('does not open a driver for a lock taken before the cache store was reconfigu
   const lock = cache.lock('work', 10)
   configureCacheRuntime({ config, redisConfig })
 
-  await expect(lock.get()).rejects.toThrow(/replaced/)
-  await expect(lock.release()).rejects.toThrow(/replaced/)
+  await expect(lock.get()).rejects.toBeInstanceOf(CacheDriverResolutionError)
+  await expect(lock.release()).rejects.toBeInstanceOf(CacheDriverResolutionError)
   expect(events).toEqual([])
 })
 

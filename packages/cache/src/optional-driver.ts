@@ -1,7 +1,6 @@
 import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
 import { createManagedResources, type ManagedResources, type ResourceLease } from '@holo-js/kernel/managed-resources'
 import {
-  CacheError,
   CacheOptionalPackageError,
   type CacheDriverContract,
   type CacheDriverGetResult,
@@ -130,20 +129,14 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     return pending
   }
 
-  private async withInstance<TValue>(
-    callback: (instance: LazyCacheDriverInstance<TOptions>) => Promise<TValue> | TValue,
+  private async withDriver<TValue>(
+    callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
   ): Promise<TValue> {
     const instance = this.instance ?? await (this.pending ?? this.createInstance())
     if (this.instance === undefined && instance.generation === this.disposalGeneration) {
       this.instance = instance
     }
-    return instance.lease.hold(() => callback(instance))
-  }
-
-  private async withDriver<TValue>(
-    callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
-  ): Promise<TValue> {
-    return this.withInstance(instance => callback(instance.lease.value.driver))
+    return instance.lease.hold(() => callback(instance.lease.value.driver))
   }
 
   [CACHE_DRIVER_DISPOSE_SYMBOL](): void {
@@ -169,33 +162,12 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {
-    const createdGeneration = this.disposalGeneration
-    let bound: {
-      readonly generation: number
-      readonly lease: ResourceLease<LeasedCacheDriver>
-      readonly lock: CacheLockContract
-    } | undefined
+    let lock: CacheLockContract | undefined
 
-    const replacedError = (): CacheError => new CacheError(
-      'CACHE_DRIVER_RESOLUTION_FAILED',
-      `[@holo-js/cache] Cache lock "${name}" belongs to a cache store that was replaced by reconfiguration; take a new lock from cache.lock().`,
-    )
-
-    const holdLock = async <TValue>(operation: (lock: CacheLockContract) => Promise<TValue> | TValue): Promise<TValue> => {
-      const current = bound
-      if (this.disposalGeneration !== (current?.generation ?? createdGeneration)) throw replacedError()
-      if (current) {
-        return current.lease.hold(() => operation(current.lock))
-      }
-
-      return this.withInstance((instance) => {
-        bound ??= {
-          generation: instance.generation,
-          lease: instance.lease,
-          lock: instance.lease.value.driver.lock(name, seconds),
-        }
-        if (bound.lease !== instance.lease) throw replacedError()
-        return operation(bound.lock)
+    const holdLock = <TValue>(operation: (lock: CacheLockContract) => Promise<TValue> | TValue): Promise<TValue> => {
+      return this.withDriver((driver) => {
+        lock ??= driver.lock(name, seconds)
+        return operation(lock)
       })
     }
 
