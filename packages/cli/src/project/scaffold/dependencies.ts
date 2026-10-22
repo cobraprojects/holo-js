@@ -1,8 +1,5 @@
 import { resolve } from 'node:path'
-import {
-  configEvaluationInternals,
-  loadConfigDirectory,
-} from '@holo-js/config'
+import { loadConfigDirectory } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/mail/config'
@@ -34,7 +31,6 @@ import {
 } from '../frameworks'
 import { loadProjectPluginFrameworkDescriptors } from '../plugins'
 import {
-  importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
 } from '../runtime'
@@ -71,32 +67,6 @@ function resolveManagedPackageVersion(
     HOLO_PACKAGE_VERSION,
     workspacePackageNames,
   )
-}
-
-function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
-  if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) {
-    return undefined
-  }
-
-  const exports = moduleValue as { readonly default?: unknown, readonly queue?: unknown }
-  const value = typeof exports.default !== 'undefined'
-    ? exports.default
-    : exports.queue
-
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined
-  }
-
-  return value as HoloQueueConfig
-}
-
-async function loadQueueConfigFile(
-  projectRoot: string,
-  queueConfigPath: string,
-): Promise<HoloQueueConfig | undefined> {
-  return configEvaluationInternals.evaluate({ cwd: projectRoot }, async () => {
-    return resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
-  })
 }
 
 function queueConnectionUsesDriver(
@@ -560,7 +530,10 @@ async function upsertQueuePackageDependency(
   const nextQueueRedisVersion = resolveManagedPackageVersion('@holo-js/queue-redis', dependencies, devDependencies, workspacePackageNames)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
   const queueConfig = queueConfigPath
-    ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
+    ? await loadConfigDirectory(projectRoot, {
+        preferCache: false,
+        processEnv: process.env,
+      }).then(config => config.queue).catch(() => undefined)
     : undefined
   const queueConnections = Object.values(queueConfig?.connections ?? {})
   const requiresQueueDb = queueConfig

@@ -2633,7 +2633,7 @@ export default defineAppConfig({
       },
     })
 
-    await writeProjectFile(projectRoot, 'config/queue.mjs', 'export default "keep"\n')
+    await writeProjectFile(projectRoot, 'config/queue.mjs', 'throw new Error("unreadable queue config")\n')
     await writeProjectFile(projectRoot, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
 
@@ -2662,7 +2662,7 @@ export default defineAppConfig({
       updatedEnvExample: true,
       createdJobsDirectory: true,
     })
-    expect(await readFile(join(projectRoot, 'config/queue.mjs'), 'utf8')).toBe('export default "keep"\n')
+    expect(await readFile(join(projectRoot, 'config/queue.mjs'), 'utf8')).toBe('throw new Error("unreadable queue config")\n')
     expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     const envAfterFirstInstall = await readFile(join(projectRoot, '.env'), 'utf8')
     const envExampleAfterFirstInstall = await readFile(join(projectRoot, '.env.example'), 'utf8')
