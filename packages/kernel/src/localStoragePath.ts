@@ -42,4 +42,14 @@ function splitLocalStoragePath(path: string): string[] {
   return path.trimStart().replace(/\\/g, '/').split('/').filter(Boolean)
 }
 
-export const localStoragePathInternals = { assertValidSegment, segmentProblem, splitLocalStoragePath, windowsStorageNameProblem }
+function isReservedLocalStorageName(name: string | undefined): boolean {
+  return name?.endsWith('$') === true
+}
+
+export const localStoragePathInternals = {
+  assertValidSegment,
+  isReservedLocalStorageName,
+  segmentProblem,
+  splitLocalStoragePath,
+  windowsStorageNameProblem,
+}

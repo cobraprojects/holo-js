@@ -18,7 +18,6 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) await rm(root, { recursive: true, force: true })
 })
 
-// A project whose plugin boot waits on a gate the child process controls, so initialization can be held open.
 async function createHeldBootProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-next-held-boot-'))
   tempRoots.push(root)
@@ -102,8 +101,6 @@ export default async function boot() {
   return root
 }
 
-// Starts Next-style initialization through the public helpers, holds it open, then delivers SIGTERM
-// and exits the way Next does: the process exit happens before the held initialization is released.
 function heldInitScript(projectRoot: string, outcome: 'ok' | 'fail'): string {
   return `
     const { createNextHoloHelpers } = await import(${JSON.stringify(runtimeSource)})

@@ -5,10 +5,8 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:p
 import ts from 'typescript'
 
 const DEFAULT_REPOSITORY_ROOT = resolve(import.meta.dirname, '..')
-// The marker lives inside dist, so a rebuild that clears dist also clears the marker until the build succeeds again.
 const BUILD_MARKER = posix.join('dist', '.holo-build-fingerprint')
 const EXCLUDED_DIRECTORIES = new Set(['dist', 'node_modules', 'tests', 'coverage'])
-// Repository-wide inputs that every package build reads, besides the tsconfig extends chain.
 const SHARED_BUILD_FILES = [
   'package.json',
   'bun.lock',
@@ -42,7 +40,6 @@ function resolveExtends(from, specifier) {
   return createRequire(from).resolve(specifier)
 }
 
-// Every tsconfig a package's build reads, following `extends` (relative or package specifiers) to the end of the chain.
 function tsconfigChain(configPath, seen = new Set()) {
   const absolute = resolve(configPath)
   if (seen.has(absolute)) return []
@@ -65,11 +62,6 @@ function sharedBuildInputs(repositoryRoot, directory) {
   return [...paths].map(path => ({ key: repositoryKey(repositoryRoot, path), path }))
 }
 
-/**
- * Hashes every input a package build reads: the package's own files (relative path and content, excluding dist,
- * node_modules, tests, coverage, and hidden entries), plus the repository-wide inputs and the tsconfig chain. A
- * missing input is hashed as absent, so deleting one also changes the fingerprint. Modification times are ignored.
- */
 function workspaceBuildFingerprint(directory, repositoryRoot = DEFAULT_REPOSITORY_ROOT) {
   const entries = [
     ...listBuildInputs(directory).map(file => ({ key: file, path: join(directory, file) })),
@@ -92,10 +84,6 @@ function exportTargets(value) {
   return []
 }
 
-/**
- * The files the package manifest promises after a build. A dist with a recent marker but a missing entry point is not
- * a usable build.
- */
 function requiredBuildOutputs(directory) {
   const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
   const targets = [
@@ -118,7 +106,6 @@ export function isWorkspaceBuildCurrent(directory, repositoryRoot = DEFAULT_REPO
   return requiredBuildOutputs(directory).every(output => existsSync(join(directory, output)))
 }
 
-/** Call only after a successful build, so the marker never describes a partial build. */
 export function writeWorkspaceBuildMarker(directory, repositoryRoot = DEFAULT_REPOSITORY_ROOT) {
   mkdirSync(join(directory, 'dist'), { recursive: true })
   writeFileSync(join(directory, BUILD_MARKER), `${workspaceBuildFingerprint(directory, repositoryRoot)}\n`)

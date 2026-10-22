@@ -545,8 +545,6 @@ it('applies a write once in the process that made it, however many embedded work
   await db.table('scores').where('id', 1).update({ score: 7 })
   await new Promise(resolve => setTimeout(resolve, 500))
 
-  // The local write notifies local listeners once. Its copies from the sender and both workers carry the
-  // same write id, so none of them is applied again.
   expect(applied).toHaveLength(1)
 }, 30_000)
 

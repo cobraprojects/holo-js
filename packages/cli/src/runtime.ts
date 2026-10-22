@@ -414,7 +414,9 @@ export function runRuntimeInvocation(
     let stderr = ''
     let error: Error | null = null
 
-    child.stdin.on('error', () => undefined)
+    child.stdin.on('error', stdinError => {
+      if ((stdinError as NodeJS.ErrnoException).code !== 'EPIPE') error = stdinError
+    })
     child.stdin.end(options.input)
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -538,7 +540,7 @@ export async function withRuntimeEnvironment<T>(
       input: runtimePayload,
     })
 
-    if (result.status !== 0) {
+    if (result.status !== 0 || result.error) {
       throw new Error(getRuntimeFailureMessage(kind, result))
     }
 

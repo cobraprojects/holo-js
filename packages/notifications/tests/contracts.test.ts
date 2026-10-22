@@ -157,21 +157,28 @@ describe('@holo-js/notifications contracts', () => {
     expect(notificationsInternals.normalizeDelayConfig(new Date('2026-01-01T00:00:00.000Z'))).toEqual(
       new Date('2026-01-01T00:00:00.000Z'),
     )
-    expect(notificationsInternals.normalizeQueueOptions({
-      afterCommit: false,
-    })).toEqual({
+    const withQueue = (queue: unknown) => notificationsInternals.normalizeNotificationDefinition({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Queued',
+          }
+        },
+      },
+      queue: queue as never,
+    }).queue
+    expect(withQueue({ afterCommit: false })).toEqual({
       afterCommit: false,
     })
-    expect(notificationsInternals.normalizeQueueOptions({
-      queue: 'notifications',
-    })).toEqual({
+    expect(withQueue({ queue: 'notifications' })).toEqual({
       connection: undefined,
       queue: 'notifications',
     })
-    expect(notificationsInternals.normalizeOptionalBoolean(undefined, 'flag')).toBeUndefined()
-    expect(notificationsInternals.normalizeOptionalBoolean(false, 'flag')).toBe(false)
+    expect(() => withQueue({ afterCommit: 'yes' })).toThrow('must be a boolean')
     expect(notificationsInternals.normalizeOptionalString(undefined, 'label')).toBeUndefined()
-    expect(() => notificationsInternals.normalizeOptionalBoolean('yes' as never, 'flag')).toThrow('must be a boolean')
     expect(() => notificationsInternals.normalizeDelayConfig('broken' as never)).toThrow('must be a number, Date, plain object, or function')
     expect(() => notificationsInternals.normalizeNotificationDefinition('broken' as never)).toThrow('must define via() and build')
     expect(notificationsInternals.createAnonymousNotificationTarget({

@@ -48,21 +48,6 @@ function normalizeDelayValue(value: NotificationDelayValue, label: string): Noti
   return value
 }
 
-function normalizeOptionalBoolean(
-  value: boolean | undefined,
-  label: string,
-): boolean | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  if (typeof value !== 'boolean') {
-    throw new Error(`[@holo-js/notifications] ${label} must be a boolean when provided.`)
-  }
-
-  return value
-}
-
 export interface NotificationMailMessage {
   readonly subject: string
   readonly greeting?: string
@@ -398,12 +383,6 @@ export function isNotificationDefinition(value: unknown): value is NotificationD
     && isObject((value as { build?: unknown }).build)
 }
 
-function normalizeQueueOptions(
-  value: NotificationQueueOptions | undefined,
-): NotificationQueueOptions | undefined {
-  return normalizeNotificationQueueOptions(value)
-}
-
 function normalizeDelayConfig<TNotifiable, TChannels extends string>(
   value:
     | NotificationDelayValue
@@ -461,7 +440,7 @@ export function normalizeNotificationDefinition<
     ? definition.queue
     : typeof definition.queue === 'boolean'
       ? definition.queue
-      : normalizeQueueOptions(definition.queue)
+      : normalizeNotificationQueueOptions(definition.queue)
 
   const normalized: NotificationDefinition<TNotifiable, TBuild> = {
     ...definition,
@@ -509,7 +488,5 @@ export const notificationsInternals = {
   normalizeDelayConfig,
   normalizeDelayValue,
   normalizeNotificationDefinition,
-  normalizeOptionalBoolean,
   normalizeOptionalString,
-  normalizeQueueOptions,
 }
