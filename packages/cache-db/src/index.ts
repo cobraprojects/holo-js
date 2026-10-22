@@ -15,8 +15,7 @@ import {
   createConnectionManager,
   createSchemaService,
   createRuntimeConnectionOptions,
-  driverErrorCodes,
-  isDatabaseDeadlockError,
+  holoRuntimeInternals,
   TableQueryBuilder,
   type DatabaseContext,
   type DatabaseContextOptions,
@@ -25,6 +24,8 @@ import {
   type TableDefinitionBuilder,
 } from '@holo-js/db'
 import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
+
+const { driverErrorCodes, isDatabaseDeadlockError } = holoRuntimeInternals
 
 export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'

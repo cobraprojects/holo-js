@@ -8,7 +8,15 @@ A driver decides where queued jobs wait until a worker runs them. Holo ships thr
 | `database` | A `jobs` table in your database | Yes | `@holo-js/queue-db` |
 | `redis` | Redis | Yes | `@holo-js/queue-redis` |
 
-`npx holo install queue --driver <name>` adds the right package. If you switch drivers by editing the config, run the installer again with the new driver to add the missing package. It won't overwrite your existing `config/queue.ts`.
+`npx holo install queue --driver <name>` adds the right package when it creates `config/queue.ts`. It won't overwrite your existing `config/queue.ts`.
+
+## Installed packages
+
+When `config/queue.ts` exists and Holo can read it, the config decides which queue packages are installed. The `--driver` flag doesn't change that. A `redis` connection installs `@holo-js/queue-redis`. A `database` connection, or a failed-job store that isn't `false`, installs `@holo-js/queue-db`. A queue package the config doesn't use is removed. For example, take a config that only uses `sync` and sets `failed: false`, which is what the installer writes. `npx holo install queue --driver redis` on that config adds nothing, and it removes `@holo-js/queue-db` and `@holo-js/queue-redis` if they are installed. Without `failed: false`, the config still needs `@holo-js/queue-db`, so the installer keeps it.
+
+If you switch drivers, edit the config and run `npx holo install queue` again. The installer adds the packages the config now needs, and reruns with no changes do nothing.
+
+If Holo can't read `config/queue.ts`, the `--driver` flag adds the package for that driver, and Holo adds any package the config still needs. It never removes a queue package that is already installed.
 
 ## Sync
 

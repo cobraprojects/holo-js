@@ -53,24 +53,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+function resolveConfigExportValue(moduleValue: unknown): object | undefined {
   if (isObject(moduleValue) && isObject(moduleValue.default)) {
-    return moduleValue.default as TConfig
+    return moduleValue.default
   }
 
   if (isObject(moduleValue) && isObject(moduleValue.config)) {
-    return moduleValue.config as TConfig
+    return moduleValue.config
   }
 
   if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
-    return {} as TConfig
+    return undefined
   }
 
   if (isObject(moduleValue)) {
-    return moduleValue as TConfig
+    return moduleValue
   }
 
-  return {} as TConfig
+  return undefined
+}
+
+function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+  return (resolveConfigExportValue(moduleValue) ?? {}) as TConfig
 }
 
 function getConfigName(fileName: string): ConfigFileName {
@@ -81,9 +85,8 @@ const requireConfig = createRequire(import.meta.url)
 const importConfig = createJiti(import.meta.url, { moduleCache: false, interopDefault: false })
 let configImportNonce = 0
 
-async function importConfigModule(filePath: string): Promise<unknown> {
-  configImportNonce += 1
-
+async function importConfigModule(filePath: string, importKey?: string): Promise<unknown> {
+  const key = importKey ?? String(++configImportNonce)
   const extension = extname(filePath)
   if (extension === '.ts' || extension === '.mts' || extension === '.cts') {
     return importConfig.import(filePath)
@@ -93,7 +96,7 @@ async function importConfigModule(filePath: string): Promise<unknown> {
     delete requireConfig.cache[requireConfig.resolve(filePath)]
   }
 
-  return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
+  return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${key}`)
 }
 
 const CONFIG_CACHE_FILE_MODE = 0o600
@@ -493,9 +496,12 @@ export function defineAppConfig<TConfig extends HoloAppConfig>(config: TConfig):
 
 export const loaderInternals = {
   collectConfigEntries,
+  configExtensionPriority: CONFIG_EXTENSION_PRIORITY,
+  importConfigModule,
   getDeferredConfigNames,
   getNormalizerConfigNames,
   getConfigExtensionPriority,
   resolveConfigExport,
+  resolveConfigExportValue,
   splitCacheableConfig,
 }

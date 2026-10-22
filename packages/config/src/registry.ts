@@ -85,4 +85,13 @@ export const configRegistryInternals = {
   getRegisteredNames(): readonly string[] {
     return Object.freeze([...configNormalizers.keys()].sort())
   },
+  snapshotNormalizers(): () => void {
+    const saved = new Map(configNormalizers)
+    return () => {
+      configNormalizers.clear()
+      for (const [name, normalizer] of saved) {
+        configNormalizers.set(name, normalizer)
+      }
+    }
+  },
 }

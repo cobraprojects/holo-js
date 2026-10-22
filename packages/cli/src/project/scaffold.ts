@@ -555,10 +555,7 @@ export async function installQueueIntoProject(
 
   await mkdir(jobsRoot, { recursive: true })
 
-  const updatedPackageJson = await upsertQueuePackageDependency(
-    projectRoot,
-    !queueConfigExists || driver !== 'sync' ? driver : undefined,
-  )
+  const updatedPackageJson = await upsertQueuePackageDependency(projectRoot, driver)
   const envPath = resolve(projectRoot, '.env')
   const envExamplePath = resolve(projectRoot, '.env.example')
   const nextEnv = upsertEnvContents(await readTextFile(envPath), queueEnvFiles.env)
