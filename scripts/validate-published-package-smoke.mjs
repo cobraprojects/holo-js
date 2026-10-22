@@ -223,7 +223,7 @@ async function verifyPackageImports(tempRoot, packages) {
   run(tempRoot, 'node', [smokePath])
 }
 
-async function copyFrameworkApp(source, target) {
+async function copyFrameworkApp(source, target, catalog) {
   await cp(source, target, {
     recursive: true,
     filter(path) {
@@ -232,6 +232,10 @@ async function copyFrameworkApp(source, target) {
       return !['node_modules', '.holo-js', '.next', '.nuxt', '.output', 'build', 'storage'].includes(rootSegment)
     },
   })
+  // The copy must depend on the released ranges it installs from the staged registry, not on
+  // monorepo-only workspace:/catalog: specifiers that bun cannot resolve outside the repository.
+  const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
+  await writeFile(join(target, 'package.json'), `${JSON.stringify(resolveReleaseManifest(manifest, catalog), null, 2)}\n`)
   await mkdir(join(target, 'storage'), { recursive: true })
 }
 
@@ -390,7 +394,7 @@ async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNo
   await symlink(join(nodeModulesRoot, '@holo-js/cli/dist/bin/holo.mjs'), join(binRoot, 'holo'))
 }
 
-async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework) {
+async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework, catalog) {
   const selectedApps = framework
     ? frameworkApps.filter(app => app.name === framework)
     : frameworkApps
@@ -401,14 +405,15 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework) {
     const sourceAppRoot = join(rootDir, app.source)
     const appRoot = join(tempRoot, `framework-${app.name}`)
     const env = { DB_DRIVER: 'sqlite', DB_URL: join(appRoot, 'storage/database.sqlite'), DB_SQLITE_URL: join(appRoot, 'storage/database.sqlite') }
-    await copyFrameworkApp(sourceAppRoot, appRoot)
+    await copyFrameworkApp(sourceAppRoot, appRoot, catalog)
     if (app.name === 'next') {
       await createFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     } else {
       await createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     }
     run(appRoot, 'bun', ['run', 'prepare'], env)
-    run(appRoot, 'bun', ['x', 'holo', 'migrate:fresh', '--seed'], env)
+    // The copy has no APP_ENV, so it resolves to production; migrate:fresh needs --force to run unattended.
+    run(appRoot, 'bun', ['x', 'holo', 'migrate:fresh', '--seed', '--force'], env)
     const build = run(appRoot, 'bun', ['run', 'build'], env)
     if (app.name === 'next') {
       assert.doesNotMatch(
@@ -438,7 +443,7 @@ export async function validatePublishedPackageSmoke(options = {}) {
     const stagedNodeModules = await stagePackages(registryRoot, packages, catalog)
     await linkExternalDependencies(stagedNodeModules)
     await verifyPackageImports(registryRoot, packages)
-    await buildFrameworkCopies(tempRoot, stagedNodeModules, options.framework)
+    await buildFrameworkCopies(tempRoot, stagedNodeModules, options.framework, catalog)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }

@@ -184,6 +184,15 @@ describe('generated schema helpers', () => {
     expect(runtimeRendered).not.toContain('declare module \'@holo-js/db\'')
   })
 
+  it('imports only the builders a generated schema module uses when no tables are generated', () => {
+    for (const rendered of [renderGeneratedSchemaRuntimeModule([]), renderGeneratedSchemaModule([])]) {
+      expect(rendered).toContain('import { registerGeneratedTables } from \'@holo-js/db\'')
+      expect(rendered).not.toContain('defineGeneratedTable')
+      expect(rendered).not.toContain('column')
+      expect(rendered).toContain('registerGeneratedTables(tables)')
+    }
+  })
+
   it('resolves explicit generated tables and falls back to a minimal table shape when absent', () => {
     const users = defineGeneratedTable('users', {
       id: column.id(),

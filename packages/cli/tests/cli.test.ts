@@ -1,6 +1,6 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -346,7 +346,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
       if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
     }
   }
+  // Rebuilding every package here takes minutes and runs inside the file's beforeAll budget. Packages the workspace
+  // has already built (scripts/build-libraries.mjs runs before the library tests) are linked instead.
   for (const { name, directory } of packages) {
+    const workspaceDist = join(workspaceRoot, 'packages', basename(directory), 'dist')
+    if (existsSync(workspaceDist)) {
+      symlinkSync(workspaceDist, join(directory, 'dist'), 'dir')
+      continue
+    }
     const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
     expect(build.status, build.stderr || build.stdout).toBe(0)
   }

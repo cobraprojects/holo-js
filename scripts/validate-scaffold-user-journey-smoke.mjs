@@ -714,6 +714,22 @@ ${authBody}
   }
 }
 
+// A successful login rotates the guest session it started from, so guest CSRF credentials are only
+// valid until the next login. Re-issue them from a fresh guest request before reusing them.
+async function fetchGuestCredentials(origin) {
+  const page = await fetch(origin)
+  const xsrfCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))
+  const sessionCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('holo_session='))
+  assert.ok(xsrfCookie && sessionCookie, 'A guest request must issue its CSRF and session cookies')
+  const cookie = `${xsrfCookie.split(';')[0]}; ${sessionCookie.split(';')[0]}`
+  const token = decodeURIComponent(xsrfCookie.split(';')[0].slice('XSRF-TOKEN='.length))
+  return {
+    cookie,
+    token,
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-TOKEN': token, 'Content-Type': 'application/json' },
+  }
+}
+
 async function assertAuthSecurity(journey) {
   const origin = `http://localhost:${journey.port}`
   const route = action => journey.framework === 'nuxt'
@@ -847,29 +863,33 @@ async function assertAuthSecurity(journey) {
       await browser.close()
     }
   }
+  const nativeGuest = await fetchGuestCredentials(origin)
   const nativeFormLogin = await fetch(route('login'), {
-    method: 'POST', headers: { Cookie: cookie, Origin: origin },
-    body: new URLSearchParams({ ...credentials, _token: token }),
+    method: 'POST', headers: { Cookie: nativeGuest.cookie, Origin: origin },
+    body: new URLSearchParams({ ...credentials, _token: nativeGuest.token }),
   })
   assert.equal(nativeFormLogin.status, 200, await nativeFormLogin.clone().text())
+  let guestHeaders = (await fetchGuestCredentials(origin)).headers
   const invalidCredentials = await fetch(route('login'), {
-    method: 'POST', headers, body: JSON.stringify({ ...credentials, password: 'wrong-password' }),
+    method: 'POST', headers: guestHeaders, body: JSON.stringify({ ...credentials, password: 'wrong-password' }),
   })
   assert.equal(invalidCredentials.status, 422, 'Invalid credentials must return a validation response')
   assert.equal(invalidCredentials.headers.getSetCookie().some(value => value.startsWith('holo_session=')), false)
-  const finalAllowed = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+  const finalAllowed = await fetch(route('login'), { method: 'POST', headers: guestHeaders, body: JSON.stringify(credentials) })
   assert.equal(finalAllowed.status, 200, 'Rejected CSRF requests must not consume the login limit')
   if (journey.framework !== 'next') {
-    const fifthGuestAttempt = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+    guestHeaders = (await fetchGuestCredentials(origin)).headers
+    const fifthGuestAttempt = await fetch(route('login'), { method: 'POST', headers: guestHeaders, body: JSON.stringify(credentials) })
     assert.equal(fifthGuestAttempt.status, 200, 'Five guest login attempts must be allowed')
   }
-  const limited = await fetch(route('login'), { method: 'POST', headers, body: JSON.stringify(credentials) })
+  guestHeaders = (await fetchGuestCredentials(origin)).headers
+  const limited = await fetch(route('login'), { method: 'POST', headers: guestHeaders, body: JSON.stringify(credentials) })
   assert.equal(limited.status, 429, 'The sixth login attempt must be throttled')
   const failure = await limited.json()
   assert.ok(failure.retryAfterSeconds > 0)
   assert.equal(limited.headers.getSetCookie().some(value => value.startsWith('holo_session=')), false)
   const routeAttempts = await Promise.all(Array.from({ length: 12 }, () => fetch(route('throttle'), {
-    method: 'POST', headers: { ...headers, Origin: allowedOrigin },
+    method: 'POST', headers: { ...guestHeaders, Origin: allowedOrigin },
   })))
   assert.equal(routeAttempts.filter(response => response.status === 200).length, 10)
   assert.equal(routeAttempts.filter(response => response.status === 429).length, 2, 'Plain-route throttling must return 429 under concurrent requests')
