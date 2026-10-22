@@ -5,7 +5,6 @@ import { pathToFileURL } from 'node:url'
 import {
   configEvaluationInternals,
   loaderInternals,
-  loadConfigDirectory,
   holoAppDefaults,
   normalizeAppConfig,
 } from '@holo-js/config'
@@ -33,6 +32,7 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 import { writeTextFile } from './atomic-file'
+import { loadConfigWithNormalizers } from './load-config'
 
 type ProjectConfigImportState = {
   readonly hash: string
@@ -128,7 +128,7 @@ export async function loadProjectConfig(
       },
     }
   })
-  const { app, database } = evaluated.source ?? await loadConfigDirectory(projectRoot, {
+  const { app, database } = evaluated.source ?? await loadConfigWithNormalizers(projectRoot, {
     envName: evaluated.environment.name,
     processEnv: evaluated.environment.values,
   })
@@ -169,7 +169,7 @@ export async function serializeProjectConfig(
   config: NormalizedHoloProjectConfig,
   manifestPath: string,
 ): Promise<string> {
-  const loaded = await loadConfigDirectory(projectRoot, {
+  const loaded = await loadConfigWithNormalizers(projectRoot, {
     processEnv: process.env,
   }).catch(() => undefined)
   const appConfig = loaded?.app ?? holoAppDefaults
@@ -211,7 +211,7 @@ export async function serializeDatabaseConfig(
   projectRoot: string,
   _targetPath: string,
 ): Promise<string> {
-  const loaded = await loadConfigDirectory(projectRoot, {
+  const loaded = await loadConfigWithNormalizers(projectRoot, {
     processEnv: process.env,
   }).catch(() => undefined)
   const databaseConfig = loaded?.database ?? holoDatabaseDefaults

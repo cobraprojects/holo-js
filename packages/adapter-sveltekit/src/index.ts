@@ -12,7 +12,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { requestUrlInternals } from '@holo-js/kernel'
+import { createCookieWriteUnavailableError, requestUrlInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -393,7 +393,7 @@ function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOption
     appendResponseCookie(cookie: string) {
       const event = getCurrentSvelteKitRequestEvent()
       if (!event) {
-        throw Object.assign(new Error('Authentication cookies cannot be set outside an active SvelteKit request.'), { code: 'cookie_write_unavailable' })
+        throw createCookieWriteUnavailableError('Authentication cookies cannot be set outside an active SvelteKit request.')
       }
       const parsed = parseResponseCookie(cookie)
       if (!parsed) {

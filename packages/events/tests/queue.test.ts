@@ -27,6 +27,7 @@ import {
   registerListener,
   resetEventsRegistry,
   resetEventsRuntime,
+  runQueuedListenerInvocation,
   unregisterListener,
 } from '../src'
 
@@ -266,6 +267,29 @@ describe('@holo-js/events queue integration', () => {
       expect(await listFailedQueueJobs()).toHaveLength(1)
     } finally {
       await database.cleanup()
+    }
+  })
+
+  it('reports a failed backoff release and still rethrows the listener error', async () => {
+    const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+    registerEvent(event)
+    const handlerError = new Error('transient')
+    const releaseError = new Error('queue unavailable')
+    const listener = registerListener(defineListener({
+      name: 'send.welcome', listensTo: [event], queue: true, backoff: 1,
+      handle() {
+        throw handlerError
+      },
+    }))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(runQueuedListenerInvocation(
+        { listenerId: listener.id, eventName: 'user.registered', occurredAt: 0, payload: { userId: 'usr-1' } },
+        { attempt: 1, maxAttempts: 2, release: async () => { throw releaseError } } as never,
+      )).rejects.toBe(handlerError)
+      expect(consoleError).toHaveBeenCalledWith('[holo:events] listener.releaseRetry', releaseError)
+    } finally {
+      consoleError.mockRestore()
     }
   })
 

@@ -2,7 +2,6 @@ import { constants as fsConstants } from 'node:fs'
 import { access, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
 import type { NormalizedHoloAuthConfig } from '@holo-js/auth'
-import { loadConfigDirectory } from '@holo-js/config'
 import { renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-js/db'
 import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/kernel'
 import { relativeImportPath } from '../templates'
@@ -51,6 +50,7 @@ import {
   makeProjectRelativePath,
 } from './shared'
 import { writeTextFile } from './atomic-file'
+import { loadConfigWithNormalizers } from './load-config'
 
 export function renderGeneratedModule(exportName: string, value: unknown): string {
   return [
@@ -891,7 +891,7 @@ export async function writeGeneratedProjectRegistry(
     tsconfigPath,
     renderGeneratedTsconfigForBase(await resolveGeneratedTsconfigBase(projectRoot)),
   )
-  const loadedConfig = await loadConfigDirectory(projectRoot)
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot)
   const configEntries = await collectProjectConfigEntries(projectRoot)
   const existingRegistry = await loadGeneratedProjectRegistry(projectRoot)
   const nextRegistry = existingRegistry && JSON.stringify(stripGeneratedAt(existingRegistry)) === JSON.stringify(stripGeneratedAt(registry))

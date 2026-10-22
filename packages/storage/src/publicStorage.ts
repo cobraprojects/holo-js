@@ -137,7 +137,7 @@ function resolveRouteSegments(routePath: string): string[] | null {
 
 function areValidFileSegments(segments: readonly string[]): boolean {
   return segments.length > 0
-    && !segments.at(-1)?.endsWith('$')
+    && !localStoragePathInternals.isReservedLocalStorageName(segments.at(-1))
     && segments.every(segment => localStoragePathInternals.segmentProblem(segment) === null)
 }
 

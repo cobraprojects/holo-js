@@ -1,4 +1,5 @@
 import {
+  CacheDriverResolutionError,
   deserializeCacheValue,
   normalizeCacheTtl,
   resolveCacheKey,
@@ -6,9 +7,10 @@ import {
   type CacheDependencyIndex,
   type CacheDriverPutInput,
   type CacheKeyInput,
+  type CacheLockContract,
   type CacheTtlInput,
 } from './contracts'
-import { getCacheRuntime, resolveConfiguredDriver } from './runtime-shared'
+import { getCacheRuntime, getCacheRuntimeBindings, resolveConfiguredDriver } from './runtime-shared'
 
 export function resolveDriverContext(driverName?: string) {
   const runtime = getCacheRuntime()
@@ -70,9 +72,42 @@ export function writeCacheEntry(
   return context.driver.put(createCacheEntry(context, key, value, ttl))
 }
 
-export function createCacheLock(name: string, seconds: number, driverName?: string) {
+export function createCacheLock(name: string, seconds: number, driverName?: string): CacheLockContract {
+  const runtime = getCacheRuntime()
   const context = resolveDriverContext(driverName)
-  return context.driver.lock(resolveNormalizedKey(context, name), seconds)
+  return guardCacheLockAgainstReconfigure(
+    context.driver.lock(resolveNormalizedKey(context, name), seconds),
+    runtime,
+  )
+}
+
+function guardCacheLockAgainstReconfigure(
+  lock: CacheLockContract,
+  runtime: ReturnType<typeof getCacheRuntime>,
+): CacheLockContract {
+  const assertCurrentRuntime = (): void => {
+    if (getCacheRuntimeBindings() === runtime) return
+
+    throw new CacheDriverResolutionError(
+      `[@holo-js/cache] Cache lock "${lock.name}" belongs to a cache store that was replaced by reconfiguration; take a new lock from cache.lock().`,
+    )
+  }
+
+  return {
+    name: lock.name,
+    async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+      assertCurrentRuntime()
+      return lock.get(callback)
+    },
+    async release(): Promise<boolean> {
+      assertCurrentRuntime()
+      return lock.release()
+    },
+    async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+      assertCurrentRuntime()
+      return lock.block(waitSeconds, callback)
+    },
+  }
 }
 
 export async function forgetNormalizedCacheEntry(

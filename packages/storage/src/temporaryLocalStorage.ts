@@ -29,7 +29,7 @@ export function createTemporaryLocalStorageUrl(
   if (!config.appKey) throw new Error('[Holo Storage] Temporary local URLs require the configured application key.')
   if (!config.appUrl) throw new Error('[Holo Storage] Temporary local URLs require the configured application URL.')
   const fileSegments = path.split('/')
-  if (fileSegments.filter(Boolean).at(-1)?.endsWith('$')) {
+  if (localStoragePathInternals.isReservedLocalStorageName(fileSegments.filter(Boolean).at(-1))) {
     throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
   }
   if (!fileSegments.every(isSafeSegment)) throw new Error('[Holo Storage] Invalid temporary local storage path.')
@@ -72,7 +72,7 @@ export function resolveTemporaryLocalStorageRequest(
     return null
   }
   const [diskName, ...fileSegments] = segments
-  if (fileSegments.length === 0 || fileSegments.at(-1)?.endsWith('$') || !fileSegments.every(isSafeSegment)) return null
+  if (fileSegments.length === 0 || localStoragePathInternals.isReservedLocalStorageName(fileSegments.at(-1)) || !fileSegments.every(isSafeSegment)) return null
   const disk = diskName && Object.hasOwn(config.disks, diskName) ? config.disks[diskName] : undefined
   if (!isLocalDisk(disk)) return null
   const root = resolve(projectRoot, disk.root)

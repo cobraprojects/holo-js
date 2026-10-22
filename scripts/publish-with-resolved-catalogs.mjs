@@ -71,8 +71,9 @@ async function listPackageManifestPaths(root = repoRoot) {
       try {
         await access(manifestPath)
         return manifestPath
-      } catch {
-        return null
+      } catch (error) {
+        if (error.code === 'ENOENT') return null
+        throw error
       }
     }))
 
@@ -101,7 +102,7 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot, op
     } catch (error) {
       console.error(error)
     }
-    await pendingWrites.catch(() => {})
+    await pendingWrites.catch(error => console.error(error))
     for (const [manifestPath, contents] of originalManifests) {
       try {
         writeFileSync(manifestPath, contents)
@@ -260,11 +261,7 @@ function processGroupAlive(pid) {
 
   if (process.platform !== 'linux') return true
 
-  try {
-    return probeProcessGroup(pid, linuxProcessReaders) !== 'gone'
-  } catch {
-    return true
-  }
+  return probeProcessGroup(pid, linuxProcessReaders) !== 'gone'
 }
 
 function sleep(ms) {

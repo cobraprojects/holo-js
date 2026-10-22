@@ -150,6 +150,7 @@ describe('released file locks across processes', () => {
     await Promise.all(owner.pendingRecordLockReleaseRetries)
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
+    expect((reports[0] as Error).cause).toMatchObject({ code: 'EPERM' })
     windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
   }, 15_000)

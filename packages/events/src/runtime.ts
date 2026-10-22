@@ -290,8 +290,6 @@ async function executeDispatch<TPayload>(
     return createResult(false)
   }
 
-  // The deferred callback is registered before the immediate listeners run, so it stays
-  // gated on their completion: a failing immediate listener leaves nothing queued to run.
   let immediatePhaseCompleted = false
   const scheduled = scheduleDeferredDispatch(async () => {
     if (immediatePhaseCompleted) {
