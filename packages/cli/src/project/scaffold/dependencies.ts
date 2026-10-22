@@ -1,5 +1,8 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
+import {
+  configEvaluationInternals,
+  loadConfigDirectory,
+} from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/mail/config'
@@ -14,6 +17,7 @@ import { loadProjectConfig } from '../config'
 import {
   AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
   CACHE_CONFIG_FILE_NAMES,
+  QUEUE_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
   type GeneratedProjectRegistry,
   type SupportedAuthSocialProvider,
@@ -31,6 +35,7 @@ import {
 } from '../frameworks'
 import { loadProjectPluginFrameworkDescriptors } from '../plugins'
 import {
+  importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
 } from '../runtime'
@@ -67,6 +72,30 @@ function resolveManagedPackageVersion(
     HOLO_PACKAGE_VERSION,
     workspacePackageNames,
   )
+}
+
+function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
+  if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) {
+    return undefined
+  }
+
+  const exports = moduleValue as { readonly default?: unknown, readonly config?: unknown, readonly queue?: unknown }
+  const value = [exports.default, exports.config, exports.queue].find(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate))
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+
+  return value as HoloQueueConfig
+}
+
+async function loadQueueConfigFile(
+  projectRoot: string,
+  queueConfigPath: string,
+): Promise<HoloQueueConfig | undefined> {
+  return configEvaluationInternals.evaluate({ cwd: projectRoot }, async () => {
+    return resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
+  })
 }
 
 function queueConnectionUsesDriver(
@@ -415,7 +444,9 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/queue')
   }
 
-  const isQueueConfigUnreadable = queueConfigured && loaded.queue === undefined
+  const queueConfigPath = queueConfigured ? await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES) : undefined
+  const isQueueConfigUnreadable = queueConfigured
+    && (queueConfigPath ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined) : undefined) === undefined
   const queueDriverPackagesToPreserve = new Set<string>(isQueueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
 
   if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
@@ -524,16 +555,13 @@ async function upsertQueuePackageDependency(
   driver?: SupportedQueueInstallerDriver,
 ): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies, workspacePackageNames } = await readPackageJsonDependencyState(projectRoot)
-  const queueConfigPath = await resolveFirstExistingPath(projectRoot, ['config/queue.ts', 'config/queue.mts', 'config/queue.js', 'config/queue.mjs', 'config/queue.cts', 'config/queue.cjs'])
+  const queueConfigPath = await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES)
   const nextVersion = resolveManagedPackageVersion('@holo-js/queue', dependencies, devDependencies, workspacePackageNames)
   const nextQueueDbVersion = resolveManagedPackageVersion('@holo-js/queue-db', dependencies, devDependencies, workspacePackageNames)
   const nextQueueRedisVersion = resolveManagedPackageVersion('@holo-js/queue-redis', dependencies, devDependencies, workspacePackageNames)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
   const queueConfig = queueConfigPath
-    ? await loadConfigDirectory(projectRoot, {
-        preferCache: false,
-        processEnv: process.env,
-      }).then(config => config.queue).catch(() => undefined)
+    ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
     : undefined
   const queueConnections = Object.values(queueConfig?.connections ?? {})
   const requiresQueueDb = queueConfig
