@@ -591,11 +591,9 @@ async function forEachConcurrently<TItem>(
   concurrency: number,
   task: (item: TItem) => Promise<void>,
 ): Promise<void> {
-  let next = 0
+  const pending = items.values()
   const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const item = items[next]!
-      next += 1
+    for (const item of pending) {
       await task(item)
     }
   }

@@ -44,8 +44,8 @@ function imageRuleSegment(definition: FieldDefinition, rule: FieldRule): readonl
   const index = definition.rules.indexOf(rule)
   let start = index
   let end = index + 1
-  while (start > 0 && definition.rules[start - 1]!.name !== 'transform') start -= 1
-  while (end < definition.rules.length && definition.rules[end]!.name !== 'transform') end += 1
+  while (start > 0 && definition.rules[start - 1]?.name !== 'transform') start -= 1
+  while (end < definition.rules.length && definition.rules[end]?.name !== 'transform') end += 1
   return definition.rules.slice(start, end)
 }
 
