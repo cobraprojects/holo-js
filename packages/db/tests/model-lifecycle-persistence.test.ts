@@ -1187,4 +1187,74 @@ describe('model save writes', () => {
       expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
     })
   })
+
+  describe('when reading the stored row back fails after the write', () => {
+    const children = defineTable('children', {
+      id: column.id(),
+      parentId: column.integer(),
+      name: column.string(),
+    })
+
+    function defineReadFailingChildModel(state: { throwOnRead: boolean }) {
+      return defineModelFromTable(children, {
+        timestamps: false,
+        fillable: ['parentId', 'name'],
+        casts: {
+          name: {
+            get: value => {
+              if (state.throwOnRead) {
+                throw new Error('cast read failed')
+              }
+              return value
+            },
+            set: value => value,
+          },
+        },
+      })
+    }
+
+    it('keeps a completed update when a caller transaction catches the error and commits', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.table('parents').insert({ id: 1 })
+      await db.table('children').insert({ id: 1, parentId: 1, name: 'Ada' })
+      const state = { throwOnRead: false }
+      const Child = defineReadFailingChildModel(state)
+
+      const child = await Child.findOrFail(1)
+      await db.transaction(async () => {
+        child.set('name', 'Grace')
+        state.throwOnRead = true
+        await expect(child.save()).rejects.toThrow('cast read failed')
+        state.throwOnRead = false
+      })
+
+      expect(await db.table('children').where('id', 1).get()).toMatchObject([{ name: 'Grace' }])
+      expect(child.get('name')).toBe('Grace')
+      expect(child.exists()).toBe(true)
+      expect(child.isDirty()).toBe(false)
+    })
+
+    it('keeps a created model persisted so a retry does not insert it again', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.table('parents').insert({ id: 42 })
+      const state = { throwOnRead: false }
+      const Child = defineReadFailingChildModel(state)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await db.transaction(async () => {
+        state.throwOnRead = true
+        await expect(child.save()).rejects.toThrow('cast read failed')
+        state.throwOnRead = false
+      })
+
+      expect(await db.table('children').count()).toBe(1)
+      expect(child.exists()).toBe(true)
+      expect(child.get('id')).toBe(1)
+      expect(child.isDirty()).toBe(false)
+
+      await child.save()
+
+      expect(await db.table('children').count()).toBe(1)
+    })
+  })
 })

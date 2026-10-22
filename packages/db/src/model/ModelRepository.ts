@@ -60,6 +60,10 @@ import type {
 } from './types'
 
 type WriteMode = 'create' | 'update'
+type WriteMarks = {
+  readonly sqlCompleted: () => void
+  readonly normalized: () => void
+}
 type PivotAttributes = Record<string, unknown>
 type PivotSyncResult = { attached: unknown[], detached: unknown[], updated: unknown[] }
 type PivotToggleResult = { attached: unknown[], detached: unknown[] }
@@ -1667,7 +1671,7 @@ export class ModelRepository<
   }
 
   private async insertEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
-    return this.writeUnit(entity, async markWritten => {
+    return this.writeUnit(entity, async marks => {
       entity.forceFill(applyGeneratedUniqueIds(this.definition, applyPendingModelAttributes(this.definition, entity.toAttributes())))
       this.applyWriteMutators(entity, Object.keys(entity.toAttributes()))
       await this.dispatchCancelableEvent('saving', entity)
@@ -1687,9 +1691,8 @@ export class ModelRepository<
           ? { [this.definition.primaryKey]: result.lastInsertId }
           : {}),
       } as Partial<ModelRecord<TTable>>
-      entity.forceFill(this.normalizeFromStorage(attributes))
-      markWritten()
-      entity.recordChanges({})
+      marks.sqlCompleted()
+      this.applyStoredValues(entity, attributes, {}, marks)
       await this.dispatchEvent('created', entity)
       await this.dispatchEvent('saved', entity)
       await this.touchOwners(entity)
@@ -1811,7 +1814,7 @@ export class ModelRepository<
       return this.insertEntity(entity)
     }
 
-    return this.writeUnit(entity, async markWritten => {
+    return this.writeUnit(entity, async marks => {
       const primaryKey = this.definition.primaryKey
       const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
@@ -1835,9 +1838,8 @@ export class ModelRepository<
       }
 
       await this.writeQuery().where(primaryKey, id).getTableQueryBuilder().update(dirty)
-      entity.recordChanges(written)
-      entity.forceFill(this.normalizeFromStorage(dirty))
-      markWritten()
+      marks.sqlCompleted()
+      this.applyStoredValues(entity, dirty, written, marks)
       await this.dispatchEvent('updated', entity)
       await this.dispatchEvent('saved', entity)
       await this.touchOwners(entity)
@@ -1852,19 +1854,21 @@ export class ModelRepository<
 
   private async writeUnit<TResult>(
     entity: Entity<TTable>,
-    write: (markWritten: () => void) => Promise<TResult>,
+    write: (marks: WriteMarks) => Promise<TResult>,
   ): Promise<TResult> {
     const ownsTransaction = this.getConnection().getScope().kind === 'root'
     const state = captureEntityWriteState(entity)
     const dirtyKeys = Object.keys(entity.getDirty())
     return this.runWriteUnit(async () => {
       let written = false
+      const restoreForWrite = () => commitFailureRestoreFor(this.getConnection(), entity, () => createEntityCommitRestore(entity, state))
       try {
-        return await write(() => {
-          written = true
-          const restore = commitFailureRestoreFor(this.getConnection(), entity, () => createEntityCommitRestore(entity, state))
-          restore.recordWrite(state, dirtyKeys)
-          restore.recordWritten()
+        return await write({
+          sqlCompleted: () => {
+            written = true
+            restoreForWrite().recordWrite(state, dirtyKeys)
+          },
+          normalized: () => restoreForWrite().recordWritten(),
         })
       } catch (error) {
         if (ownsTransaction || !written) {
@@ -1873,6 +1877,24 @@ export class ModelRepository<
         throw error
       }
     })
+  }
+
+  private applyStoredValues(
+    entity: Entity<TTable>,
+    stored: Partial<ModelRecord<TTable>>,
+    changes: Record<string, unknown>,
+    marks: WriteMarks | undefined,
+  ): void {
+    entity.recordChanges(changes)
+    try {
+      entity.forceFill(this.normalizeFromStorage(stored))
+    } catch (error) {
+      entity.forceFill(stored)
+      entity.finishSave()
+      marks?.normalized()
+      throw error
+    }
+    marks?.normalized()
   }
 
   private async finishUnchangedSave(entity: Entity<TTable>): Promise<Entity<TTable>> {
@@ -1922,7 +1944,7 @@ export class ModelRepository<
   }
 
   async restoreEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
-    return this.writeUnit(entity, async markWritten => {
+    return this.writeUnit(entity, async marks => {
       const deletedAtColumn = this.getDeletedAtColumn()
       if (!deletedAtColumn) {
         throw new HydrationError(`${this.definition.name} does not support soft deletes.`)
@@ -1943,13 +1965,10 @@ export class ModelRepository<
       const wrote = Object.keys(dirty).length > 0
       if (wrote) {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+        marks.sqlCompleted()
       }
 
-      entity.recordChanges(written)
-      entity.forceFill(this.normalizeFromStorage(dirty))
-      if (wrote) {
-        markWritten()
-      }
+      this.applyStoredValues(entity, dirty, written, wrote ? marks : undefined)
       entity.finishSave()
       await this.dispatchEvent('restored', entity)
       await this.touchOwners(entity)
