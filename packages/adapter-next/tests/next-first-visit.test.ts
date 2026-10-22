@@ -6,6 +6,17 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 
+function runProcess(command: string, args: readonly string[], options: { cwd: string, env: NodeJS.ProcessEnv }): Promise<{ code: number | null, output: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    child.stdout.on('data', chunk => { output += chunk.toString() })
+    child.stderr.on('data', chunk => { output += chunk.toString() })
+    child.once('error', reject)
+    child.once('close', code => resolve({ code, output }))
+  })
+}
+
 function acceptsConnections(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const socket = connect(port, '127.0.0.1')
@@ -75,9 +86,14 @@ export async function POST(request) { await csrf.verify(request); return Respons
   const address = portServer.address()
   if (!address || typeof address === 'string') throw new Error('Expected a TCP port')
   await new Promise<void>((resolve, reject) => portServer.close(error => error ? reject(error) : resolve()))
-  const server = spawn(process.execPath, [requireNext.resolve('next/dist/bin/next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', String(address.port)], {
+  const nextBin = requireNext.resolve('next/dist/bin/next')
+  const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' }
+  // A production build compiles every route before the first request, so the request below does no on-demand compile.
+  const build = await runProcess(process.execPath, [nextBin, 'build', '--webpack'], { cwd: root, env })
+  expect(build.code, build.output).toBe(0)
+  const server = spawn(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', String(address.port)], {
     cwd: root,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'development' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -90,8 +106,7 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
-  // Readiness is the dev server accepting connections. An HTTP probe would also wait for the first page compile,
-  // which is not part of starting the server and is not bounded by it.
+  // Readiness is the server accepting connections. An HTTP probe would also wait on a request-driven compile.
   await vi.waitUntil(async () => {
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
     return acceptsConnections(address.port)
