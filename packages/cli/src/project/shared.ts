@@ -333,7 +333,7 @@ export const AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES = {
 export const CONFIG_EXTENSION_PRIORITY = loaderInternals.configExtensionPriority
 export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
 
-export function configFileNamesFor(configName: string): readonly string[] {
+function configFileNamesFor(configName: string): readonly string[] {
   return CONFIG_EXTENSION_PRIORITY.map(extension => `config/${configName}${extension}`)
 }
 

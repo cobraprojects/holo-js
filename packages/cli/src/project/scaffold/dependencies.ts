@@ -455,22 +455,24 @@ export async function syncManagedDriverDependencies(
   }
 
   const queueConfigPath = queueConfigured ? await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES) : undefined
-  const isQueueConfigUnreadable = queueConfigured
-    && (queueConfigPath ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined) : undefined) === undefined
+  const queueConfig = queueConfigPath
+    ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
+    : undefined
+  const isQueueConfigUnreadable = queueConfigured && queueConfig === undefined
   const queueDriverPackagesToPreserve = new Set<string>(isQueueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
 
   if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
     requiredPackages.add('@holo-js/queue')
 
     if (queueConfigured && !isQueueConfigUnreadable) {
-      const queueConnections = Object.values(loaded.queue?.connections ?? {})
+      const queueConnections = Object.values(queueConfig?.connections ?? {})
       if (queueConnections.some(connection => connection.driver === 'redis')) {
         requiredPackages.add('@holo-js/queue-redis')
       }
 
       if (
         queueConnections.some(connection => connection.driver === 'database')
-        || loaded.queue?.failed !== false
+        || queueConfig?.failed !== false
       ) {
         requiredPackages.add('@holo-js/queue-db')
       }

@@ -1633,7 +1633,7 @@ export const connections = {
   })
 
   it.each([
-    ['config/queue.cjs', 'exports.default = { failed: false, connections: { redis: { driver: \'redis\', queue: \'default\', retryAfter: 90, blockFor: 5 } } }\n'],
+    ['config/queue.cjs', 'module.exports = { failed: false, connections: { redis: { driver: \'redis\', queue: \'default\', retryAfter: 90, blockFor: 5 } } }\n'],
     ['config/queue.cts', 'export default { failed: false, connections: { redis: { driver: \'redis\', queue: \'default\', retryAfter: 90, blockFor: 5 } } }\n'],
   ])('adds the redis queue package when %s requires it', async (configPath, contents) => {
     const projectRoot = await createTempProject()
