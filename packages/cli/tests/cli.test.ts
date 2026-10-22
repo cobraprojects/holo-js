@@ -5,7 +5,7 @@ import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink,
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -285,8 +285,42 @@ function createTempBuildRootSync(prefix: string): string {
   return root
 }
 
+const SYNC_CHILD_TIMEOUT_MS = 120_000
+const SYNC_CHILD_OUTPUT_TAIL_LENGTH = 4_000
+
+function syncChildOutputTail(output: string | null): string {
+  const text = output ?? ''
+  return text.length > SYNC_CHILD_OUTPUT_TAIL_LENGTH ? `...${text.slice(-SYNC_CHILD_OUTPUT_TAIL_LENGTH)}` : text
+}
+
+function spawnSyncBounded(
+  command: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+): SpawnSyncReturns<string> {
+  const startedAt = Date.now()
+  const result = spawnSync(command, args, {
+    ...options,
+    encoding: 'utf8',
+    timeout: SYNC_CHILD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  })
+  if (result.error || result.signal) {
+    throw new Error([
+      `Synchronous child process did not complete: ${[command, ...args].join(' ')}`,
+      `cwd: ${String(options.cwd ?? process.cwd())}`,
+      `elapsed: ${Date.now() - startedAt}ms (limit ${SYNC_CHILD_TIMEOUT_MS}ms)`,
+      `error: ${result.error?.message ?? 'none'}`,
+      `signal: ${result.signal ?? 'none'}`,
+      `stdout tail:\n${syncChildOutputTail(result.stdout)}`,
+      `stderr tail:\n${syncChildOutputTail(result.stderr)}`,
+    ].join('\n'))
+  }
+  return result
+}
+
 function buildWorkspacePackageSync(filter: string, outDir: string) {
-  return spawnSync('bun', ['run', '--filter', filter, 'build'], {
+  return spawnSyncBounded('bun', ['run', '--filter', filter, 'build'], {
     cwd: workspaceRoot,
     encoding: 'utf8',
     env: {
@@ -511,7 +545,7 @@ function runCliProcess(
   const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
   linkBuiltWorkspacePackagesSync(projectRoot)
 
-  return spawnSync('node', [cliBinPath, ...args], {
+  return spawnSyncBounded('node', [cliBinPath, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
@@ -601,7 +635,7 @@ function linkBuiltWorkspacePackagesSync(projectRoot: string): void {
 }
 
 function runNode(projectRoot: string, entryPath: string) {
-  return spawnSync('node', [entryPath], {
+  return spawnSyncBounded('node', [entryPath], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: process.env,
@@ -609,7 +643,7 @@ function runNode(projectRoot: string, entryPath: string) {
 }
 
 function runNodeScript(projectRoot: string, entryPath: string, args: readonly string[]) {
-  return spawnSync('node', [entryPath, ...args], {
+  return spawnSyncBounded('node', [entryPath, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: process.env,
@@ -11090,7 +11124,7 @@ export default {
           .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
       ),
     ]
-    const executed = spawnSync('node', [built.cliBinPath, 'list'], {
+    const executed = spawnSyncBounded('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,
@@ -11112,12 +11146,12 @@ export default {
   it('runs non-runtime published CLI commands without loading runtime-only deps', async () => {
     const built = ensureBuiltWorkspacePackagesSync()
 
-    const listed = spawnSync('node', [built.cliBinPath, 'list'], {
+    const listed = spawnSyncBounded('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,
     })
-    const help = spawnSync('node', [built.cliBinPath, 'make:model', '--help'], {
+    const help = spawnSyncBounded('node', [built.cliBinPath, 'make:model', '--help'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,

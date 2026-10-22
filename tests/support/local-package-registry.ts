@@ -14,7 +14,7 @@ export type LocalPackageRegistry = {
 }
 
 function sharedBunCacheDirectory(): string {
-  return execFileSync('bun', ['pm', 'cache'], { encoding: 'utf8' }).trim()
+  return execFileSync('bun', ['pm', 'cache'], { encoding: 'utf8', timeout: 120_000 }).trim()
 }
 
 async function createScopeIsolatedBunCache(root: string, scope: string): Promise<string> {
