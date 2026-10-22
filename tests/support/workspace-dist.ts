@@ -70,7 +70,7 @@ export function runWorkspaceBuild(
   })
 }
 
-async function buildWorkspacePackage(name: string, workspaceRoot: string): Promise<void> {
+export async function buildWorkspacePackage(name: string, workspaceRoot: string): Promise<void> {
   const result = await runWorkspaceBuild(name, workspaceRoot)
   if (result.status !== 0) {
     throw new Error(`Building ${name} failed with exit code ${result.status}.\n${result.stderr || result.stdout}`)
