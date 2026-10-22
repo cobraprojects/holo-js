@@ -1,0 +1,89 @@
+import { spawn } from 'node:child_process'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+
+export type WorkspacePackage = { readonly name: string, readonly directory: string }
+
+export type WorkspacePackageBuild = (name: string, workspaceRoot: string) => Promise<void>
+
+const BUILD_CONFIG_FILES = ['package.json', 'tsconfig.json', 'tsup.config.ts']
+
+function listFiles(directory: string): string[] {
+  if (!existsSync(directory)) return []
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name)
+    return entry.isDirectory() ? listFiles(path) : [path]
+  })
+}
+
+function newestMtime(paths: readonly string[]): number | undefined {
+  let newest: number | undefined
+  for (const path of paths) {
+    const mtime = statSync(path).mtimeMs
+    if (newest === undefined || mtime > newest) newest = mtime
+  }
+  return newest
+}
+
+function buildInputs(directory: string): string[] {
+  return [
+    ...BUILD_CONFIG_FILES.map(name => join(directory, name)).filter(existsSync),
+    ...listFiles(join(directory, 'src')),
+  ]
+}
+
+/**
+ * A package's dist is current only when it was written after every file that feeds the build. An older dist is
+ * stale, so reusing it would exercise code the source no longer matches.
+ */
+export function isWorkspaceDistCurrent(directory: string): boolean {
+  const built = newestMtime(listFiles(join(directory, 'dist')))
+  if (built === undefined) return false
+  const inputs = newestMtime(buildInputs(directory))
+  return inputs === undefined || built >= inputs
+}
+
+/**
+ * Rebuilds, one at a time, only the packages whose dist is missing or stale. The builds are asynchronous so the
+ * test process keeps its event loop free while they run.
+ */
+export async function rebuildStaleWorkspacePackages(
+  workspaceRoot: string,
+  packages: readonly WorkspacePackage[],
+  build: WorkspacePackageBuild = buildWorkspacePackage,
+): Promise<string[]> {
+  const stale = packages.filter(({ directory }) => !isWorkspaceDistCurrent(directory))
+  for (const { name } of stale) {
+    await build(name, workspaceRoot)
+  }
+  return stale.map(({ name }) => name)
+}
+
+export type WorkspaceBuildResult = { readonly status: number | null, readonly stdout: string, readonly stderr: string }
+
+export function runWorkspaceBuild(
+  filter: string,
+  workspaceRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<WorkspaceBuildResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('bun', ['run', '--filter', filter, 'build'], {
+      cwd: workspaceRoot,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => stdout += String(chunk))
+    child.stderr.on('data', chunk => stderr += String(chunk))
+    child.once('error', reject)
+    child.once('close', status => resolve({ status, stdout, stderr }))
+  })
+}
+
+async function buildWorkspacePackage(name: string, workspaceRoot: string): Promise<void> {
+  const result = await runWorkspaceBuild(name, workspaceRoot)
+  if (result.status !== 0) {
+    throw new Error(`Building ${name} failed with exit code ${result.status}.\n${result.stderr || result.stdout}`)
+  }
+}

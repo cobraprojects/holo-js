@@ -12,6 +12,7 @@ export default mergeConfig(workspaceTestConfig, defineConfig({
     maxWorkers: 2,
     testTimeout: includeCliIntegration ? 30_000 : 5_000,
     exclude: includeCliIntegration ? [] : ['tests/cli.test.ts'],
+    ...(includeCliIntegration ? { globalSetup: ['tests/global-setup.ts'] } : {}),
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
