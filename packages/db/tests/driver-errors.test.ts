@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { DatabaseError, driverErrorCodes, isDatabaseDeadlockError } from '../src'
+import { DatabaseError, holoRuntimeInternals } from '../src'
+
+const { driverErrorCodes, isDatabaseDeadlockError } = holoRuntimeInternals
 
 function driverError(code: string, cause?: unknown): Error & { readonly code: string } {
   return Object.assign(new Error(`driver error ${code}`), { code, cause })

@@ -707,3 +707,127 @@ describe('model lifecycle persistence', () => {
     expect(await db.table('ledgers').get()).toMatchObject([{ code: 'seeded', name: 'Seeded', status: 'active' }])
   })
 })
+
+describe('model save writes', () => {
+  beforeEach(() => resetDB())
+
+  it('updates a soft-deleted entity loaded with withTrashed()', async () => {
+    const db = await openDatabase()
+    const posts = defineTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, posts)
+    await db.table('posts').insert([{ id: 1, title: 'Old', deleted_at: '2025-01-01T00:00:00.000Z' }])
+    const Post = defineModelFromTable(posts, {
+      fillable: ['title'],
+      softDeletes: true,
+      casts: { deleted_at: 'date' },
+    })
+
+    const post = await Post.withTrashed().findOrFail(1)
+    post.set('title', 'Renamed')
+    await post.save()
+
+    expect(await db.table('posts').where('id', 1).get()).toMatchObject([{ title: 'Renamed' }])
+    expect(post.isDirty()).toBe(false)
+  })
+
+  it('runs mutators once when a failed save is retried', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', {
+      id: column.id(),
+      email: column.string().unique(),
+      secret: column.string(),
+    })
+    await createTestTable(db, members)
+    await db.table('members').insert([
+      { id: 1, email: 'taken@example.com', secret: 'stored' },
+      { id: 2, email: 'free@example.com', secret: 'stored' },
+    ])
+    const Member = defineModelFromTable(members, {
+      fillable: ['email', 'secret'],
+      mutators: { secret: value => `hashed:${String(value)}` },
+    })
+
+    const inserted = Member.make({ email: 'taken@example.com', secret: 'pw' })
+    await expect(inserted.save()).rejects.toThrow()
+    inserted.set('email', 'new@example.com')
+    await inserted.save()
+    expect(await db.table('members').where('email', 'new@example.com').get()).toMatchObject([{ secret: 'hashed:pw' }])
+
+    const loaded = await Member.findOrFail(2)
+    loaded.set('secret', 'next')
+    loaded.set('email', 'taken@example.com')
+    await expect(loaded.save()).rejects.toThrow()
+    loaded.set('email', 'moved@example.com')
+    await loaded.save()
+    expect(await db.table('members').where('id', 2).get()).toMatchObject([
+      { email: 'moved@example.com', secret: 'hashed:next' },
+    ])
+  })
+
+  it('runs mutators once when a listener fails after the write and the save is retried', async () => {
+    const db = await openDatabase()
+    const members = defineTable('members', {
+      id: column.id(),
+      email: column.string(),
+      secret: column.string(),
+    })
+    await createTestTable(db, members)
+    let failNextCreated = true
+    const Member = defineModelFromTable(members, {
+      fillable: ['email', 'secret'],
+      mutators: { secret: value => `hashed:${String(value)}` },
+      events: {
+        created: [() => {
+          if (failNextCreated) {
+            failNextCreated = false
+            throw new Error('created listener failed')
+          }
+        }],
+      },
+    })
+
+    const member = Member.make({ email: 'a@example.com', secret: 'pw' })
+    await expect(member.save()).rejects.toThrow('created listener failed')
+    await member.save()
+
+    expect(await db.table('members').get()).toMatchObject([{ email: 'a@example.com', secret: 'hashed:pw' }])
+  })
+
+  it('restores a trashed row again when a restored listener fails and the restore is retried', async () => {
+    const db = await openDatabase()
+    const posts = defineTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    await createTestTable(db, posts)
+    await db.table('posts').insert([{ id: 1, title: 'Gone', deleted_at: '2025-01-01T00:00:00.000Z' }])
+    let failNextRestored = true
+    const Post = defineModelFromTable(posts, {
+      fillable: ['title'],
+      softDeletes: true,
+      timestamps: false,
+      casts: { deleted_at: 'date' },
+      events: {
+        restored: [() => {
+          if (failNextRestored) {
+            failNextRestored = false
+            throw new Error('restored listener failed')
+          }
+        }],
+      },
+    })
+
+    const post = await Post.withTrashed().findOrFail(1)
+    await expect(post.restore()).rejects.toThrow('restored listener failed')
+    expect(post.trashed()).toBe(true)
+    await post.restore()
+
+    expect(await db.table('posts').where('id', 1).get()).toMatchObject([{ deleted_at: null }])
+    expect(post.trashed()).toBe(false)
+  })
+})

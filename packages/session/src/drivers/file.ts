@@ -70,7 +70,8 @@ function lockPresentError(lockPath: string): Error {
 
 const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const BUSY_FILE_RETRY_MS = 1_000
-const RECORD_LOCK_RELEASE_RETRY_MS = 1_000
+const RECORD_LOCK_RELEASE_RETRY_FIRST_MS = 5
+const RECORD_LOCK_RELEASE_RETRY_MAX_MS = 100
 const pendingRecordLockReleaseRetries = new Set<Promise<void>>()
 
 function errorCode(error: unknown): string | undefined {
@@ -220,16 +221,11 @@ async function reclaimableRecordLock(lockPath: string, identity: RecordLockIdent
 async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<boolean> {
   const leasePath = join(lockPath, recordLockOwnerFileName(owner))
   const contents = `${JSON.stringify({ ...owner, released: true })}\n`
-  const deadline = Date.now() + BUSY_FILE_RETRY_MS
-  for (;;) {
-    try {
-      await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
-      return true
-    } catch (error) {
-      if (isMissingFileError(error)) return true
-      if (!isBusyFileError(error) || Date.now() >= deadline) return false
-      await sleep(5)
-    }
+  try {
+    await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
+    return true
+  } catch (error) {
+    return isMissingFileError(error)
   }
 }
 
@@ -300,19 +296,23 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
 }
 
 async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
-  if (await markRecordLockReleased(lockPath, owner)) return
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  let delayMs = RECORD_LOCK_RELEASE_RETRY_FIRST_MS
+  for (;;) {
+    await delay(delayMs, undefined, { ref: false })
+    if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
+    if (await markRecordLockReleased(lockPath, owner)) return
+    if (Date.now() + delayMs >= deadline) break
+    delayMs = Math.min(delayMs * 2, RECORD_LOCK_RELEASE_RETRY_MAX_MS)
+  }
   reportError(
-    new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
+    new Error(`[@holo-js/session] Could not publish the release of file session lock for "${recordPath}"; other processes may wait until this process reclaims the lease or exits.`),
     { capability: 'session', operation: 'file.releaseLock' },
   )
 }
 
 function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner): void {
-  const retry: Promise<void> = new Promise<void>(resolve => {
-    const timer = setTimeout(() => resolve(retryRecordLockRelease(recordPath, lockPath, owner)), RECORD_LOCK_RELEASE_RETRY_MS)
-    timer.unref()
-  })
+  const retry: Promise<void> = retryRecordLockRelease(recordPath, lockPath, owner)
     .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
     .finally(() => { pendingRecordLockReleaseRetries.delete(retry) })
   pendingRecordLockReleaseRetries.add(retry)
@@ -329,12 +329,12 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
     const published = await markRecordLockReleased(lockPath, owner)
     if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
     if (retirementFailure) throw retirementFailure.error
-    reportError(
-      new Error(published
-        ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
-        : `[@holo-js/session] Could not remove file session lock for "${recordPath}" or publish its release; other processes may wait until this process reclaims the lease or exits, and a retry is scheduled.`),
-      { capability: 'session', operation: 'file.releaseLock' },
-    )
+    if (published) {
+      reportError(
+        new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
+        { capability: 'session', operation: 'file.releaseLock' },
+      )
+    }
   } finally {
     heldRecordLockTokens.delete(owner.token)
   }

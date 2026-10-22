@@ -1412,6 +1412,60 @@ export default defineJob({
     await secondRuntime.shutdown()
   })
 
+  it('keeps a registered job dispatchable when a reload is rejected for an invalid job timeout', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeQueueConfig(root, `
+import { defineQueueConfig } from ${queuePackageEntry}
+
+export default defineQueueConfig({
+  default: 'database',
+  connections: {
+    database: {
+      driver: 'database',
+      connection: 'default',
+      table: 'jobs',
+      retryAfter: 90,
+    },
+  },
+})
+`)
+    await mkdir(join(root, 'server/jobs/reports'), { recursive: true })
+    await writeFile(join(root, 'server/jobs/reports/send-digest.ts'), `
+import { defineJob } from '@holo-js/queue'
+
+export default defineJob({
+  timeout: 120,
+  async handle() {
+    return 'project-version'
+  },
+})
+`, 'utf8')
+    await writeRegistry(root, {
+      jobs: [{
+        sourcePath: 'server/jobs/reports/send-digest.ts',
+        name: 'reports.send-digest',
+        connection: 'database',
+        queue: 'default',
+      }],
+    })
+
+    registerQueueJob({
+      async handle() {
+        return 'running-version'
+      },
+    }, {
+      name: 'reports.send-digest',
+      sourcePath: 'server/jobs/reports/send-digest.ts',
+    })
+
+    await expect(initializeHolo(root, {
+      registerProjectQueueJobs: true,
+    })).rejects.toThrow('timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds')
+
+    await expect(Queue.dispatchSync('reports.send-digest', {})).resolves.toBe('running-version')
+  })
+
   it('removes discovered queue jobs from the global registry when the runtime shuts down', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2142,6 +2196,72 @@ export default defineDatabaseConfig({
 
     const normalRuntime = await createHolo(root)
     await expect(normalRuntime.initialize()).rejects.toThrow()
+  })
+
+  it('rejects a plugin boot hook that registers a job whose timeout is not below its connection retryAfter, and keeps no plugin job registered', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeQueueConfig(root, `
+import { defineQueueConfig } from ${queuePackageEntry}
+
+export default defineQueueConfig({
+  default: 'database',
+  connections: {
+    database: {
+      driver: 'database',
+      connection: 'default',
+      table: 'jobs',
+      retryAfter: 90,
+    },
+  },
+})
+`)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-queue-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-queue-boot', `
+export default {
+  id: 'queue-boot',
+  name: 'Queue Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoRegisterPluginQueueJob__()
+}
+`,
+    })
+    const runtimeGlobal = globalThis as typeof globalThis & { __holoRegisterPluginQueueJob__?: () => void }
+    runtimeGlobal.__holoRegisterPluginQueueJob__ = () => {
+      registerQueueJob({
+        timeout: 120,
+        async handle() {
+          return 'plugin-version'
+        },
+      }, { name: 'plugin.report' })
+    }
+    onTestFinished(() => {
+      runtimeGlobal.__holoRegisterPluginQueueJob__ = undefined
+    })
+
+    await expect(initializeHolo(root)).rejects.toThrow('timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds')
+
+    expect(listRegisteredQueueJobs().map(job => job.name)).not.toContain('plugin.report')
   })
 
   it('loads plugin boot modules from the runtime config process environment', async () => {

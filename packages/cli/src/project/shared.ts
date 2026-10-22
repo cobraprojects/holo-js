@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { extname, join, relative, resolve } from 'node:path'
+import { loaderInternals } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type { HoloAppCommand } from '../types'
 import {
@@ -329,116 +330,38 @@ export const AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES = {
   linkedin: '@holo-js/auth-social-linkedin',
 } as const satisfies Record<SupportedAuthSocialProvider, string>
 
-export const APP_CONFIG_FILE_NAMES = [
-  'config/app.ts',
-  'config/app.mts',
-  'config/app.js',
-  'config/app.mjs',
-] as const
+export const CONFIG_EXTENSION_PRIORITY = loaderInternals.configExtensionPriority
+export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
 
-export const DATABASE_CONFIG_FILE_NAMES = [
-  'config/database.ts',
-  'config/database.mts',
-  'config/database.js',
-  'config/database.mjs',
-] as const
+function configFileNamesFor(configName: string): readonly string[] {
+  return CONFIG_EXTENSION_PRIORITY.map(extension => `config/${configName}${extension}`)
+}
 
-export const AUTH_CONFIG_FILE_NAMES = [
-  'config/auth.ts',
-  'config/auth.mts',
-  'config/auth.js',
-  'config/auth.mjs',
-  'config/auth.cts',
-  'config/auth.cjs',
-] as const
+export const APP_CONFIG_FILE_NAMES = configFileNamesFor('app')
 
-export const SESSION_CONFIG_FILE_NAMES = [
-  'config/session.ts',
-  'config/session.mts',
-  'config/session.js',
-  'config/session.mjs',
-  'config/session.cts',
-  'config/session.cjs',
-] as const
+export const DATABASE_CONFIG_FILE_NAMES = configFileNamesFor('database')
 
-export const QUEUE_CONFIG_FILE_NAMES = [
-  'config/queue.ts',
-  'config/queue.mts',
-  'config/queue.js',
-  'config/queue.mjs',
-] as const
+export const AUTH_CONFIG_FILE_NAMES = configFileNamesFor('auth')
 
-export const REDIS_CONFIG_FILE_NAMES = [
-  'config/redis.ts',
-  'config/redis.mts',
-  'config/redis.js',
-  'config/redis.mjs',
-  'config/redis.cts',
-  'config/redis.cjs',
-] as const
+export const SESSION_CONFIG_FILE_NAMES = configFileNamesFor('session')
 
-export const CACHE_CONFIG_FILE_NAMES = [
-  'config/cache.ts',
-  'config/cache.mts',
-  'config/cache.js',
-  'config/cache.mjs',
-  'config/cache.cts',
-  'config/cache.cjs',
-] as const
+export const QUEUE_CONFIG_FILE_NAMES = configFileNamesFor('queue')
 
-export const NOTIFICATIONS_CONFIG_FILE_NAMES = [
-  'config/notifications.ts',
-  'config/notifications.mts',
-  'config/notifications.js',
-  'config/notifications.mjs',
-  'config/notifications.cts',
-  'config/notifications.cjs',
-] as const
+export const REDIS_CONFIG_FILE_NAMES = configFileNamesFor('redis')
 
-export const MAIL_CONFIG_FILE_NAMES = [
-  'config/mail.ts',
-  'config/mail.mts',
-  'config/mail.js',
-  'config/mail.mjs',
-  'config/mail.cts',
-  'config/mail.cjs',
-] as const
+export const CACHE_CONFIG_FILE_NAMES = configFileNamesFor('cache')
 
-export const MEDIA_CONFIG_FILE_NAMES = [
-  'config/media.ts',
-  'config/media.mts',
-  'config/media.js',
-  'config/media.mjs',
-  'config/media.cts',
-  'config/media.cjs',
-] as const
+export const NOTIFICATIONS_CONFIG_FILE_NAMES = configFileNamesFor('notifications')
 
-export const SECURITY_CONFIG_FILE_NAMES = [
-  'config/security.ts',
-  'config/security.mts',
-  'config/security.js',
-  'config/security.mjs',
-  'config/security.cts',
-  'config/security.cjs',
-] as const
+export const MAIL_CONFIG_FILE_NAMES = configFileNamesFor('mail')
 
-export const CORS_CONFIG_FILE_NAMES = [
-  'config/cors.ts',
-  'config/cors.mts',
-  'config/cors.js',
-  'config/cors.mjs',
-  'config/cors.cts',
-  'config/cors.cjs',
-] as const
+export const MEDIA_CONFIG_FILE_NAMES = configFileNamesFor('media')
 
-export const BROADCAST_CONFIG_FILE_NAMES = [
-  'config/broadcast.ts',
-  'config/broadcast.mts',
-  'config/broadcast.js',
-  'config/broadcast.mjs',
-  'config/broadcast.cts',
-  'config/broadcast.cjs',
-] as const
+export const SECURITY_CONFIG_FILE_NAMES = configFileNamesFor('security')
+
+export const CORS_CONFIG_FILE_NAMES = configFileNamesFor('cors')
+
+export const BROADCAST_CONFIG_FILE_NAMES = configFileNamesFor('broadcast')
 
 export const DB_DRIVER_PACKAGE_NAMES = {
   sqlite: '@holo-js/db-sqlite',
@@ -480,8 +403,6 @@ export const GENERATED_TSCONFIG_PATH = join(GENERATED_ROOT, 'tsconfig.json')
 export const GENERATED_GITIGNORE_PATH = join(GENERATED_ROOT, '.gitignore')
 export const GENERATED_SVELTE_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.ts')
 export const GENERATED_SVELTE_SERVER_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.server.ts')
-export const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
-export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = SUPPORTED_FRAMEWORK_IDS
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const

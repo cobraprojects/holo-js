@@ -59,8 +59,7 @@ import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
 import { acquireSessionStores } from './sessionCapabilityLifetime'
-import { throwCapabilityFailures } from './capabilityLifetimes'
-import { createManagedResources, holdOperations, type ManagedResources, type ResourceLease } from './managedResources'
+import { createManagedResources, holdOperations, throwCapabilityFailures, type ManagedResources, type ResourceLease } from '@holo-js/kernel/managed-resources'
 import { preloadDiscoveredModelModules, preloadGeneratedSchemaModule } from './discoveryRuntime'
 import { loadInstalledFeatureConfigContributions } from './configRuntime'
 import {
@@ -175,6 +174,7 @@ export interface HoloQueueDriverBinding {
 }
 
 type QueueModule = Pick<typeof QueueFeature,
+  | 'assertQueueJobTimeouts'
   | 'configureQueueRuntime'
   | 'loadQueuePluginDriverFactories'
   | 'getRegisteredQueueJob'
@@ -1329,30 +1329,41 @@ async function registerProjectQueueJobs(
     return Object.freeze([])
   }
 
-  const registeredJobNames: string[] = []
-  try {
-    for (const entry of registry.jobs) {
-      const existing = queueModule.getRegisteredQueueJob(entry.name)
-      if (existing && !existing.sourcePath) {
-        continue
-      }
-
-      const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
-      const job = resolveQueueJobExport(queueModule, moduleValue)
-      if (!job) {
-        throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
-      }
-
-      queueModule.registerQueueJob(job, {
-        name: entry.name,
-        sourcePath: entry.sourcePath,
-        replaceExisting: Boolean(existing?.sourcePath),
-      })
-      registeredJobNames.push(entry.name)
+  const resolvedJobs: Array<{
+    readonly name: string
+    readonly sourcePath: string
+    readonly job: NonNullable<ReturnType<typeof resolveQueueJobExport>>
+    readonly replaceExisting: boolean
+  }> = []
+  for (const entry of registry.jobs) {
+    const existing = queueModule.getRegisteredQueueJob(entry.name)
+    if (existing && !existing.sourcePath) {
+      continue
     }
-  } catch (error) {
-    unregisterProjectQueueJobs(queueModule, registeredJobNames)
-    throw error
+
+    const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
+    const job = resolveQueueJobExport(queueModule, moduleValue)
+    if (!job) {
+      throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
+    }
+
+    resolvedJobs.push({
+      name: entry.name,
+      sourcePath: entry.sourcePath,
+      job,
+      replaceExisting: Boolean(existing?.sourcePath),
+    })
+  }
+
+  queueModule.assertQueueJobTimeouts(resolvedJobs.map(({ name, job }) => ({
+    name,
+    definition: queueModule.normalizeQueueJobDefinition(job),
+  })))
+
+  const registeredJobNames: string[] = []
+  for (const { name, sourcePath, job, replaceExisting } of resolvedJobs) {
+    queueModule.registerQueueJob(job, { name, sourcePath, replaceExisting })
+    registeredJobNames.push(name)
   }
 
   return Object.freeze(registeredJobNames)
@@ -2422,6 +2433,7 @@ export const holoRuntimeInternals = {
   createCoreNotificationStore,
   createNotificationMailText,
   createCoreSessionStores,
+  createCsrfSessionAccessor,
   registerProjectAuthorizationDefinitions,
   resolveAuthorizationDefinitionExport,
   fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,

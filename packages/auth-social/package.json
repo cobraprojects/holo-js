@@ -30,7 +30,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/auth": "catalog:"
+    "@holo-js/auth": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

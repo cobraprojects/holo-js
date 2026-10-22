@@ -8,7 +8,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { createBroadcastWorkerRuntime, defineChannel, normalizeBroadcastConfig, renderBroadcastAuthResponse, startBroadcastWorker } from '../src'
 
-async function startNativeWorker(options: { authorize?: () => boolean | Promise<boolean>; authEndpoint?: string; resolveUser?: () => unknown } = {}) {
+async function startNativeWorker(options: { authorize?: () => boolean | Promise<boolean>; authEndpoint?: string; resolveUser?: () => unknown; maxMessageBytes?: number; presenceAuthorize?: () => { id: string } } = {}) {
   const reservation = createServer()
   reservation.listen(0, '127.0.0.1')
   await once(reservation, 'listening')
@@ -22,13 +22,13 @@ async function startNativeWorker(options: { authorize?: () => boolean | Promise<
         main: { driver: 'holo', appId: 'main', key: 'main-key', secret: 'main-secret', ...(options.authEndpoint ? { clientOptions: { authEndpoint: options.authEndpoint } } : {}) },
         tenant: { driver: 'holo', appId: 'tenant', key: 'tenant-key', secret: 'tenant-secret' },
       },
-      worker: { host: '127.0.0.1', port: address.port, statsEnabled: true, maxRequestBytes: 4096 },
+      worker: { host: '127.0.0.1', port: address.port, statsEnabled: true, maxRequestBytes: 4096, ...(options.maxMessageBytes ? { maxMessageBytes: options.maxMessageBytes } : {}) },
     }),
     channelAuth: options.authEndpoint ? undefined : {
       resolveUser: options.resolveUser ?? (({ guard }) => ({ id: guard === 'admin' ? 'native-admin' : 'native-user' })),
       definitions: [
         defineChannel('orders.1', { type: 'private', authorize: options.authorize ?? (() => true) }),
-        defineChannel('room.1', { type: 'presence', authorize: () => ({ id: 'guest' }) }),
+        defineChannel('room.1', { type: 'presence', authorize: options.presenceAuthorize ?? (() => ({ id: 'guest' })) }),
         defineChannel('admins.1', { type: 'private', guard: 'admin', authorize: user => typeof user === 'object' && user !== null && 'id' in user && user.id === 'native-admin' }),
         defineChannel('dynamic.{area}', {
           type: 'private',
@@ -147,6 +147,38 @@ it('delivers identical channel names only to the authenticated app scope over na
   await expect(fetch(worker.request('tenant')).then(response => response.json())).resolves.toMatchObject({ deliveredSockets: 1 })
   await expect.poll(() => main.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'main' }])
   await expect.poll(() => tenant.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'tenant' }])
+})
+
+it('closes a native WebSocket that sends an oversize frame with 1009 while the worker and other sockets keep running', async () => {
+  const worker = await startNativeWorker({ maxMessageBytes: 512 })
+  const offender = await worker.connect()
+  const healthy = await worker.connect()
+  const offenderClosed = once(offender.socket, 'close')
+  offender.socket.send('x'.repeat(513))
+  const [code] = await offenderClosed
+  expect(code).toBe(1009)
+  await expect.poll(async () => (await worker.stats()).connectionCount).toBe(1)
+  expect(healthy.socket.readyState).toBe(WebSocket.OPEN)
+  healthy.socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-orders.1' } }))
+  await expect.poll(() => healthy.messages.some(message => message.event === 'pusher_internal:subscription_succeeded')).toBe(true)
+  await expect(fetch(worker.request()).then(response => response.json())).resolves.toMatchObject({ deliveredSockets: 1 })
+  await expect.poll(() => healthy.messages.filter(message => message.event === 'orders.updated').map(message => JSON.parse(message.data))).toEqual([{ title: 'main' }])
+  expect(await worker.stats()).toMatchObject({ connectionCount: 1, subscribedChannelCount: 1 })
+})
+
+it('removes the presence member of a socket closed for an oversize frame and tells the remaining subscribers', async () => {
+  let presenceJoins = 0
+  const worker = await startNativeWorker({ maxMessageBytes: 512, presenceAuthorize: () => ({ id: ++presenceJoins === 1 ? 'offender' : 'healthy' }) })
+  const offender = await worker.connect()
+  const healthy = await worker.connect()
+  for (const client of [offender, healthy]) {
+    client.socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'presence-room.1' } }))
+    await expect.poll(() => client.messages.some(message => message.event === 'pusher_internal:subscription_succeeded' && message.channel === 'presence-room.1')).toBe(true)
+  }
+  const offenderClosed = once(offender.socket, 'close')
+  offender.socket.send('x'.repeat(513))
+  expect((await offenderClosed)[0]).toBe(1009)
+  await expect.poll(() => healthy.messages.filter(message => message.event === 'pusher_internal:member_removed').map(message => JSON.parse(message.data))).toEqual([{ user_id: 'offender' }])
 })
 
 it('reports malformed socket messages to the reporter active at worker start and closes with a protocol error', async () => {

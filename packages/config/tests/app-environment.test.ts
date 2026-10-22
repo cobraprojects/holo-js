@@ -203,4 +203,12 @@ describe('synchronous application environment resolution', () => {
 
     expect(() => resolveProjectAppEnvironmentSync({ cwd: root, processEnv: {} })).toThrow('Invalid APP_ENV "staging"')
   })
+
+  it('surfaces an unreadable .env instead of falling back to production', async () => {
+    const root = await createProject()
+    await mkdir(join(root, '.env'))
+
+    expect(() => resolveProjectAppEnvironmentSync({ cwd: root, processEnv: {} })).toThrow(/EISDIR/)
+    await expect(loadEnvironment({ cwd: root, processEnv: {} })).rejects.toThrow(/EISDIR/)
+  })
 })
