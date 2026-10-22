@@ -929,7 +929,7 @@ beforeAll(async () => {
   ensureBuiltWorkspacePackagesSync()
   inheritedPath = process.env.PATH
   packageManagerShimRoot = await mkdtemp(join(tmpdir(), 'holo-cli-package-manager-'))
-  const shims = await createPackageManagerShims(packageManagerShimRoot, inheritedPath ?? '')
+  const shims = await createPackageManagerShims(packageManagerShimRoot)
   packageManagerInstallLog = shims.installLog
   process.env.PATH = `${packageManagerShimRoot}${delimiter}${inheritedPath ?? ''}`
 }, 300_000)

@@ -1,6 +1,6 @@
-import { statSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
-import { delimiter, join } from 'node:path'
+import { copyFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const shimmedPackageManagers = ['bun', 'npm', 'pnpm', 'yarn'] as const
 
@@ -9,36 +9,31 @@ export type PackageManagerShims = {
   readonly installLog: string
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
+export type PackageManagerLauncher = {
+  readonly fileName: string
+  readonly contents: string
 }
 
-function findExecutableOnPath(name: string, searchPath: string): string | undefined {
-  for (const directory of searchPath.split(delimiter)) {
-    if (!directory) continue
-    const candidate = join(directory, name)
-    if (statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate
+const runnerSource = fileURLToPath(new URL('./package-manager-shim-runner.mjs', import.meta.url))
+
+export function renderLauncher(name: string, platform: NodeJS.Platform, nodePath: string = process.execPath): PackageManagerLauncher {
+  if (platform === 'win32') {
+    return {
+      fileName: `${name}.cmd`,
+      contents: `@"${nodePath}" "%~dp0shim.mjs" ${name} %*\r\n`,
+    }
   }
-  return undefined
+  return {
+    fileName: name,
+    contents: `#!/bin/sh\nexec node "$(dirname "$0")/shim.mjs" ${name} "$@"\n`,
+  }
 }
 
-export async function createPackageManagerShims(root: string, searchPath: string): Promise<PackageManagerShims> {
-  const installLog = join(root, 'install-requests.log')
+export async function createPackageManagerShims(root: string): Promise<PackageManagerShims> {
+  await copyFile(runnerSource, join(root, 'shim.mjs'))
   for (const name of shimmedPackageManagers) {
-    const realBinary = findExecutableOnPath(name, searchPath)
-    const forward = realBinary
-      ? `exec ${shellQuote(realBinary)} "$@"`
-      : `echo ${shellQuote(`${name} is not installed`)} >&2\nexit 127`
-    await writeFile(join(root, name), [
-      '#!/bin/sh',
-      'if [ "$1" = "install" ]; then',
-      `  pwd -P >> ${shellQuote(installLog)}`,
-      '  if [ -f install-hook.cjs ]; then node install-hook.cjs || exit $?; fi',
-      '  exit 0',
-      'fi',
-      forward,
-      '',
-    ].join('\n'), { mode: 0o755 })
+    const launcher = renderLauncher(name, process.platform)
+    await writeFile(join(root, launcher.fileName), launcher.contents, { mode: 0o755 })
   }
-  return { root, installLog }
+  return { root, installLog: join(root, 'install-requests.log') }
 }
