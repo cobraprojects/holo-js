@@ -3,6 +3,7 @@ import {
   configEvaluationInternals,
   configRegistryInternals,
   loadConfigDirectory,
+  loaderInternals,
 } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
@@ -76,31 +77,6 @@ function resolveManagedPackageVersion(
   )
 }
 
-function isConfigObject(value: unknown): value is object {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
-  if (!isConfigObject(moduleValue)) {
-    return undefined
-  }
-
-  const exports = moduleValue as { readonly default?: unknown, readonly config?: unknown }
-  if (isConfigObject(exports.default)) {
-    return exports.default as HoloQueueConfig
-  }
-
-  if (isConfigObject(exports.config)) {
-    return exports.config as HoloQueueConfig
-  }
-
-  if ('default' in exports || 'config' in exports) {
-    return undefined
-  }
-
-  return moduleValue as HoloQueueConfig
-}
-
 type QueuePackageRequirements = {
   readonly database: boolean
   readonly redis: boolean
@@ -135,7 +111,7 @@ async function loadQueueConfigFile(
   queueConfigPath: string,
 ): Promise<HoloQueueConfig | undefined> {
   return configEvaluationInternals.evaluate({ cwd: projectRoot }, async () => {
-    return resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
+    return loaderInternals.resolveConfigExportValue(await importProjectModule(projectRoot, queueConfigPath)) as HoloQueueConfig | undefined
   })
 }
 

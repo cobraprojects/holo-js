@@ -53,24 +53,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+function resolveConfigExportValue(moduleValue: unknown): object | undefined {
   if (isObject(moduleValue) && isObject(moduleValue.default)) {
-    return moduleValue.default as TConfig
+    return moduleValue.default
   }
 
   if (isObject(moduleValue) && isObject(moduleValue.config)) {
-    return moduleValue.config as TConfig
+    return moduleValue.config
   }
 
   if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
-    return {} as TConfig
+    return undefined
   }
 
   if (isObject(moduleValue)) {
-    return moduleValue as TConfig
+    return moduleValue
   }
 
-  return {} as TConfig
+  return undefined
+}
+
+function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+  return (resolveConfigExportValue(moduleValue) ?? {}) as TConfig
 }
 
 function getConfigName(fileName: string): ConfigFileName {
@@ -498,5 +502,6 @@ export const loaderInternals = {
   getNormalizerConfigNames,
   getConfigExtensionPriority,
   resolveConfigExport,
+  resolveConfigExportValue,
   splitCacheableConfig,
 }
