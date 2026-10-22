@@ -230,6 +230,18 @@ function runtimeInstanceModuleSource(specifier: string, instance: Record<string,
   return lines.join('\n')
 }
 
+function resolveHoloPackageFromRuntime(specifier: string): string {
+  try {
+    return import.meta.resolve(specifier)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
+      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`)
+    }
+
+    throw error
+  }
+}
+
 function bridgeRuntimeModuleInstances(): Plugin {
   return {
     name: 'holo-runtime-module-instances',
@@ -237,7 +249,7 @@ function bridgeRuntimeModuleInstances(): Plugin {
       build.onResolve({ filter: /^@holo-js\// }, args => (
         runtimeModuleInstances().has(args.path)
           ? { path: args.path, namespace: runtimeInstanceNamespace }
-          : undefined
+          : { path: resolveHoloPackageFromRuntime(args.path), external: true }
       ))
       build.onLoad({ filter: /.*/, namespace: runtimeInstanceNamespace }, args => ({
         contents: runtimeInstanceModuleSource(args.path, runtimeModuleInstances().get(args.path) ?? {}),

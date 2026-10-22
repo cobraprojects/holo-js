@@ -71,6 +71,34 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(model.Entity).toBe(holoDb.Entity)
   })
 
+  it('bundles unregistered holo packages from the runtime root, not the app copy', async () => {
+    const projectRoot = await createTempProject()
+    const appMediaRoot = join(projectRoot, 'node_modules/@holo-js/media')
+    await mkdir(appMediaRoot, { recursive: true })
+    await writeFile(join(appMediaRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/media',
+      type: 'module',
+      exports: { '.': './index.mjs' },
+    }))
+    await writeFile(join(appMediaRoot, 'index.mjs'), 'export const source = "app copy"\n')
+    await writeFile(join(projectRoot, 'model.ts'), "export { source } from '@holo-js/media'\n")
+
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const source = await readFile(bundled.path, 'utf8')
+    await bundled.cleanup()
+
+    expect(source).not.toContain('"@holo-js/media"')
+    expect(source).not.toContain(appMediaRoot)
+    expect(source).toContain('/packages/media/')
+  })
+
+  it('fails loudly when app code imports a holo package the runtime cannot resolve', async () => {
+    const projectRoot = await createTempProject()
+    await writeFile(join(projectRoot, 'model.ts'), "export { nothing } from '@holo-js/not-installed-anywhere'\n")
+
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/alongside the Holo runtime/)
+  })
+
   it('does not import package export targets pruned from a production artifact', async () => {
     const projectRoot = await createTempProject()
     const packageRoot = join(projectRoot, 'node_modules/@fixture/optional')
