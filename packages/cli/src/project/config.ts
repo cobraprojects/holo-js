@@ -4,6 +4,7 @@ import { extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   configEvaluationInternals,
+  loaderInternals,
   loadConfigDirectory,
   holoAppDefaults,
   normalizeAppConfig,
@@ -33,30 +34,6 @@ import {
 } from './runtime'
 import { writeTextFile } from './atomic-file'
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
-  if (isObject(moduleValue) && isObject(moduleValue.default)) {
-    return moduleValue.default as TConfig
-  }
-
-  if (isObject(moduleValue) && isObject(moduleValue.config)) {
-    return moduleValue.config as TConfig
-  }
-
-  if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
-    return {} as TConfig
-  }
-
-  if (isObject(moduleValue)) {
-    return moduleValue as TConfig
-  }
-
-  return {} as TConfig
-}
-
 type ProjectConfigImportState = {
   readonly hash: string
   readonly nonce: number
@@ -78,15 +55,14 @@ function hashProjectConfigImportInputs(
   return hash.digest('hex').slice(0, 16)
 }
 
-async function resolveProjectConfigImportUrl(
+async function resolveProjectConfigImportKey(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<string> {
-  const fileUrl = pathToFileURL(filePath).href
   const hash = hashProjectConfigImportInputs(await readFile(filePath, 'utf8'), environmentValues)
   const previous = projectConfigImportStates.get(filePath)
   if (previous?.hash === hash) {
-    return `${fileUrl}?t=${previous.nonce}`
+    return String(previous.nonce)
   }
 
   projectConfigImportNonce += 1
@@ -96,7 +72,7 @@ async function resolveProjectConfigImportUrl(
   }
   projectConfigImportStates.set(filePath, next)
 
-  return `${fileUrl}?t=${next.nonce}`
+  return String(next.nonce)
 }
 
 async function importProjectConfigFile<TConfig extends object>(
@@ -104,19 +80,19 @@ async function importProjectConfigFile<TConfig extends object>(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
-  const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
+  const importKey = await resolveProjectConfigImportKey(filePath, environmentValues)
   const configExtension = extname(filePath)
-  const bundled = configExtension === '.ts' || configExtension === '.mts'
-    ? await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
-    : undefined
-  const resolvedImportUrl = bundled
-    ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
-    : importUrl
+  if (configExtension !== '.ts' && configExtension !== '.mts') {
+    return loaderInternals.resolveConfigExport<TConfig>(await loaderInternals.importConfigModule(filePath, importKey))
+  }
+
+  const bundled = await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
+  const resolvedImportUrl = `${pathToFileURL(bundled.path).href}?t=${importKey}`
 
   try {
-    return resolveConfigExport<TConfig>(await import(resolvedImportUrl))
+    return loaderInternals.resolveConfigExport<TConfig>(await import(resolvedImportUrl))
   } finally {
-    await bundled?.cleanup()
+    await bundled.cleanup()
   }
 }
 

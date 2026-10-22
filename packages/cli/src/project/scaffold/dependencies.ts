@@ -1,7 +1,9 @@
 import { resolve } from 'node:path'
 import {
   configEvaluationInternals,
+  configRegistryInternals,
   loadConfigDirectory,
+  loaderInternals,
 } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
@@ -17,6 +19,7 @@ import { loadProjectConfig } from '../config'
 import {
   AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
   CACHE_CONFIG_FILE_NAMES,
+  QUEUE_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
   type GeneratedProjectRegistry,
   type SupportedAuthSocialProvider,
@@ -37,6 +40,7 @@ import {
   importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
+  resolveProjectPackageImportSpecifier,
 } from '../runtime'
 import { writeTextFile } from '../atomic-file'
 import { loadGeneratedProjectRegistry } from '../registry'
@@ -73,21 +77,33 @@ function resolveManagedPackageVersion(
   )
 }
 
-function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
-  if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) {
-    return undefined
+type QueuePackageRequirements = {
+  readonly database: boolean
+  readonly redis: boolean
+}
+
+function inferQueuePackageRequirements(queue: Pick<HoloQueueConfig, 'connections' | 'failed'>): QueuePackageRequirements {
+  const connections = Object.values(queue.connections ?? {})
+  return {
+    database: connections.some(connection => queueConnectionUsesDriver(connection, 'database')) || queue.failed !== false,
+    redis: connections.some(connection => queueConnectionUsesDriver(connection, 'redis')),
   }
+}
 
-  const exports = moduleValue as { readonly default?: unknown, readonly queue?: unknown }
-  const value = typeof exports.default !== 'undefined'
-    ? exports.default
-    : exports.queue
-
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined
+async function loadNormalizedQueueConfig(projectRoot: string): Promise<HoloQueueConfig | undefined> {
+  const restoreNormalizers = configRegistryInternals.snapshotNormalizers()
+  try {
+    const queueConfigSpecifier = resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue/config')
+    await import(queueConfigSpecifier.startsWith('file:') ? `${queueConfigSpecifier}?t=${Date.now()}-${Math.random()}` : queueConfigSpecifier)
+      .catch(() => undefined)
+    return await loadConfigDirectory(projectRoot, {
+      preferCache: false,
+      processEnv: process.env,
+    }).then(config => config.queue as HoloQueueConfig | undefined)
+      .catch(() => undefined)
+  } finally {
+    restoreNormalizers()
   }
-
-  return value as HoloQueueConfig
 }
 
 async function loadQueueConfigFile(
@@ -95,7 +111,7 @@ async function loadQueueConfigFile(
   queueConfigPath: string,
 ): Promise<HoloQueueConfig | undefined> {
   return configEvaluationInternals.evaluate({ cwd: projectRoot }, async () => {
-    return resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
+    return loaderInternals.resolveConfigExportValue(await importProjectModule(projectRoot, queueConfigPath)) as HoloQueueConfig | undefined
   })
 }
 
@@ -445,19 +461,25 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/queue')
   }
 
+  const queueConfigPath = queueConfigured ? await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES) : undefined
+  const queueConfig = queueConfigPath
+    ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
+    : undefined
+  const isQueueConfigUnreadable = queueConfigured && queueConfig === undefined
+  const normalizedQueueConfig = isQueueConfigUnreadable ? await loadNormalizedQueueConfig(projectRoot) : undefined
+  const queueDriverPackagesToPreserve = new Set<string>(isQueueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
+
   if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
     requiredPackages.add('@holo-js/queue')
 
-    if (queueConfigured) {
-      const queueConnections = Object.values(loaded.queue?.connections ?? {})
-      if (queueConnections.some(connection => connection.driver === 'redis')) {
+    const queueRequirementSource = queueConfig ?? normalizedQueueConfig
+    if (queueConfigured && queueRequirementSource) {
+      const requirements = inferQueuePackageRequirements(queueRequirementSource)
+      if (requirements.redis) {
         requiredPackages.add('@holo-js/queue-redis')
       }
 
-      if (
-        queueConnections.some(connection => connection.driver === 'database')
-        || loaded.queue?.failed !== false
-      ) {
+      if (requirements.database) {
         requiredPackages.add('@holo-js/queue-db')
       }
     }
@@ -527,7 +549,7 @@ export async function syncManagedDriverDependencies(
   }
 
   for (const packageName of removableManagedPackages) {
-    if (requiredPackages.has(packageName)) {
+    if (requiredPackages.has(packageName) || queueDriverPackagesToPreserve.has(packageName)) {
       continue
     }
 
@@ -551,26 +573,31 @@ async function upsertQueuePackageDependency(
   driver?: SupportedQueueInstallerDriver,
 ): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies, workspacePackageNames } = await readPackageJsonDependencyState(projectRoot)
-  const queueConfigPath = await resolveFirstExistingPath(projectRoot, ['config/queue.ts', 'config/queue.mts', 'config/queue.js', 'config/queue.mjs', 'config/queue.cts', 'config/queue.cjs'])
+  const queueConfigPath = await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES)
   const nextVersion = resolveManagedPackageVersion('@holo-js/queue', dependencies, devDependencies, workspacePackageNames)
   const nextQueueDbVersion = resolveManagedPackageVersion('@holo-js/queue-db', dependencies, devDependencies, workspacePackageNames)
   const nextQueueRedisVersion = resolveManagedPackageVersion('@holo-js/queue-redis', dependencies, devDependencies, workspacePackageNames)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
-  const queueConfig = typeof driver === 'undefined' && queueConfigPath
+  const queueConfig = queueConfigPath
     ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
     : undefined
-  const queueConnections = Object.values(queueConfig?.connections ?? {})
-  const configuredDefaultQueueDriver = queueConfig?.default
-    ? queueConfig.connections?.[queueConfig.default]?.driver
+  const normalizedQueueConfig = queueConfigPath && queueConfig === undefined
+    ? await loadNormalizedQueueConfig(projectRoot)
     : undefined
-  const resolvedQueueDriver = driver && driver !== 'sync'
-    ? driver
-    : configuredDefaultQueueDriver ?? driver
-  const requiresQueueDb = resolvedQueueDriver === 'database'
-    || (queueConfig ? (queueConfig.failed ?? true) !== false : false)
-    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'database'))
-  const requiresQueueRedis = resolvedQueueDriver === 'redis'
-    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
+  const configuredRequirements = queueConfig ?? normalizedQueueConfig
+  const inferredRequirements = configuredRequirements ? inferQueuePackageRequirements(configuredRequirements) : undefined
+  const requiresQueueDb = queueConfig
+    ? inferredRequirements?.database === true
+    : driver === 'database'
+      || typeof dependencies['@holo-js/queue-db'] !== 'undefined'
+      || typeof devDependencies['@holo-js/queue-db'] !== 'undefined'
+      || inferredRequirements?.database === true
+  const requiresQueueRedis = queueConfig
+    ? inferredRequirements?.redis === true
+    : driver === 'redis'
+      || typeof dependencies['@holo-js/queue-redis'] !== 'undefined'
+      || typeof devDependencies['@holo-js/queue-redis'] !== 'undefined'
+      || inferredRequirements?.redis === true
   const currentVersion = dependencies['@holo-js/queue']
   const currentQueueDbVersion = dependencies['@holo-js/queue-db']
   const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']
