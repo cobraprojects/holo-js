@@ -117,6 +117,34 @@ it('compensates attachment and replacement files when the enclosing transaction 
   await expect(Storage.disk('public').exists(nextPath)).resolves.toBe(false)
 })
 
+it('dispatches queued conversions only after the enclosing transaction commits', async () => {
+  const generated: string[] = []
+  setMediaConversionExecutor({
+    async generate({ conversion: selected }) {
+      generated.push(selected.name)
+      return { contents: Buffer.from(selected.name), fileName: `${selected.name}.txt` }
+    },
+  })
+  const QueuedPost = defineMediaModel(defineModel(postsTable, { fillable: ['title'] }), {
+    collections: [collection('avatars').disk('public')],
+    conversions: [conversion('thumb').performOnCollections('avatars').queued()],
+  })
+  const post = await QueuedPost.create({ title: 'Rolled back' })
+
+  await expect(DB.transaction(async () => {
+    await post.addMedia(Buffer.from('original')).toMediaCollection('avatars')
+    throw new Error('outer rollback')
+  })).rejects.toThrow('outer rollback')
+  expect(generated).toEqual([])
+  expect(await post.getMedia('avatars')).toEqual([])
+
+  await DB.transaction(async () => {
+    await post.addMedia(Buffer.from('committed')).toMediaCollection('avatars')
+    expect(generated).toEqual([])
+  })
+  expect(generated).toEqual(['thumb'])
+})
+
 it('compensates original and generated files when attachment persistence fails', async () => {
   setMediaConversionExecutor({
     async generate() {
