@@ -1557,7 +1557,8 @@ export default defineAppConfig({
 
     const rerun = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
     expect(rerun.status).toBe(0)
-    expect(rerun.stdout).toContain('Installed queue support.')
+    expect(rerun.stdout).toContain('Queue support is already installed.')
+    expect(rerun.stdout).not.toContain('updated package.json')
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
   }, 90000)
 

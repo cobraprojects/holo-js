@@ -445,10 +445,13 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/queue')
   }
 
+  const queueConfigUnreadable = queueConfigured && loaded.queue === undefined
+  const queueDriverPackagesOwnedByInstaller = new Set<string>(queueConfigUnreadable ? ['@holo-js/queue-db', '@holo-js/queue-redis'] : [])
+
   if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
     requiredPackages.add('@holo-js/queue')
 
-    if (queueConfigured) {
+    if (queueConfigured && !queueConfigUnreadable) {
       const queueConnections = Object.values(loaded.queue?.connections ?? {})
       if (queueConnections.some(connection => connection.driver === 'redis')) {
         requiredPackages.add('@holo-js/queue-redis')
@@ -527,7 +530,7 @@ export async function syncManagedDriverDependencies(
   }
 
   for (const packageName of removableManagedPackages) {
-    if (requiredPackages.has(packageName)) {
+    if (requiredPackages.has(packageName) || queueDriverPackagesOwnedByInstaller.has(packageName)) {
       continue
     }
 
@@ -556,21 +559,16 @@ async function upsertQueuePackageDependency(
   const nextQueueDbVersion = resolveManagedPackageVersion('@holo-js/queue-db', dependencies, devDependencies, workspacePackageNames)
   const nextQueueRedisVersion = resolveManagedPackageVersion('@holo-js/queue-redis', dependencies, devDependencies, workspacePackageNames)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
-  const queueConfig = typeof driver === 'undefined' && queueConfigPath
+  const queueConfig = queueConfigPath
     ? await loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
     : undefined
   const queueConnections = Object.values(queueConfig?.connections ?? {})
-  const configuredDefaultQueueDriver = queueConfig?.default
-    ? queueConfig.connections?.[queueConfig.default]?.driver
-    : undefined
-  const resolvedQueueDriver = driver && driver !== 'sync'
-    ? driver
-    : configuredDefaultQueueDriver ?? driver
-  const requiresQueueDb = resolvedQueueDriver === 'database'
-    || (queueConfig ? (queueConfig.failed ?? true) !== false : false)
-    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'database'))
-  const requiresQueueRedis = resolvedQueueDriver === 'redis'
-    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
+  const requiresQueueDb = queueConfig
+    ? queueConnections.some(connection => queueConnectionUsesDriver(connection, 'database')) || queueConfig.failed !== false
+    : driver === 'database' || typeof dependencies['@holo-js/queue-db'] !== 'undefined'
+  const requiresQueueRedis = queueConfig
+    ? queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
+    : driver === 'redis'
   const currentVersion = dependencies['@holo-js/queue']
   const currentQueueDbVersion = dependencies['@holo-js/queue-db']
   const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']
