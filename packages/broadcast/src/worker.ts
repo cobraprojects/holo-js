@@ -34,7 +34,7 @@ import {
 import {
   BroadcastPayloadTooLargeError,
   decodeNodeWebSocketMessage,
-  getNodeWebSocketMessageBytes,
+  isNodeWebSocketMessageTooLargeError,
   readLimitedRequestText,
   readNodeRequestBody,
   toNodeHeaders,
@@ -195,6 +195,7 @@ type NodeWebSocketLike = {
   terminate(): void
   close(code?: number, reason?: string): void
   on(event: 'message', listener: (data: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer) => void): unknown
+  on(event: 'error', listener: (error: Error) => void): unknown
   on(event: 'pong', listener: () => void): unknown
   on(event: 'close', listener: () => void): unknown
 }
@@ -2769,6 +2770,15 @@ export async function startBroadcastWorker(
       const connectionInfo = requestConnectionInfo.get(request)!
 
       const socketId = connectionInfo.socketId
+      socket.on('error', (error) => {
+        runtime.disconnectWebSocket(socketId)
+        if (isNodeWebSocketMessageTooLargeError(error)) {
+          socket.close(1009, 'Message too large')
+          return
+        }
+        report(error, { capability: 'broadcast', operation: 'worker.socketError' })
+        socket.close(1011, 'Socket error')
+      })
       try {
         runtime.connectWebSocket({
           ...connectionInfo,
@@ -2791,12 +2801,6 @@ export async function startBroadcastWorker(
       })
       socket.on('message', (message) => {
         heartbeat.recordActivity(socket)
-        const messageBytes = getNodeWebSocketMessageBytes(message)
-        if (messageBytes > config.worker.maxMessageBytes) {
-          runtime.disconnectWebSocket(socketId)
-          socket.close(1009, 'Message too large')
-          return
-        }
         const value = decodeNodeWebSocketMessage(message)
         void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
           report(error, { capability: 'broadcast', operation: 'worker.socketMessage' })

@@ -95,10 +95,6 @@ export function decodeNodeWebSocketMessage(
   return String(message)
 }
 
-export function getNodeWebSocketMessageBytes(
-  message: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer,
-): number {
-  if (typeof message === 'string') return Buffer.byteLength(message)
-  if (message instanceof ArrayBuffer || message instanceof Uint8Array) return message.byteLength
-  return message.reduce((size, chunk) => size + chunk.byteLength, 0)
+export function isNodeWebSocketMessageTooLargeError(error: Error): boolean {
+  return (error as { code?: unknown }).code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH'
 }
