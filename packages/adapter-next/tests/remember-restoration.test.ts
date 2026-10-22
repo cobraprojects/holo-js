@@ -60,9 +60,6 @@ function nextStores() {
   return { workAsyncStorage, workUnitAsyncStorage, RequestCookies, ResponseCookies, RequestCookiesAdapter }
 }
 
-// Runs `callback` inside a Next.js request phase. A `render` phase is a Server Component
-// render, where the cookie store is read-only; an `action` phase is a Server Action or
-// Route Handler, where cookies can be written.
 async function inNextRequest<TValue>(
   phase: 'render' | 'action',
   cookieHeader: string | undefined,

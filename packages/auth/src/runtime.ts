@@ -1,3 +1,4 @@
+import { COOKIE_WRITE_UNAVAILABLE } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
@@ -85,7 +86,6 @@ import {
   loadOptionalSecurityModule,
 } from './runtime/optionalSecurity'
 import {
-  COOKIE_WRITE_UNAVAILABLE,
   appendResponseCookies,
   assertResponseCookiesWritable,
   isAuthResponseInterrupt,

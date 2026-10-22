@@ -41,7 +41,6 @@ export function collectLibraryBuilds(rootDir, packageNames) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  // The CLI's generated workspace catalog is written here, before any package builds, so builds and tests never write src.
   await generateCliWorkspaceCatalog(resolve(import.meta.dirname, '..'))
   for (const { name, directory } of collectLibraryBuilds(resolve(import.meta.dirname, '..'))) {
     console.log(`Building ${name}`)

@@ -36,7 +36,6 @@ async function createRepository(version: string): Promise<{ root: string, cli: s
   return { root, cli }
 }
 
-// Stands in for `bun run build`: the bundle embeds whatever catalog the source holds when the build runs.
 async function bundleCatalog(_name: string, root: string): Promise<void> {
   const cli = join(root, 'packages', 'cli')
   const catalog = await readFile(join(cli, 'src', 'generated', 'workspaceCatalog.ts'), 'utf8')

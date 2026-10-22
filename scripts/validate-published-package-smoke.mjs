@@ -232,8 +232,6 @@ async function copyFrameworkApp(source, target, catalog) {
       return !['node_modules', '.holo-js', '.next', '.nuxt', '.output', 'build', 'storage'].includes(rootSegment)
     },
   })
-  // The copy must depend on the released ranges it installs from the staged registry, not on
-  // monorepo-only workspace:/catalog: specifiers that bun cannot resolve outside the repository.
   const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
   await writeFile(join(target, 'package.json'), `${JSON.stringify(resolveReleaseManifest(manifest, catalog), null, 2)}\n`)
   await mkdir(join(target, 'storage'), { recursive: true })
@@ -412,7 +410,6 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework, cata
       await createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     }
     run(appRoot, 'bun', ['run', 'prepare'], env)
-    // The copy has no APP_ENV, so it resolves to production; migrate:fresh needs --force to run unattended.
     run(appRoot, 'bun', ['x', 'holo', 'migrate:fresh', '--seed', '--force'], env)
     const build = run(appRoot, 'bun', ['run', 'build'], env)
     if (app.name === 'next') {

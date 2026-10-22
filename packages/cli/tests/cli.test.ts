@@ -331,7 +331,6 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     join(root, 'packages'),
     Object.keys(workspaceCatalog).filter(name => name.startsWith('@holo-js/')),
   )
-  // The built runtime loads each package's optional peers from that package's own location, as an app install provides them.
   for (const { directory } of packages) {
     const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { peerDependencies?: Record<string, string> }
     for (const peerName of Object.keys(manifest.peerDependencies ?? {})) {
@@ -339,8 +338,6 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
       if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
     }
   }
-  // The integration global setup rebuilds stale workspace packages before any worker starts, so each dist copied here is
-  // current. A stale one means that setup did not run, and building it here would block this worker's event loop.
   for (const { name, directory } of packages) {
     const workspacePackageRoot = join(workspaceRoot, 'packages', basename(directory))
     if (!isWorkspaceDistCurrent(workspacePackageRoot, workspaceRoot)) {
@@ -10324,8 +10321,6 @@ export default defineRedisConfig({
     }
 
     it.each(redisConfigFormats.flatMap(format => [true, false].map(importEnv => ({ ...format, importEnv }))).filter(
-      // A CJS config cannot import @holo-js/config under Node today: the package has no require export, so the
-      // loader fails before the check runs. The CJS env-import case is covered by redis-cache-connections.test.ts.
       ({ moduleFormat, importEnv }) => !(moduleFormat === 'cjs' && importEnv),
     ))(
       'refuses a redis cache install without a cache connection in a .$extension config (env imported: $importEnv)',

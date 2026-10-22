@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import type { QueueJobContext, QueueJobDefinition, QueueJsonValue, QueueRegisteredJob } from '@holo-js/queue'
+import { holoRuntimeInternals } from '@holo-js/db'
 import type { EventQueuedListenerDispatch, EventEnvelope, RegisteredListener } from './contracts'
 import { getRegisteredListener } from './registry'
 
@@ -125,7 +126,8 @@ export async function runQueuedListenerInvocation(
 
     try {
       await context.release(resolveListenerRetryDelaySeconds(backoff, context.attempt))
-    } catch {
+    } catch (releaseError) {
+      holoRuntimeInternals.reportError(releaseError, { capability: 'events', operation: 'listener.releaseRetry' })
       throw error
     }
   }
