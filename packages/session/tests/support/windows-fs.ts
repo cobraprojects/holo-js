@@ -10,6 +10,7 @@ export type WindowsFsState = {
   readonly ioErrorRenamePrefixes: Set<string>
   readonly ioErrorUnlinkPrefixes: Set<string>
   readonly renameAttempts: Map<string, number>
+  readonly writeAttempts?: Map<string, number>
   readonly pausedRenameSources?: Map<string, Promise<void>>
 }
 
@@ -40,7 +41,9 @@ export function windowsFsOverrides(actual: typeof FsPromises, state: WindowsFsSt
       return await model.unlink(path, ...rest)
     },
     writeFile: async (path, data, options) => {
-      if (startsWithAny(String(path), state.blockedWritePrefixes)) throw permissionDenied('write')
+      const targetPath = String(path)
+      if (state.writeAttempts) state.writeAttempts.set(targetPath, (state.writeAttempts.get(targetPath) ?? 0) + 1)
+      if (startsWithAny(targetPath, state.blockedWritePrefixes)) throw permissionDenied('write')
       return await actual.writeFile(path, data, options)
     },
     rename: async (source, target) => {
