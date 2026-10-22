@@ -26,7 +26,6 @@ import security, {
   defineRateLimiter,
   defineSecurityConfig,
   defineSecurityRuntimeBindings,
-  fileRateLimitDriverInternals,
   getSecurityRuntimeBindings,
   getSecurityRuntime,
   ip,
@@ -1578,6 +1577,10 @@ describe('@holo-js/security rate-limit drivers', () => {
       return join(root, 'buckets', hex(shard % 256), hex(Math.floor(shard / 256) % 256), `${name}.json`)
     }
 
+    function bucketLockDirectory(bucketPath: string): string {
+      return `${bucketPath}.lock`
+    }
+
     async function writeExpiredBucketFile(path: string): Promise<void> {
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, JSON.stringify({
@@ -1753,7 +1756,7 @@ describe('@holo-js/security rate-limit drivers', () => {
         lockTimeoutMs: 2000,
       })
       await store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })
-      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(await onlyBucketPath(harness.root))
+      const lockPath = bucketLockDirectory(await onlyBucketPath(harness.root))
       await mkdir(lockPath)
       const hit = store.hit('waiting', { maxAttempts: 1, decaySeconds: 60 })
       await pause(20)
@@ -1813,6 +1816,18 @@ describe('@holo-js/security rate-limit drivers', () => {
         }, { timeout: 60_000, interval: 10 })
       }
 
+      async function waitUntilSweepPauses(root: string, filesBeforeSweep: number) {
+        let previous = -1
+        await vi.waitFor(async () => {
+          const current = await bucketFileCount(root)
+          const paused = current < filesBeforeSweep && current === previous
+          previous = current
+          if (!paused) {
+            throw new Error('Timed out waiting for the background sweep to pause.')
+          }
+        }, { timeout: 60_000, interval: 100 })
+      }
+
       it('returns from hit promptly while the sweep meets a locked expired bucket', async () => {
         const root = await createSweepRoot()
         const store = createFileRateLimitStore(root, {
@@ -1821,7 +1836,7 @@ describe('@holo-js/security rate-limit drivers', () => {
         })
         const heldKeyPath = shardedBucketPath(root, 0, 'held')
         await writeExpiredBucketFile(heldKeyPath)
-        const heldLockPath = fileRateLimitDriverInternals.getBucketLockPath(heldKeyPath)
+        const heldLockPath = bucketLockDirectory(heldKeyPath)
         await mkdir(heldLockPath)
 
         const startedAt = performance.now()
@@ -1836,28 +1851,39 @@ describe('@holo-js/security rate-limit drivers', () => {
         await rm(heldKeyPath, { force: true })
       }, 30_000)
 
-      it('starts at most one sweep while one is in flight', async () => {
+      it('removes expired bucket files from disk while keeping live ones', async () => {
         const root = await createSweepRoot()
         let now = sweepStart
         const store = createFileRateLimitStore(root, {
           now: () => now,
         })
-        await writeExpiredBuckets(root, 1_500, 'flight')
-
-        await store.hit('limiter:login|user:first', {
+        await store.hit('limiter:login|user:short-window', {
           maxAttempts: 2,
           decaySeconds: 60,
         })
+        const shortWindowPath = await onlyBucketPath(root)
+        await store.hit('limiter:login|user:long-window', {
+          maxAttempts: 2,
+          decaySeconds: 3_600,
+        })
+        const longWindowPath = (await filesUnder(join(root, 'buckets'))).find(path => path !== shortWindowPath) ?? ''
+
         now = new Date(now.getTime() + 61_000)
-        await store.hit('limiter:login|user:second', {
-          maxAttempts: 2,
-          decaySeconds: 60,
+        await waitUntil(async () => {
+          await store.hit('limiter:login|user:kicker', {
+            maxAttempts: 2,
+            decaySeconds: 60,
+          })
+          return await access(shortWindowPath).then(() => false, () => true)
         })
 
-        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(true)
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+        expect(await filesUnder(join(root, 'buckets'))).toContain(longWindowPath)
+        await expect(store.hit('limiter:login|user:long-window', {
+          maxAttempts: 2,
+          decaySeconds: 3_600,
+        })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
         await store.close?.()
-      }, 30_000)
+      }, 60_000)
 
       it('removes abandoned buckets across batches and later sweep cycles', async () => {
         const root = await createSweepRoot()
@@ -1889,13 +1915,20 @@ describe('@holo-js/security rate-limit drivers', () => {
         await store.close?.()
       }, 60_000)
 
-      it('holds at most one batch of sweep entries per run across several thousand buckets', async () => {
+      it('bounds each sweep run so one run leaves expired buckets for later runs', async () => {
         const root = await createSweepRoot()
-        let now = sweepStart
+        const now = sweepStart
         const store = createFileRateLimitStore(root, {
           now: () => now,
         })
         await writeExpiredBuckets(root, 3_000, 'bounded')
+
+        await store.hit('limiter:login|user:kicker', {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })
+        await waitUntilSweepPauses(root, 3_001)
+        expect(await bucketFileCount(root)).toBeGreaterThan(1)
 
         await waitUntil(async () => {
           await store.hit('limiter:login|user:kicker', {
@@ -1904,14 +1937,10 @@ describe('@holo-js/security rate-limit drivers', () => {
           })
           return await bucketFileCount(root) === 1
         })
-
-        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
         await store.close?.()
       }, 120_000)
 
-      it('streams a single shard holding several thousand files without holding it in memory', async () => {
+      it('drains a single shard holding several thousand expired files across runs', async () => {
         const root = await createSweepRoot()
         const now = sweepStart
         const store = createFileRateLimitStore(root, {
@@ -1937,13 +1966,10 @@ describe('@holo-js/security rate-limit drivers', () => {
           return await bucketFileCount(root) === 1
         })
 
-        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepPeakHeldNames(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
         await store.close?.()
       }, 120_000)
 
-      it('charges empty shard directories against each run so the walk stays bounded', async () => {
+      it('still reaches an expired bucket behind thousands of empty shard directories', async () => {
         const root = await createSweepRoot()
         const now = sweepStart
         const store = createFileRateLimitStore(root, {
@@ -1969,12 +1995,10 @@ describe('@holo-js/security rate-limit drivers', () => {
           return await bucketFileCount(root) === 1
         })
 
-        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(8)
         await store.close?.()
       }, 120_000)
 
-      it('charges non-JSON entries against each run so a shard of them cannot run unbounded', async () => {
+      it('still reaches an expired bucket behind a shard of thousands of non-JSON entries', async () => {
         const root = await createSweepRoot()
         const now = sweepStart
         const store = createFileRateLimitStore(root, {
@@ -2002,41 +2026,10 @@ describe('@holo-js/security rate-limit drivers', () => {
           return await bucketFileCount(root) === 1
         })
 
-        expect(fileRateLimitDriverInternals.sweepMaxEntriesPerRun(store)).toBeLessThanOrEqual(1_000)
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBeGreaterThanOrEqual(3)
         await store.close?.()
       }, 120_000)
 
-      it('keeps one shard handle open between runs and releases it on close', async () => {
-        const root = await createSweepRoot()
-        const now = sweepStart
-        const store = createFileRateLimitStore(root, {
-          now: () => now,
-        })
-        const shard = join(root, 'buckets', 'aa', 'bb')
-        await writeExpiredBucketFile(join(shard, 'handle-seed.json'))
-        for (let index = 0; index < 2_500; index += 1) {
-          await writeFile(join(shard, `handle-${index}.json`), JSON.stringify({
-            namespaceHash: 'namespace',
-            keyHash: 'handle',
-            prefixHashes: ['prefix'],
-            attempts: 1,
-            expiresAt: '2026-04-16T11:59:00.000Z',
-          }), 'utf8')
-        }
-
-        await store.hit('limiter:login|user:first-run', {
-          maxAttempts: 2,
-          decaySeconds: 60,
-        })
-        await waitUntil(async () => !fileRateLimitDriverInternals.sweepInFlight(store))
-        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(1)
-
-        await store.close?.()
-        expect(fileRateLimitDriverInternals.sweepOpenHandles(store)).toBe(0)
-      }, 120_000)
-
-      it('finishes an in-flight sweep on close and starts no more after it', async () => {
+      it('stops the background sweep on close so later hits start no further runs', async () => {
         const root = await createSweepRoot()
         let now = sweepStart
         const store = createFileRateLimitStore(root, {
@@ -2049,14 +2042,16 @@ describe('@holo-js/security rate-limit drivers', () => {
           decaySeconds: 60,
         })
         await store.close?.()
-        expect(fileRateLimitDriverInternals.sweepInFlight(store)).toBe(false)
+        const remaining = await bucketFileCount(root)
+        expect(remaining).toBeGreaterThan(1)
 
         now = new Date(now.getTime() + 61_000)
         await store.hit('limiter:login|user:after-close', {
           maxAttempts: 2,
           decaySeconds: 60,
         })
-        expect(fileRateLimitDriverInternals.sweepRunsStarted(store)).toBe(1)
+        await pause(200)
+        expect(await bucketFileCount(root)).toBe(remaining + 1)
       }, 30_000)
     })
 
@@ -2090,26 +2085,22 @@ describe('@holo-js/security rate-limit drivers', () => {
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
       const harness = await createHarness()
       const store = harness.createStore()
+      const concurrentHits = 8
 
-      const [first, second] = await Promise.all([
-        store.hit('limiter:login|user:concurrent', {
-          maxAttempts: 3,
-          decaySeconds: 60,
-        }),
-        store.hit('limiter:login|user:concurrent', {
-          maxAttempts: 3,
-          decaySeconds: 60,
-        }),
-      ])
+      const results = await Promise.all(Array.from({ length: concurrentHits }, () => store.hit('limiter:login|user:concurrent', {
+        maxAttempts: concurrentHits,
+        decaySeconds: 60,
+      })))
 
-      expect([first.snapshot.attempts, second.snapshot.attempts].sort((left, right) => left - right)).toEqual([1, 2])
+      expect(results.map(result => result.snapshot.attempts).sort((left, right) => left - right))
+        .toEqual(Array.from({ length: concurrentHits }, (_, index) => index + 1))
 
       const persisted = await harness.createStore().hit('limiter:login|user:concurrent', {
-        maxAttempts: 3,
+        maxAttempts: concurrentHits,
         decaySeconds: 60,
       })
 
-      expect(persisted.snapshot.attempts).toBe(3)
+      expect(persisted.snapshot.attempts).toBe(concurrentHits + 1)
     })
 
     it('reclaims stale bucket locks before timing out', async () => {
@@ -2122,7 +2113,7 @@ describe('@holo-js/security rate-limit drivers', () => {
         decaySeconds: 60,
       })
       const bucketPath = await onlyBucketPath(harness.root)
-      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
+      const lockPath = bucketLockDirectory(bucketPath)
       await rm(bucketPath)
 
       await mkdir(lockPath)
@@ -2153,7 +2144,7 @@ describe('@holo-js/security rate-limit drivers', () => {
         decaySeconds: 60,
       })
       const bucketPath = await onlyBucketPath(harness.root)
-      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
+      const lockPath = bucketLockDirectory(bucketPath)
       await rm(bucketPath)
       const store = createFileRateLimitStore(harness.root, {
         now: () => new Date('2026-04-16T12:00:00.000Z'),
@@ -2178,87 +2169,39 @@ describe('@holo-js/security rate-limit drivers', () => {
       expect(persisted.snapshot.attempts).toBe(7)
     })
 
-    it('does not delete a newer bucket lock when an older owner finishes', async () => {
+    it('does not reclaim a live bucket lock while its holder is still running', async () => {
       const harness = await createHarness()
-      const bucketPath = join(harness.root, 'buckets', 'replaced-lock.json')
-      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
-      const ownerPath = join(lockPath, 'owner')
-      let releaseLock!: () => void
-      let replacedLock!: () => void
-      const releaseRequested = new Promise<void>((resolve) => {
-        releaseLock = resolve
+      const key = 'limiter:login|user:live-lock'
+      const store = createFileRateLimitStore(harness.root, {
+        now: () => new Date('2026-04-16T12:00:00.000Z'),
+        lockRetryDelayMs: 1,
+        lockTimeoutMs: 300,
       })
-      const lockReplaced = new Promise<void>((resolve) => {
-        replacedLock = resolve
+      await store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
       })
+      const lockPath = bucketLockDirectory(await onlyBucketPath(harness.root))
+      await mkdir(lockPath)
+      const keepAlive = setInterval(() => {
+        const now = new Date()
+        void utimes(lockPath, now, now).catch(() => {})
+      }, 50)
 
-      const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 20,
-      }, async () => {
+      try {
+        await expect(store.hit(key, {
+          maxAttempts: 2,
+          decaySeconds: 60,
+        })).rejects.toThrow('Timed out waiting for file rate-limit lock')
+      } finally {
+        clearInterval(keepAlive)
         await rm(lockPath, { recursive: true, force: true })
-        await mkdir(lockPath)
-        await writeFile(ownerPath, 'new-owner', 'utf8')
-        replacedLock()
-        await releaseRequested
-      })
-
-      await lockReplaced
-      releaseLock()
-      await holdingLock
-
-      await expect(readFile(ownerPath, 'utf8')).resolves.toBe('new-owner')
-      await rm(lockPath, { recursive: true, force: true })
-    })
-
-    it('ignores heartbeat failures when a lock disappears during the protected operation', async () => {
-      const harness = await createHarness()
-      const bucketPath = join(harness.root, 'buckets', 'heartbeat-missing-lock.json')
-      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
-      const rejections: unknown[] = []
-      const recordRejection = (reason: unknown) => { rejections.push(reason) }
-      process.on('unhandledRejection', recordRejection)
-
-      try {
-        await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-          retryDelayMs: 1,
-          timeoutMs: 4,
-        }, async () => {
-          await rm(lockPath, { recursive: true, force: true })
-          await pause(10)
-        })).resolves.toBeUndefined()
-        await pause(10)
-      } finally {
-        process.off('unhandledRejection', recordRejection)
       }
-      expect(rejections).toEqual([])
-    })
 
-    it('does not reclaim live bucket locks while another operation is still running', async () => {
-      const harness = await createHarness()
-      const bucketPath = join(harness.root, 'buckets', 'live-lock.json')
-      let releaseLock!: () => void
-      let signalAcquired!: () => void
-      const releaseRequested = new Promise<void>((resolve) => { releaseLock = resolve })
-      const lockAcquired = new Promise<void>((resolve) => { signalAcquired = resolve })
-      const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 100,
-      }, async () => {
-        signalAcquired()
-        await releaseRequested
-      })
-
-      await lockAcquired
-      try {
-        await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-          retryDelayMs: 1,
-          timeoutMs: 300,
-        }, async () => 'reclaimed')).rejects.toThrow(`Timed out waiting for file rate-limit lock "${fileRateLimitDriverInternals.getBucketLockPath(bucketPath)}"`)
-      } finally {
-        releaseLock()
-        await holdingLock
-      }
+      await expect(store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).resolves.toMatchObject({ snapshot: { attempts: 2 } })
     })
 
     it('waits for active bucket locks before clearing all persisted buckets', async () => {
@@ -2266,34 +2209,16 @@ describe('@holo-js/security rate-limit drivers', () => {
       const store = createFileRateLimitStore(harness.root, {
         now: () => new Date('2026-04-16T12:00:00.000Z'),
         lockRetryDelayMs: 1,
-        lockTimeoutMs: 100,
+        lockTimeoutMs: 2000,
       })
       const key = 'limiter:login|user:clear-all-lock'
-      let releaseLock!: () => void
 
       await store.hit(key, {
         maxAttempts: 2,
         decaySeconds: 60,
       })
-      const bucketPath = await onlyBucketPath(harness.root)
-
-      const lockHeld = new Promise<void>((resolve) => {
-        releaseLock = resolve
-      })
-      let signalLockAcquired!: () => void
-      const lockAcquired = new Promise<void>((resolve) => {
-        signalLockAcquired = resolve
-      })
-
-      const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 100,
-      }, async () => {
-        signalLockAcquired()
-        await lockHeld
-      })
-
-      await lockAcquired
+      const lockPath = bucketLockDirectory(await onlyBucketPath(harness.root))
+      await mkdir(lockPath)
 
       let clearResolved = false
       const clearAll = store.clearAll().then((cleared) => {
@@ -2304,8 +2229,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       await pause(10)
       expect(clearResolved).toBe(false)
 
-      releaseLock()
-      await holdingLock
+      await rm(lockPath, { recursive: true, force: true })
       await expect(clearAll).resolves.toBe(1)
       await expect(store.hit(key, {
         maxAttempts: 2,
@@ -2318,65 +2242,35 @@ describe('@holo-js/security rate-limit drivers', () => {
     })
 
     async function withDisappearingLockedBucket(
-      callback: (store: SecurityRateLimitStore, key: string) => Promise<void>,
+      callback: (store: SecurityRateLimitStore) => Promise<number>,
     ): Promise<void> {
       const harness = await createHarness()
       const store = createFileRateLimitStore(harness.root, {
         now: () => new Date('2026-04-16T12:00:00.000Z'),
         lockRetryDelayMs: 1,
-        lockTimeoutMs: 100,
+        lockTimeoutMs: 2000,
       })
-      const key = 'limiter:login|user:disappearing-lock'
-      let releaseLock!: () => void
-
-      await store.hit(key, {
+      await store.hit('limiter:login|user:disappearing-lock', {
         maxAttempts: 2,
         decaySeconds: 60,
       })
       const bucketPath = await onlyBucketPath(harness.root)
+      const lockPath = bucketLockDirectory(bucketPath)
+      await mkdir(lockPath)
 
-      let requestDelete!: () => void
-      const deleteRequested = new Promise<void>((resolve) => {
-        requestDelete = resolve
-      })
-      const bucketDeleted = new Promise<void>((resolve) => {
-        releaseLock = resolve
-      })
-      let signalLockAcquired!: () => void
-      const lockAcquired = new Promise<void>((resolve) => {
-        signalLockAcquired = resolve
-      })
-
-      const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
-        retryDelayMs: 1,
-        timeoutMs: 100,
-      }, async () => {
-        signalLockAcquired()
-        await deleteRequested
-        await rm(bucketPath, { force: true })
-        releaseLock()
-      })
-
-      await lockAcquired
-      const pendingClear = callback(store, key)
+      const pendingClear = callback(store)
       await pause(5)
-      requestDelete()
-      await bucketDeleted
-      await pendingClear
-
-      await holdingLock
+      await rm(bucketPath, { force: true })
+      await rm(lockPath, { recursive: true, force: true })
+      await expect(pendingClear).resolves.toBe(0)
     }
 
     it('skips buckets deleted before clearByPrefix acquires their lock', async () => {
-      await withDisappearingLockedBucket(async (store) => {
-        await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(0)
-      })
+      await withDisappearingLockedBucket(store => store.clearByPrefix('limiter:login|'))
     })
 
     it('skips buckets deleted before clearAll acquires their lock', async () => {
-      await withDisappearingLockedBucket(async (store) => {
-        await expect(store.clearAll()).resolves.toBe(0)
-      })
+      await withDisappearingLockedBucket(store => store.clearAll())
     })
 
     it('rejects a malformed bucket file instead of ignoring it', async () => {

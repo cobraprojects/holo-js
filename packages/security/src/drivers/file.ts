@@ -33,14 +33,6 @@ export interface FileRateLimitStoreOptions {
   readonly lockTimeoutMs?: number
 }
 
-type FileRateLimitSweepStats = {
-  inFlight: boolean
-  runsStarted: number
-  peakHeldNames: number
-  maxEntriesPerRun: number
-  openHandles: number
-}
-
 type FileRateLimitKeyHashes = {
   readonly namespaceHash: string
   readonly prefixHashes: readonly string[]
@@ -49,7 +41,6 @@ type FileRateLimitKeyHashes = {
 const LOCK_OWNER_FILE = 'owner'
 const BUCKETS_DIRECTORY = 'buckets'
 const PRUNE_INTERVAL_MS = 60_000
-const sweepStats = new WeakMap<SecurityRateLimitStore, FileRateLimitSweepStats>()
 const SWEEP_BATCH_SIZE = 1_000
 
 function createBucketHash(key: string): string {
@@ -395,12 +386,10 @@ async function readShardEntries(
 
 async function* readShardListing(
   directory: string,
-  onHeld: (count: number) => void,
   onUnreadable?: (directory: string, error: unknown) => void,
 ): AsyncGenerator<FileRateLimitWalkStep, FileRateLimitShardListing | undefined> {
   yield UNIT_STEP
   const entries = await readShardEntries(directory, onUnreadable)
-  onHeld(entries?.length ?? 0)
   yield* chargeUnits(entries?.length ?? 0)
   yield UNIT_STEP
 
@@ -415,13 +404,10 @@ async function* readShardListing(
 
 async function openShard(
   directory: string,
-  counter: { openHandles: number },
   onUnreadable?: (directory: string, error: unknown) => void,
 ): Promise<Dir | undefined> {
   try {
-    const handle = await opendir(directory)
-    counter.openHandles += 1
-    return handle
+    return await opendir(directory)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
@@ -455,20 +441,18 @@ async function readShardEntry(
 
 async function* walkBucketTree(
   bucketsRoot: string,
-  counter: { openHandles: number },
-  onHeld: (count: number) => void,
   onUnreadable?: (directory: string, error: unknown) => void,
 ): AsyncGenerator<FileRateLimitWalkStep> {
-  const tops = yield* readShardListing(bucketsRoot, onHeld, onUnreadable)
+  const tops = yield* readShardListing(bucketsRoot, onUnreadable)
 
   for (const top of tops?.names ?? []) {
     const topPath = join(bucketsRoot, top)
-    const middles = yield* readShardListing(topPath, onHeld, onUnreadable)
+    const middles = yield* readShardListing(topPath, onUnreadable)
 
     for (const middle of middles?.names ?? []) {
       const leaf = join(topPath, middle)
       yield UNIT_STEP
-      const handle = await openShard(leaf, counter, onUnreadable)
+      const handle = await openShard(leaf, onUnreadable)
       if (!handle) {
         continue
       }
@@ -480,7 +464,6 @@ async function* walkBucketTree(
             : UNIT_STEP
         }
       } finally {
-        counter.openHandles -= 1
         await handle.close().catch(() => undefined)
       }
       yield UNIT_STEP
@@ -489,7 +472,7 @@ async function* walkBucketTree(
 }
 
 async function* bucketFilePaths(bucketsRoot: string): AsyncGenerator<string> {
-  for await (const step of walkBucketTree(bucketsRoot, { openHandles: 0 }, () => undefined)) {
+  for await (const step of walkBucketTree(bucketsRoot)) {
     if (step.kind === 'bucket') {
       yield step.path
     }
@@ -522,16 +505,6 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     timeoutMs: lockTimeoutMs,
   }
   const bucketsRoot = join(root, BUCKETS_DIRECTORY)
-  const stats: FileRateLimitSweepStats = {
-    inFlight: false,
-    runsStarted: 0,
-    peakHeldNames: 0,
-    maxEntriesPerRun: 0,
-    openHandles: 0,
-  }
-  const recordHeldNames = (count: number): void => {
-    stats.peakHeldNames = Math.max(stats.peakHeldNames, count)
-  }
   let cycleStartedAt: number | undefined
   let cursor: AsyncGenerator<FileRateLimitWalkStep> | undefined
   let inFlight: Promise<void> | undefined
@@ -579,7 +552,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     let finished = false
 
     try {
-      cursor ??= walkBucketTree(bucketsRoot, stats, recordHeldNames, reportUnreadable)
+      cursor ??= walkBucketTree(bucketsRoot, reportUnreadable)
 
       while (units < SWEEP_BATCH_SIZE && !closed) {
         const next = await cursor.next()
@@ -597,7 +570,6 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       reportSweepError(error)
       finished = true
     } finally {
-      stats.maxEntriesPerRun = Math.max(stats.maxEntriesPerRun, units)
       if (finished || closed) {
         await closeCursor()
       }
@@ -617,11 +589,8 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       cycleStartedAt = now.getTime()
     }
 
-    stats.runsStarted += 1
-    stats.inFlight = true
     inFlight = runSweep(now).finally(() => {
       inFlight = undefined
-      stats.inFlight = false
     })
   }
 
@@ -739,36 +708,5 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
     },
   }
 
-  sweepStats.set(store, stats)
   return store
-}
-
-function sweepInFlight(store: SecurityRateLimitStore): boolean {
-  return sweepStats.get(store)?.inFlight ?? false
-}
-
-function sweepRunsStarted(store: SecurityRateLimitStore): number {
-  return sweepStats.get(store)?.runsStarted ?? 0
-}
-
-function sweepPeakHeldNames(store: SecurityRateLimitStore): number {
-  return sweepStats.get(store)?.peakHeldNames ?? 0
-}
-
-function sweepMaxEntriesPerRun(store: SecurityRateLimitStore): number {
-  return sweepStats.get(store)?.maxEntriesPerRun ?? 0
-}
-
-function sweepOpenHandles(store: SecurityRateLimitStore): number {
-  return sweepStats.get(store)?.openHandles ?? 0
-}
-
-export const fileRateLimitDriverInternals = {
-  getBucketLockPath,
-  sweepInFlight,
-  sweepMaxEntriesPerRun,
-  sweepOpenHandles,
-  sweepPeakHeldNames,
-  sweepRunsStarted,
-  withBucketLock,
 }

@@ -752,8 +752,6 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
-  heldRecordLockTokens,
-  pendingRecordLockReleaseRetries,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,

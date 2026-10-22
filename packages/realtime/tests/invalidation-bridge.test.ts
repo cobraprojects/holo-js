@@ -228,46 +228,59 @@ it('runs nothing from a refresh queue that a reset cancels, even when the next r
   expect(nextRuns.length).toBe(nextBefore)
 }, 30_000)
 
-it('drops a remote refresh granted a slot before a reset instead of running it in the replacement runtime', async () => {
+function createGate() {
+  let open: () => void = () => undefined
+  const promise = new Promise<void>(resolve => { open = resolve })
+  return { promise, open }
+}
+
+it('does not let a refresh that started before a reset hand its slot to the replacement runtime', async () => {
   const { db } = await openRealtimeDatabase()
-  let staleRuns = 0
-  const stale = query({
-    name: 'records.stale',
+  let currentGate: ReturnType<typeof createGate> | undefined
+  const gated = new Map<string, number>()
+  const createGatedQuery = (name: string) => query({
+    name,
     access: 'public',
     handler: async () => {
-      staleRuns += 1
+      const gate = currentGate
+      if (gate) {
+        gated.set(name, (gated.get(name) ?? 0) + 1)
+        await gate.promise
+      }
       return { records: await db.table('records').orderBy('id').get() }
     },
   })
-  await subscribeRealtimeQuery(stale)
-  const beforeStale = staleRuns
-  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  onTestFinished(() => { vi.useRealTimers() })
+  const countGated = (names: readonly string[]) => names.reduce((total, name) => total + (gated.get(name) ?? 0), 0)
 
-  void bridge.receive(remoteInvalidation(['db:main:records']))
-  await new Promise(resolve => setImmediate(resolve))
-  expect(vi.getTimerCount()).toBe(1)
-  vi.advanceTimersByTime(10)
+  const staleNames = Array.from({ length: 5 }, (_, index) => `records.staleSlot.${index}`)
+  for (const name of staleNames) {
+    await subscribeRealtimeQuery(createGatedQuery(name))
+  }
+  const staleGate = createGate()
+  currentGate = staleGate
+  const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+  const staleReceived = bridge.receive(remoteInvalidation(['db:main:records']))
+  await expect.poll(() => countGated(staleNames), { timeout: 5_000 }).toBe(4)
+
   resetRealtimeRuntime()
   configureRealtimeRuntime({ db: () => db })
-  vi.useRealTimers()
+  currentGate = undefined
+  const replacementNames = Array.from({ length: 5 }, (_, index) => `records.replacementSlot.${index}`)
+  for (const name of replacementNames) {
+    await subscribeRealtimeQuery(createGatedQuery(name))
+  }
+  const replacementGate = createGate()
+  currentGate = replacementGate
+  const replacementReceived = bridge.receive(remoteInvalidation(['db:main:records']))
+  await expect.poll(() => countGated(replacementNames), { timeout: 5_000 }).toBe(4)
 
-  let replacementRuns = 0
-  const replacement = query({
-    name: 'records.stale',
-    access: 'public',
-    handler: async () => {
-      replacementRuns += 1
-      return { records: await db.table('records').orderBy('id').get() }
-    },
-  })
-  await subscribeRealtimeQuery(replacement)
-  const beforeReplacementRefresh = replacementRuns
-  await new Promise(resolve => setTimeout(resolve, 100))
+  staleGate.open()
+  await staleReceived
+  expect(countGated(replacementNames)).toBe(4)
 
-  expect(staleRuns).toBe(beforeStale)
-  expect(replacementRuns).toBe(beforeReplacementRefresh)
+  replacementGate.open()
+  await replacementReceived
+  expect(countGated(replacementNames)).toBe(5)
 }, 30_000)
 
 it('cancels a subscription\'s deferred remote refresh when it unsubscribes', async () => {

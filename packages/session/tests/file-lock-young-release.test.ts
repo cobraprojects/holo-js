@@ -43,6 +43,13 @@ async function leftoverTombstones(): Promise<string[]> {
   return (await readdir(root)).filter(name => name.endsWith('.released'))
 }
 
+async function waitForFirstRemoval(initialCount: number): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while ((await leftoverTombstones()).length >= initialCount && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
 async function settledLeftoverTombstones(): Promise<string[]> {
   const deadline = Date.now() + 10_000
   let current = await leftoverTombstones()
@@ -117,6 +124,7 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
       openGate()
     }
 
+    await waitForFirstRemoval(300)
     const overflow = await settledLeftoverTombstones()
     expect(overflow.length).toBeGreaterThan(0)
     expect(overflow.length).toBeLessThan(300)

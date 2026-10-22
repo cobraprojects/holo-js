@@ -1,24 +1,62 @@
+import { execFile } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { PassThrough } from 'node:stream'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { createInternalCommands } from '../src/cli'
+import { runCli } from '../src/cli'
 import { buildQueueWorkArgs } from '../src/queue'
 import { parseBackoffFlag } from '../src/parsing'
-import type { CommandDefinition, InternalCommandContext, IoStreams } from '../src/cli-types'
-import type { QueueWorkerRunOptions } from '@holo-js/queue'
+import type { IoStreams } from '../src/cli-types'
 
-function createIo(): IoStreams {
-  const write = () => true
+const execute = promisify(execFile)
+const repoRoot = resolve(import.meta.dirname, '../../..')
+const builtCli = join(repoRoot, 'packages/cli/dist/bin/holo.mjs')
+
+function createIo(projectRoot: string): IoStreams {
   return {
-    cwd: process.cwd(),
-    stdin: process.stdin,
-    stdout: { write } as unknown as NodeJS.WriteStream,
-    stderr: { write } as unknown as NodeJS.WriteStream,
+    cwd: projectRoot,
+    stdin: new PassThrough() as never,
+    stdout: new PassThrough() as never,
+    stderr: new PassThrough() as never,
   }
 }
 
-function findQueueWorkCommand(commands: readonly CommandDefinition[]): CommandDefinition {
-  const command = commands.find(entry => entry.name === 'queue:work')
-  if (!command) throw new Error('queue:work is not registered.')
-  return command
+async function createAlwaysFailingQueueProject(root: string): Promise<string> {
+  const attemptLog = join(root, 'attempts.log')
+  const write = async (name: string, content: string) => {
+    await mkdir(dirname(join(root, name)), { recursive: true })
+    await writeFile(join(root, name), content)
+  }
+  await mkdir(join(root, 'node_modules'), { recursive: true })
+  await symlink(join(repoRoot, 'packages'), join(root, 'node_modules/@holo-js'))
+  await write('package.json', JSON.stringify({ type: 'module' }))
+  await write('config/app.mjs', "import { defineAppConfig } from '@holo-js/config'; export default defineAppConfig({ name: 'Queue Worker Flags' })")
+  await write('config/database.mjs', `import { defineDatabaseConfig } from '@holo-js/db'; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'queue.sqlite'))} } } })`)
+  await write('config/queue.mjs', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'database', failed: false, connections: { database: { driver: 'database', connection: 'main' } } })")
+  await write('server/jobs/AlwaysFails.mjs', `
+import { appendFile } from 'node:fs/promises'
+import { defineJob } from '@holo-js/queue'
+export default defineJob({
+  async handle() {
+    await appendFile(${JSON.stringify(attemptLog)}, Date.now() + '\\n')
+    throw new Error('AlwaysFails always fails')
+  },
+})
+`)
+  await write('dispatch.mjs', `
+import { createHolo } from '@holo-js/core/runtime'
+const runtime = await createHolo(process.cwd())
+await runtime.initialize()
+try {
+  const { default: AlwaysFails } = await import('./server/jobs/AlwaysFails.mjs')
+  await AlwaysFails.dispatch({})
+} finally {
+  await runtime.shutdown()
+}
+`)
+  return attemptLog
 }
 
 describe('queue:work --backoff', () => {
@@ -47,25 +85,27 @@ describe('queue:work --backoff', () => {
     expect(buildQueueWorkArgs({ tries: '2', backoff: '5,10' })).toEqual(['queue:work', '--tries', '2', '--backoff', '5,10'])
   })
 
-  it('passes the parsed backoff and tries to the queue worker when queue:work runs', async () => {
-    const workerOptions: QueueWorkerRunOptions[] = []
-    const context: InternalCommandContext = {
-      ...createIo(),
-      projectRoot: process.cwd(),
-      registry: [],
-      loadProject: async () => {
-        throw new Error('loadProject should not be called')
-      },
+  it('retries a failing job for exactly --tries attempts, spaced by --backoff, on a real database queue', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-queue-worker-flags-'))
+    try {
+      const attemptLog = await createAlwaysFailingQueueProject(root)
+      await execute(process.execPath, [builtCli, 'queue:table'], { cwd: root })
+      await execute(process.execPath, [builtCli, 'migrate'], { cwd: root })
+      await execute(process.execPath, ['dispatch.mjs'], { cwd: root })
+
+      await expect(runCli([
+        'queue:work', '--tries', '3', '--backoff', '1', '--sleep', '0', '--max-jobs', '10', '--max-time', '5',
+      ], createIo(root))).resolves.toBe(0)
+
+      const attemptTimes = (await readFile(attemptLog, 'utf8')).trim().split('\n').map(Number)
+      const retryDelays = attemptTimes.slice(1).map((attemptTime, index) => attemptTime - attemptTimes[index]!)
+      expect(attemptTimes).toHaveLength(3)
+      for (const retryDelay of retryDelays) {
+        expect(retryDelay).toBeGreaterThanOrEqual(1000)
+        expect(retryDelay).toBeLessThan(2000)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
     }
-    const command = findQueueWorkCommand(createInternalCommands(context, undefined, {
-      runQueueWorkCommand: async (_io, _projectRoot, options) => {
-        workerOptions.push(options)
-      },
-    }))
-    const prepared = await command.prepare?.({ args: [], flags: { once: true, tries: '2', backoff: '5,10' } }, context)
-
-    await command.run({ projectRoot: process.cwd(), cwd: process.cwd(), args: [], flags: prepared?.flags ?? {}, loadProject: context.loadProject })
-
-    expect(workerOptions).toMatchObject([{ once: true, tries: 2, backoff: [5, 10] }])
-  })
+  }, 30_000)
 })

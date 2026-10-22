@@ -576,6 +576,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
       for (const outcome of await Promise.all(outcomes)) expect(outcome).toBeInstanceOf(TransactionError)
 
+      expect((await db.unsafeQuery<{ value: number }>(unsafeSql('select 1 as value'), { timeoutMs: 2_000 })).rows).toEqual([{ value: 1 }])
       expect(getEventListeners(controller.signal, 'abort').length).toBe(listenersBefore)
       expect(process.getActiveResourcesInfo().filter(name => name === 'Timeout').length).toBe(timersBefore)
     }, 5_000)
