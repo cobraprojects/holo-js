@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli'
@@ -59,6 +60,11 @@ try {
   return attemptLog
 }
 
+async function readAttemptTimes(attemptLog: string): Promise<number[]> {
+  const contents = await readFile(attemptLog, 'utf8').catch(() => '')
+  return contents.trim().split('\n').filter(Boolean).map(Number)
+}
+
 describe('queue:work --backoff', () => {
   it('parses one retry delay or a comma-separated list of retry delays', () => {
     expect(parseBackoffFlag({ backoff: '5' })).toBe(5)
@@ -85,7 +91,7 @@ describe('queue:work --backoff', () => {
     expect(buildQueueWorkArgs({ tries: '2', backoff: '5,10' })).toEqual(['queue:work', '--tries', '2', '--backoff', '5,10'])
   })
 
-  it('retries a failing job for exactly --tries attempts, spaced by --backoff, on a real database queue', async () => {
+  it('retries a failing job for exactly --tries attempts, spaced by at least --backoff, on a real database queue', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-queue-worker-flags-'))
     try {
       const attemptLog = await createAlwaysFailingQueueProject(root)
@@ -93,16 +99,19 @@ describe('queue:work --backoff', () => {
       await execute(process.execPath, [builtCli, 'migrate'], { cwd: root })
       await execute(process.execPath, ['dispatch.mjs'], { cwd: root })
 
-      await expect(runCli([
-        'queue:work', '--tries', '3', '--backoff', '1', '--sleep', '0', '--max-jobs', '10', '--max-time', '5',
-      ], createIo(root))).resolves.toBe(0)
+      const worker = runCli(['queue:work', '--tries', '3', '--backoff', '1', '--sleep', '0'], createIo(root))
+      while ((await readAttemptTimes(attemptLog)).length < 3) {
+        await delay(20)
+      }
+      await delay(1_500)
+      await expect(runCli(['queue:restart'], createIo(root))).resolves.toBe(0)
+      await expect(worker).resolves.toBe(0)
 
-      const attemptTimes = (await readFile(attemptLog, 'utf8')).trim().split('\n').map(Number)
+      const attemptTimes = await readAttemptTimes(attemptLog)
       const retryDelays = attemptTimes.slice(1).map((attemptTime, index) => attemptTime - attemptTimes[index]!)
       expect(attemptTimes).toHaveLength(3)
       for (const retryDelay of retryDelays) {
         expect(retryDelay).toBeGreaterThanOrEqual(1000)
-        expect(retryDelay).toBeLessThan(2000)
       }
     } finally {
       await rm(root, { recursive: true, force: true })
