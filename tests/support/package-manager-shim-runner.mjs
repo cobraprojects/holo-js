@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 const DEPTH_VARIABLE = 'HOLO_PACKAGE_MANAGER_SHIM_DEPTH'
+const WINDOWS_META_CHARS = /([()\][%!^"`<>&|;, *?])/g
 const MAX_DEPTH = 8
 
 function defaultIsFile(candidate, platform) {
@@ -15,6 +16,26 @@ function defaultIsFile(candidate, platform) {
   } catch {
     return false
   }
+}
+
+function escapeWindowsCommand(command) {
+  return command.replace(WINDOWS_META_CHARS, '^$1')
+}
+
+function escapeWindowsArgument(argument, doubleEscapeMetaChars) {
+  let escaped = `${argument}`.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"')
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1')
+  escaped = `"${escaped}"`.replace(WINDOWS_META_CHARS, '^$1')
+  return doubleEscapeMetaChars ? escaped.replace(WINDOWS_META_CHARS, '^$1') : escaped
+}
+
+export function buildWindowsBatchInvocation(file, args, comspec = 'cmd.exe') {
+  const doubleEscapeMetaChars = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(file)
+  const commandLine = [
+    escapeWindowsCommand(path.win32.normalize(file)),
+    ...args.map(argument => escapeWindowsArgument(argument, doubleEscapeMetaChars)),
+  ].join(' ')
+  return { file: comspec, args: ['/d', '/s', '/c', `"${commandLine}"`], windowsVerbatimArguments: true }
 }
 
 function sameDirectory(flavor, left, right, platform) {
@@ -64,8 +85,15 @@ function recordInstallRequest(shimRoot, env) {
 }
 
 function runRealBinary(realBinary, args, env) {
-  const usesShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(realBinary)
-  const child = spawn(realBinary, args, { stdio: 'inherit', shell: usesShell, env })
+  const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(realBinary)
+  const invocation = isBatch
+    ? buildWindowsBatchInvocation(realBinary, args, process.env.ComSpec)
+    : { file: realBinary, args, windowsVerbatimArguments: false }
+  const child = spawn(invocation.file, invocation.args, {
+    stdio: 'inherit',
+    env,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  })
   child.on('error', error => {
     process.stderr.write(`${error.message}\n`)
     process.exit(1)

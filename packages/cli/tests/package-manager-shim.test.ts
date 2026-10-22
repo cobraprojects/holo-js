@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderLauncher, writeLauncher } from '../../../tests/support/launchers'
 import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
-import { resolveExecutable } from '../../../tests/support/package-manager-shim-runner.mjs'
+import { buildWindowsBatchInvocation, resolveExecutable } from '../../../tests/support/package-manager-shim-runner.mjs'
 
 const tempDirs: string[] = []
 
@@ -155,3 +155,68 @@ describe('package manager shim resolution', () => {
     expect(resolved).toBe('/usr/local/bin/npm')
   })
 })
+
+describe('windows batch invocation', () => {
+  it('passes a path with spaces as one command token', () => {
+    expect(buildWindowsBatchInvocation('C:\\Program Files\\nodejs\\npm.cmd', ['--version'])).toEqual({
+      file: 'cmd.exe',
+      args: ['/d', '/s', '/c', String.raw`"C:\Program^ Files\nodejs\npm.cmd ^"--version^""`],
+      windowsVerbatimArguments: true,
+    })
+  })
+
+  it('keeps an argument with spaces as one argument', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\npm.cmd', ['install', 'my project']).args[3]).toBe(
+      String.raw`"C:\tools\npm.cmd ^"install^" ^"my^ project^""`,
+    )
+  })
+
+  it('escapes embedded quotes and the backslashes before them', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\bun.cmd', ['say "hi"']).args[3]).toBe(
+      String.raw`"C:\tools\bun.cmd ^"say^ \^"hi\^"^""`,
+    )
+  })
+
+  it('escapes the cmd metacharacters & | < >', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\bun.cmd', ['a&b', 'c|d', 'e<f>g']).args[3]).toBe(
+      String.raw`"C:\tools\bun.cmd ^"a^&b^" ^"c^|d^" ^"e^<f^>g^""`,
+    )
+  })
+
+  it('escapes the caret', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\bun.cmd', ['a^b']).args[3]).toBe(
+      String.raw`"C:\tools\bun.cmd ^"a^^b^""`,
+    )
+  })
+
+  it('escapes the percent sign', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\bun.cmd', ['100%']).args[3]).toBe(
+      String.raw`"C:\tools\bun.cmd ^"100^%^""`,
+    )
+  })
+
+  it('doubles a trailing backslash so the closing quote is not escaped', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\bun.cmd', ['dir\\']).args[3]).toBe(
+      String.raw`"C:\tools\bun.cmd ^"dir\\^""`,
+    )
+  })
+
+  it('doubles metacharacters for a cmd shim under node_modules/.bin', () => {
+    expect(buildWindowsBatchInvocation('C:\\proj\\node_modules\\.bin\\bun.cmd', ['a&b', 'x y']).args[3]).toBe(
+      String.raw`"C:\proj\node_modules\.bin\bun.cmd ^^^"a^^^&b^^^" ^^^"x^^^ y^^^""`,
+    )
+  })
+
+  it('normalizes forward slashes in the file to Windows separators', () => {
+    expect(buildWindowsBatchInvocation('C:/forward/slash/npm.cmd', ['run', 'build']).args[3]).toBe(
+      String.raw`"C:\forward\slash\npm.cmd ^"run^" ^"build^""`,
+    )
+  })
+
+  it('runs through the comspec it is given', () => {
+    expect(buildWindowsBatchInvocation('C:\\tools\\npm.cmd', [], 'C:\\Windows\\System32\\cmd.exe').file).toBe(
+      'C:\\Windows\\System32\\cmd.exe',
+    )
+  })
+})
+
