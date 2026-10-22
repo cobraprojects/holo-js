@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
@@ -205,15 +206,20 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
   return tsconfigPath
 }
 
-const runtimeModuleInstancesKey = Symbol.for('holo-js.runtime.moduleInstances')
 const runtimeInstanceNamespace = 'holo-runtime-instance'
+const runtimeCopyId = randomUUID()
 
 type RuntimeModuleInstances = Map<string, Record<string, unknown>>
 
+function runtimeModuleInstancesSlot(): string {
+  return `holo-js.runtime.moduleInstances.${runtimeCopyId}`
+}
+
 function runtimeModuleInstances(): RuntimeModuleInstances {
   const registry = globalThis as typeof globalThis & Record<symbol, RuntimeModuleInstances | undefined>
-  registry[runtimeModuleInstancesKey] ??= new Map()
-  return registry[runtimeModuleInstancesKey]
+  const slot = Symbol.for(runtimeModuleInstancesSlot())
+  registry[slot] ??= new Map()
+  return registry[slot]
 }
 
 function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
@@ -221,7 +227,7 @@ function registerRuntimeModuleInstance(specifier: string, instance: Record<strin
 }
 
 function runtimeInstanceModuleSource(specifier: string, instance: Record<string, unknown>): string {
-  const lines = [`const instance = globalThis[Symbol.for(${JSON.stringify(runtimeModuleInstancesKey.description)})].get(${JSON.stringify(specifier)})`]
+  const lines = [`const instance = globalThis[Symbol.for(${JSON.stringify(runtimeModuleInstancesSlot())})].get(${JSON.stringify(specifier)})`]
   Object.keys(instance).forEach((name, index) => {
     lines.push(`const value${index} = instance[${JSON.stringify(name)}]`)
     lines.push(`export { value${index} as ${JSON.stringify(name)} }`)
@@ -453,6 +459,7 @@ export const runtimeModuleInternals = {
   isMissingOptionalModule,
   loadEsbuild,
   pathExists,
+  registerRuntimeModuleInstance,
   resolveRuntimeModuleSearchPaths,
   resolveOptionalImportSpecifier,
   runEsbuild,

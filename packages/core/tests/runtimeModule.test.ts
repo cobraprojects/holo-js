@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as holoDb from '@holo-js/db'
 import { importBundledRuntimeModule, runtimeModuleInternals } from '../src/runtimeModule'
+import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const tempDirs: string[] = []
 
@@ -97,6 +98,26 @@ describe('@holo-js/core runtime module helpers', () => {
     await writeFile(join(projectRoot, 'model.ts'), "export { nothing } from '@holo-js/not-installed-anywhere'\n")
 
     await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/alongside the Holo runtime/)
+  })
+
+  it('binds each runtime copy to the instances that copy registered', async () => {
+    const projectRoot = await createTempProject()
+    await writeFile(join(projectRoot, 'model.ts'), "export { marker } from '@holo-js/fixture-instance'\n")
+    const runtimeModulePath = resolve(import.meta.dirname, '../src/runtimeModule.ts')
+    const firstCopy = await import(`${runtimeModulePath}?copy=first`) as typeof runtimeModuleInternalsModule
+    const secondCopy = await import(`${runtimeModulePath}?copy=second`) as typeof runtimeModuleInternalsModule
+    firstCopy.runtimeModuleInternals.registerRuntimeModuleInstance('@holo-js/fixture-instance', { marker: 'first' })
+    secondCopy.runtimeModuleInternals.registerRuntimeModuleInstance('@holo-js/fixture-instance', { marker: 'second' })
+
+    const firstBundle = await firstCopy.runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const firstModel = await firstCopy.runtimeModuleInternals.importModule<{ marker: string }>(pathToFileURL(firstBundle.path).href)
+    await firstBundle.cleanup()
+    const secondBundle = await secondCopy.runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const secondModel = await secondCopy.runtimeModuleInternals.importModule<{ marker: string }>(pathToFileURL(secondBundle.path).href)
+    await secondBundle.cleanup()
+
+    expect(firstModel.marker).toBe('first')
+    expect(secondModel.marker).toBe('second')
   })
 
   it('does not import package export targets pruned from a production artifact', async () => {
