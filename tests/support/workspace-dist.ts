@@ -1,46 +1,18 @@
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { isWorkspaceBuildCurrent, writeWorkspaceBuildMarker } from '../../scripts/workspace-build-fingerprint.mjs'
 
 export type WorkspacePackage = { readonly name: string, readonly directory: string }
 
 export type WorkspacePackageBuild = (name: string, workspaceRoot: string) => Promise<void>
 
-const BUILD_CONFIG_FILES = ['package.json', 'tsconfig.json', 'tsup.config.ts']
-
-function listFiles(directory: string): string[] {
-  if (!existsSync(directory)) return []
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(directory, entry.name)
-    return entry.isDirectory() ? listFiles(path) : [path]
-  })
-}
-
-function newestMtime(paths: readonly string[]): number | undefined {
-  let newest: number | undefined
-  for (const path of paths) {
-    const mtime = statSync(path).mtimeMs
-    if (newest === undefined || mtime > newest) newest = mtime
-  }
-  return newest
-}
-
-function buildInputs(directory: string): string[] {
-  return [
-    ...BUILD_CONFIG_FILES.map(name => join(directory, name)).filter(existsSync),
-    ...listFiles(join(directory, 'src')),
-  ]
-}
-
 /**
- * A package's dist is current only when it was written after every file that feeds the build. An older dist is
- * stale, so reusing it would exercise code the source no longer matches.
+ * A dist is current when its marker matches the content fingerprint of the package and every manifest entry point
+ * exists. Modification times are not consulted, so a touch alone does not invalidate a build.
  */
 export function isWorkspaceDistCurrent(directory: string): boolean {
-  const built = newestMtime(listFiles(join(directory, 'dist')))
-  if (built === undefined) return false
-  const inputs = newestMtime(buildInputs(directory))
-  return inputs === undefined || built >= inputs
+  return isWorkspaceBuildCurrent(directory)
 }
 
 /**
@@ -60,8 +32,8 @@ export function copyWorkspaceDist(workspaceDist: string, stagedDist: string): vo
 }
 
 /**
- * Rebuilds, one at a time, only the packages whose dist is missing or stale. The builds are asynchronous so the
- * test process keeps its event loop free while they run.
+ * Rebuilds, one at a time, only the packages whose build is missing or stale. The builds are asynchronous so the
+ * test process keeps its event loop free while they run. A marker is written only after a build succeeds.
  */
 export async function rebuildStaleWorkspacePackages(
   workspaceRoot: string,
@@ -69,8 +41,9 @@ export async function rebuildStaleWorkspacePackages(
   build: WorkspacePackageBuild = buildWorkspacePackage,
 ): Promise<string[]> {
   const stale = packages.filter(({ directory }) => !isWorkspaceDistCurrent(directory))
-  for (const { name } of stale) {
+  for (const { name, directory } of stale) {
     await build(name, workspaceRoot)
+    writeWorkspaceBuildMarker(directory)
   }
   return stale.map(({ name }) => name)
 }
