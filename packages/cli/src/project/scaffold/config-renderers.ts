@@ -340,6 +340,7 @@ export function renderSecurityConfig(framework?: FrameworkDescriptor): string {
     '    limiters: {',
     '      login: limit.perMinute(5).define(),',
     '      register: limit.perHour(10).define(),',
+    '      emailVerificationResend: limit.perMinute(6).define(),',
     '    },',
     '  },',
     '})',

@@ -58,20 +58,31 @@ function parseEnvFile(contents: string): Record<string, string> {
   return values
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
 async function readEnvFile(filePath: string): Promise<Record<string, string> | undefined> {
   try {
-    const contents = await readFile(filePath, 'utf8')
-    return parseEnvFile(contents)
-  } catch {
-    return undefined
+    return parseEnvFile(await readFile(filePath, 'utf8'))
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined
+    }
+
+    throw error
   }
 }
 
 function readEnvFileSync(filePath: string): Record<string, string> | undefined {
   try {
     return parseEnvFile(readFileSync(filePath, 'utf8'))
-  } catch {
-    return undefined
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined
+    }
+
+    throw error
   }
 }
 
