@@ -30,7 +30,6 @@ import {
   runQueuedListenerInvocation,
   unregisterListener,
 } from '../src'
-import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 
 const execFileAsync = promisify(execFile)
 type PackageManifest = {
@@ -282,23 +281,15 @@ describe('@holo-js/events queue integration', () => {
         throw handlerError
       },
     }))
-    const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
-    errorReportingInternals.configure({
-      report(error, context) {
-        reports.push({ error, context })
-      },
-    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await expect(runQueuedListenerInvocation(
         { listenerId: listener.id, eventName: 'user.registered', occurredAt: 0, payload: { userId: 'usr-1' } },
         { attempt: 1, maxAttempts: 2, release: async () => { throw releaseError } } as never,
       )).rejects.toBe(handlerError)
-      expect(reports).toEqual([{
-        error: releaseError,
-        context: { capability: 'events', operation: 'listener.releaseRetry' },
-      }])
+      expect(consoleError).toHaveBeenCalledWith('[holo:events] listener.releaseRetry', releaseError)
     } finally {
-      errorReportingInternals.configure(undefined)
+      consoleError.mockRestore()
     }
   })
 
