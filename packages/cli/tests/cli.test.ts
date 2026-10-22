@@ -1,5 +1,6 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
+import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -284,16 +285,6 @@ function createTempBuildRootSync(prefix: string): string {
   return root
 }
 
-function buildWorkspacePackageSync(filter: string, outDir: string) {
-  return spawnSync('bun', ['run', '--filter', filter, 'build'], {
-    cwd: workspaceRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOLO_BUILD_OUT_DIR: outDir,
-    },
-  })
-}
 
 function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   if (builtWorkspacePackages) {
@@ -345,9 +336,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
       if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
     }
   }
+  // The integration global setup rebuilds stale workspace packages before any worker starts, so each dist copied here is
+  // current. A stale one means that setup did not run, and building it here would block this worker's event loop.
   for (const { name, directory } of packages) {
-    const build = buildWorkspacePackageSync(name, join(directory, 'dist'))
-    expect(build.status, build.stderr || build.stdout).toBe(0)
+    const workspacePackageRoot = join(workspaceRoot, 'packages', basename(directory))
+    if (!isWorkspaceDistCurrent(workspacePackageRoot, workspaceRoot)) {
+      throw new Error(`Workspace package ${name} has no current dist. Run the cli integration suite through its test:integration script.`)
+    }
+    copyWorkspaceDist(join(workspacePackageRoot, 'dist'), join(directory, 'dist'))
   }
 
   builtWorkspacePackages = {
@@ -393,7 +389,7 @@ async function runWorkspacePackageBuild(filter: string) {
   const root = await mkdtemp(join(tmpdir(), 'holo-package-build-'))
   tempBuildRoots.push(root)
   const outDir = join(root, 'dist')
-  const result = buildWorkspacePackageSync(filter, outDir)
+  const result = await runWorkspaceBuild(filter, workspaceRoot, { ...process.env, HOLO_BUILD_OUT_DIR: outDir })
 
   return {
     ...result,

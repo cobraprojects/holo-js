@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { generateCliWorkspaceCatalog } from './generate-cli-workspace-catalog.mjs'
+import { writeWorkspaceBuildMarker } from './workspace-build-fingerprint.mjs'
 
 export function collectLibraryBuilds(rootDir, packageNames) {
   const packagesRoot = join(rootDir, 'packages')
@@ -39,10 +41,13 @@ export function collectLibraryBuilds(rootDir, packageNames) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  // The CLI's generated workspace catalog is written here, before any package builds, so builds and tests never write src.
+  await generateCliWorkspaceCatalog(resolve(import.meta.dirname, '..'))
   for (const { name, directory } of collectLibraryBuilds(resolve(import.meta.dirname, '..'))) {
     console.log(`Building ${name}`)
     const result = spawnSync('bun', ['run', 'build'], { cwd: directory, stdio: 'inherit' })
     if (result.error) throw result.error
     if (result.status !== 0) process.exit(result.status ?? 1)
+    writeWorkspaceBuildMarker(directory, resolve(import.meta.dirname, '..'))
   }
 }

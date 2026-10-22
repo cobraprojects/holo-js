@@ -1,5 +1,9 @@
 # The Windows fs loader is loaded by URL through module.register(), so no static import reaches it.
-entry = ["packages/session/tests/support/windows-fs-loader/fs.mjs"]
+# Vitest loads the CLI integration global setup by path from packages/cli/vitest.config.ts.
+entry = [
+  "packages/session/tests/support/windows-fs-loader/fs.mjs",
+  "packages/cli/tests/global-setup.ts",
+]
 
 [resolve]
 conditions = ["@holo-js/source"]
