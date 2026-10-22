@@ -36,6 +36,7 @@ import {
   APP_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type SupportedAuthSocialProvider,
+  QUEUE_CONFIG_FILE_NAMES,
 } from './project/shared'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
 import { createAppCommandRuntimeBoundary } from './app-command-runtime'
@@ -722,10 +723,7 @@ export function createInternalCommands(
             installQueueIntoProject,
           } = await loadProjectScaffoldModule()
           const queueConfigured = await hasProjectDependency(context.projectRoot, '@holo-js/queue')
-            || await fileExists(resolve(context.projectRoot, 'config/queue.ts'))
-            || await fileExists(resolve(context.projectRoot, 'config/queue.mts'))
-            || await fileExists(resolve(context.projectRoot, 'config/queue.js'))
-            || await fileExists(resolve(context.projectRoot, 'config/queue.mjs'))
+            || (await Promise.all(QUEUE_CONFIG_FILE_NAMES.map(path => fileExists(resolve(context.projectRoot, path))))).some(Boolean)
           const eventsResult = await installEventsIntoProject(context.projectRoot)
           let queueResult:
             | Awaited<ReturnType<typeof ProjectScaffoldModule.installQueueIntoProject>>
