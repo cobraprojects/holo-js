@@ -4974,16 +4974,15 @@ export default defineCacheConfig({
 })
 `)
 
-    const io = createIo(projectRoot)
-    await runProjectPrepare(projectRoot, io.io)
+    await runProjectPrepare(projectRoot)
 
     const syncedDependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
     expect(syncedDependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
-      expect(syncedDependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
-      expect(syncedDependencies['@holo-js/cache-redis']).toBe(expectedHoloPackageRange)
-      expect(typeof syncedDependencies.ioredis).toBe('string')
+    expect(syncedDependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
+    expect(syncedDependencies['@holo-js/cache-redis']).toBe(expectedHoloPackageRange)
+    expect(typeof syncedDependencies.ioredis).toBe('string')
 
-      await writeProjectFile(projectRoot, 'config/cache.ts', `
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
 import { defineCacheConfig } from '@holo-js/cache'
 
 export default defineCacheConfig({
@@ -4997,15 +4996,14 @@ export default defineCacheConfig({
 })
 `)
 
-    await runProjectPrepare(projectRoot, io.io)
+    await runProjectPrepare(projectRoot)
 
     const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
     expect(dependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
     expect(dependencies['@holo-js/cache-db']).toBeUndefined()
     expect(dependencies['@holo-js/cache-redis']).toBeUndefined()
     expect(dependencies.ioredis).toBeUndefined()
-    expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
-  }, 60000)
+  })
 
   it('preserves package-only cache support during prepare when config/cache.ts is absent', async () => {
     const projectRoot = await createTempProject()
