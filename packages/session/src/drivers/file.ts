@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, constants as fsConstants, type Dir } from 'node:fs'
+import { constants as fsConstants, type Dir } from 'node:fs'
 import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -14,19 +14,6 @@ const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
 const heldRecordLockTokens = new Set<string>()
-const LOCK_TRACE_DIR = process.env.HOLO_SESSION_LOCK_TRACE_DIR
-function trace(event: string, data: Record<string, unknown> = {}): void {
-  if (!LOCK_TRACE_DIR) return
-  appendFileSync(join(LOCK_TRACE_DIR, `${process.pid}.jsonl`), `${JSON.stringify({ t: Date.now(), pid: process.pid, ev: event, ...data })}\n`)
-}
-async function ownerAgeMs(lockPath: string, owner: RecordLockOwner): Promise<number | undefined> {
-  if (!LOCK_TRACE_DIR) return undefined
-  const modified = await stat(join(lockPath, recordLockOwnerFileName(owner))).then(value => value.mtimeMs, () => undefined)
-  return modified === undefined ? undefined : Math.round(Date.now() - modified)
-}
-function traceError(error: unknown): string | undefined {
-  return error instanceof Error ? (error as NodeJS.ErrnoException).code ?? error.message.slice(0, 120) : String(error)
-}
 type MakeDirectory = typeof defaultMkdir
 
 type RecordLockOwner = {
@@ -190,7 +177,6 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
       } catch (error) {
         if (isMissingFileError(error)) break
         if (!isBusyFileError(error)) throw error
-        trace('remove.unlink-busy', { code: traceError(error), settleMs })
         if (Date.now() >= deadline) return false
         await sleep(5)
       }
@@ -204,7 +190,6 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
       const code = errorCode(error)
       if (code === 'ENOENT') return true
       if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && !isBusyFileError(error)) throw error
-      trace('remove.rmdir-err', { code, settleMs })
       if (Date.now() >= deadline) return false
       await sleep(5)
     }
@@ -236,15 +221,11 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   const leasePath = join(lockPath, recordLockOwnerFileName(owner))
   const contents = `${JSON.stringify({ ...owner, released: true })}\n`
   const deadline = Date.now() + BUSY_FILE_RETRY_MS
-  let failures = 0
   for (;;) {
     try {
       await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
-      trace('markReleased.ok', { token: owner.token.slice(0, 8), failures })
       return true
     } catch (error) {
-      failures += 1
-      if (failures === 1) trace('markReleased.err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
       if (isMissingFileError(error)) return true
       if (!isBusyFileError(error) || Date.now() >= deadline) return false
       await sleep(5)
@@ -270,12 +251,10 @@ async function removeTombstone(tombstonePath: string): Promise<void> {
   for (;;) {
     try {
       await unlink(tombstonePath)
-      trace('tombstone.removed')
       return
     } catch (error) {
       if (isMissingFileError(error)) return
       if (!isBusyFileError(error)) throw error
-      trace('tombstone.busy', { code: traceError(error), delayMs })
       if (Date.now() + delayMs > deadline) return
       await delay(delayMs, undefined, { ref: false })
       delayMs = Math.min(delayMs * 2, TOMBSTONE_RETRY_MAX_MS)
@@ -311,15 +290,12 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
   try {
     await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
   } catch (error) {
-    trace('retire.rename-err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
     if (isMissingFileError(error)) return 'absent'
     if (isBusyFileError(error)) return 'busy'
     throw error
   }
-  trace('retire.renamed', { token: owner.token.slice(0, 8) })
   scheduleTombstoneRemoval(tombstonePath)
-  const removed = await removeRecordLock(lockPath)
-  trace('retire.dir-removed', { token: owner.token.slice(0, 8), removed })
+  await removeRecordLock(lockPath)
   return 'retired'
 }
 
@@ -343,7 +319,6 @@ function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, ow
 }
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  trace('release.start', { token: owner.token.slice(0, 8), ageMs: await ownerAgeMs(lockPath, owner) })
   try {
     let retirementFailure: { readonly error: unknown } | undefined
     try {
@@ -353,7 +328,6 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
     }
     const published = await markRecordLockReleased(lockPath, owner)
     if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
-    trace('release.done', { token: owner.token.slice(0, 8), published, retirementFailure: traceError(retirementFailure?.error) })
     if (retirementFailure) throw retirementFailure.error
     reportError(
       new Error(published
@@ -396,8 +370,6 @@ async function acquireRecordLockBefore(
   const pendingPath = `${lockPath}.${owner.token}.pending`
   const ownerFileName = recordLockOwnerFileName(owner)
   let acquired = false
-  const acquireStarted = Date.now()
-  trace('acquire.start', { token: owner.token.slice(0, 8), record: recordPath.slice(-12), wait: wait !== undefined })
   heldRecordLockTokens.add(owner.token)
   try {
     await makeDirectory(pendingPath)
@@ -412,21 +384,18 @@ async function acquireRecordLockBefore(
     let observedLease: RecordLockIdentity | undefined
     while (!acquired) {
       if (wait && Date.now() >= Math.min(deadline, wait.hardDeadline)) {
-        trace('acquire.timeout', { token: owner.token.slice(0, 8), waitMs: Date.now() - acquireStarted, holder: observedOwner?.slice(0, 8), deadlineInMs: deadline - Date.now() })
         throw acquireTimeoutError(recordPath, uncontendedFailure)
       }
       try {
         if (await hasRecordLock(lockPath)) throw lockPresentError(lockPath)
         await rename(pendingPath, lockPath)
         acquired = true
-        trace('acquire.ok', { token: owner.token.slice(0, 8), waitMs: Date.now() - acquireStarted })
       } catch (error) {
         const code = errorCode(error)
         const busy = isBusyFileError(error)
         const lockedByOther = code === 'EEXIST' || code === 'ENOTEMPTY'
         const identity = lockedByOther || busy ? await readRecordLockIdentity(lockPath, observedLease) : undefined
         const contended = lockedByOther || identity !== undefined
-        trace('acquire.contended', { token: owner.token.slice(0, 8), code: traceError(error), holder: identity?.owner?.token.slice(0, 8), released: identity?.owner?.released, fileName: identity?.fileName !== undefined, ageMs: identity ? Date.now() - identity.modifiedAt : undefined, holderPid: identity?.owner?.pid, holderHost: identity?.owner?.host === hostname() })
         if (!contended && !busy) throw error
         uncontendedFailure = contended ? undefined : error
         if (contended) {
@@ -436,11 +405,7 @@ async function acquireRecordLockBefore(
             deadline = Math.min(Date.now() + RECORD_LOCK_ACQUIRE_STALL_MS, wait.hardDeadline)
           }
           const reclaimable = await reclaimableRecordLock(lockPath, identity)
-          if (reclaimable) {
-            const reclaimed = await reclaimStaleLock(lockPath, reclaimable)
-            trace('acquire.reclaim', { token: owner.token.slice(0, 8), holder: reclaimable.owner?.token.slice(0, 8), reclaimed })
-            if (reclaimed) continue
-          }
+          if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
         }
         if (wait === undefined) {
           heldRecordLockTokens.delete(owner.token)
