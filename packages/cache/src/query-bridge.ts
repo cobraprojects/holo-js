@@ -341,7 +341,7 @@ export function createCacheQueryBridge(
     for (const dependency of dependencies) {
       const indexedKeys = await dependencyIndex.listKeys(dependency)
       for (const indexedKey of indexedKeys) {
-        /* v8 ignore next 3 */
+        /* v8 ignore next 3 -- repeated dependency listings collapse after the first removeKey() call in the shared index. */
         if (invalidatedKeys.has(indexedKey)) {
           continue
         }

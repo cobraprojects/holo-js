@@ -540,7 +540,7 @@ export async function withRuntimeEnvironment<T>(
       input: runtimePayload,
     })
 
-    if (result.status !== 0) {
+    if (result.status !== 0 || result.error) {
       throw new Error(getRuntimeFailureMessage(kind, result))
     }
 

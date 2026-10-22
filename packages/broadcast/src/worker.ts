@@ -2683,7 +2683,7 @@ export async function startBroadcastWorker(
                 send(payload) {
                   socket.send(payload)
                 },
-                /* v8 ignore next 3 */
+                /* v8 ignore next 3 -- Bun websocket close callback forwarding is adapter glue; close is driven by Bun, not by unit tests. */
                 close(code, reason) {
                   socket.close(code, reason)
                 },
@@ -2749,7 +2749,7 @@ export async function startBroadcastWorker(
     try {
       nodeWsModule = await (runtimeBindings.loadWebSocketModule
         ? runtimeBindings.loadWebSocketModule()
-        /* v8 ignore next */
+        /* v8 ignore next -- default ws import; tests always provide loadWebSocketModule */
         : import('ws'))
     } catch (error) {
       await runtime.close()
@@ -2765,7 +2765,7 @@ export async function startBroadcastWorker(
     const requestConnectionInfo = new WeakMap<IncomingMessage, WorkerConnectionInfo>()
     const wsServer = new WebSocketServer({ noServer: true, maxPayload: config.worker.maxMessageBytes })
     const heartbeat = startSocketHeartbeat(wsServer.clients, runtimeBindings.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS)
-    /* v8 ignore start */
+    /* v8 ignore start -- Node websocket connection handler is adapter glue; exercised by real ws integration tests */
     wsServer.on('connection', (socket, request) => {
       const connectionInfo = requestConnectionInfo.get(request)!
 
@@ -2838,7 +2838,7 @@ export async function startBroadcastWorker(
       const runtimeResponse = await runtime.fetch(runtimeRequest)
       await writeNodeResponse(response, runtimeResponse)
     })
-    /* v8 ignore start */
+    /* v8 ignore start -- Node websocket upgrade handler is adapter glue; requires real ws package for integration testing */
     httpServer.on('upgrade', (request, socket, head) => {
       const requestUrl = new URL(toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`))
       const appMatch = requestUrl.pathname.match(appPathRegex)
@@ -2887,7 +2887,7 @@ export async function startBroadcastWorker(
     }
 
     const address = httpServer.address()
-    /* v8 ignore next */
+    /* v8 ignore next -- defensive fallback when httpServer.address() returns a string or null */
     const port = typeof address === 'object' && address ? address.port : config.worker.port
     return Object.freeze({
       host: config.worker.host,

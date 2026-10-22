@@ -109,11 +109,11 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
     throw new HydrationError(`Leap second in "${value}" cannot be written as a timestamp.`)
   }
 
-  if (!hasCalendarFields(match)) {
+  const zone = match[9]?.toUpperCase()
+  if (zone === undefined || !hasCalendarFields(match)) {
     return undefined
   }
 
-  const zone = (match[9] ?? '').toUpperCase()
   const canonicalZone = zone.length === 5 ? `${zone.slice(0, 3)}:${zone.slice(3)}` : zone
   const instant = new Date(`${match[1]}${canonicalZone}`)
   return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[8] }

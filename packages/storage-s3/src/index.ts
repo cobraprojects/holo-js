@@ -591,9 +591,9 @@ async function forEachConcurrently<TItem>(
   concurrency: number,
   task: (item: TItem) => Promise<void>,
 ): Promise<void> {
-  const pending = items.values()
+  const remaining = items.values()
   const worker = async (): Promise<void> => {
-    for (const item of pending) {
+    for (const item of remaining) {
       await task(item)
     }
   }
