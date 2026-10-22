@@ -1,5 +1,4 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
@@ -66,6 +65,7 @@ import {
   validateMigrationName,
 } from './discovery-helpers'
 import type { BroadcastDiscoveryModule } from './shared'
+import { loadConfigWithNormalizers } from './load-config'
 
 type BroadcastExportEntry = {
   readonly exportName: string
@@ -115,7 +115,7 @@ export async function prepareProjectDiscovery(
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
   prepareFramework = true,
 ): Promise<GeneratedProjectRegistry> {
-  const loadedConfig = await loadConfigDirectory(projectRoot, {
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot, {
     processEnv: process.env,
   })
   const modelsRoot = resolve(projectRoot, config.paths.models)

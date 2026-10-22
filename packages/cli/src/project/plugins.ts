@@ -2,7 +2,6 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { loadConfigDirectory } from '@holo-js/config'
 import type { MigrationDefinition } from '@holo-js/db'
 import {
   type HoloPluginBroadcastContributions,
@@ -16,6 +15,7 @@ import {
   loadHoloPluginDefinitions,
   normalizeHoloPluginDefinition as normalizeKernelPluginDefinition,
 } from '@holo-js/kernel'
+import { loadConfigWithNormalizers } from './load-config'
 export type {
   HoloPluginBroadcastContributions,
   HoloPluginCacheContributions,
@@ -714,7 +714,7 @@ export async function loadProjectPluginFrameworkDescriptors(projectRoot: string)
 
 export async function readProjectPluginNames(projectRoot: string): Promise<readonly string[]> {
   try {
-    const config = await loadConfigDirectory(projectRoot, {
+    const config = await loadConfigWithNormalizers(projectRoot, {
       preferCache: false,
       processEnv: process.env,
     })

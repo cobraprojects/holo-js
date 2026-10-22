@@ -3,7 +3,8 @@ import { existsSync, watch } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { loadConfigDirectory, type LoadedHoloConfig } from '@holo-js/config'
+import type { LoadedHoloConfig } from '@holo-js/config'
+import type { loadConfigDirectory } from '@holo-js/config'
 import {
   configureDB,
   resetDB,
@@ -40,6 +41,7 @@ import type { LoadedProjectConfig, CommandFlagValue } from './types'
 import type { HoloRuntime } from '@holo-js/core'
 import type { QueueDriverFactory, QueueWorkerRunOptions } from '@holo-js/queue'
 import { writeTextFile } from './project/atomic-file'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 type QueueMaintenanceConnection = Awaited<ReturnType<typeof loadConfigDirectory>>['queue']['connections'][string]
 
@@ -403,7 +405,7 @@ export async function initializeQueueMaintenanceEnvironment(
     >>
   } = {},
 ): Promise<QueueMaintenanceEnvironment> {
-  const loadedConfig = await (dependencies.loadConfig ?? loadConfigDirectory)(projectRoot)
+  const loadedConfig = await (dependencies.loadConfig ?? loadConfigWithNormalizers)(projectRoot)
   const queueModule = await (dependencies.loadQueueModule ?? loadQueueCliModule)(projectRoot)
   const resolvedConnectionName = connectionName?.trim() || loadedConfig.queue.default
   const connection = loadedConfig.queue.connections[resolvedConnectionName]

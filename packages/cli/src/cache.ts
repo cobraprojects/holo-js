@@ -1,9 +1,10 @@
-import { loadConfigDirectory } from '@holo-js/config'
+import type { loadConfigDirectory } from '@holo-js/config'
 import { unregisterDatabaseDriverFactory } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 type LoadedCacheConfig = Awaited<ReturnType<typeof loadConfigDirectory>> & {
   readonly cache: {
@@ -130,7 +131,7 @@ export async function initializeCacheMaintenanceEnvironment(
   projectRoot: string,
   driverName?: string,
 ): Promise<CacheMaintenanceEnvironment> {
-  const loadedConfig = await loadConfigDirectory(projectRoot) as LoadedCacheConfig
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot) as LoadedCacheConfig
   const databaseDriverFactories = await loadProjectDatabaseDrivers(projectRoot, loadedConfig.database)
   const cacheModule = await loadCacheCliModule(projectRoot)
   const cache = resolveCacheFacade(cacheModule)
