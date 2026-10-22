@@ -30,8 +30,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "catalog:",
-    "@holo-js/kernel": "catalog:"
+    "@holo-js/db": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/queue": "catalog:"
