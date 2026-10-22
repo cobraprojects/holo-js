@@ -1,11 +1,13 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
+import { writeLauncher, writeLauncherSync } from '../../../tests/support/launchers'
+import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -19,7 +21,6 @@ import {
   resolveInstalledDependencyRoot,
   symlinkPackageDependencySync,
 } from '../../../tests/support/published-package'
-import { startLocalPackageRegistry, type LocalPackageRegistry } from '../../../tests/support/local-package-registry'
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
@@ -406,9 +407,8 @@ async function linkWorkspaceCli(projectRoot: string): Promise<void> {
   await mkdir(binariesDir, { recursive: true })
   await linkWorkspaceDb(projectRoot)
   await rm(join(packagesDir, '@holo-js', 'cli'), { recursive: true, force: true }).catch(() => {})
-  await rm(join(binariesDir, 'holo'), { force: true }).catch(() => {})
   await symlink(cliPackageRoot, join(packagesDir, '@holo-js', 'cli')).catch(() => {})
-  await symlink(cliBinPath, join(binariesDir, 'holo')).catch(() => {})
+  await writeLauncher(binariesDir, 'holo', { node: { absolute: cliBinPath } })
 }
 
 async function linkWorkspaceAuthFlowPackages(projectRoot: string): Promise<void> {
@@ -584,9 +584,7 @@ function linkBuiltWorkspacePackagesSync(projectRoot: string): void {
     symlinkSync(packageRoot, packagePath)
   }
 
-  const binaryPath = join(binariesDir, 'holo')
-  rmSync(binaryPath, { force: true })
-  symlinkSync(cliBinPath, binaryPath)
+  writeLauncherSync(binariesDir, 'holo', { node: { absolute: cliBinPath } })
 }
 
 function runNode(projectRoot: string, entryPath: string) {
@@ -643,7 +641,6 @@ function createIo(projectRoot: string, options: { tty?: boolean, input?: string 
 
 async function createTempProject(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'holo-cli-test-'))
-  await writeFile(join(dir, '.npmrc'), `prefer-offline=true\n${localRegistry.scope}:registry=${localRegistry.url}\n`)
   await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', private: true }, null, 2))
   await writeProjectFile(dir, 'config/app.ts', `
 import { defineAppConfig } from '@holo-js/config'
@@ -774,11 +771,23 @@ async function createTempDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'holo-cli-dir-'))
 }
 
-async function createOfflinePackageManagerEnv(projectRoot: string): Promise<NodeJS.ProcessEnv> {
-  const binRoot = join(projectRoot, '.offline-package-manager')
+let packageManagerShimRoot = ''
+let packageManagerInstallLog = ''
+
+async function writeFrameworkSyncBinary(projectRoot: string, name: string): Promise<void> {
+  const binRoot = join(projectRoot, 'node_modules', '.bin')
   await mkdir(binRoot, { recursive: true })
-  await writeFile(join(binRoot, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-  return { PATH: `${binRoot}:${process.env.PATH ?? ''}` }
+  await writeLauncher(binRoot, name, { exit: 0 })
+}
+
+async function packageManagerInstallRequestCount(projectRoot: string): Promise<number> {
+  const root = await realpath(projectRoot)
+  const requests = (await readFile(packageManagerInstallLog, 'utf8').catch(() => '')).split('\n')
+  return requests.filter(request => request === root).length
+}
+
+async function expectPackageManagerInstallRequests(projectRoot: string, count: number): Promise<void> {
+  expect(await packageManagerInstallRequestCount(projectRoot)).toBe(count)
 }
 
 async function writeProjectFile(projectRoot: string, relativePath: string, contents: string): Promise<void> {
@@ -912,13 +921,15 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
 }
 
 const tempDirs: string[] = []
-let localRegistry: LocalPackageRegistry
-const inheritedBunCacheDirectory = process.env.BUN_INSTALL_CACHE_DIR
+let inheritedPath: string | undefined
 
 beforeAll(async () => {
-  const { packages } = ensureBuiltWorkspacePackagesSync()
-  localRegistry = await startLocalPackageRegistry({ scope: '@holo-js', catalog: workspaceCatalog, packages })
-  process.env.BUN_INSTALL_CACHE_DIR = localRegistry.env.BUN_INSTALL_CACHE_DIR
+  ensureBuiltWorkspacePackagesSync()
+  inheritedPath = process.env.PATH
+  packageManagerShimRoot = await mkdtemp(join(tmpdir(), 'holo-cli-package-manager-'))
+  const shims = await createPackageManagerShims(packageManagerShimRoot)
+  packageManagerInstallLog = shims.installLog
+  process.env.PATH = `${packageManagerShimRoot}${delimiter}${inheritedPath ?? ''}`
 }, 300_000)
 
 afterEach(async () => {
@@ -929,9 +940,9 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
-  if (inheritedBunCacheDirectory === undefined) delete process.env.BUN_INSTALL_CACHE_DIR
-  else process.env.BUN_INSTALL_CACHE_DIR = inheritedBunCacheDirectory
-  await localRegistry?.close()
+  if (inheritedPath === undefined) delete process.env.PATH
+  else process.env.PATH = inheritedPath
+  if (packageManagerShimRoot) await rm(packageManagerShimRoot, { recursive: true, force: true })
   for (const root of tempBuildRoots.splice(0)) {
     await rm(root, { recursive: true, force: true })
   }
@@ -1501,11 +1512,14 @@ APP_ENV=development
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('APP_NAME=Fixture\n\nQUEUE_CONNECTION=sync\n')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe('APP_NAME=\n\nQUEUE_CONNECTION=\n')
     await expect(stat(join(projectRoot, 'server/jobs'))).resolves.toBeDefined()
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+    expect(installRequests).toBeGreaterThan(0)
 
     const rerun = runCliProcess(projectRoot, ['install', 'queue'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Queue support is already installed.')
-  }, 90000)
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
+  })
 
   it('installs redis queue support additively without duplicating env keys or overwriting queue config', async () => {
     const projectRoot = await createTempProject()
@@ -1539,6 +1553,8 @@ export default defineAppConfig({
     expect(result.stdout).toContain('updated .env.example')
     expect(result.stdout).not.toContain('created config/queue.ts')
     expect(result.stdout).toContain('created server/jobs')
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+    expect(installRequests).toBeGreaterThan(0)
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -1559,8 +1575,9 @@ export default defineAppConfig({
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Queue support is already installed.')
     expect(rerun.stdout).not.toContain('updated package.json')
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
-  }, 90000)
+  })
 
   it('installs auth support into an existing project with local defaults', async () => {
     const projectRoot = await createTempProject()
@@ -1576,6 +1593,8 @@ export default defineAppConfig({
     expect(result.stdout).toContain('created config/cors.ts')
     expect(result.stdout).toContain('created server/models/User.ts')
     expect(result.stdout).toContain('created 8 auth migrations')
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+    expect(installRequests).toBeGreaterThan(0)
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -1595,6 +1614,7 @@ export default defineAppConfig({
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
     await mkdir(join(projectRoot, 'data'), { recursive: true })
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
@@ -1607,7 +1627,7 @@ export default defineAppConfig({
     } finally {
       database.close()
     }
-  }, 90000)
+  })
 
 
   it('installs authorization support without forcing auth and is idempotent', async () => {
@@ -1656,12 +1676,15 @@ export default defineAppConfig({
     expect(first.stdout).toContain('  - created server/abilities')
     expect(first.stdout).toContain('  - created server/policies/README.md')
     expect(first.stdout).toContain('  - created server/abilities/README.md')
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+    expect(installRequests).toBeGreaterThan(0)
 
     const second = runCliProcess(projectRoot, ['install', 'authorization'])
 
     expect(second.status).toBe(0)
     expect(second.stdout).toContain('Authorization support is already installed.')
-  }, 90000)
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
+  })
 
   it('keeps auth installed when authorization is added afterward', async () => {
     const projectRoot = await createTempProject()
@@ -3981,7 +4004,8 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('MAIL_MAILER=preview')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('MAIL_MAILER=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
-  }, 60000)
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBeGreaterThan(0)
+  })
 
   it('installs cache support through the CLI with the default file driver and is idempotent', async () => {
     const projectRoot = await createTempProject()
@@ -4188,20 +4212,20 @@ export default defineCacheConfig({
     await rm(join(projectRoot, '.env'), { force: true })
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(packageJson.scripts.prepare).toBe('holo key:generate && holo install broadcast && holo prepare')
-    const offlineEnv = await createOfflinePackageManagerEnv(projectRoot)
-
-    const keyGenerated = runCliProcess(projectRoot, ['key:generate'], { env: offlineEnv })
+    const keyGenerated = runCliProcess(projectRoot, ['key:generate'])
     expect(keyGenerated.status, keyGenerated.stderr || keyGenerated.stdout).toBe(0)
-    const broadcastInstalled = runCliProcess(projectRoot, ['install', 'broadcast'], { env: offlineEnv })
+    const broadcastInstalled = runCliProcess(projectRoot, ['install', 'broadcast'])
     expect(broadcastInstalled.status, broadcastInstalled.stderr || broadcastInstalled.stdout).toBe(0)
-    const prepared = runCliProcess(projectRoot, ['prepare'], { env: offlineEnv })
+    await expectPackageManagerInstallRequests(projectRoot, 0)
+    const prepared = runCliProcess(projectRoot, ['prepare'])
     expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    await expectPackageManagerInstallRequests(projectRoot, 0)
 
     const env = await readFile(join(projectRoot, '.env'), 'utf8')
     expect(env).toMatch(/^BROADCAST_APP_ID=[a-f0-9]{16}$/m)
     expect(env).toMatch(/^BROADCAST_APP_KEY=[a-f0-9]{32}$/m)
     expect(env).toMatch(/^BROADCAST_APP_SECRET=[A-Za-z0-9_-]{43}$/m)
-  }, 120_000)
+  })
 
   it('installs Next.js broadcast support without requiring framework Flux bootstrap files', async () => {
     const nextRoot = await createTempProject()
@@ -4216,8 +4240,9 @@ export default defineCacheConfig({
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'app/layout.tsx', 'export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html> }\n')
-    const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(nextRoot) })
+    const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'])
     expect(nextResult.status, `${nextResult.stdout}\n${nextResult.stderr}`).toBe(0)
+    expect(await packageManagerInstallRequestCount(nextRoot)).toBeGreaterThan(0)
     expect(nextResult.stdout).toContain('Installed broadcast support.')
     expect(nextResult.stdout).toContain('  - updated .env')
     expect(nextResult.stdout).toContain('  - updated .env.example')
@@ -4273,8 +4298,10 @@ export default defineCacheConfig({
         nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
-    const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(nuxtRoot) })
+    await writeFrameworkSyncBinary(nuxtRoot, 'nuxt')
+    const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'])
     expect(nuxtResult.status, `${nuxtResult.stdout}\n${nuxtResult.stderr}`).toBe(0)
+    expect(await packageManagerInstallRequestCount(nuxtRoot)).toBeGreaterThan(0)
     await expect(stat(join(nuxtRoot, 'app/plugins/flux.client.ts'))).rejects.toThrow()
     await expect(stat(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'))).rejects.toThrow()
     await expect(stat(join(nuxtRoot, 'server/holo.ts'))).rejects.toThrow()
@@ -4295,8 +4322,10 @@ export default defineCacheConfig({
         '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
-    const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'], { env: await createOfflinePackageManagerEnv(svelteRoot) })
+    await writeFrameworkSyncBinary(svelteRoot, 'svelte-kit')
+    const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'])
     expect(svelteResult.status, `${svelteResult.stdout}\n${svelteResult.stderr}`).toBe(0)
+    expect(await packageManagerInstallRequestCount(svelteRoot)).toBeGreaterThan(0)
     await expect(stat(join(svelteRoot, 'src/lib/flux.ts'))).rejects.toThrow()
     await expect(stat(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
@@ -4938,8 +4967,8 @@ export default defineDatabaseConfig({
       },
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies?.['@holo-js/db-sqlite']).toBeUndefined()
-    expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/db-postgres/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
-  }, 60000)
+    await expectPackageManagerInstallRequests(projectRoot, 1)
+  })
 
   it('syncs cache optional packages from config/cache.ts during prepare', async () => {
     const projectRoot = await createTempProject()
@@ -4976,11 +5005,12 @@ export default defineCacheConfig({
 
     const syncedDependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
     expect(syncedDependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
-      expect(syncedDependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
-      expect(syncedDependencies['@holo-js/cache-redis']).toBe(expectedHoloPackageRange)
-      expect(typeof syncedDependencies.ioredis).toBe('string')
+    expect(syncedDependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
+    expect(syncedDependencies['@holo-js/cache-redis']).toBe(expectedHoloPackageRange)
+    expect(typeof syncedDependencies.ioredis).toBe('string')
+    await expectPackageManagerInstallRequests(projectRoot, 1)
 
-      await writeProjectFile(projectRoot, 'config/cache.ts', `
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
 import { defineCacheConfig } from '@holo-js/cache'
 
 export default defineCacheConfig({
@@ -5001,8 +5031,8 @@ export default defineCacheConfig({
     expect(dependencies['@holo-js/cache-db']).toBeUndefined()
     expect(dependencies['@holo-js/cache-redis']).toBeUndefined()
     expect(dependencies.ioredis).toBeUndefined()
-    expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
-  }, 60000)
+    await expectPackageManagerInstallRequests(projectRoot, 2)
+  })
 
   it('preserves package-only cache support during prepare when config/cache.ts is absent', async () => {
     const projectRoot = await createTempProject()
@@ -5022,8 +5052,8 @@ export default defineCacheConfig({
 
     const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
     expect(dependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
-    expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
-  }, 60000)
+    await expectPackageManagerInstallRequests(projectRoot, 1)
+  })
 
   it('caches evaluated config values and clears the cache through the CLI', async () => {
     const projectRoot = await createTempProject()
@@ -8827,9 +8857,8 @@ export default {
         manifest.dependencies['@holo-js/core'] = expectedHoloPackageRange
         manifest.dependencies['demo-framework'] = `file:${frameworkRoot}`
         manifest.dependencies['holo-plugin-demo-framework'] = `file:${installedPluginRoot}`
-        manifest.scripts = { postinstall: 'node postinstall.cjs' }
         await writeFile(join(projectRoot, 'package.json'), JSON.stringify(manifest))
-        await writeFile(join(projectRoot, 'postinstall.cjs'), `
+        await writeFile(join(projectRoot, 'install-hook.cjs'), `
 const fs = require('node:fs')
 const projectRoot = process.cwd()
 ${mutation.replace("manifest.dependencies['changed-framework'] = '^1.0.0'", `manifest.dependencies['changed-framework'] = ${JSON.stringify(`file:${frameworkRoot}`)}`)}
@@ -8839,6 +8868,7 @@ ${mutation.replace("manifest.dependencies['changed-framework'] = '^1.0.0'", `man
         await runProjectPrepare(projectRoot)
       }
 
+      await expectPackageManagerInstallRequests(projectRoot, scenario === 'installation-changes-discovery' ? 1 : 0)
       const expectedFramework = scenario === 'installation-changes-discovery' ? 'changed-framework' : 'demo-framework'
       expect(JSON.parse(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8'))).toEqual({ framework: expectedFramework })
       expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain(`const commandName = "${expectedFramework}"`)
