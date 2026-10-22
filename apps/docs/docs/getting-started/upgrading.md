@@ -181,6 +181,10 @@ Local disks also change to exact names; see [Local file names](#local-file-names
 
 S3 requests now time out, and `writeStream()` uploads parts of at most 64 MiB, so one stream can upload up to about 620 GiB. See [S3 timeouts](/storage/s3#timeouts).
 
+### Nuxt builds don't keep storage credentials
+
+`nuxt build` no longer writes the S3 credentials of your storage disks (`accessKeyId`, `secretAccessKey`, and `sessionToken`) into the build's options. The running server reads them when it starts, from the environment that `config/storage.ts` reads, such as `STORAGE_DISKS_S3_ACCESS_KEY_ID`. Set those variables on the server. Values that exist only in the build environment aren't available at runtime. See [S3 storage](/storage/s3).
+
 ### S3 uploads now carry a Content-Type
 
 S3 uploads now carry a `Content-Type`, taken from the file's first bytes or its extension. Before, S3 stored every object as `binary/octet-stream`, so browsers downloaded it. New uploads of browser-renderable types, such as images, PDF, text, and JSON, now display inline when a public bucket or CDN serves them. HTML, SVG, and XML are still stored as `application/octet-stream`, so they keep downloading. Existing objects are unchanged. See [Content types](/storage/s3#content-types).
@@ -527,6 +531,26 @@ Check three behaviors when you upgrade:
 
 To retry a transaction after a deadlock or lock timeout, pass `attempts`. See [Retry deadlocks](/database/transactions#retry-deadlocks).
 
+### Rollback callbacks and failed rollbacks
+
+Check three behaviors when you upgrade:
+
+- `afterRollback()` callbacks run in reverse registration order. Before, they ran in registration order.
+- A callback that throws no longer stops the callbacks after it. When one fails, `DB.transaction()` rejects with an `AggregateError` that holds the original error and a `TransactionError`, so a `catch` that checked for the original error must read the `errors` array.
+- When the rollback itself fails, `afterRollback()` callbacks don't run, and `DB.transaction()` rejects with the rollback error. The query logger's `onTransactionRollback` hook receives that failure once.
+
+### Query logger hooks run outside the connection
+
+Check three behaviors when you upgrade:
+
+- `onQueryStart` runs before its query waits for a slot on the connection. Before, a query that the queue limit rejected never ran `onQueryStart`; now it runs both `onQueryStart` and `onQueryError`.
+- A hook can run queries on its own connection without stalling it, and queries a hook runs don't trigger the query hooks again. Before, a hook that queried a busy connection could hang it or loop through the error hook.
+- A hook inside a transaction that waits for work needing that transaction's connection still hangs, because the transaction waits for the hook. Don't await a query on the transaction's connection from inside a hook.
+
+### findMany splits large key lists
+
+`findMany()` with more than 256 keys runs one query per chunk of 256 keys, as eager loads do, instead of one query with every key. Duplicate keys are removed, and each row is returned once. Soft-deleted rows stay excluded, and global scopes still apply to every chunk. Update code or tests that count queries or expect one statement for a long key list. Each chunk also appears as its own entry in the query logger.
+
 ### Query operators, date values, and foreign-key toggles
 
 Check three behaviors when you upgrade:
@@ -573,6 +597,10 @@ User.with({
 ```
 
 Relation callbacks now also type their query builder as the related model, so a callback that uses a column of another model is a type error. `whereRelation()` and `orWhereRelation()` on a nested path check their column against the leaf model too. See [Constraining eager loads](/orm/relationships/loading#constraining-eager-loads).
+
+### Lifecycle handlers and scope constraints are typed
+
+Handlers in a model's `events` option receive the model's entity, and the callback you pass to `scopeRelation()` receives a query on the related model. TypeScript checks the columns those callbacks use and any parameter annotation you wrote. An annotation that doesn't match the entity, or a constraint that names a column the related table lacks, is now a type error. The runtime behavior doesn't change. Correct the annotation or the column name.
 
 ### Scope names must not match builder methods
 
