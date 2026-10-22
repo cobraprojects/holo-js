@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { decryptCookieValue, encryptCookieValue } from '@holo-js/kernel'
+import { cookieEncryptionInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { DEFAULT_SESSION_REMEMBER_ME_LIFETIME } from './config'
 import type {
@@ -482,11 +482,11 @@ export function cookie(name: string, value: string, options?: CookieSerializeOpt
 
 function encryptedCookie(name: string, value: string, options?: CookieSerializeOptions): string {
   const appKey = getSessionRuntimeState().bindings?.appKey
-  return serializeCookie(name, value ? encryptCookieValue(name, value, appKey) : '', options)
+  return serializeCookie(name, value ? cookieEncryptionInternals.encryptCookieValue(name, value, appKey) : '', options)
 }
 
 function decryptCookie(name: string, value: string): string | undefined {
-  return decryptCookieValue(name, value, getSessionRuntimeState().bindings?.appKey)
+  return cookieEncryptionInternals.decryptCookieValue(name, value, getSessionRuntimeState().bindings?.appKey)
 }
 
 export function sessionCookie(value: string, options?: CookieSerializeOptions): string {

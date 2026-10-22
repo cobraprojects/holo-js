@@ -12,7 +12,7 @@ function cookieEncryptionKey(appKey: string | undefined): Buffer {
   return createHmac('sha256', key).update('holo-js:cookie-encryption').digest()
 }
 
-export function encryptCookieValue(name: string, value: string, appKey: string | undefined): string {
+function encryptCookieValue(name: string, value: string, appKey: string | undefined): string {
   const iv = randomBytes(IV_BYTES)
   const cipher = createCipheriv('aes-256-gcm', cookieEncryptionKey(appKey), iv)
   cipher.setAAD(Buffer.from(name, 'utf8'))
@@ -20,7 +20,7 @@ export function encryptCookieValue(name: string, value: string, appKey: string |
   return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url')
 }
 
-export function decryptCookieValue(name: string, value: string, appKey: string | undefined): string | undefined {
+function decryptCookieValue(name: string, value: string, appKey: string | undefined): string | undefined {
   const key = cookieEncryptionKey(appKey)
   const payload = Buffer.from(value, 'base64url')
   if (payload.toString('base64url') !== value) return undefined
@@ -35,3 +35,5 @@ export function decryptCookieValue(name: string, value: string, appKey: string |
     return undefined
   }
 }
+
+export const cookieEncryptionInternals = Object.freeze({ decryptCookieValue, encryptCookieValue })

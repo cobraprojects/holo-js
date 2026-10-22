@@ -8,7 +8,7 @@
 
 ### Apple callbacks and signing-key rotation
 
-Serve your [Apple callback](/auth/social-login#apple) over HTTPS. Holo now sends its state cookie with `SameSite=None; Secure`, allowing Apple's cross-site form POST while keeping state validation. Keep the callback as a POST handler and exclude it from CSRF protection. No social-provider configuration changes are required.
+Serve your [Apple callback](/auth/social-login#apple) over HTTPS. Holo now sends its state cookie with `SameSite=None; Secure`, allowing Apple's cross-site form POST while keeping state validation. Keep the callback as a POST handler and exclude it from CSRF protection. Behind a proxy that terminates TLS, list the proxy in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies) so Holo sees the HTTPS request and sends `Secure`; no other configuration changes are required.
 
 Apple, Clerk, and WorkOS signing keys now expire after ten minutes. An unknown key ID can refresh them at most once per minute, and concurrent requests share the fetch. A newly rotated key may therefore take up to a minute to be accepted. Tokens with invalid signatures under a known key ID no longer trigger a fetch.
 
@@ -295,6 +295,8 @@ Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0
 
 The environment now comes only from `APP_ENV`. The `--env` option wins over `APP_ENV` from your shell, which wins over `APP_ENV` in `.env`. When none of them sets it, the environment is `production` instead of `development`. Holo uses that environment to pick which `.env` files load. `HOLO_ENV` is no longer read, and `NODE_ENV` no longer picks the environment. A value other than `development`, `production`, or `test` now stops Holo with an error instead of counting as `development`.
 
+An env file that exists but can't be read, such as a `.env` that is a directory, also stops Holo with the file-system error. Before, it was skipped, so the environment fell back to `production`.
+
 Before installing 0.4.0:
 
 1. Add `APP_ENV=development` to your local `.env`. Without it, local commands and `holo dev` run as `production`.
@@ -476,7 +478,7 @@ Each Redis session is its own key: the store's `prefix`, then `holo:session:`, t
 Update the resend route and its page:
 
 - Call `resendEmailVerification()` with no arguments. Users are signed in after `login()`, including unverified users, so the verification page can post to the route without an address.
-- Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
+- Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. New security configs include the limiter. If your `config/security.ts` already exists, add it to `rateLimit.limiters`. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
 - Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
 
 ### Password reset cycles remember tokens

@@ -73,7 +73,7 @@ const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
 
 type AuthRuntimeJwksCacheEntry = {
   readonly keys: Promise<readonly AuthRuntimeJwkKey[]>
-  readonly loadedAt: number
+  loadedAt: number
   expiresAt: number
 }
 
@@ -85,6 +85,23 @@ function findJwk(keys: readonly AuthRuntimeJwkKey[], kid: string | undefined): A
     : keys[0]
 }
 
+async function fetchJwks(options: {
+  readonly requestUrl: string
+  readonly errorMessage: string
+}): Promise<readonly AuthRuntimeJwkKey[]> {
+  const response = await fetch(options.requestUrl, {
+    headers: {
+      accept: 'application/json',
+    },
+  })
+  if (!response.ok) {
+    throw new Error(options.errorMessage)
+  }
+
+  const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
+  return payload.keys ?? []
+}
+
 function loadJwks(
   cache: AuthRuntimeJwksCache,
   cacheKey: string,
@@ -93,28 +110,28 @@ function loadJwks(
     readonly errorMessage: string
   },
 ): AuthRuntimeJwksCacheEntry {
+  const previous = cache.get(cacheKey)
   const entry: AuthRuntimeJwksCacheEntry = {
     loadedAt: Date.now(),
     expiresAt: Number.POSITIVE_INFINITY,
-    keys: (async () => {
-      const response = await fetch(options.requestUrl, {
-        headers: {
-          accept: 'application/json',
-        },
-      })
-      if (!response.ok) {
-        throw new Error(options.errorMessage)
-      }
+    keys: fetchJwks(options).then(
+      keys => {
+        entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS
+        return keys
+      },
+      async error => {
+        entry.loadedAt = Date.now()
+        entry.expiresAt = entry.loadedAt + JWKS_REFRESH_INTERVAL_MS
+        const previousKeys = await previous?.keys.catch(() => undefined)
+        if (previousKeys) {
+          return previousKeys
+        }
 
-      const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
-      return payload.keys ?? []
-    })(),
+        throw error
+      },
+    ),
   }
 
-  entry.keys.then(
-    () => { entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS },
-    () => { entry.expiresAt = Date.now() + JWKS_REFRESH_INTERVAL_MS },
-  )
   cache.set(cacheKey, entry)
   return entry
 }
