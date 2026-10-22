@@ -1681,7 +1681,6 @@ export class ModelRepository<
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
         : { lastInsertId: await query.insertGetId(payload) }
-      markWritten()
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
@@ -1689,6 +1688,7 @@ export class ModelRepository<
           : {}),
       } as Partial<ModelRecord<TTable>>
       entity.forceFill(this.normalizeFromStorage(attributes))
+      markWritten()
       entity.recordChanges({})
       await this.dispatchEvent('created', entity)
       await this.dispatchEvent('saved', entity)
@@ -1835,9 +1835,9 @@ export class ModelRepository<
       }
 
       await this.writeQuery().where(primaryKey, id).getTableQueryBuilder().update(dirty)
-      markWritten()
       entity.recordChanges(written)
       entity.forceFill(this.normalizeFromStorage(dirty))
+      markWritten()
       await this.dispatchEvent('updated', entity)
       await this.dispatchEvent('saved', entity)
       await this.touchOwners(entity)
@@ -1859,21 +1859,16 @@ export class ModelRepository<
     const dirtyKeys = Object.keys(entity.getDirty())
     return this.runWriteUnit(async () => {
       let written = false
-      const pending: { recordWritten?: () => void } = {}
       try {
-        const result = await write(() => {
+        return await write(() => {
           written = true
           const restore = commitFailureRestoreFor(this.getConnection(), entity, () => createEntityCommitRestore(entity, state))
           restore.recordWrite(state, dirtyKeys)
-          pending.recordWritten = () => restore.recordWritten()
+          restore.recordWritten()
         })
-        pending.recordWritten?.()
-        return result
       } catch (error) {
         if (ownsTransaction || !written) {
           restoreEntityWriteState(entity, state)
-        } else {
-          pending.recordWritten?.()
         }
         throw error
       }
@@ -1945,13 +1940,16 @@ export class ModelRepository<
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       const written = entity.getDirty()
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
-      if (Object.keys(dirty).length > 0) {
+      const wrote = Object.keys(dirty).length > 0
+      if (wrote) {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
-        markWritten()
       }
 
       entity.recordChanges(written)
       entity.forceFill(this.normalizeFromStorage(dirty))
+      if (wrote) {
+        markWritten()
+      }
       entity.finishSave()
       await this.dispatchEvent('restored', entity)
       await this.touchOwners(entity)
