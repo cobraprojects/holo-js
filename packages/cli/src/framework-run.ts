@@ -166,8 +166,10 @@ export function createFrameworkSession(
       activeRun?.shutdown(signal)
     }
   }
+  let interruptReceived = false
   const onSigint = () => {
-    if (!controller.signal.aborted) {
+    if (!interruptReceived) {
+      interruptReceived = true
       shutdown('SIGINT')
       return
     }

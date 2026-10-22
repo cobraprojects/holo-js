@@ -31,6 +31,7 @@ describe('expandWindowsPercentReferences', () => {
     ['does not expand the value it inserts', '%A%', { A: '%B%', B: 'x' }, '%B%'],
     ['expands an empty variable to nothing', 'a%EMPTY%b', { EMPTY: '' }, 'ab'],
     ['does not read inherited object properties', '%constructor%', {}, '%constructor%'],
+    ['matches variable names case-insensitively, as cmd.exe does', '%userprofile%\\x', { USERPROFILE: 'C:\\U' }, 'C:\\U\\x'],
   ])('%s', (_title, value, processEnv, expected) => {
     expect(expandWindowsPercentReferences(value, processEnv)).toBe(expected)
   })

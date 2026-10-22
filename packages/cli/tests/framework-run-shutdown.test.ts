@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, expect, it } from 'vitest'
 import { createFrameworkSession } from '../src/framework-run'
 
+type WorkerPids = { readonly child: number, readonly grandchild: number }
+
 const tempDirs: string[] = []
 
 afterEach(async () => {
@@ -25,17 +27,22 @@ function createIo(projectRoot: string) {
 }
 
 function workerScript(pidPath: string, options: { readonly ignoreSigint: boolean }): string {
+  const grandchildSource = [
+    options.ignoreSigint ? `process.on('SIGINT', () => {})` : '',
+    `process.stdout.write('ready')`,
+    `setInterval(() => {}, 1000)`,
+  ].filter(Boolean).join('; ')
   return [
     `const { spawn } = require('node:child_process')`,
     `const { writeFileSync } = require('node:fs')`,
     options.ignoreSigint ? `process.on('SIGINT', () => {})` : '',
-    `const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })`,
-    `writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ child: process.pid, grandchild: grandchild.pid }))`,
+    `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildSource)}], { stdio: ['ignore', 'pipe', 'ignore'] })`,
+    `grandchild.stdout.once('data', () => writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ child: process.pid, grandchild: grandchild.pid })))`,
     `setInterval(() => {}, 1000)`,
   ].join('\n')
 }
 
-async function readPids(pidPath: string): Promise<{ readonly child: number, readonly grandchild: number }> {
+async function readPids(pidPath: string): Promise<WorkerPids> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
       return JSON.parse(await readFile(pidPath, 'utf8'))
@@ -68,7 +75,7 @@ it.skipIf(process.platform === 'win32')('force-stops the run on a second SIGINT 
   const pidPath = join(projectRoot, 'pids.json')
   const exits: number[] = []
   const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, code => exits.push(code))
-  let pids: { readonly child: number, readonly grandchild: number } | undefined
+  let pids: WorkerPids | undefined
   try {
     const run = await session.launch({ command: process.execPath, args: ['-e', workerScript(pidPath, { ignoreSigint: true })] }, [])
     pids = await readPids(pidPath)
@@ -77,6 +84,7 @@ it.skipIf(process.platform === 'win32')('force-stops the run on a second SIGINT 
     await delay(200)
     expect(exits).toEqual([])
     expect(isAlive(pids.child)).toBe(true)
+    expect(isAlive(pids.grandchild)).toBe(true)
 
     process.emit('SIGINT')
     expect(exits).toEqual([130])
@@ -93,7 +101,7 @@ it.skipIf(process.platform === 'win32')('delivers the first SIGINT to the whole 
   const pidPath = join(projectRoot, 'pids.json')
   const exits: number[] = []
   const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, code => exits.push(code))
-  let pids: { readonly child: number, readonly grandchild: number } | undefined
+  let pids: WorkerPids | undefined
   try {
     const run = await session.launch({ command: process.execPath, args: ['-e', workerScript(pidPath, { ignoreSigint: false })] }, [])
     pids = await readPids(pidPath)
@@ -112,7 +120,7 @@ it.skipIf(process.platform === 'win32')('stops the run when the terminal hangs u
   const projectRoot = await createProjectRoot()
   const pidPath = join(projectRoot, 'pids.json')
   const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, () => {})
-  let pids: { readonly child: number, readonly grandchild: number } | undefined
+  let pids: WorkerPids | undefined
   try {
     const run = await session.launch({ command: process.execPath, args: ['-e', workerScript(pidPath, { ignoreSigint: false })] }, [])
     pids = await readPids(pidPath)

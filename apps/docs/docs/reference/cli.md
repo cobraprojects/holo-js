@@ -601,7 +601,7 @@ Accepts the same flags as `queue:work` except `--once` and `--stop-when-empty`.
 npx holo queue:listen --connection redis --queue media
 ```
 
-`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A second `Ctrl+C` while it shuts down force-stops the worker and exits with status 130, so a job in progress is interrupted and retried later. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A second `Ctrl+C` while it shuts down force-stops the worker and exits with status 130. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
 
 ### queue:restart
 

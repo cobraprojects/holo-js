@@ -59,6 +59,11 @@ function parseEnvFile(contents: string): Record<string, string> {
   return values
 }
 
+function findProcessEnvValue(processEnv: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(processEnv).find(candidate => candidate.toUpperCase() === name.toUpperCase())
+  return key === undefined ? undefined : processEnv[key]
+}
+
 export function expandWindowsPercentReferences(value: string, processEnv: NodeJS.ProcessEnv): string {
   let expanded = ''
   let index = 0
@@ -82,7 +87,7 @@ export function expandWindowsPercentReferences(value: string, processEnv: NodeJS
     }
 
     const name = value.slice(start + 1, end)
-    const resolved = Object.hasOwn(processEnv, name) ? processEnv[name] : undefined
+    const resolved = findProcessEnvValue(processEnv, name)
     expanded += typeof resolved === 'string' ? resolved : value.slice(start, end + 1)
     index = end + 1
   }
