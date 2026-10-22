@@ -1,5 +1,6 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
+import { writeLauncher, writeLauncherSync } from '../../../tests/support/launchers'
 import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -406,9 +407,8 @@ async function linkWorkspaceCli(projectRoot: string): Promise<void> {
   await mkdir(binariesDir, { recursive: true })
   await linkWorkspaceDb(projectRoot)
   await rm(join(packagesDir, '@holo-js', 'cli'), { recursive: true, force: true }).catch(() => {})
-  await rm(join(binariesDir, 'holo'), { force: true }).catch(() => {})
   await symlink(cliPackageRoot, join(packagesDir, '@holo-js', 'cli')).catch(() => {})
-  await symlink(cliBinPath, join(binariesDir, 'holo')).catch(() => {})
+  await writeLauncher(binariesDir, 'holo', { node: { absolute: cliBinPath } })
 }
 
 async function linkWorkspaceAuthFlowPackages(projectRoot: string): Promise<void> {
@@ -584,9 +584,7 @@ function linkBuiltWorkspacePackagesSync(projectRoot: string): void {
     symlinkSync(packageRoot, packagePath)
   }
 
-  const binaryPath = join(binariesDir, 'holo')
-  rmSync(binaryPath, { force: true })
-  symlinkSync(cliBinPath, binaryPath)
+  writeLauncherSync(binariesDir, 'holo', { node: { absolute: cliBinPath } })
 }
 
 function runNode(projectRoot: string, entryPath: string) {
@@ -779,7 +777,7 @@ let packageManagerInstallLog = ''
 async function writeFrameworkSyncBinary(projectRoot: string, name: string): Promise<void> {
   const binRoot = join(projectRoot, 'node_modules', '.bin')
   await mkdir(binRoot, { recursive: true })
-  await writeFile(join(binRoot, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  await writeLauncher(binRoot, name, { exit: 0 })
 }
 
 async function packageManagerInstallRequestCount(projectRoot: string): Promise<number> {

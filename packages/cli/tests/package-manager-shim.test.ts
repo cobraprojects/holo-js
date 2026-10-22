@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createPackageManagerShims, renderLauncher } from '../../../tests/support/package-manager-shim'
+import { renderLauncher, writeLauncher } from '../../../tests/support/launchers'
+import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { resolveExecutable } from '../../../tests/support/package-manager-shim-runner.mjs'
 
 const tempDirs: string[] = []
@@ -14,20 +15,13 @@ afterEach(async () => {
   }
 })
 
-async function writeFakeRealBinary(directory: string, name: string, message: string): Promise<void> {
-  await mkdir(directory, { recursive: true })
-  if (process.platform === 'win32') {
-    await writeFile(join(directory, `${name}.cmd`), `@echo ${message} %*\r\n`)
-    return
-  }
-  await writeFile(join(directory, name), `#!/bin/sh\necho "${message} $*"\n`, { mode: 0o755 })
-}
 
 async function createQuotedFixture() {
   const base = await mkdtemp(join(tmpdir(), "holo-shim-it's-"))
   tempDirs.push(base)
   const realBin = join(base, "real bin's")
-  await writeFakeRealBinary(realBin, 'npm', 'real npm:')
+  await mkdir(realBin, { recursive: true })
+  await writeLauncher(realBin, 'npm', { echo: 'real npm:' })
   const shimRoot = join(base, "shim's root")
   await mkdir(shimRoot)
   const shims = await createPackageManagerShims(shimRoot)
@@ -38,7 +32,7 @@ async function createQuotedFixture() {
 }
 
 function runManager(shimRoot: string, env: NodeJS.ProcessEnv, cwd: string, args: readonly string[]) {
-  const launcher = renderLauncher('npm', process.platform).fileName
+  const launcher = renderLauncher('npm', { node: { sibling: 'shim.mjs' }, leadingArgs: ['npm'] }).fileName
   return spawnSync(join(shimRoot, launcher), [...args], {
     cwd,
     env,
@@ -159,21 +153,5 @@ describe('package manager shim resolution', () => {
     })
 
     expect(resolved).toBe('/usr/local/bin/npm')
-  })
-})
-
-describe('package manager launchers', () => {
-  it('renders a .cmd launcher that forwards to the runner through the node path on win32', () => {
-    const launcher = renderLauncher('npm', 'win32', 'C:\\node\\node.exe')
-
-    expect(launcher.fileName).toBe('npm.cmd')
-    expect(launcher.contents).toBe('@"C:\\node\\node.exe" "%~dp0shim.mjs" npm %*\r\n')
-  })
-
-  it('renders an executable sh launcher that execs node on POSIX', () => {
-    const launcher = renderLauncher('npm', 'linux')
-
-    expect(launcher.fileName).toBe('npm')
-    expect(launcher.contents).toBe('#!/bin/sh\nexec node "$(dirname "$0")/shim.mjs" npm "$@"\n')
   })
 })
