@@ -70,7 +70,8 @@ function lockPresentError(lockPath: string): Error {
 
 const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const BUSY_FILE_RETRY_MS = 1_000
-const RECORD_LOCK_RELEASE_RETRY_MS = 1_000
+const RECORD_LOCK_RELEASE_RETRY_FIRST_MS = 5
+const RECORD_LOCK_RELEASE_RETRY_MAX_MS = 100
 const pendingRecordLockReleaseRetries = new Set<Promise<void>>()
 
 function errorCode(error: unknown): string | undefined {
@@ -217,19 +218,16 @@ async function reclaimableRecordLock(lockPath: string, identity: RecordLockIdent
   return stale ? identity : undefined
 }
 
-async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<boolean> {
+type RecordLockPublish = { readonly published: true } | { readonly published: false, readonly error: unknown }
+
+async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<RecordLockPublish> {
   const leasePath = join(lockPath, recordLockOwnerFileName(owner))
   const contents = `${JSON.stringify({ ...owner, released: true })}\n`
-  const deadline = Date.now() + BUSY_FILE_RETRY_MS
-  for (;;) {
-    try {
-      await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
-      return true
-    } catch (error) {
-      if (isMissingFileError(error)) return true
-      if (!isBusyFileError(error) || Date.now() >= deadline) return false
-      await sleep(5)
-    }
+  try {
+    await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
+    return { published: true }
+  } catch (error) {
+    return isMissingFileError(error) ? { published: true } : { published: false, error }
   }
 }
 
@@ -299,20 +297,27 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
   return 'retired'
 }
 
-async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
-  if (await markRecordLockReleased(lockPath, owner)) return
+async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner, failure: unknown): Promise<void> {
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  let delayMs = RECORD_LOCK_RELEASE_RETRY_FIRST_MS
+  let lastError = failure
+  for (;;) {
+    await delay(delayMs, undefined, { ref: false })
+    if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
+    const publish = await markRecordLockReleased(lockPath, owner)
+    if (publish.published) return
+    lastError = publish.error
+    if (Date.now() + delayMs >= deadline) break
+    delayMs = Math.min(delayMs * 2, RECORD_LOCK_RELEASE_RETRY_MAX_MS)
+  }
   reportError(
-    new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
+    new Error(`[@holo-js/session] Could not publish the release of file session lock for "${recordPath}"; other processes may wait until this process reclaims the lease or exits.`, { cause: lastError }),
     { capability: 'session', operation: 'file.releaseLock' },
   )
 }
 
-function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner): void {
-  const retry: Promise<void> = new Promise<void>(resolve => {
-    const timer = setTimeout(() => resolve(retryRecordLockRelease(recordPath, lockPath, owner)), RECORD_LOCK_RELEASE_RETRY_MS)
-    timer.unref()
-  })
+function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner, failure: unknown): void {
+  const retry: Promise<void> = retryRecordLockRelease(recordPath, lockPath, owner, failure)
     .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
     .finally(() => { pendingRecordLockReleaseRetries.delete(retry) })
   pendingRecordLockReleaseRetries.add(retry)
@@ -326,15 +331,15 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
     } catch (error) {
       retirementFailure = { error }
     }
-    const published = await markRecordLockReleased(lockPath, owner)
-    if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
+    const publish = await markRecordLockReleased(lockPath, owner)
+    if (!publish.published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner, publish.error)
     if (retirementFailure) throw retirementFailure.error
-    reportError(
-      new Error(published
-        ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
-        : `[@holo-js/session] Could not remove file session lock for "${recordPath}" or publish its release; other processes may wait until this process reclaims the lease or exits, and a retry is scheduled.`),
-      { capability: 'session', operation: 'file.releaseLock' },
-    )
+    if (publish.published) {
+      reportError(
+        new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
+        { capability: 'session', operation: 'file.releaseLock' },
+      )
+    }
   } finally {
     heldRecordLockTokens.delete(owner.token)
   }
@@ -376,7 +381,6 @@ async function acquireRecordLockBefore(
     const ownerHandle = await open(join(pendingPath, ownerFileName), 'wx', 0o600)
     try {
       await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
-      await ownerHandle.sync()
     } finally {
       await ownerHandle.close()
     }
@@ -605,7 +609,9 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
     } finally {
       sweeping = false
       if (directory) {
-        idleTimer = setTimeout(() => { void closeDirectory().catch(() => undefined) }, 60_000)
+        idleTimer = setTimeout(() => {
+          void closeDirectory().catch(error => reportError(error, { capability: 'session', operation: 'file.closeDirectory' }))
+        }, 60_000)
         idleTimer.unref()
       }
     }
@@ -752,10 +758,6 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
-  heldRecordLockTokens,
-  pendingRecordLockReleaseRetries,
-  pendingTombstoneRemovals,
-  tombstoneQueueLimit: TOMBSTONE_QUEUE_LIMIT,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,

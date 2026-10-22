@@ -3,9 +3,6 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { field, safeParse, schema } from '../packages/validation/src/index.ts'
 
-// Run with: node --import tsx scripts/measure-validation-form-memory.mjs [MiB=80] [runs=3]
-// Nesting bound: node --import tsx scripts/measure-validation-form-memory.mjs --nesting [runs=3]
-// Each sample uses a fresh process; RSS is a measurement, never a test assertion.
 const mib = 1024 ** 2
 const [command = '80', size = '80', mode] = process.argv.slice(2)
 

@@ -14,7 +14,7 @@ import type {
 import { createNotificationContext } from './runtime-channels'
 import {
   normalizeNotificationDelay as normalizeDelayValue,
-  normalizeNotificationQueueOptions as normalizeQueueOptions,
+  normalizeNotificationQueueOptions,
 } from './queueOptions'
 
 export type ResolvedTarget = {
@@ -71,7 +71,7 @@ export function resolveNotificationQueueOptions(
     return queue
   }
 
-  return normalizeQueueOptions(queue) ?? false
+  return normalizeNotificationQueueOptions(queue) ?? false
 }
 
 export function resolveNotificationDelay(

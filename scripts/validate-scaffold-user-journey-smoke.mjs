@@ -714,8 +714,6 @@ ${authBody}
   }
 }
 
-// A successful login rotates the guest session it started from, so guest CSRF credentials are only
-// valid until the next login. Re-issue them from a fresh guest request before reusing them.
 async function fetchGuestCredentials(origin) {
   const page = await fetch(origin)
   const xsrfCookie = page.headers.getSetCookie().find(cookie => cookie.startsWith('XSRF-TOKEN='))

@@ -59,7 +59,7 @@ function encodeStorageKeySegment(name: string): string {
 }
 
 function storageKeySegmentFromEntry(entry: Dirent): string {
-  return entry.isFile() && entry.name.endsWith('$')
+  return entry.isFile() && localStoragePathInternals.isReservedLocalStorageName(entry.name)
     ? `${encodeStorageKeySegment(entry.name.slice(0, -1))}$`
     : encodeStorageKeySegment(entry.name)
 }
@@ -166,7 +166,7 @@ function decodeLegacyStorageName(name: string): string | null {
 }
 
 function isStorageMetadataEntry(entry: Dirent): boolean {
-  return !entry.isDirectory() && entry.name.endsWith('$')
+  return !entry.isDirectory() && localStoragePathInternals.isReservedLocalStorageName(entry.name)
 }
 
 function decodeLegacyStorageEntry(entry: Dirent): string | null {
@@ -187,7 +187,7 @@ function storageNameDecodingSkipReason(entry: Dirent, decoded: string, platform:
     const windowsProblem = localStoragePathInternals.windowsStorageNameProblem(decoded)
     if (windowsProblem) return windowsProblem
   }
-  if (entry.isFile() && !isMetadata && decoded.endsWith('$')) {
+  if (entry.isFile() && !isMetadata && localStoragePathInternals.isReservedLocalStorageName(decoded)) {
     return 'local file names ending in "$" are reserved for metadata'
   }
   if (decodeLegacyStorageName(isMetadata ? decoded.slice(0, -1) : decoded) !== null) {

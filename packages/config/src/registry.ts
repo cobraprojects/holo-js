@@ -85,6 +85,20 @@ export const configRegistryInternals = {
   getRegisteredNames(): readonly string[] {
     return Object.freeze([...configNormalizers.keys()].sort())
   },
+  async runWithoutNormalizers<TResult>(names: readonly string[], run: () => Promise<TResult>): Promise<TResult> {
+    const saved = new Map(configNormalizers)
+    for (const name of names) {
+      configNormalizers.delete(name)
+    }
+    try {
+      return await run()
+    } finally {
+      configNormalizers.clear()
+      for (const [name, normalizer] of saved) {
+        configNormalizers.set(name, normalizer)
+      }
+    }
+  },
   snapshotNormalizers(): () => void {
     const saved = new Map(configNormalizers)
     return () => {

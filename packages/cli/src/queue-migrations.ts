@@ -1,5 +1,4 @@
 import { createMigrationFiles } from './migration-creation'
-import { loadConfigDirectory } from '@holo-js/config'
 import type { NormalizedQueueDatabaseConnectionConfig } from '@holo-js/queue'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
@@ -9,13 +8,14 @@ import {
   nextMigrationTemplate,
 } from './migrations'
 import type { IoStreams } from './cli-types'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 export const DEFAULT_DATABASE_QUEUE_TABLE = 'jobs'
 export const DEFAULT_FAILED_JOBS_TABLE = 'failed_jobs'
 
 export async function loadQueueConfig(projectRoot: string) {
   await import('@holo-js/queue/config')
-  return (await loadConfigDirectory(projectRoot)).queue
+  return (await loadConfigWithNormalizers(projectRoot)).queue
 }
 
 function isDatabaseQueueConnection(

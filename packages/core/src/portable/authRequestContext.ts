@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createCookieWriteUnavailableError } from '@holo-js/kernel'
 
 export interface AuthRequestAccessors {
   getCookie?(name: string): string | undefined | Promise<string | undefined>
@@ -77,7 +78,7 @@ export function createRequestAwareAuthContext<TContext extends AuthContext>(
     appendResponseCookie(cookie) {
       const resolved = resolveRequestContext()
       if (!resolved.appendResponseCookie) {
-        throw Object.assign(new Error('Authentication cookies cannot be set in this request context.'), { code: 'cookie_write_unavailable' })
+        throw createCookieWriteUnavailableError('Authentication cookies cannot be set in this request context.')
       }
       return resolved.appendResponseCookie(cookie)
     },

@@ -502,7 +502,6 @@ function createDispatchEnvelope<TPayload extends QueueJsonValue>(
   { runsInline = false }: { runsInline?: boolean } = {},
 ): QueueJobEnvelope<TPayload> {
   validateQueuePayload(payload)
-  // Snapshot the payload so a deferred (afterCommit) dispatch serializes what was passed in, not later mutations.
   const snapshot = JSON.parse(JSON.stringify(payload)) as TPayload
   return createJobEnvelope(jobName, snapshot, options, { validateTimeout: !runsInline })
 }
@@ -573,7 +572,6 @@ async function dispatchRecord(
     const driver = resolveConnectionDriver(envelope.connection)
     const connection = resolveConnectionConfig(getQueueRuntimeState().config, envelope.connection)
     const afterCommit = options.afterCommit ?? connection.afterCommit
-    // The awaited result is returned before commit, so it can only carry the caller's job ID if the driver stores that ID.
     if (afterCommit && driver.acceptsJobId !== true) {
       throw new Error(
         `[Holo Queue] Queue connection "${envelope.connection}" uses driver "${driver.driver}", `
@@ -584,7 +582,6 @@ async function dispatchRecord(
     const transaction = afterCommit ? await resolveOpenDatabaseTransaction() : undefined
 
     if (transaction) {
-      // Completion and failure hooks run at commit time, so they reflect what was actually enqueued.
       transaction.afterCommit(async () => {
         try {
           const result = await dispatchThroughDriver(driver, envelope)
@@ -602,7 +599,6 @@ async function dispatchRecord(
         }
       })
 
-      // The driver runs at commit, so report how it will run now, not after commit.
       return {
         jobId: envelope.id,
         connection: envelope.connection,

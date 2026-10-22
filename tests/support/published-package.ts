@@ -48,7 +48,6 @@ function isWorkspaceDependency(dependencyName: string): boolean {
   return dependencyName.startsWith('@holo-js/')
 }
 
-// Optional peers stay unlinked so that tests can prove they are absent; a test that needs one links it explicitly.
 function requiredPeerDependencies(manifest: PackageManifest): Record<string, string> {
   return Object.fromEntries(
     Object.entries(manifest.peerDependencies ?? {})

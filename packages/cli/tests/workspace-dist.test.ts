@@ -12,7 +12,6 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-// A repository with the shared inputs every package build depends on, and one package that extends them.
 async function createWorkspace(): Promise<{ root: string, directory: string }> {
   const root = await mkdtemp(join(tmpdir(), 'holo-workspace-dist-'))
   roots.push(root)
@@ -34,7 +33,6 @@ async function createWorkspace(): Promise<{ root: string, directory: string }> {
   return { root, directory }
 }
 
-// Writes a dist and its marker, as a successful build does.
 async function buildDist(root: string, directory: string): Promise<void> {
   await mkdir(join(directory, 'dist'), { recursive: true })
   await writeFile(join(directory, 'dist', 'index.mjs'), 'export const value = 1\n')

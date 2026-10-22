@@ -215,7 +215,7 @@ function normalizeKey(input: string): string {
 }
 
 function assertNotReservedLocalName(input: string, driver: RuntimeDiskConfig['driver']): void {
-  if (driver !== 's3' && normalizeRelativePath(input).split('/').filter(Boolean).at(-1)?.endsWith('$')) {
+  if (driver !== 's3' && localStoragePathInternals.isReservedLocalStorageName(normalizeRelativePath(input).split('/').filter(Boolean).at(-1))) {
     throw new Error('[Holo Storage] Local file names ending in "$" are reserved for metadata.')
   }
 }
@@ -279,7 +279,7 @@ function normalizeBackendPage(
 
   const normalizedDirectory = normalizeRelativePath(directory)
   const prefix = normalizedDirectory ? `${normalizedDirectory}/` : ''
-  const paths = value.paths.filter(path => !path.endsWith('$')).map(keyToPath)
+  const paths = value.paths.filter(path => !localStoragePathInternals.isReservedLocalStorageName(path)).map(keyToPath)
   const seen = new Set<string>()
   for (const path of paths) {
     const hasControlCharacter = Array.from(path).some(character => {
