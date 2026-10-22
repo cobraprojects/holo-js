@@ -454,7 +454,6 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 
 export const runtimeModuleInternals = {
   bundleRuntimeModule,
-  definitionGraphIsNative: (projectRoot: string): boolean | undefined => definitionGraphSources.get(projectRoot)?.native,
   importModule,
   importOptionalRuntimeModule,
   isMissingOptionalModule,

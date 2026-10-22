@@ -121,21 +121,22 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(secondModel.marker).toBe('second')
   })
 
-  it('bundles definitions whose nested workspace resolves a different holo copy', async () => {
+  it('binds a definition shipped in a dependency to the runtime when the dependency has its own holo copy', async () => {
     const projectRoot = await createTempProject()
     await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
     await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
-    const nestedCopyRoot = join(projectRoot, 'server/workspace/node_modules/@holo-js/config')
+    const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const nestedCopyRoot = join(jobsRoot, 'node_modules/@holo-js/config')
     await mkdir(nestedCopyRoot, { recursive: true })
+    await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
     await writeFile(join(nestedCopyRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
     await writeFile(join(nestedCopyRoot, 'index.mjs'), 'export const defineAppConfig = "nested copy"\n')
-    const definitionPath = join(projectRoot, 'server/workspace/job.mjs')
+    const definitionPath = join(jobsRoot, 'job.mjs')
     await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
 
     const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
     const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
 
-    expect(runtimeModuleInternals.definitionGraphIsNative(projectRoot)).toBe(false)
     expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
   })
 
