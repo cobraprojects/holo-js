@@ -547,11 +547,11 @@ Check three behaviors when you upgrade:
 
 - `onQueryStart` runs before its query waits for a slot on the connection. Before, a query that the queue limit rejected never ran `onQueryStart`; now it runs both `onQueryStart` and `onQueryError`.
 - A hook can run queries on its own connection without stalling it, and queries a hook runs don't trigger the query hooks again. Before, a hook that queried a busy connection could hang it or loop through the error hook.
-- A hook inside a transaction that waits for work needing that transaction's connection still hangs, because the transaction waits for the hook. Don't await a query on the transaction's connection from inside a hook.
+- A hook inside a transaction that waits for the transaction to finish, or for other work that needs the transaction's connection, still hangs, because the transaction waits for the hook.
 
 ### findMany splits large key lists
 
-`findMany()` with more than 256 keys runs one query per chunk of 256 keys, as eager loads do, instead of one query with every key. Duplicate keys are removed, and each row is returned once. Soft-deleted rows stay excluded, and global scopes still apply to every chunk. Update code or tests that count queries or expect one statement for a long key list. Each chunk also appears as its own entry in the query logger.
+`findMany()` can split a key list of more than 256 keys into chunks of 256, as eager loads do, instead of sending every key in one statement. A chunked call runs its own queries, so the query count grows with the number of chunks. Duplicate keys are removed, and each row is returned once. Soft-deleted rows stay excluded, and global scopes still apply to every chunk. Update code or tests that count queries or expect one statement for a long key list.
 
 ### Query operators, date values, and foreign-key toggles
 
