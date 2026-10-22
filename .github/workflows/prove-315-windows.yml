@@ -37,14 +37,13 @@ jobs:
       - name: Run the native session locking suite 30 times with lock tracing
         working-directory: packages/session
         run: |
+          set +e +o pipefail
           mkdir -p ../../lock-traces
           : > ../../lock-traces/summary.txt
           for i in $(seq 1 30); do
             mkdir -p "../../lock-traces/run-$i"
-            set +e
             HOLO_SESSION_LOCK_TRACE_DIR="../../lock-traces/run-$i" bun run test:platform > "../../lock-traces/run-$i/result.json" 2> "../../lock-traces/run-$i/stderr.log"
             code=$?
-            set -e
             failed=$(grep -o -E '"fullName":"[^"]*","status":"failed"' "../../lock-traces/run-$i/result.json" | sed 's/,"status":"failed"//' | tr '\n' ' ')
             echo "run $i exit=$code failed=[$failed]" | tee -a ../../lock-traces/summary.txt
           done

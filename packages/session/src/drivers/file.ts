@@ -19,6 +19,11 @@ function trace(event: string, data: Record<string, unknown> = {}): void {
   if (!LOCK_TRACE_DIR) return
   appendFileSync(join(LOCK_TRACE_DIR, `${process.pid}.jsonl`), `${JSON.stringify({ t: Date.now(), pid: process.pid, ev: event, ...data })}\n`)
 }
+async function ownerAgeMs(lockPath: string, owner: RecordLockOwner): Promise<number | undefined> {
+  if (!LOCK_TRACE_DIR) return undefined
+  const modified = await stat(join(lockPath, recordLockOwnerFileName(owner))).then(value => value.mtimeMs, () => undefined)
+  return modified === undefined ? undefined : Math.round(Date.now() - modified)
+}
 function traceError(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code ?? error.message.slice(0, 120) : String(error)
 }
@@ -231,13 +236,15 @@ async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner):
   const leasePath = join(lockPath, recordLockOwnerFileName(owner))
   const contents = `${JSON.stringify({ ...owner, released: true })}\n`
   const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  let failures = 0
   for (;;) {
     try {
       await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
-      trace('markReleased.ok', { token: owner.token.slice(0, 8) })
+      trace('markReleased.ok', { token: owner.token.slice(0, 8), failures })
       return true
     } catch (error) {
-      trace('markReleased.err', { token: owner.token.slice(0, 8), code: traceError(error) })
+      failures += 1
+      if (failures === 1) trace('markReleased.err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
       if (isMissingFileError(error)) return true
       if (!isBusyFileError(error) || Date.now() >= deadline) return false
       await sleep(5)
@@ -304,7 +311,7 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
   try {
     await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
   } catch (error) {
-    trace('retire.rename-err', { token: owner.token.slice(0, 8), code: traceError(error) })
+    trace('retire.rename-err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
     if (isMissingFileError(error)) return 'absent'
     if (isBusyFileError(error)) return 'busy'
     throw error
@@ -336,7 +343,7 @@ function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, ow
 }
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  trace('release.start', { token: owner.token.slice(0, 8) })
+  trace('release.start', { token: owner.token.slice(0, 8), ageMs: await ownerAgeMs(lockPath, owner) })
   try {
     let retirementFailure: { readonly error: unknown } | undefined
     try {
