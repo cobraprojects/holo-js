@@ -37,7 +37,7 @@ async function runInShell(invocation: ReturnType<typeof resolvePackageManagerSpa
   return stdout
 }
 
-it('hands package-manager arguments to the child unchanged, quoting them for the Windows shell', async () => {
+it('delivers package-manager arguments unchanged whether they are quoted for the Windows shell or spawned directly', async () => {
   const args = ['-p', 'JSON.stringify(process.argv.slice(1))', 'install app', 'say "hi"']
 
   const windowsOutput = await runInShell(resolvePackageManagerSpawn({ command: 'node', args }, 'win32'))
