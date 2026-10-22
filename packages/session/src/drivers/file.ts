@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, constants as fsConstants, type Dir } from 'node:fs'
+import { constants as fsConstants, type Dir } from 'node:fs'
 import { mkdir as defaultMkdir, lstat, open, opendir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -14,19 +14,6 @@ const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_LOCK_HEARTBEAT_MS = 3_000
 const PROCESS_INSTANCE_TOKEN = randomUUID()
 const heldRecordLockTokens = new Set<string>()
-const LOCK_TRACE_DIR = process.env.HOLO_SESSION_LOCK_TRACE_DIR
-function trace(event: string, data: Record<string, unknown> = {}): void {
-  if (!LOCK_TRACE_DIR) return
-  appendFileSync(join(LOCK_TRACE_DIR, `${process.pid}.jsonl`), `${JSON.stringify({ t: Date.now(), pid: process.pid, ev: event, ...data })}\n`)
-}
-async function ownerAgeMs(lockPath: string, owner: RecordLockOwner): Promise<number | undefined> {
-  if (!LOCK_TRACE_DIR) return undefined
-  const modified = await stat(join(lockPath, recordLockOwnerFileName(owner))).then(value => value.mtimeMs, () => undefined)
-  return modified === undefined ? undefined : Math.round(Date.now() - modified)
-}
-function traceError(error: unknown): string | undefined {
-  return error instanceof Error ? (error as NodeJS.ErrnoException).code ?? error.message.slice(0, 120) : String(error)
-}
 type MakeDirectory = typeof defaultMkdir
 
 type RecordLockOwner = {
@@ -83,7 +70,8 @@ function lockPresentError(lockPath: string): Error {
 
 const BUSY_FILE_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const BUSY_FILE_RETRY_MS = 1_000
-const RECORD_LOCK_RELEASE_RETRY_MS = 1_000
+const RECORD_LOCK_RELEASE_RETRY_FIRST_MS = 5
+const RECORD_LOCK_RELEASE_RETRY_MAX_MS = 100
 const pendingRecordLockReleaseRetries = new Set<Promise<void>>()
 
 function errorCode(error: unknown): string | undefined {
@@ -190,7 +178,6 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
       } catch (error) {
         if (isMissingFileError(error)) break
         if (!isBusyFileError(error)) throw error
-        trace('remove.unlink-busy', { code: traceError(error), settleMs })
         if (Date.now() >= deadline) return false
         await sleep(5)
       }
@@ -204,7 +191,6 @@ async function removeRecordLock(lockPath: string, fileName?: string, settleMs = 
       const code = errorCode(error)
       if (code === 'ENOENT') return true
       if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && !isBusyFileError(error)) throw error
-      trace('remove.rmdir-err', { code, settleMs })
       if (Date.now() >= deadline) return false
       await sleep(5)
     }
@@ -235,20 +221,11 @@ async function reclaimableRecordLock(lockPath: string, identity: RecordLockIdent
 async function markRecordLockReleased(lockPath: string, owner: RecordLockOwner): Promise<boolean> {
   const leasePath = join(lockPath, recordLockOwnerFileName(owner))
   const contents = `${JSON.stringify({ ...owner, released: true })}\n`
-  const deadline = Date.now() + BUSY_FILE_RETRY_MS
-  let failures = 0
-  for (;;) {
-    try {
-      await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
-      trace('markReleased.ok', { token: owner.token.slice(0, 8), failures })
-      return true
-    } catch (error) {
-      failures += 1
-      if (failures === 1) trace('markReleased.err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
-      if (isMissingFileError(error)) return true
-      if (!isBusyFileError(error) || Date.now() >= deadline) return false
-      await sleep(5)
-    }
+  try {
+    await writeFile(leasePath, contents, { encoding: 'utf8', flag: 'r+' })
+    return true
+  } catch (error) {
+    return isMissingFileError(error)
   }
 }
 
@@ -270,12 +247,10 @@ async function removeTombstone(tombstonePath: string): Promise<void> {
   for (;;) {
     try {
       await unlink(tombstonePath)
-      trace('tombstone.removed')
       return
     } catch (error) {
       if (isMissingFileError(error)) return
       if (!isBusyFileError(error)) throw error
-      trace('tombstone.busy', { code: traceError(error), delayMs })
       if (Date.now() + delayMs > deadline) return
       await delay(delayMs, undefined, { ref: false })
       delayMs = Math.min(delayMs * 2, TOMBSTONE_RETRY_MAX_MS)
@@ -311,39 +286,39 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
   try {
     await rename(join(lockPath, recordLockOwnerFileName(owner)), tombstonePath)
   } catch (error) {
-    trace('retire.rename-err', { token: owner.token.slice(0, 8), code: traceError(error), ageMs: await ownerAgeMs(lockPath, owner) })
     if (isMissingFileError(error)) return 'absent'
     if (isBusyFileError(error)) return 'busy'
     throw error
   }
-  trace('retire.renamed', { token: owner.token.slice(0, 8) })
   scheduleTombstoneRemoval(tombstonePath)
-  const removed = await removeRecordLock(lockPath)
-  trace('retire.dir-removed', { token: owner.token.slice(0, 8), removed })
+  await removeRecordLock(lockPath)
   return 'retired'
 }
 
 async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
-  if (await markRecordLockReleased(lockPath, owner)) return
+  const deadline = Date.now() + BUSY_FILE_RETRY_MS
+  let delayMs = RECORD_LOCK_RELEASE_RETRY_FIRST_MS
+  for (;;) {
+    await delay(delayMs, undefined, { ref: false })
+    if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
+    if (await markRecordLockReleased(lockPath, owner)) return
+    if (Date.now() + delayMs >= deadline) break
+    delayMs = Math.min(delayMs * 2, RECORD_LOCK_RELEASE_RETRY_MAX_MS)
+  }
   reportError(
-    new Error(`[@holo-js/session] Could not release file session lock for "${recordPath}" on the scheduled retry; other processes can reclaim it only after this process reclaims it or exits.`),
+    new Error(`[@holo-js/session] Could not publish the release of file session lock for "${recordPath}"; other processes may wait until this process reclaims the lease or exits.`),
     { capability: 'session', operation: 'file.releaseLock' },
   )
 }
 
 function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner): void {
-  const retry: Promise<void> = new Promise<void>(resolve => {
-    const timer = setTimeout(() => resolve(retryRecordLockRelease(recordPath, lockPath, owner)), RECORD_LOCK_RELEASE_RETRY_MS)
-    timer.unref()
-  })
+  const retry: Promise<void> = retryRecordLockRelease(recordPath, lockPath, owner)
     .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
     .finally(() => { pendingRecordLockReleaseRetries.delete(retry) })
   pendingRecordLockReleaseRetries.add(retry)
 }
 
 async function releaseRecordLock(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
-  trace('release.start', { token: owner.token.slice(0, 8), ageMs: await ownerAgeMs(lockPath, owner) })
   try {
     let retirementFailure: { readonly error: unknown } | undefined
     try {
@@ -353,14 +328,13 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
     }
     const published = await markRecordLockReleased(lockPath, owner)
     if (!published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
-    trace('release.done', { token: owner.token.slice(0, 8), published, retirementFailure: traceError(retirementFailure?.error) })
     if (retirementFailure) throw retirementFailure.error
-    reportError(
-      new Error(published
-        ? `[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`
-        : `[@holo-js/session] Could not remove file session lock for "${recordPath}" or publish its release; other processes may wait until this process reclaims the lease or exits, and a retry is scheduled.`),
-      { capability: 'session', operation: 'file.releaseLock' },
-    )
+    if (published) {
+      reportError(
+        new Error(`[@holo-js/session] Could not remove file session lock for "${recordPath}"; the next writer will reclaim it.`),
+        { capability: 'session', operation: 'file.releaseLock' },
+      )
+    }
   } finally {
     heldRecordLockTokens.delete(owner.token)
   }
@@ -396,8 +370,6 @@ async function acquireRecordLockBefore(
   const pendingPath = `${lockPath}.${owner.token}.pending`
   const ownerFileName = recordLockOwnerFileName(owner)
   let acquired = false
-  const acquireStarted = Date.now()
-  trace('acquire.start', { token: owner.token.slice(0, 8), record: recordPath.slice(-12), wait: wait !== undefined })
   heldRecordLockTokens.add(owner.token)
   try {
     await makeDirectory(pendingPath)
@@ -412,21 +384,18 @@ async function acquireRecordLockBefore(
     let observedLease: RecordLockIdentity | undefined
     while (!acquired) {
       if (wait && Date.now() >= Math.min(deadline, wait.hardDeadline)) {
-        trace('acquire.timeout', { token: owner.token.slice(0, 8), waitMs: Date.now() - acquireStarted, holder: observedOwner?.slice(0, 8), deadlineInMs: deadline - Date.now() })
         throw acquireTimeoutError(recordPath, uncontendedFailure)
       }
       try {
         if (await hasRecordLock(lockPath)) throw lockPresentError(lockPath)
         await rename(pendingPath, lockPath)
         acquired = true
-        trace('acquire.ok', { token: owner.token.slice(0, 8), waitMs: Date.now() - acquireStarted })
       } catch (error) {
         const code = errorCode(error)
         const busy = isBusyFileError(error)
         const lockedByOther = code === 'EEXIST' || code === 'ENOTEMPTY'
         const identity = lockedByOther || busy ? await readRecordLockIdentity(lockPath, observedLease) : undefined
         const contended = lockedByOther || identity !== undefined
-        trace('acquire.contended', { token: owner.token.slice(0, 8), code: traceError(error), holder: identity?.owner?.token.slice(0, 8), released: identity?.owner?.released, fileName: identity?.fileName !== undefined, ageMs: identity ? Date.now() - identity.modifiedAt : undefined, holderPid: identity?.owner?.pid, holderHost: identity?.owner?.host === hostname() })
         if (!contended && !busy) throw error
         uncontendedFailure = contended ? undefined : error
         if (contended) {
@@ -436,11 +405,7 @@ async function acquireRecordLockBefore(
             deadline = Math.min(Date.now() + RECORD_LOCK_ACQUIRE_STALL_MS, wait.hardDeadline)
           }
           const reclaimable = await reclaimableRecordLock(lockPath, identity)
-          if (reclaimable) {
-            const reclaimed = await reclaimStaleLock(lockPath, reclaimable)
-            trace('acquire.reclaim', { token: owner.token.slice(0, 8), holder: reclaimable.owner?.token.slice(0, 8), reclaimed })
-            if (reclaimed) continue
-          }
+          if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue
         }
         if (wait === undefined) {
           heldRecordLockTokens.delete(owner.token)

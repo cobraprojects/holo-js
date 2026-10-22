@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
 import type { WindowsFsState } from './support/windows-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map() }))
+const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map(), writeAttempts: new Map() }))
 const tornLeaseReads = vi.hoisted(() => ({ armed: false }))
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -50,6 +50,7 @@ describe('released file locks across processes', () => {
     recordPath = join(root, 'session.json')
     lockPath = `${recordPath}.lock`
     reports.length = 0
+    windowsFs.writeAttempts!.clear()
   })
 
   afterEach(async () => {
@@ -138,19 +139,19 @@ describe('released file locks across processes', () => {
     expect(owner.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
-  it('reports that other processes must wait when the release cannot be published, and schedules one retry', async () => {
+  it('reports that other processes must wait once the release retries stop publishing it', async () => {
     const owner = await loadProcess()
     const holder = await owner.acquireRecordLock(recordPath, mkdir)
     windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
     windowsFs.blockedWritePrefixes.add(lockPath)
     await holder()
 
+    expect(owner.pendingRecordLockReleaseRetries.size).toBe(1)
+    await Promise.all(owner.pendingRecordLockReleaseRetries)
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
-    expect(owner.pendingRecordLockReleaseRetries.size).toBe(1)
     windowsFs.blockedRenamePrefixes.clear()
     windowsFs.blockedWritePrefixes.clear()
-    await Promise.all(owner.pendingRecordLockReleaseRetries)
   }, 15_000)
 
   it('lets another process reclaim the lease once a scheduled retry publishes the release', async () => {
@@ -168,6 +169,20 @@ describe('released file locks across processes', () => {
     const other = await loadProcess()
     await (await other.acquireRecordLock(recordPath, mkdir))()
     expect(other.heldRecordLockTokens.size).toBe(0)
+  }, 15_000)
+
+  it('does not hold the releasing call while the publish of a busy lease keeps failing', async () => {
+    const owner = await loadProcess()
+    const holder = await owner.acquireRecordLock(recordPath, mkdir)
+    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    windowsFs.blockedWritePrefixes.add(lockPath)
+    await holder()
+
+    const leaseWriteAttempts = [...windowsFs.writeAttempts!].filter(([path]) => path.startsWith(leasePrefix(lockPath))).reduce((total, [, count]) => total + count, 0)
+    expect(leaseWriteAttempts).toBeLessThanOrEqual(3)
+    windowsFs.blockedRenamePrefixes.clear()
+    windowsFs.blockedWritePrefixes.clear()
+    await Promise.all(owner.pendingRecordLockReleaseRetries)
   }, 15_000)
 
   it('does not reclaim a lease its own process still holds', async () => {
