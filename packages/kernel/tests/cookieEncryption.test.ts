@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { decryptCookieValue, encryptCookieValue } from '../src/index'
+import { cookieEncryptionInternals } from '../src/index'
+
+const { decryptCookieValue, encryptCookieValue } = cookieEncryptionInternals
 
 const appKey = 'base64-application-key-for-cookie-tests'
 

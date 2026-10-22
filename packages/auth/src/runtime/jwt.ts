@@ -70,10 +70,16 @@ function verifyJwtSignatureWithJwk(
 
 const JWKS_MAX_AGE_MS = 10 * 60 * 1000
 const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
+const JWKS_FAILURE_GRACE_MS = 10 * 60 * 1000
+
+type AuthRuntimeJwksSnapshot = {
+  readonly keys: readonly AuthRuntimeJwkKey[]
+  readonly fetchedAt: number
+}
 
 type AuthRuntimeJwksCacheEntry = {
-  readonly keys: Promise<readonly AuthRuntimeJwkKey[]>
-  readonly loadedAt: number
+  readonly snapshot: Promise<AuthRuntimeJwksSnapshot>
+  loadedAt: number
   expiresAt: number
 }
 
@@ -85,6 +91,23 @@ function findJwk(keys: readonly AuthRuntimeJwkKey[], kid: string | undefined): A
     : keys[0]
 }
 
+async function fetchJwks(options: {
+  readonly requestUrl: string
+  readonly errorMessage: string
+}): Promise<readonly AuthRuntimeJwkKey[]> {
+  const response = await fetch(options.requestUrl, {
+    headers: {
+      accept: 'application/json',
+    },
+  })
+  if (!response.ok) {
+    throw new Error(options.errorMessage)
+  }
+
+  const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
+  return payload.keys ?? []
+}
+
 function loadJwks(
   cache: AuthRuntimeJwksCache,
   cacheKey: string,
@@ -93,28 +116,32 @@ function loadJwks(
     readonly errorMessage: string
   },
 ): AuthRuntimeJwksCacheEntry {
+  const previous = cache.get(cacheKey)
   const entry: AuthRuntimeJwksCacheEntry = {
     loadedAt: Date.now(),
     expiresAt: Number.POSITIVE_INFINITY,
-    keys: (async () => {
-      const response = await fetch(options.requestUrl, {
-        headers: {
-          accept: 'application/json',
-        },
-      })
-      if (!response.ok) {
-        throw new Error(options.errorMessage)
-      }
+    snapshot: fetchJwks(options).then(
+      keys => {
+        entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS
+        return { keys, fetchedAt: entry.loadedAt }
+      },
+      async error => {
+        entry.loadedAt = Date.now()
+        const previousSnapshot = await previous?.snapshot.catch(() => undefined)
+        if (previousSnapshot && entry.loadedAt - previousSnapshot.fetchedAt < JWKS_FAILURE_GRACE_MS) {
+          entry.expiresAt = Math.min(
+            entry.loadedAt + JWKS_REFRESH_INTERVAL_MS,
+            previousSnapshot.fetchedAt + JWKS_FAILURE_GRACE_MS,
+          )
+          return previousSnapshot
+        }
 
-      const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
-      return payload.keys ?? []
-    })(),
+        entry.expiresAt = entry.loadedAt + JWKS_REFRESH_INTERVAL_MS
+        throw error
+      },
+    ),
   }
 
-  entry.keys.then(
-    () => { entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS },
-    () => { entry.expiresAt = Date.now() + JWKS_REFRESH_INTERVAL_MS },
-  )
   cache.set(cacheKey, entry)
   return entry
 }
@@ -145,7 +172,7 @@ async function resolveCachedJwk(
   },
 ): Promise<AuthRuntimeJwkKey | undefined> {
   const entry = resolveCacheEntry(cache, cacheKey, options)
-  const key = findJwk(await entry.keys, options.kid)
+  const key = findJwk((await entry.snapshot).keys, options.kid)
   if (key || Date.now() - entry.loadedAt < JWKS_REFRESH_INTERVAL_MS) {
     return key
   }
@@ -154,7 +181,7 @@ async function resolveCachedJwk(
   const refreshed = latest && latest !== entry
     ? latest
     : loadJwks(cache, cacheKey, options)
-  return findJwk(await refreshed.keys, options.kid)
+  return findJwk((await refreshed.snapshot).keys, options.kid)
 }
 
 export const authJwtInternals = {

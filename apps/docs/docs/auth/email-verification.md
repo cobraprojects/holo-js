@@ -206,7 +206,7 @@ export async function POST() {
 
 :::
 
-The route needs a limiter named `emailVerificationResend` in `config/security.ts`, which the installer doesn't add. Six sends per minute per user is enough for a slow human and too few for a script:
+The route needs a limiter named `emailVerificationResend` in `config/security.ts`. The auth installer adds it when it creates that file; if your `config/security.ts` already exists, add it yourself. Six sends per minute per user is enough for a slow human and too few for a script:
 
 ```ts [config/security.ts]
 import { defineSecurityConfig, limit } from '@holo-js/security'

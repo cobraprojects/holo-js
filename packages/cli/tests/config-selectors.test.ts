@@ -244,6 +244,13 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
     expect(loaded.security.trustedProxies).toEqual(trustedProxies)
   })
 
+  it('scaffolds the six-per-minute verification resend limiter that the email verification route applies', async () => {
+    const root = await createProject()
+    await writeConfig(root, 'security', renderSecurityConfig())
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(loaded.security.rateLimit.limiters.emailVerificationResend).toMatchObject({ maxAttempts: 6, decaySeconds: 60 })
+  })
+
   it('selects the shared Redis connection and rate-limit driver from the environment', async () => {
     const root = await createProject()
     await writeConfig(root, 'redis', renderRedisConfig(), `
