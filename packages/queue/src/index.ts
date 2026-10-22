@@ -86,6 +86,7 @@ export {
   registerQueueJob,
   registerQueueJobs,
   resetQueueRegistry,
+  restoreRegisteredQueueJobs,
   unregisterQueueJob,
 } from './registry'
 export {
@@ -93,7 +94,7 @@ export {
   syncQueueDriverInternals,
 } from './drivers/sync'
 export {
-  assertRegisteredQueueJobTimeouts,
+  assertQueueJobTimeouts,
   configureQueueRuntime,
   dispatch,
   dispatchSync,

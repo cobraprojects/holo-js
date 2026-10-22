@@ -13,7 +13,7 @@ import {
   runQueueWorker,
   clearQueueConnection,
   QueueReleaseUnsupportedError,
-  assertRegisteredQueueJobTimeouts,
+  assertQueueJobTimeouts,
   configureQueueRuntime,
   defineJob,
   dispatch,
@@ -218,7 +218,7 @@ export default {
     expect(getQueueRuntime().config).toBe(previous)
   })
 
-  it('rejects a job registered after the queue config loaded when its timeout is not below its connection retryAfter', () => {
+  it('rejects candidate jobs whose timeout is not below their connection retryAfter, without registering them', () => {
     configureQueueRuntime({
       config: {
         default: 'database',
@@ -227,9 +227,9 @@ export default {
         },
       },
     })
-    registerQueueJob({ timeout: 120, handle() {} }, { name: 'late-report' })
 
-    expect(() => assertRegisteredQueueJobTimeouts()).toThrow('[Holo Queue] Queue job "late-report" timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds.')
+    expect(() => assertQueueJobTimeouts([{ name: 'late-report', definition: { timeout: 120 } }])).toThrow('[Holo Queue] Queue job "late-report" timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds.')
+    expect(getRegisteredQueueJob('late-report')).toBeUndefined()
   })
 
   it('accepts a registered job timeout below its connection retryAfter when the queue config loads', () => {

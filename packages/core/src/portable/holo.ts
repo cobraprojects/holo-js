@@ -174,14 +174,16 @@ export interface HoloQueueDriverBinding {
 }
 
 type QueueModule = Pick<typeof QueueFeature,
-  | 'assertRegisteredQueueJobTimeouts'
+  | 'assertQueueJobTimeouts'
   | 'configureQueueRuntime'
   | 'loadQueuePluginDriverFactories'
   | 'getRegisteredQueueJob'
   | 'getQueueRuntime'
   | 'isQueueJobDefinition'
   | 'normalizeQueueJobDefinition'
+  | 'listRegisteredQueueJobs'
   | 'registerQueueJob'
+  | 'restoreRegisteredQueueJobs'
   | 'shutdownQueueRuntime'
   | 'unregisterQueueJob'
 > & Partial<Pick<typeof QueueFeature,
@@ -1329,30 +1331,61 @@ async function registerProjectQueueJobs(
     return Object.freeze([])
   }
 
-  const registeredJobNames: string[] = []
-  try {
-    for (const entry of registry.jobs) {
-      const existing = queueModule.getRegisteredQueueJob(entry.name)
-      if (existing && !existing.sourcePath) {
-        continue
-      }
-
-      const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
-      const job = resolveQueueJobExport(queueModule, moduleValue)
-      if (!job) {
-        throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
-      }
-
-      queueModule.registerQueueJob(job, {
-        name: entry.name,
-        sourcePath: entry.sourcePath,
-        replaceExisting: Boolean(existing?.sourcePath),
-      })
-      registeredJobNames.push(entry.name)
+  const resolvedJobs: Array<{
+    readonly name: string
+    readonly sourcePath: string
+    readonly job: NonNullable<ReturnType<typeof resolveQueueJobExport>>
+    readonly replaced?: ReturnType<QueueModule['getRegisteredQueueJob']>
+  }> = []
+  for (const entry of registry.jobs) {
+    const existing = queueModule.getRegisteredQueueJob(entry.name)
+    if (existing && !existing.sourcePath) {
+      continue
     }
-    queueModule.assertRegisteredQueueJobTimeouts()
+
+    const moduleValue = await importDefinition(resolve(projectRoot, entry.sourcePath))
+    const job = resolveQueueJobExport(queueModule, moduleValue)
+    if (!job) {
+      throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
+    }
+
+    resolvedJobs.push({
+      name: entry.name,
+      sourcePath: entry.sourcePath,
+      job,
+      replaced: existing?.sourcePath ? existing : undefined,
+    })
+  }
+
+  queueModule.assertQueueJobTimeouts(resolvedJobs.map(({ name, job }) => ({
+    name,
+    definition: queueModule.normalizeQueueJobDefinition(job),
+  })))
+
+  const registeredJobNames: string[] = []
+  const replacedJobs: NonNullable<(typeof resolvedJobs)[number]['replaced']>[] = []
+  try {
+    for (const { name, sourcePath, job, replaced } of resolvedJobs) {
+      queueModule.registerQueueJob(job, {
+        name,
+        sourcePath,
+        replaceExisting: Boolean(replaced),
+      })
+      registeredJobNames.push(name)
+      if (replaced) {
+        replacedJobs.push(replaced)
+      }
+    }
   } catch (error) {
-    unregisterProjectQueueJobs(queueModule, registeredJobNames)
+    const replacedNames = new Set(replacedJobs.map(job => job.name))
+    unregisterProjectQueueJobs(queueModule, registeredJobNames.filter(name => !replacedNames.has(name)))
+    for (const replaced of replacedJobs) {
+      queueModule.registerQueueJob(replaced.definition, {
+        name: replaced.name,
+        sourcePath: replaced.sourcePath,
+        replaceExisting: true,
+      })
+    }
     throw error
   }
 
@@ -2090,29 +2123,38 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
   const bootRuntimeServices = async (): Promise<void> => {
     await runOptionalSubsystemsSerially(() => configureRuntimeSubsystems(bootOptions))
-    await bootHoloPluginModules(projectRoot, loadedConfig)
-    const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
-      ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
-        ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
-        : [])
     const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
     if (activeQueueModule && optionalEventsModule) {
       await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
     }
-    if (registryHasEvents(registry)) {
-      const eventsModule = await loadEventsModule(true)
-      if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
-      activeEventsModule = eventsModule
-      const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule, importDefinition)
-      runtimeOwnedEventNames.push(...eventRegistration.eventNames)
-      runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
-    }
-    activeAuthorizationModule = await loadAuthorizationModule()
-    const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
-    disposeAuthorizationDefinitions = authorizationRegistration.dispose
-    if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
-      if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
-      runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule, importDefinition))
+    const queueJobsBeforeBoot = activeQueueModule?.listRegisteredQueueJobs()
+    try {
+      await bootHoloPluginModules(projectRoot, loadedConfig)
+      const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
+        ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
+          ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
+          : [])
+      if (registryHasEvents(registry)) {
+        const eventsModule = await loadEventsModule(true)
+        if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
+        activeEventsModule = eventsModule
+        const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule, importDefinition)
+        runtimeOwnedEventNames.push(...eventRegistration.eventNames)
+        runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
+      }
+      activeAuthorizationModule = await loadAuthorizationModule()
+      const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
+      disposeAuthorizationDefinitions = authorizationRegistration.dispose
+      if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
+        if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
+        runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule, importDefinition))
+      }
+      activeQueueModule?.assertQueueJobTimeouts(activeQueueModule.listRegisteredQueueJobs())
+    } catch (error) {
+      if (activeQueueModule && queueJobsBeforeBoot) {
+        activeQueueModule.restoreRegisteredQueueJobs(queueJobsBeforeBoot)
+      }
+      throw error
     }
   }
 

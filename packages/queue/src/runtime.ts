@@ -780,22 +780,33 @@ function createQueueConnection(name?: string): QueueConnectionFacade {
   }
 }
 
-function assertRegisteredJobTimeoutsBelowRetryAfter(config: NormalizedHoloQueueConfig): void {
-  for (const registered of listRegisteredQueueJobs()) {
-    const connectionName = registered.definition.connection
-      ? normalizeConnectionName(registered.definition.connection)
+export type QueueJobTimeoutCandidate = {
+  readonly name: string
+  readonly definition: {
+    readonly timeout?: number
+    readonly connection?: string
+  }
+}
+
+function assertJobTimeoutsBelowRetryAfter(
+  config: NormalizedHoloQueueConfig,
+  jobs: readonly QueueJobTimeoutCandidate[],
+): void {
+  for (const job of jobs) {
+    const connectionName = job.definition.connection
+      ? normalizeConnectionName(job.definition.connection)
       : config.default
     const connection = config.connections[connectionName]
     if (!connection) {
       continue
     }
 
-    assertQueueTimeoutBelowRetryAfter(`Queue job "${registered.name}"`, registered.definition.timeout, connection)
+    assertQueueTimeoutBelowRetryAfter(`Queue job "${job.name}"`, job.definition.timeout, connection)
   }
 }
 
-export function assertRegisteredQueueJobTimeouts(): void {
-  assertRegisteredJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config)
+export function assertQueueJobTimeouts(jobs: readonly QueueJobTimeoutCandidate[]): void {
+  assertJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config, jobs)
 }
 
 export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}): void {
@@ -806,7 +817,7 @@ export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}
     const config = isNormalizedQueueConfig(options.config)
       ? options.config
       : normalizeQueueConfig(options.config, options.redisConfig)
-    assertRegisteredJobTimeoutsBelowRetryAfter(config)
+    assertJobTimeoutsBelowRetryAfter(config, listRegisteredQueueJobs())
     state.config = config
     shouldResetDrivers = true
   }

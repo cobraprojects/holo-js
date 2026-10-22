@@ -115,6 +115,26 @@ export function unregisterQueueJob(name: string): boolean {
   return deleted
 }
 
+export function restoreRegisteredQueueJobs(snapshot: readonly QueueRegisteredJob[]): void {
+  const jobs = getQueueRegistryState().jobs
+  const keep = new Set(snapshot.map(job => job.name))
+  for (const name of [...jobs.keys()]) {
+    if (!keep.has(name)) {
+      unregisterQueueJob(name)
+    }
+  }
+
+  for (const job of snapshot) {
+    if (jobs.get(job.name) === job) {
+      continue
+    }
+
+    queueJobInternals.deleteQueueJobDefinitionName(job.name)
+    queueJobInternals.setQueueJobDefinitionName(job.definition, job.name)
+    jobs.set(job.name, job)
+  }
+}
+
 export function resetQueueRegistry(): void {
   getQueueRegistryState().jobs.clear()
   queueJobInternals.clearQueueJobDefinitionNames()
