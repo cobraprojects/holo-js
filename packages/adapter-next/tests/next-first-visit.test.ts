@@ -1,10 +1,24 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { createServer } from 'node:net'
+import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
+
+function acceptsConnections(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = connect(port, '127.0.0.1')
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => {
+      socket.destroy()
+      resolve(false)
+    })
+  })
+}
 
 it('uses the proxy session for the first route token and submission in native Next', async () => {
   const repository = resolve(import.meta.dirname, '../../..')
@@ -76,11 +90,13 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
+  // Readiness is the dev server accepting connections. An HTTP probe would also wait for the first page compile,
+  // which is not part of starting the server and is not bounded by it.
   await vi.waitUntil(async () => {
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
-    return fetch(baseUrl).then(response => response.ok).catch(() => false)
+    return acceptsConnections(address.port)
   }, { timeout: 60_000, interval: 100 }).catch(error => {
-    throw new Error(`Next did not become ready: ${output}`, { cause: error })
+    throw new Error(`Next did not start listening: ${output}`, { cause: error })
   })
   const first = await fetch(`${baseUrl}/api/token`)
   expect(first.status, output).toBe(200)
