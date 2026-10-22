@@ -284,8 +284,6 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
         },
       },
     })
-    // Installed before initialization settles so a termination signal during startup still closes what init opens.
-    // A rejected initialization opened nothing that needs closing.
     let report: ReturnType<typeof captureErrorReporter> | undefined
     installNextShutdown({
       close: async () => {

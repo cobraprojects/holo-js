@@ -61,8 +61,6 @@ function remoteTableInvalidation(table: string) {
   return queryCacheInternals.receiveRemoteDatabaseDependencyInvalidation({ id: randomUUID(), connectionName: 'main', dependencies: [`db:main:${table}`] })
 }
 
-// A query fill writes its rows to the cache only after its database read has returned, so
-// holding the next cache write holds the fill between its read and its registration.
 function holdNextCacheWrite() {
   const driver = createMemoryCacheDriver({ name: 'memory' })
   const put = driver.put.bind(driver)

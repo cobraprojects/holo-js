@@ -199,8 +199,6 @@ export function createCacheQueryBridge(
   const pendingDependencyTables = new Map<string, PendingDependencyTable>()
   let dependencyTableDrain: Promise<void> | undefined
 
-  // Only tokens that an in-flight fill watches have a generation. Invalidations for anything else
-  // bump nothing, so the map cannot grow with every row token written.
   const watchedInvalidationTokens = new Map<string, WatchedInvalidationToken>()
 
   function bumpInvalidationGenerations(tokens: readonly string[]): void {
@@ -212,8 +210,6 @@ export function createCacheQueryBridge(
     }
   }
 
-  // Each token an eviction pass could match against this dependency: the dependency itself and every
-  // ":"-delimited prefix, which is how a table token covers its row and mutation tokens.
   function invalidationTokensCovering(dependency: CacheDependencyDescriptor): string[] {
     const tokens = [dependency]
     for (let index = dependency.indexOf(':'); index !== -1; index = dependency.indexOf(':', index + 1)) {
@@ -288,8 +284,6 @@ export function createCacheQueryBridge(
             options.driver,
           )
           await syncDependencies(indexedKey, options.dependencies)
-          // An invalidation that ran during the read may have finished its eviction pass before the
-          // registration above, so that pass could not see this entry. Remove it here instead.
           if (watch.invalidated()) {
             await forgetCacheEntry(key, options.driver, dependencyIndex)
           }

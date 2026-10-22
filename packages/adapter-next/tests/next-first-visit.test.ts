@@ -6,8 +6,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 
-// Runs a command in its own process group, so a build's worker processes die with it. The promise rejects at the
-// deadline, and the test-finished hook kills the group, so a hung build cannot outlive the test.
 function runProcess(
   command: string,
   args: readonly string[],
@@ -110,11 +108,8 @@ export async function POST(request) { await csrf.verify(request); return Respons
   }
   const nextBin = requireNext.resolve('next/dist/bin/next')
   const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' }
-  // A production build compiles every route before the first request, so the request below does no on-demand compile.
-  // The build's deadline sits below the test budget, so a hung build fails with its output before the test times out.
   const build = await runProcess(process.execPath, [nextBin, 'build', '--webpack'], { cwd: root, env, deadlineMs: 100_000 })
   expect(build.code, build.output).toBe(0)
-  // Reserve the port only now, so a slow build cannot let another process claim it before `next start` binds.
   const portServer = createServer()
   await new Promise<void>(resolve => portServer.listen(0, '127.0.0.1', resolve))
   const address = portServer.address()
@@ -135,7 +130,6 @@ export async function POST(request) { await csrf.verify(request); return Respons
     await closed
   })
   const baseUrl = `http://127.0.0.1:${address.port}`
-  // Readiness is the server accepting connections. An HTTP probe would also wait on a request-driven compile.
   await vi.waitUntil(async () => {
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
     return acceptsConnections(address.port)

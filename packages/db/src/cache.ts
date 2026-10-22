@@ -72,8 +72,6 @@ export interface RemoteDatabaseDependencyInvalidation {
   readonly dependencies: readonly string[]
 }
 
-// Every registered publisher sends each invalidation once on its own transport. Receivers drop the
-// duplicates by write ID, so correctness does not depend on which transports are shared.
 type DatabaseDependencyInvalidationPublisherCandidate = {
   readonly publisher: DatabaseDependencyInvalidationPublisher
 }
@@ -831,12 +829,9 @@ export function hasDatabaseDependencyInvalidationPublisher(): boolean {
   return (getQueryCacheBridgeState().dependencyInvalidationPublishers?.length ?? 0) > 0
 }
 
-// A write ID is recorded when this process applies it, so the copies that come back to this process
-// are dropped. Old IDs expire, and the set is bounded, so memory stays flat under sustained writes.
 const DATABASE_INVALIDATION_ID_TTL_MS = 60_000
 const DATABASE_INVALIDATION_ID_LIMIT = 10_000
 
-// Returns false when the ID was already applied within the TTL.
 function rememberDatabaseInvalidationId(id: string): boolean {
   const state = getQueryCacheBridgeState()
   state.recentDatabaseInvalidationIds ??= new Map<string, number>()
@@ -2205,7 +2200,6 @@ export async function invalidateQueryCacheDependencies(
         }
 
         const event = createDatabaseDependencyInvalidationEvent(connection, dependencies, mutations, plan?.metadata)
-        // Tags that are not table keys stay local: a remote worker can evict nothing for them.
         const remote = serializeDatabaseDependencyInvalidation(event)
         if (candidates.length > 0 && remote.dependencies.length > 0) {
           rememberDatabaseInvalidationId(remote.id)

@@ -7,21 +7,11 @@ export type WorkspacePackage = { readonly name: string, readonly directory: stri
 
 export type WorkspacePackageBuild = (name: string, workspaceRoot: string) => Promise<void>
 
-/**
- * A dist is current when its marker matches the content fingerprint of the package and every manifest entry point
- * exists. Modification times are not consulted, so a touch alone does not invalidate a build.
- */
 export function isWorkspaceDistCurrent(directory: string, workspaceRoot: string): boolean {
   return isWorkspaceBuildCurrent(directory, workspaceRoot)
 }
 
-/**
- * Copies a workspace dist into a staged package as real files. A link would make the staged package's dependencies
- * resolve from the workspace's real path, which can hide a dependency the staged package does not declare.
- */
 export function copyWorkspaceDist(workspaceDist: string, stagedDist: string): void {
-  // cpSync's dereference option leaves file symlinks as links on some Node versions, so copy each entry explicitly.
-  // statSync and copyFileSync both follow links, so the staged package gets real files.
   mkdirSync(stagedDist, { recursive: true })
   for (const entry of readdirSync(workspaceDist)) {
     const source = join(workspaceDist, entry)
@@ -31,10 +21,6 @@ export function copyWorkspaceDist(workspaceDist: string, stagedDist: string): vo
   }
 }
 
-/**
- * Rebuilds, one at a time, only the packages whose build is missing or stale. The builds are asynchronous so the
- * test process keeps its event loop free while they run. A marker is written only after a build succeeds.
- */
 export async function rebuildStaleWorkspacePackages(
   workspaceRoot: string,
   packages: readonly WorkspacePackage[],
