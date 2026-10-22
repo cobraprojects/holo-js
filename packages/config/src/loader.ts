@@ -85,9 +85,8 @@ const requireConfig = createRequire(import.meta.url)
 const importConfig = createJiti(import.meta.url, { moduleCache: false, interopDefault: false })
 let configImportNonce = 0
 
-async function importConfigModule(filePath: string): Promise<unknown> {
-  configImportNonce += 1
-
+async function importConfigModule(filePath: string, importKey?: string): Promise<unknown> {
+  const key = importKey ?? String(++configImportNonce)
   const extension = extname(filePath)
   if (extension === '.ts' || extension === '.mts' || extension === '.cts') {
     return importConfig.import(filePath)
@@ -97,7 +96,7 @@ async function importConfigModule(filePath: string): Promise<unknown> {
     delete requireConfig.cache[requireConfig.resolve(filePath)]
   }
 
-  return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${configImportNonce}`)
+  return import(/* webpackIgnore: true */ `${pathToFileURL(filePath).href}?t=${key}`)
 }
 
 const CONFIG_CACHE_FILE_MODE = 0o600

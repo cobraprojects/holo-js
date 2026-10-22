@@ -55,15 +55,14 @@ function hashProjectConfigImportInputs(
   return hash.digest('hex').slice(0, 16)
 }
 
-async function resolveProjectConfigImportUrl(
+async function resolveProjectConfigImportKey(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<string> {
-  const fileUrl = pathToFileURL(filePath).href
   const hash = hashProjectConfigImportInputs(await readFile(filePath, 'utf8'), environmentValues)
   const previous = projectConfigImportStates.get(filePath)
   if (previous?.hash === hash) {
-    return `${fileUrl}?t=${previous.nonce}`
+    return String(previous.nonce)
   }
 
   projectConfigImportNonce += 1
@@ -73,7 +72,7 @@ async function resolveProjectConfigImportUrl(
   }
   projectConfigImportStates.set(filePath, next)
 
-  return `${fileUrl}?t=${next.nonce}`
+  return String(next.nonce)
 }
 
 async function importProjectConfigFile<TConfig extends object>(
@@ -81,14 +80,14 @@ async function importProjectConfigFile<TConfig extends object>(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
+  const importKey = await resolveProjectConfigImportKey(filePath, environmentValues)
   const configExtension = extname(filePath)
   if (configExtension !== '.ts' && configExtension !== '.mts') {
-    return loaderInternals.resolveConfigExport<TConfig>(await loaderInternals.importConfigModule(filePath))
+    return loaderInternals.resolveConfigExport<TConfig>(await loaderInternals.importConfigModule(filePath, importKey))
   }
 
-  const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
   const bundled = await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
-  const resolvedImportUrl = `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
+  const resolvedImportUrl = `${pathToFileURL(bundled.path).href}?t=${importKey}`
 
   try {
     return loaderInternals.resolveConfigExport<TConfig>(await import(resolvedImportUrl))
