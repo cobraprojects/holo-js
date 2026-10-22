@@ -1544,7 +1544,7 @@ APP_ENV=development
     const rerun = runCliProcess(projectRoot, ['install', 'queue'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Queue support is already installed.')
-  }, 90000)
+  })
 
   it('installs redis queue support additively without duplicating env keys or overwriting queue config', async () => {
     const projectRoot = await createTempProject()
@@ -1598,7 +1598,7 @@ export default defineAppConfig({
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Installed queue support.')
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
-  }, 90000)
+  })
 
   it('installs auth support into an existing project with local defaults', async () => {
     const projectRoot = await createTempProject()
@@ -1645,7 +1645,7 @@ export default defineAppConfig({
     } finally {
       database.close()
     }
-  }, 90000)
+  })
 
 
   it('installs authorization support without forcing auth and is idempotent', async () => {
@@ -1699,7 +1699,7 @@ export default defineAppConfig({
 
     expect(second.status).toBe(0)
     expect(second.stdout).toContain('Authorization support is already installed.')
-  }, 90000)
+  })
 
   it('keeps auth installed when authorization is added afterward', async () => {
     const projectRoot = await createTempProject()
@@ -4238,7 +4238,7 @@ export default defineCacheConfig({
     expect(env).toMatch(/^BROADCAST_APP_ID=[a-f0-9]{16}$/m)
     expect(env).toMatch(/^BROADCAST_APP_KEY=[a-f0-9]{32}$/m)
     expect(env).toMatch(/^BROADCAST_APP_SECRET=[A-Za-z0-9_-]{43}$/m)
-  }, 120_000)
+  })
 
   it('installs Next.js broadcast support without requiring framework Flux bootstrap files', async () => {
     const nextRoot = await createTempProject()
@@ -5059,8 +5059,8 @@ export default defineCacheConfig({
 
     const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
     expect(dependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
-    expect(JSON.parse(await readFile(join(projectRoot, 'node_modules/@holo-js/cache/package.json'), 'utf8')).version).toBe(HOLO_PACKAGE_VERSION)
-  }, 60000)
+    await expectPackageManagerInstallRequested(projectRoot)
+  })
 
   it('caches evaluated config values and clears the cache through the CLI', async () => {
     const projectRoot = await createTempProject()
