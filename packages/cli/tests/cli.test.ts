@@ -1603,6 +1603,58 @@ export default defineAppConfig({
     })
   })
 
+  it('treats a queue config with named exports as the authority for queue packages', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/queue.ts', `
+export const failed = false
+export const connections = {
+  jobs: { driver: 'database', connection: 'default', table: 'jobs', queue: 'default', retryAfter: 90, sleep: 1 },
+}
+`)
+    await writeProjectFile(projectRoot, '.env', 'APP_NAME=Fixture\n')
+    await writeProjectFile(projectRoot, '.env.example', 'APP_NAME=\n')
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+        esbuild: ESBUILD_PACKAGE_VERSION,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: true,
+    })
+    const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies
+    expect(dependencies).toHaveProperty('@holo-js/queue-db')
+    expect(dependencies).not.toHaveProperty('@holo-js/queue-redis')
+  })
+
+  it('keeps a redis queue package listed as a dev dependency when config/queue.ts cannot be read', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/queue.ts', 'throw new Error("unreadable queue config")\n')
+    await writeProjectFile(projectRoot, '.env', 'APP_NAME=Fixture\n')
+    await writeProjectFile(projectRoot, '.env.example', 'APP_NAME=\n')
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        esbuild: ESBUILD_PACKAGE_VERSION,
+      },
+      devDependencies: {
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    await projectInternals.installQueueIntoProject(projectRoot)
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+    expect(packageJson.dependencies).toHaveProperty('@holo-js/queue-redis')
+  })
+
   it('reruns redis queue install without rewriting the manifest or requesting installs', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

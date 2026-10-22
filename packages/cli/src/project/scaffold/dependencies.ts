@@ -74,19 +74,29 @@ function resolveManagedPackageVersion(
   )
 }
 
+function isConfigObject(value: unknown): value is object {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
 function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
-  if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) {
+  if (!isConfigObject(moduleValue)) {
     return undefined
   }
 
-  const exports = moduleValue as { readonly default?: unknown, readonly config?: unknown, readonly queue?: unknown }
-  const value = [exports.default, exports.config, exports.queue].find(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate))
+  const exports = moduleValue as { readonly default?: unknown, readonly config?: unknown }
+  if (isConfigObject(exports.default)) {
+    return exports.default as HoloQueueConfig
+  }
 
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (isConfigObject(exports.config)) {
+    return exports.config as HoloQueueConfig
+  }
+
+  if ('default' in exports || 'config' in exports) {
     return undefined
   }
 
-  return value as HoloQueueConfig
+  return moduleValue as HoloQueueConfig
 }
 
 async function loadQueueConfigFile(
@@ -566,10 +576,10 @@ async function upsertQueuePackageDependency(
   const queueConnections = Object.values(queueConfig?.connections ?? {})
   const requiresQueueDb = queueConfig
     ? queueConnections.some(connection => queueConnectionUsesDriver(connection, 'database')) || queueConfig.failed !== false
-    : driver === 'database' || typeof dependencies['@holo-js/queue-db'] !== 'undefined'
+    : driver === 'database' || typeof dependencies['@holo-js/queue-db'] !== 'undefined' || typeof devDependencies['@holo-js/queue-db'] !== 'undefined'
   const requiresQueueRedis = queueConfig
     ? queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
-    : driver === 'redis' || typeof dependencies['@holo-js/queue-redis'] !== 'undefined'
+    : driver === 'redis' || typeof dependencies['@holo-js/queue-redis'] !== 'undefined' || typeof devDependencies['@holo-js/queue-redis'] !== 'undefined'
   const currentVersion = dependencies['@holo-js/queue']
   const currentQueueDbVersion = dependencies['@holo-js/queue-db']
   const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']
