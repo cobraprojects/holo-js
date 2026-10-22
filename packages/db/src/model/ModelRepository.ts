@@ -18,8 +18,8 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
-import { onTransactionCommitFailure } from '../core/commitFailureCallbacks'
-import { Entity, captureEntityWriteState, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
+import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
+import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
@@ -1856,12 +1856,14 @@ export class ModelRepository<
   ): Promise<TResult> {
     const ownsTransaction = this.getConnection().getScope().kind === 'root'
     const state = captureEntityWriteState(entity)
+    const dirtyKeys = Object.keys(entity.getDirty())
     return this.runWriteUnit(async () => {
       let written = false
       try {
         return await write(() => {
           written = true
-          onTransactionCommitFailure(this.getConnection(), () => restoreEntityWriteState(entity, state))
+          const restore = commitFailureRestoreFor(this.getConnection(), entity, () => createEntityCommitRestore(entity, state))
+          restore.recordWrite(state, dirtyKeys)
         })
       } catch (error) {
         if (ownsTransaction || !written) {

@@ -984,6 +984,36 @@ export function getEntityKeyForSave<TTable extends TableDefinition, TRelations e
   return readOriginalAttribute(entity as unknown as EntityBase, primaryKey) ?? entity.get(primaryKey as never)
 }
 
+class EntityCommitRestore<TTable extends TableDefinition, TRelations extends RelationMap> {
+  readonly #entity: EntityBase<TTable, TRelations>
+  readonly #first: EntityWriteState
+  #inputs: Record<string, unknown> = {}
+
+  constructor(entity: EntityBase<TTable, TRelations>, first: EntityWriteState) {
+    this.#entity = entity
+    this.#first = first
+  }
+
+  recordWrite(state: EntityWriteState, dirtyKeys: readonly string[]): void {
+    this.#inputs = { ...this.#inputs, ...Object.fromEntries(dirtyKeys.map(key => [key, state.attributes[key]])) }
+  }
+
+  absorb(later: EntityCommitRestore<TTable, TRelations>): void {
+    this.#inputs = { ...this.#inputs, ...later.#inputs }
+  }
+
+  restore(): void {
+    restoreEntityWriteState(this.#entity, { ...this.#first, attributes: { ...this.#first.attributes, ...this.#inputs } })
+  }
+}
+
+export function createEntityCommitRestore<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: EntityBase<TTable, TRelations>,
+  first: EntityWriteState,
+): EntityCommitRestore<TTable, TRelations> {
+  return new EntityCommitRestore(entity, first)
+}
+
 export function captureEntityWriteState<TTable extends TableDefinition, TRelations extends RelationMap>(
   entity: EntityBase<TTable, TRelations>,
 ): EntityWriteState {

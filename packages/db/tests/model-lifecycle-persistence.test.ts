@@ -982,6 +982,100 @@ describe('model save writes', () => {
       expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
     })
 
+    it('restores a created model to the latest edit when it is saved twice before a failed COMMIT', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async () => {
+        await child.save()
+        child.set('name', 'Grace')
+        await child.save()
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').count()).toBe(0)
+      expect(child.get('name')).toBe('Grace')
+      expect(child.isDirty('name')).toBe(true)
+      expect(child.exists()).toBe(false)
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Grace', 'Grace'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Grace!' }])
+      expect(child.isDirty()).toBe(false)
+    })
+
+    it('restores an updated model to the latest edit when it is saved twice before a failed COMMIT', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.table('parents').insert({ id: 1 })
+      await db.table('children').insert({ id: 1, parentId: 1, name: 'Ada!' })
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = await Child.findOrFail(1)
+      await expect(db.transaction(async () => {
+        child.set('parentId', 99)
+        child.set('name', 'Grace')
+        await child.save()
+        child.set('name', 'Linus')
+        await child.save()
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').where('id', 1).get()).toMatchObject([{ parentId: 1, name: 'Ada!' }])
+      expect(child.get('name')).toBe('Linus')
+      expect(child.get('parentId')).toBe(99)
+      expect(child.isDirty()).toBe(true)
+
+      await db.table('parents').insert({ id: 99 })
+      await child.save()
+
+      expect(seen).toEqual(['Grace', 'Linus', 'Linus'])
+      expect(await db.table('children').where('id', 1).get()).toMatchObject([{ parentId: 99, name: 'Linus!' }])
+      expect(child.isDirty()).toBe(false)
+    })
+
+    it('does not run a mutator again on an attribute a later save did not edit', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async () => {
+        await child.save()
+        child.set('parentId', 99)
+        await child.save()
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(child.get('name')).toBe('Ada')
+
+      await db.table('parents').insert({ id: 99 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Ada'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 99, name: 'Ada!' }])
+    })
+
+    it('restores a model saved in a released savepoint to its latest edit when the outer COMMIT fails', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async tx => {
+        await child.save()
+        await tx.transaction(async () => {
+          child.set('name', 'Grace')
+          await child.save()
+        })
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(child.get('name')).toBe('Grace')
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Grace', 'Grace'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Grace!' }])
+    })
+
     it('keeps the saved state when an afterCommit callback fails after the COMMIT succeeded', async () => {
       const db = await openDatabaseWithDeferredForeignKey()
       await db.table('parents').insert({ id: 42 })
