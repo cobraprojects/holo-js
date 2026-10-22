@@ -341,6 +341,25 @@ describe('@holo-js/auth-social', () => {
     }
   })
 
+  it('sets the state cookie Secure behind a TLS-terminating proxy when the request object still carries an HTTP URL', async () => {
+    await configureRuntime()
+    requestUrlInternals.provideConnectionAddress(() => '127.0.0.1')
+    configureSecurityRuntime({ config: { trustedProxies: ['127.0.0.1'] } })
+    try {
+      const response = await redirect('google', new Request('http://internal.test/auth/google', {
+        headers: {
+          host: 'internal.test',
+          'x-forwarded-host': 'app.test',
+          'x-forwarded-proto': 'https',
+        },
+      }))
+      expect(response.headers.get('set-cookie')).toContain('Secure')
+    } finally {
+      resetSecurityRuntime()
+      requestUrlInternals.provideConnectionAddress(undefined)
+    }
+  })
+
   it.each([
     'https://provider.test/authorize?response_mode=form_post',
     '/oauth/authorize?response_mode=form_post',

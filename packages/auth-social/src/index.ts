@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthSocialProviderConfig } from '@holo-js/auth'
+import { resolveRequestUrl } from '@holo-js/kernel'
 
 export interface SocialProviderProfile {
   readonly id: string
@@ -259,7 +260,7 @@ function serializeStateCookie(
   request: Request,
   formPostCallback: boolean,
 ): string {
-  const secure = new URL(request.url).protocol === 'https:'
+  const secure = resolveRequestUrl(request).protocol === 'https:'
   const attributes = [
     `${getStateCookieName(provider)}=${state}.${nonce}`,
     'Path=/',
