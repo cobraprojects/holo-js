@@ -392,8 +392,8 @@ export async function loadProjectDefinitionRuntimeModules(
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
-      if (nativeSourceLoader) continue
       if (input.imports.some(dependency => importRequiresBundle(dependency, sourcePath))) nativeGraph = false
+      if (nativeSourceLoader) continue
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {

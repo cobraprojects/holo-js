@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
 import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
@@ -22,6 +22,21 @@ async function createTempProject(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
+
+async function createDependencyDefinitionFixture(): Promise<{ projectRoot: string, definitionPath: string }> {
+  const projectRoot = await createTempProject()
+  await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+  const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
+  const nestedCopyRoot = join(jobsRoot, 'node_modules/@holo-js/config')
+  await mkdir(nestedCopyRoot, { recursive: true })
+  await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+  await writeFile(join(nestedCopyRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
+  await writeFile(join(nestedCopyRoot, 'index.mjs'), 'export const defineAppConfig = "nested copy"\n')
+  const definitionPath = join(jobsRoot, 'job.mjs')
+  await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
+  return { projectRoot, definitionPath }
+}
 
 describe('@holo-js/core runtime module helpers', () => {
   it('loads installed storage modules in a client module graph', async () => {
@@ -122,22 +137,26 @@ describe('@holo-js/core runtime module helpers', () => {
   })
 
   it('binds a definition shipped in a dependency to the runtime when the dependency has its own holo copy', async () => {
-    const projectRoot = await createTempProject()
-    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
-    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
-    const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
-    const nestedCopyRoot = join(jobsRoot, 'node_modules/@holo-js/config')
-    await mkdir(nestedCopyRoot, { recursive: true })
-    await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
-    await writeFile(join(nestedCopyRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
-    await writeFile(join(nestedCopyRoot, 'index.mjs'), 'export const defineAppConfig = "nested copy"\n')
-    const definitionPath = join(jobsRoot, 'job.mjs')
-    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
+    const { projectRoot, definitionPath } = await createDependencyDefinitionFixture()
 
     const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
     const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
 
     expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+  })
+
+  it('checks dependency-shipped definitions under a source loader too', async () => {
+    const { projectRoot, definitionPath } = await createDependencyDefinitionFixture()
+    vi.stubGlobal('Bun', {})
+
+    try {
+      const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+      const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
+
+      expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('does not import package export targets pruned from a production artifact', async () => {
