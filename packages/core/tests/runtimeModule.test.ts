@@ -159,6 +159,27 @@ describe('@holo-js/core runtime module helpers', () => {
     }
   })
 
+  it('binds a definition to the runtime instance when symlinks are preserved', async () => {
+    const projectRoot = await createTempProject()
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+    const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    await mkdir(jobsRoot, { recursive: true })
+    await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    const definitionPath = join(jobsRoot, 'job.mjs')
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
+    vi.stubEnv('NODE_PRESERVE_SYMLINKS', '1')
+
+    try {
+      const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+      const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
+
+      expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('does not import package export targets pruned from a production artifact', async () => {
     const projectRoot = await createTempProject()
     const packageRoot = join(projectRoot, 'node_modules/@fixture/optional')

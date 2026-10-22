@@ -349,7 +349,15 @@ function packageRootFromBase(base: string, packageName: string): string | undefi
   return undefined
 }
 
+function symlinksPreserved(): boolean {
+  if (process.env.NODE_PRESERVE_SYMLINKS === '1') return true
+
+  return [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)]
+    .some(option => option === '--preserve-symlinks' || option === '--preserve-symlinks-main')
+}
+
 function holoPackageSharesRuntime(packageName: string, importerPath: string): boolean {
+  if (symlinksPreserved()) return false
   const runtimeRoot = packageRootFromBase(import.meta.url, packageName)
   return runtimeRoot !== undefined && runtimeRoot === packageRootFromBase(importerPath, packageName)
 }
