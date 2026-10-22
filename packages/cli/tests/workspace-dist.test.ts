@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isWorkspaceDistCurrent, rebuildStaleWorkspacePackages } from '../../../tests/support/workspace-dist'
+import { copyWorkspaceDist, isWorkspaceDistCurrent, rebuildStaleWorkspacePackages } from '../../../tests/support/workspace-dist'
 
 const roots: string[] = []
 const BASE_TIME = Math.floor(Date.now() / 1000) - 1000
@@ -65,5 +65,23 @@ describe('workspace dist reuse', () => {
     const build = vi.fn(async () => {})
     await rebuildStaleWorkspacePackages(root, [{ name: '@holo-js/example', directory }], build)
     expect(build).toHaveBeenCalledWith('@holo-js/example', root)
+  })
+})
+
+describe('staged workspace dist', () => {
+  it('copies the dist into the staged package as real files instead of linking to the workspace', async () => {
+    const { root, directory } = await createWorkspace()
+    await buildDist(directory, BASE_TIME + 10)
+    await writeFile(join(root, 'outside.mjs'), 'export const outside = true\n')
+    await symlink(join(root, 'outside.mjs'), join(directory, 'dist', 'linked.mjs'))
+
+    const staged = join(root, 'staged', 'example')
+    await mkdir(staged, { recursive: true })
+    copyWorkspaceDist(join(directory, 'dist'), join(staged, 'dist'))
+
+    expect((await lstat(join(staged, 'dist'))).isSymbolicLink()).toBe(false)
+    expect((await lstat(join(staged, 'dist', 'index.mjs'))).isSymbolicLink()).toBe(false)
+    expect((await lstat(join(staged, 'dist', 'linked.mjs'))).isSymbolicLink()).toBe(false)
+    expect(await readFile(join(staged, 'dist', 'linked.mjs'), 'utf8')).toBe('export const outside = true\n')
   })
 })

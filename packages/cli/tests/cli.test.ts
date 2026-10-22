@@ -1,6 +1,6 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
-import { isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
+import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -337,14 +337,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
       if (peer) symlinkPackageDependencySync(join(directory, 'node_modules'), peerName, peer.directory)
     }
   }
-  // The integration global setup rebuilds stale workspace packages before any worker starts, so each dist linked here is
+  // The integration global setup rebuilds stale workspace packages before any worker starts, so each dist copied here is
   // current. A stale one means that setup did not run, and building it here would block this worker's event loop.
   for (const { name, directory } of packages) {
     const workspacePackageRoot = join(workspaceRoot, 'packages', basename(directory))
     if (!isWorkspaceDistCurrent(workspacePackageRoot)) {
       throw new Error(`Workspace package ${name} has no current dist. Run the cli integration suite through its test:integration script.`)
     }
-    symlinkSync(join(workspacePackageRoot, 'dist'), join(directory, 'dist'), 'dir')
+    copyWorkspaceDist(join(workspacePackageRoot, 'dist'), join(directory, 'dist'))
   }
 
   builtWorkspacePackages = {

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 export type WorkspacePackage = { readonly name: string, readonly directory: string }
@@ -41,6 +41,22 @@ export function isWorkspaceDistCurrent(directory: string): boolean {
   if (built === undefined) return false
   const inputs = newestMtime(buildInputs(directory))
   return inputs === undefined || built >= inputs
+}
+
+/**
+ * Copies a workspace dist into a staged package as real files. A link would make the staged package's dependencies
+ * resolve from the workspace's real path, which can hide a dependency the staged package does not declare.
+ */
+export function copyWorkspaceDist(workspaceDist: string, stagedDist: string): void {
+  // cpSync's dereference option leaves file symlinks as links on some Node versions, so copy each entry explicitly.
+  // statSync and copyFileSync both follow links, so the staged package gets real files.
+  mkdirSync(stagedDist, { recursive: true })
+  for (const entry of readdirSync(workspaceDist)) {
+    const source = join(workspaceDist, entry)
+    const target = join(stagedDist, entry)
+    if (statSync(source).isDirectory()) copyWorkspaceDist(source, target)
+    else copyFileSync(source, target)
+  }
 }
 
 /**
