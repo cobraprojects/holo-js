@@ -186,6 +186,8 @@
 - `@holo-js/kernel` declares `file-type` as a regular dependency. Before, it was an optional peer, but file-content checks import it unconditionally, so installs that couldn't resolve it from kernel's location failed every S3 write and every file-content check, such as `stat()` and file validation.
 - Queue job timeouts are checked against their connection's `retryAfter` when the queue config loads and after a project's jobs register at boot, as they already were at dispatch and worker start. A registered job whose `timeout` isn't below `retryAfter` now fails that step. Before, the mismatch surfaced only when the job was dispatched or a worker started.
 - Reconfiguring the cache runtime closes the Redis and database cache drivers it replaces only after the calls in flight on them settle, including lock operations. Before, a call still running during a reconfiguration could fail with `Connection is closed`.
+- Saving a soft-deleted model loaded with `withTrashed()` updates its row. Before, the update matched no rows and `save()` reported success. Global scopes still apply to the update, so a row a scope hides is not written.
+- Retrying a failed `save()` or `create()` runs set mutators once. Before, a retry ran them again on the values the failed attempt had already mutated, so a hashing mutator hashed twice. When a save, create, or restore fails inside Holo's transaction, the model keeps the attributes and persisted state it had before the call. Inside a transaction you start yourself, a write that completed before the failure stays in that transaction, so the model keeps its written state.
 
 ### Compatibility and upgrade requirements
 

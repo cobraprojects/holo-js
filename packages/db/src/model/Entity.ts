@@ -60,6 +60,15 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
 }
 
 let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
+let readWriteState: (entity: EntityBase) => EntityWriteState
+let applyWriteState: (entity: EntityBase, state: EntityWriteState) => void
+
+export interface EntityWriteState {
+  readonly attributes: Record<string, unknown>
+  readonly original: Record<string, unknown>
+  readonly changes: Record<string, unknown>
+  readonly persisted: boolean
+}
 
 class EntityBase<
   TTable extends TableDefinition = TableDefinition,
@@ -79,6 +88,18 @@ class EntityBase<
 
   static {
     readOriginalAttribute = (entity, key) => entity.#original[key]
+    readWriteState = entity => ({
+      attributes: snapshotAttributes(entity.#attributes),
+      original: snapshotAttributes(entity.#original),
+      changes: snapshotAttributes(entity.#changes),
+      persisted: entity.#persisted,
+    })
+    applyWriteState = (entity, state) => {
+      entity.#attributes = snapshotAttributes(state.attributes)
+      entity.#original = snapshotAttributes(state.original)
+      entity.#changes = snapshotAttributes(state.changes)
+      entity.#persisted = state.persisted
+    }
   }
 
   readonly #repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>
@@ -961,4 +982,17 @@ export function getEntityKeyForSave<TTable extends TableDefinition, TRelations e
   primaryKey: string,
 ): unknown {
   return readOriginalAttribute(entity as unknown as EntityBase, primaryKey) ?? entity.get(primaryKey as never)
+}
+
+export function captureEntityWriteState<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: EntityBase<TTable, TRelations>,
+): EntityWriteState {
+  return readWriteState(entity as unknown as EntityBase)
+}
+
+export function restoreEntityWriteState<TTable extends TableDefinition, TRelations extends RelationMap>(
+  entity: EntityBase<TTable, TRelations>,
+  state: EntityWriteState,
+): void {
+  applyWriteState(entity as unknown as EntityBase, state)
 }
