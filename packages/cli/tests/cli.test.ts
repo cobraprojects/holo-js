@@ -1,7 +1,8 @@
 import { prepareProjectSchema } from '../src/project-prepare'
 import { isIgnorableWatchError } from '../src/watch-paths'
+import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -772,38 +773,8 @@ async function createTempDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'holo-cli-dir-'))
 }
 
-const shimmedPackageManagers = ['bun', 'npm', 'pnpm', 'yarn'] as const
 let packageManagerShimRoot = ''
 let packageManagerInstallLog = ''
-
-function findExecutableOnPath(name: string, searchPath: string): string | undefined {
-  for (const directory of searchPath.split(delimiter)) {
-    if (!directory) continue
-    const candidate = join(directory, name)
-    if (statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate
-  }
-  return undefined
-}
-
-async function createPackageManagerShims(searchPath: string): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'holo-cli-package-manager-'))
-  packageManagerInstallLog = join(root, 'install-requests.log')
-  for (const name of shimmedPackageManagers) {
-    const realBinary = findExecutableOnPath(name, searchPath)
-    const forward = realBinary ? `exec '${realBinary}' "$@"` : `echo '${name} is not installed' >&2\nexit 127`
-    await writeFile(join(root, name), [
-      '#!/bin/sh',
-      'if [ "$1" = "install" ]; then',
-      `  pwd -P >> '${packageManagerInstallLog}'`,
-      '  if [ -f install-hook.cjs ]; then node install-hook.cjs || exit $?; fi',
-      '  exit 0',
-      'fi',
-      forward,
-      '',
-    ].join('\n'), { mode: 0o755 })
-  }
-  return root
-}
 
 async function writeFrameworkSyncBinary(projectRoot: string, name: string): Promise<void> {
   const binRoot = join(projectRoot, 'node_modules', '.bin')
@@ -952,7 +923,9 @@ let inheritedPath: string | undefined
 beforeAll(async () => {
   ensureBuiltWorkspacePackagesSync()
   inheritedPath = process.env.PATH
-  packageManagerShimRoot = await createPackageManagerShims(inheritedPath ?? '')
+  packageManagerShimRoot = await mkdtemp(join(tmpdir(), 'holo-cli-package-manager-'))
+  const shims = await createPackageManagerShims(packageManagerShimRoot, inheritedPath ?? '')
+  packageManagerInstallLog = shims.installLog
   process.env.PATH = `${packageManagerShimRoot}${delimiter}${inheritedPath ?? ''}`
 }, 300_000)
 
