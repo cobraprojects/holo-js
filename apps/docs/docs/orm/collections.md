@@ -82,6 +82,8 @@ await drafts.toQuery().update({ status: 'archived' })
 
 `toQuery()` throws on an empty collection, so check `length` first if the collection might be empty.
 
+The query keeps the model's named scopes, so `drafts.toQuery().published()` type-checks when `Post` defines a `published` scope.
+
 ## Reloading from the database
 
 `fresh()` reloads every model and returns a new collection. Records deleted in the meantime are left out:

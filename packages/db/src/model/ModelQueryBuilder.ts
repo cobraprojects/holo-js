@@ -536,7 +536,7 @@ class ModelQueryBuilderBase<
     await this.repository.loadRelations(entities, this.eagerLoads)
     await this.repository.loadRelationAggregates(entities, this.aggregateLoads)
     const collection = this.repository.createCollection(entities as Entity<TTable, TRelations>[]) as
-      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
   }
@@ -1004,7 +1004,7 @@ class ModelQueryBuilderBase<
   }
 
   async get(): Promise<
-    ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+    ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
   > {
     const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
@@ -1016,7 +1016,7 @@ class ModelQueryBuilderBase<
 
   private async hydrateRows(
     rows: readonly ModelRecord<TTable>[],
-  ): Promise<ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>> {
+  ): Promise<ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>> {
     const hasQueryCasts = Object.keys(this.queryCasts).length > 0
     const entities = await Promise.all(
       rows.map(row => (
@@ -1029,7 +1029,7 @@ class ModelQueryBuilderBase<
     await this.repository.loadRelations(entities, this.eagerLoads)
     await this.repository.loadRelationAggregates(entities, this.aggregateLoads)
     return this.repository.createCollection(entities as EntityWithLoaded<TTable, TRelations, TLoaded>[]) as
-      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
   }
 
   async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
@@ -1930,7 +1930,7 @@ class ModelQueryBuilderBase<
   }
 
   private async getRowsAndEntities(): Promise<{
-    readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+    readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
     readonly rows: readonly ModelRecord<TTable>[]
   }> {
     const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
