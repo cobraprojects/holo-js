@@ -48,6 +48,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const result = spawnSync('bun', ['run', 'build'], { cwd: directory, stdio: 'inherit' })
     if (result.error) throw result.error
     if (result.status !== 0) process.exit(result.status ?? 1)
-    writeWorkspaceBuildMarker(directory)
+    writeWorkspaceBuildMarker(directory, resolve(import.meta.dirname, '..'))
   }
 }

@@ -11,8 +11,8 @@ export type WorkspacePackageBuild = (name: string, workspaceRoot: string) => Pro
  * A dist is current when its marker matches the content fingerprint of the package and every manifest entry point
  * exists. Modification times are not consulted, so a touch alone does not invalidate a build.
  */
-export function isWorkspaceDistCurrent(directory: string): boolean {
-  return isWorkspaceBuildCurrent(directory)
+export function isWorkspaceDistCurrent(directory: string, workspaceRoot: string): boolean {
+  return isWorkspaceBuildCurrent(directory, workspaceRoot)
 }
 
 /**
@@ -40,10 +40,10 @@ export async function rebuildStaleWorkspacePackages(
   packages: readonly WorkspacePackage[],
   build: WorkspacePackageBuild = buildWorkspacePackage,
 ): Promise<string[]> {
-  const stale = packages.filter(({ directory }) => !isWorkspaceDistCurrent(directory))
+  const stale = packages.filter(({ directory }) => !isWorkspaceDistCurrent(directory, workspaceRoot))
   for (const { name, directory } of stale) {
     await build(name, workspaceRoot)
-    writeWorkspaceBuildMarker(directory)
+    writeWorkspaceBuildMarker(directory, workspaceRoot)
   }
   return stale.map(({ name }) => name)
 }

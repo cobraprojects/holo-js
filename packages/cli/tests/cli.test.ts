@@ -341,7 +341,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   // current. A stale one means that setup did not run, and building it here would block this worker's event loop.
   for (const { name, directory } of packages) {
     const workspacePackageRoot = join(workspaceRoot, 'packages', basename(directory))
-    if (!isWorkspaceDistCurrent(workspacePackageRoot)) {
+    if (!isWorkspaceDistCurrent(workspacePackageRoot, workspaceRoot)) {
       throw new Error(`Workspace package ${name} has no current dist. Run the cli integration suite through its test:integration script.`)
     }
     copyWorkspaceDist(join(workspacePackageRoot, 'dist'), join(directory, 'dist'))
