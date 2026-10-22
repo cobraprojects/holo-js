@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -321,6 +321,36 @@ async function bundleRuntimeModule(
 
 const definitionGraphSources = new Map<string, { readonly sources: ReadonlyMap<string, string>, readonly native: boolean }>()
 
+function packageRootFromBase(base: string, packageName: string): string | undefined {
+  const require = nodeModule.createRequire(base)
+  for (const directory of require.resolve.paths(packageName) ?? []) {
+    const candidate = join(directory, packageName)
+    if (existsSync(join(candidate, 'package.json'))) return realpathSync(candidate)
+  }
+
+  return undefined
+}
+
+function holoPackageSharesRuntime(packageName: string, projectRoot: string): boolean {
+  const runtimeRoot = packageRootFromBase(import.meta.url, packageName)
+  return runtimeRoot !== undefined && runtimeRoot === packageRootFromBase(join(projectRoot, 'package.json'), packageName)
+}
+
+function importRequiresBundle(
+  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+  projectRoot: string,
+): boolean {
+  const original = dependency.original ?? dependency.path
+  const holoPackage = /^@holo-js\/[^/]+/.exec(original)?.[0]
+  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, projectRoot)
+
+  return /^[@~]\//.test(original)
+    || !dependency.external && (
+      !original.startsWith('.') && !original.startsWith('file:') && !isAbsolute(original)
+      || !extname(original) || extname(original) !== extname(dependency.path)
+    )
+}
+
 export async function loadProjectDefinitionRuntimeModules(
   projectRoot: string,
   entryPaths: readonly string[],
@@ -345,14 +375,7 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       if (nativeSourceLoader) continue
-      if (input.imports.some(dependency => {
-        const original = dependency.original ?? dependency.path
-        return /^[@~]\//.test(original)
-          || !dependency.external && (
-            !original.startsWith('.') && !original.startsWith('file:') && !isAbsolute(original)
-            || !extname(original) || extname(original) !== extname(dependency.path)
-          )
-      })) nativeGraph = false
+      if (input.imports.some(dependency => importRequiresBundle(dependency, projectRoot))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {
