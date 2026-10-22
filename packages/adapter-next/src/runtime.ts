@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
+import { createCookieWriteUnavailableError } from '@holo-js/kernel'
 import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
 import { serializeValidationException } from '@holo-js/validation'
@@ -172,14 +173,6 @@ function isReadonlyNextCookieStore(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('Cookies can only be modified in a Server Action or Route Handler')
 }
 
-const NEXT_COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
-
-function createCookieWriteUnavailableError(cause: unknown): Error {
-  return Object.assign(new Error('Cookies can only be set in a Server Action or Route Handler, not while rendering a Server Component.', { cause }), {
-    code: NEXT_COOKIE_WRITE_UNAVAILABLE,
-  })
-}
-
 export function createNextRequestContext(request: Request): NextRequestLike {
   const nextRequest = request as NextRequestWithCookies
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
@@ -255,7 +248,12 @@ function resolveNextAuthRequestAccessors(projectRoot = process.cwd()): NonNullab
         const store = await cookies() as MutableNextCookieStore
         store.set(parsed.name, parsed.value, parsed.options)
       } catch (error) {
-        if (isMissingNextRequestScope(error) || isReadonlyNextCookieStore(error)) throw createCookieWriteUnavailableError(error)
+        if (isMissingNextRequestScope(error) || isReadonlyNextCookieStore(error)) {
+          throw createCookieWriteUnavailableError(
+            'Cookies can only be set in a Server Action or Route Handler, not while rendering a Server Component.',
+            error,
+          )
+        }
         throw error
       }
     },

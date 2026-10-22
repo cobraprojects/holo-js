@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import type { QueueJobContext, QueueJobDefinition, QueueJsonValue, QueueRegisteredJob } from '@holo-js/queue'
+import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { EventQueuedListenerDispatch, EventEnvelope, RegisteredListener } from './contracts'
 import { getRegisteredListener } from './registry'
@@ -102,14 +103,6 @@ function assertQueuedListenerMatchesEvent(
   }
 }
 
-function resolveListenerRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
-  if (typeof backoff === 'number') {
-    return backoff
-  }
-
-  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
-}
-
 export async function runQueuedListenerInvocation(
   payload: EventsInvokeListenerPayload,
   context?: QueueJobContext,
@@ -125,7 +118,7 @@ export async function runQueuedListenerInvocation(
     }
 
     try {
-      await context.release(resolveListenerRetryDelaySeconds(backoff, context.attempt))
+      await context.release(resolveRetryBackoffSeconds(backoff, context.attempt))
     } catch (releaseError) {
       reportError(releaseError, { capability: 'events', operation: 'listener.releaseRetry' })
       throw error

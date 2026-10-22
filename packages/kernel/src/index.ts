@@ -17,3 +17,5 @@ export {
 } from './requestUrl'
 export { decryptCookieValue, encryptCookieValue } from './cookieEncryption'
 export { localStoragePathInternals } from './localStoragePath'
+export { COOKIE_WRITE_UNAVAILABLE, createCookieWriteUnavailableError } from './cookieWriteUnavailable'
+export { resolveRetryBackoffSeconds } from './retryBackoff'

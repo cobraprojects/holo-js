@@ -1,3 +1,4 @@
+import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   dispatchNotificationDelivery,
@@ -450,14 +451,6 @@ async function runQueuedNotificationDelivery(
   }), payload.deduplicationKey)
 }
 
-function resolveNotificationRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
-  if (typeof backoff === 'number') {
-    return backoff
-  }
-
-  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
-}
-
 async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
   const resolvedQueueModule = queueModule ?? await loadQueueModule()
   if (resolvedQueueModule.getRegisteredQueueJob(HOLO_NOTIFICATIONS_DELIVER_JOB)) {
@@ -475,7 +468,7 @@ async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule):
           }
 
           try {
-            await context.release(resolveNotificationRetryDelaySeconds(payload.backoff, context.attempt))
+            await context.release(resolveRetryBackoffSeconds(payload.backoff, context.attempt))
           } catch (releaseError) {
             reportError(releaseError, { capability: 'notifications', operation: 'queuedDelivery.releaseRetry' })
             throw error

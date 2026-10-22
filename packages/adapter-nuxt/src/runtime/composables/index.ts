@@ -6,6 +6,7 @@ import {
   initializeHoloAdapterProject,
   type CreateHoloOptions,
 } from '@holo-js/core'
+import { createCookieWriteUnavailableError } from '@holo-js/kernel'
 
 type RuntimeConfigShape = {
   holo: {
@@ -148,7 +149,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   async function appendCookie(cookie: string): Promise<void> {
     const response = await resolveResponse()
     if (!response) {
-      throw Object.assign(new Error('Authentication cookies cannot be set outside an active Nitro request.'), { code: 'cookie_write_unavailable' })
+      throw createCookieWriteUnavailableError('Authentication cookies cannot be set outside an active Nitro request.')
     }
 
     const current = response.getHeader('set-cookie')
