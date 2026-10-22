@@ -1,4 +1,5 @@
 import { captureErrorReporter, type HoloErrorReporter } from '@holo-js/kernel/error-reporting'
+import { createManagedResources, type ManagedResources, type ResourceLease } from '@holo-js/kernel/managed-resources'
 import {
   CacheOptionalPackageError,
   type CacheDriverContract,
@@ -78,9 +79,26 @@ type LazyCacheDriverOptions<TModule, TOptions> = {
   readonly disposeDriver?: boolean
 }
 
+type LeasedCacheDriver = {
+  readonly driver: CacheDriverContract
+  close(): void | Promise<void>
+}
+
+type LazyCacheDriverInstance<TOptions> = {
+  readonly resources: ManagedResources<TOptions, LeasedCacheDriver>
+  readonly lease: ResourceLease<LeasedCacheDriver>
+}
+
+function leaseCacheDriver(driver: CacheDriverContract): LeasedCacheDriver {
+  return {
+    driver,
+    close: () => (driver as DisposableCacheDriver)[CACHE_DRIVER_DISPOSE_SYMBOL]?.(),
+  }
+}
+
 class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract {
-  private driverInstance?: CacheDriverContract
-  private pending?: Promise<CacheDriverContract>
+  private instance?: LazyCacheDriverInstance<TOptions>
+  private pending?: Promise<LazyCacheDriverInstance<TOptions>>
   private disposalGeneration = 0
 
   constructor(private readonly lazyOptions: LazyCacheDriverOptions<TModule, TOptions>) {}
@@ -93,27 +111,31 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     return this.lazyOptions.driver
   }
 
-  private async resolveDriver(): Promise<CacheDriverContract> {
-    if (this.driverInstance) return this.driverInstance
-
+  private createInstance(): Promise<LazyCacheDriverInstance<TOptions>> {
     const pendingGeneration = this.disposalGeneration
-    this.pending ??= this.lazyOptions.loadModule().then((module) => {
-      const driver = this.lazyOptions.createDriver(module, this.lazyOptions.options)
+    const resources = createManagedResources<TOptions, LeasedCacheDriver>()
+    const pending: Promise<LazyCacheDriverInstance<TOptions>> = this.lazyOptions.loadModule().then(async (module) => {
+      const lease = await resources.acquire(
+        this.lazyOptions.options,
+        () => leaseCacheDriver(this.lazyOptions.createDriver(module, this.lazyOptions.options)),
+      )
+      const instance = { resources, lease }
       if (this.disposalGeneration === pendingGeneration) {
-        this.driverInstance = driver
+        this.instance = instance
       }
-      return driver
+      return instance
     }).finally(() => {
-      this.pending = undefined
+      if (this.pending === pending) this.pending = undefined
     })
-
-    return this.pending
+    this.pending = pending
+    return pending
   }
 
   private async withDriver<TValue>(
     callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
   ): Promise<TValue> {
-    return callback(await this.resolveDriver())
+    const instance = this.instance ?? await (this.pending ?? this.createInstance())
+    return instance.lease.hold(() => callback(instance.lease.value.driver))
   }
 
   [CACHE_DRIVER_DISPOSE_SYMBOL](): void {
@@ -122,19 +144,22 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     }
 
     const pending = this.pending
-    const driverInstance = this.driverInstance
+    const instance = this.instance
 
     this.disposalGeneration += 1
-    this.driverInstance = undefined
+    this.instance = undefined
     this.pending = undefined
 
     const report = captureErrorReporter()
-    if (driverInstance) {
-      disposeCacheDriver(driverInstance, report)
+    const retire = (retired: LazyCacheDriverInstance<TOptions>): void => {
+      void retired.resources.dispose().catch(error => report(error, { capability: 'cache', operation: 'driver.dispose' }))
+    }
+    if (instance) {
+      retire(instance)
       return
     }
 
-    void pending?.then(driver => disposeCacheDriver(driver, report), () => undefined)
+    void pending?.then(retire, () => undefined)
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {
