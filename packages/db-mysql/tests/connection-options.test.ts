@@ -43,6 +43,15 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql c
     expect(result.rows[0]?.Value).not.toBe('')
   }, 30_000)
 
+  it('lets the URL ssl parameter enable TLS even when ssl is configured as false', async () => {
+    const adapter = mysqlDatabaseDriverFactory.create({ url: `${liveMySQLUrl}?ssl=${encodeURIComponent('{"rejectUnauthorized":false}')}`, ssl: false })
+    onTestFinished(() => adapter.disconnect())
+
+    const result = await adapter.query<{ Value: string }>('SHOW STATUS LIKE \'Ssl_cipher\'')
+
+    expect(result.rows[0]?.Value).not.toBe('')
+  }, 30_000)
+
   it('keeps a URL without ssl on a plaintext connection', async () => {
     const adapter = mysqlDatabaseDriverFactory.create({ url: liveMySQLUrl })
     onTestFinished(() => adapter.disconnect())

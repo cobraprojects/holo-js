@@ -40,8 +40,13 @@ async function runInShell(invocation: ReturnType<typeof resolvePackageManagerSpa
 it('delivers package-manager arguments unchanged whether they are quoted for the Windows shell or spawned directly', async () => {
   const args = ['-p', 'JSON.stringify(process.argv.slice(1))', 'install app', 'say "hi"']
 
-  const windowsOutput = await runInShell(resolvePackageManagerSpawn({ command: 'node', args }, 'win32'))
-  const directOutput = await runInShell(resolvePackageManagerSpawn({ command: 'node', args }, 'linux'))
+  const windowsInvocation = resolvePackageManagerSpawn({ command: 'node', args }, 'win32')
+  const directInvocation = resolvePackageManagerSpawn({ command: 'node', args }, 'linux')
+  const windowsOutput = await runInShell(windowsInvocation)
+  const directOutput = await runInShell(directInvocation)
+
+  expect(windowsInvocation.shell).toBe(true)
+  expect(directInvocation.shell).toBe(false)
 
   expect(JSON.parse(windowsOutput)).toEqual(['install app', 'say "hi"'])
   expect(JSON.parse(directOutput)).toEqual(['install app', 'say "hi"'])
