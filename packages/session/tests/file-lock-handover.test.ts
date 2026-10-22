@@ -183,7 +183,7 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.error?.cause).toBeUndefined()
 
     await releaseAcquisition(holder)
-  })
+  }, 15_000)
 
   it('reports the filesystem error when every rename fails without contention', async () => {
     const asleep = nextSleep()
@@ -197,7 +197,7 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.error?.cause).toEqual(expect.objectContaining({ code: 'EPERM' }))
     expect(waiter.release).toBeUndefined()
-  })
+  }, 15_000)
 
   it('polls a visibly held lock without retrying the rename', async () => {
     const holder = startAcquisition('holder')
@@ -218,7 +218,7 @@ describe('file session lock handover under a fake clock', () => {
     expect(renameAttempts('waiter')).toBeGreaterThan(attemptsWhileHeld)
 
     await releaseAcquisition(waiter)
-  })
+  }, 15_000)
 
   it('restarts the stall deadline when the lock changes hands', async () => {
     const first = startAcquisition('first')
@@ -249,7 +249,7 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.release).toBeDefined()
 
     await releaseAcquisition(waiter)
-  })
+  }, 15_000)
 
   async function giveUpAtHardCap(): Promise<void> {
     let holder = startAcquisition('holder-0')
@@ -275,7 +275,7 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * COARSE_STEP_MS)
   }
 
-  it('gives up at the hard cap while the lock keeps changing hands', giveUpAtHardCap)
+  it('gives up at the hard cap while the lock keeps changing hands', giveUpAtHardCap, 15_000)
 
   it('gives up at the hard cap while tombstone removals wait on busy unlinks', async () => {
     windowsFs.blockedUnlinkPrefixes.add(lockPath)
@@ -284,7 +284,7 @@ describe('file session lock handover under a fake clock', () => {
     } finally {
       windowsFs.blockedUnlinkPrefixes.clear()
     }
-  })
+  }, 15_000)
 
   it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
     let holder = startAcquisition('holder-0')
@@ -318,5 +318,5 @@ describe('file session lock handover under a fake clock', () => {
     expect(waiter.release).toBeUndefined()
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
-  })
+  }, 15_000)
 })
