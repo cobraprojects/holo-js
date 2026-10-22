@@ -60,6 +60,14 @@ function resolveRegistrationName(
   throw new Error('[Holo Queue] Registered jobs require an explicit name or a sourcePath-derived name.')
 }
 
+export type QueueJobRegistrationTimeoutCheck = (job: { readonly name: string, readonly definition: { readonly timeout?: number, readonly connection?: string } }) => void
+
+let registrationTimeoutCheck: QueueJobRegistrationTimeoutCheck | undefined
+
+export function setQueueJobRegistrationTimeoutCheck(check: QueueJobRegistrationTimeoutCheck): void {
+  registrationTimeoutCheck = check
+}
+
 export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
   definition: RegisterableQueueJobDefinition<TPayload, TResult>,
   options: RegisterQueueJobOptions = {},
@@ -75,6 +83,8 @@ export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
   if (registry.has(name) && options.replaceExisting !== true) {
     throw new Error(`[Holo Queue] Queue job "${name}" is already registered.`)
   }
+
+  registrationTimeoutCheck?.({ name, definition: normalizedDefinition })
 
   const entry = Object.freeze({
     name,

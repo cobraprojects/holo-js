@@ -210,7 +210,7 @@ export default defineJob<{ reportId: string }>({
 The worker doesn't stop your handler's code when it times out. Make the work inside `handle()` safe to finish late, or give it its own time limit.
 
 ::: warning Keep the timeout below `retryAfter`
-A job's `timeout`, and the worker's `--timeout`, must be less than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. Holo rejects the dispatch, or refuses to start the worker, when that happens. See [Drivers](/queue/drivers). Timeouts are also capped at 2147483 seconds, the longest delay Node can schedule.
+A job's `timeout`, and the worker's `--timeout`, must be less than the connection's `retryAfter` (90 seconds by default). Otherwise a job that is still running can be handed to a second worker. Holo rejects the queue config when a registered job's timeout is too long, rejects the dispatch of a job whose timeout is too long, and refuses to start a worker whose `--timeout` is too long. See [Drivers](/queue/drivers). Timeouts are also capped at 2147483 seconds, the longest delay Node can schedule.
 :::
 
 ## The job context
@@ -504,7 +504,7 @@ await DB.transaction(async () => {
 })
 ```
 
-The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. The connection's driver must accept a caller-supplied job ID. Otherwise `.afterCommit()` throws at dispatch, naming the connection. If queuing fails at commit, `onFailed` runs with the error, and Holo reports the error. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
+The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. The connection's driver must accept a caller-supplied job ID. Otherwise `.afterCommit()` throws at dispatch, naming the connection. If queuing fails at commit, `onFailed` runs with the error, and the `DB.transaction()` call that committed rejects with that same error. Catch it there if the request should carry on. The rejection skips any after-commit callbacks registered after this dispatch in the same transaction, as [`DB.afterCommit()`](/database/transactions) does. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
 
 ### `.onComplete(callback)` {#oncomplete-callback}
 

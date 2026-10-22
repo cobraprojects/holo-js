@@ -13,6 +13,7 @@ import {
   runQueueWorker,
   clearQueueConnection,
   QueueReleaseUnsupportedError,
+  assertQueueJobTimeouts,
   configureQueueRuntime,
   defineJob,
   dispatch,
@@ -200,6 +201,88 @@ export default {
         db: 0,
       },
     })
+  })
+
+  it('rejects a registered job whose timeout is not below its connection retryAfter when the queue config loads', () => {
+    registerQueueJob({ timeout: 120, handle() {} }, { name: 'slow-report' })
+    const previous = getQueueRuntime().config
+
+    expect(() => configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 90 },
+        },
+      },
+    })).toThrow('[Holo Queue] Queue job "slow-report" timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds.')
+    expect(getQueueRuntime().config).toBe(previous)
+  })
+
+  it('rejects candidate jobs whose timeout is not below their connection retryAfter, without registering them', () => {
+    configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 90 },
+        },
+      },
+    })
+
+    expect(() => assertQueueJobTimeouts([{ name: 'late-report', definition: { timeout: 120 } }])).toThrow('[Holo Queue] Queue job "late-report" timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds.')
+    expect(getRegisteredQueueJob('late-report')).toBeUndefined()
+  })
+
+  it('rejects registering a job whose timeout is not below its connection retryAfter, without registering it', () => {
+    configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 90 },
+        },
+      },
+    })
+
+    expect(() => registerQueueJob({ timeout: 120, handle() {} }, { name: 'late-report' })).toThrow('[Holo Queue] Queue job "late-report" timeout of 120 seconds must be less than connection "database" retryAfter of 90 seconds.')
+    expect(getRegisteredQueueJob('late-report')).toBeUndefined()
+  })
+
+  it('keeps the previous config and registrations when a reload would reject a registered job timeout', () => {
+    configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 90 },
+        },
+      },
+    })
+    registerQueueJob({ timeout: 60, handle() {} }, { name: 'quick-report' })
+    const previous = getQueueRuntime().config
+
+    expect(() => configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 30 },
+        },
+      },
+    })).toThrow('[Holo Queue] Queue job "quick-report" timeout of 60 seconds must be less than connection "database" retryAfter of 30 seconds.')
+
+    expect(getQueueRuntime().config).toBe(previous)
+    expect(getRegisteredQueueJob('quick-report')).toBeDefined()
+  })
+
+  it('accepts a registered job timeout below its connection retryAfter when the queue config loads', () => {
+
+    registerQueueJob({ timeout: 60, handle() {} }, { name: 'quick-report' })
+
+    expect(() => configureQueueRuntime({
+      config: {
+        default: 'database',
+        connections: {
+          database: { driver: 'database', retryAfter: 90 },
+        },
+      },
+    })).not.toThrow()
   })
 
   it('registers jobs from explicit names, definitions, and source-path-derived names', () => {

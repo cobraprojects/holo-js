@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'error-reporting': 'src/errorReporting.ts',
     'http-errors': 'src/httpErrors.ts',
+    'managed-resources': 'src/managedResources.ts',
     'file-content': 'src/fileContent.ts',
     'image-decoding': 'src/imageDecoding.ts',
     'image-decoding.browser': 'src/imageDecoding.browser.ts',

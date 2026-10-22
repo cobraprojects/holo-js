@@ -28,6 +28,12 @@
       "import": "./dist/http-errors.mjs",
       "default": "./dist/http-errors.mjs"
     },
+    "./managed-resources": {
+      "@holo-js/source": "./src/managedResources.ts",
+      "types": "./dist/managed-resources.d.ts",
+      "import": "./dist/managed-resources.mjs",
+      "default": "./dist/managed-resources.mjs"
+    },
     "./file-content": {
       "@holo-js/source": "./src/fileContent.ts",
       "types": "./dist/file-content.d.ts",

@@ -265,11 +265,15 @@ Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On
 
 A job that runs past its `timeout` now stops the worker, as in Laravel, and counts as an attempt. Before, the worker marked the job failed at once and moved on. Now the job stays reserved and runs again after the connection's `retryAfter` while `tries` remain. To keep failing on the first timeout, set `failOnTimeout: true` on the job. See [Timeouts](/queue/jobs#timeouts).
 
-A job `timeout`, or the worker's `--timeout`, must now be less than its connection's `retryAfter`. The dispatch throws, or `queue:work` refuses to start, when it isn't. `timeout` and `sleep` above `2147483` seconds are rejected too. Raise `retryAfter` or lower the value.
+A job `timeout`, or the worker's `--timeout`, must now be less than its connection's `retryAfter`. The dispatch throws, or `queue:work` refuses to start, when it isn't. Loading the queue config also throws when a registered job's `timeout` isn't below its connection's `retryAfter`. `timeout` and `sleep` above `2147483` seconds are rejected too. Raise `retryAfter` or lower the value.
 
 New dispatch options: `.afterCommit()` on a dispatch, and `afterCommit: true` on a queue connection (default `false`), queue the job only once the surrounding database transaction commits. `@holo-js/queue` now lists `@holo-js/db` as an optional peer for this. Install `@holo-js/db` if you use it; without it, dispatch runs right away.
 
 Queued mail, notifications, and event listeners accept `tries` and `backoff`, and `queue:work` and `queue:listen` accept `--tries` and `--backoff`. These jobs still run once unless you set `tries`. The worker's `--backoff` applies only to jobs that don't set their own `backoff`.
+
+### After-commit queue failures reach the transaction
+
+A job dispatched with `.afterCommit()`, or on a connection with `afterCommit: true`, that can't be queued when its transaction commits now makes the `DB.transaction()` call reject with that error. Before, Holo reported the error and the call resolved, so the caller never saw the failure. Catch the error around `DB.transaction()` if the request should carry on. `onFailed` still runs first, and after-commit callbacks registered after the failed dispatch in that transaction are skipped. See [Dispatch after a database commit](/queue/jobs#dispatch-after-a-database-commit).
 
 ### Event listener order and after-commit notification failures
 
