@@ -29,7 +29,7 @@ import { queueJobInternals } from './contracts'
 import { DEFAULT_QUEUE_NAME, assertQueueTimeoutBelowRetryAfter } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { syncQueueDriverFactory } from './drivers/sync'
-import { getRegisteredQueueJob } from './registry'
+import { getRegisteredQueueJob, listRegisteredQueueJobs, setQueueJobRegistrationTimeoutCheck } from './registry'
 import { loadQueuePluginDriverFactories, resetQueuePluginDriverFactories } from './plugins'
 
 type RuntimeQueueState = {
@@ -594,8 +594,8 @@ async function dispatchRecord(
 
           await handlers.completed(toDispatchResult(envelope, result))
         } catch (error) {
-          reportError(error, { capability: 'queue', operation: 'dispatch.afterCommit' })
           await handlers.failed(error)
+          throw error
         }
       })
 
@@ -776,14 +776,47 @@ function createQueueConnection(name?: string): QueueConnectionFacade {
   }
 }
 
+export type QueueJobTimeoutCandidate = {
+  readonly name: string
+  readonly definition: {
+    readonly timeout?: number
+    readonly connection?: string
+  }
+}
+
+function assertJobTimeoutsBelowRetryAfter(
+  config: NormalizedHoloQueueConfig,
+  jobs: readonly QueueJobTimeoutCandidate[],
+): void {
+  for (const job of jobs) {
+    const connectionName = job.definition.connection
+      ? normalizeConnectionName(job.definition.connection)
+      : config.default
+    const connection = config.connections[connectionName]
+    if (!connection) {
+      continue
+    }
+
+    assertQueueTimeoutBelowRetryAfter(`Queue job "${job.name}"`, job.definition.timeout, connection)
+  }
+}
+
+export function assertQueueJobTimeouts(jobs: readonly QueueJobTimeoutCandidate[]): void {
+  assertJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config, jobs)
+}
+
+setQueueJobRegistrationTimeoutCheck(job => assertJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config, [job]))
+
 export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}): void {
   const state = getQueueRuntimeState()
   let shouldResetDrivers = false
 
   if (options.config) {
-    state.config = isNormalizedQueueConfig(options.config)
+    const config = isNormalizedQueueConfig(options.config)
       ? options.config
       : normalizeQueueConfig(options.config, options.redisConfig)
+    assertJobTimeoutsBelowRetryAfter(config, listRegisteredQueueJobs().filter(job => !job.sourcePath))
+    state.config = config
     shouldResetDrivers = true
   }
 

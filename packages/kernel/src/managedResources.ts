@@ -1,6 +1,23 @@
 import { isDeepStrictEqual } from 'node:util'
-import { reportError } from '@holo-js/kernel/error-reporting'
-import { releaseManagedResources, throwCapabilityFailures } from './capabilityLifetimes'
+import { reportError } from './errorReporting'
+
+export function throwCapabilityFailures(failures: readonly unknown[]): void {
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, 'Optional capability cleanup failed.')
+}
+
+async function releaseManagedResources(adapters: readonly { disconnect?(): void | Promise<void>, close?(): void | Promise<void> }[]): Promise<void> {
+  const failures: unknown[] = []
+  for (const adapter of [...new Set(adapters)].reverse()) {
+    try {
+      if (adapter.close) await adapter.close()
+      else await adapter.disconnect?.()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  throwCapabilityFailures(failures)
+}
 
 export interface ReleasableResource {
   close?(): void | Promise<void>
@@ -91,7 +108,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
       lease: {
         value,
         hold<TResult>(operation: () => TResult): TResult {
-          if (entry.state === 'closing') throw new Error('[@holo-js/core] The managed resource is closed.')
+          if (entry.state === 'closing') throw new Error('[@holo-js/kernel] The managed resource is closed.')
           entry.pending += 1
           let result: TResult
           try {
@@ -114,7 +131,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
 
   return {
     async acquire(config, create) {
-      if (disposing) throw new Error('[@holo-js/core] Managed resources are disposed; acquire a new registry instead.')
+      if (disposing) throw new Error('[@holo-js/kernel] Managed resources are disposed; acquire a new registry instead.')
       const reusable = findSameConfig(claimed, config)
         ?? findSameConfig(active, config)
         ?? findSameConfig(retained, config)
@@ -152,7 +169,7 @@ export function createManagedResources<TConfig, TValue extends ReleasableResourc
     async dispose() {
       disposing = true
       disposalFailures = []
-      const entries = [...active, ...retained, ...claimed, ...opened]
+      const entries = new Set([...active, ...retained, ...claimed, ...opened])
       active = []
       retained = []
       claimed = []
