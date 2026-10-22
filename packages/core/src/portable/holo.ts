@@ -181,9 +181,7 @@ type QueueModule = Pick<typeof QueueFeature,
   | 'getQueueRuntime'
   | 'isQueueJobDefinition'
   | 'normalizeQueueJobDefinition'
-  | 'listRegisteredQueueJobs'
   | 'registerQueueJob'
-  | 'restoreRegisteredQueueJobs'
   | 'shutdownQueueRuntime'
   | 'unregisterQueueJob'
 > & Partial<Pick<typeof QueueFeature,
@@ -1335,7 +1333,7 @@ async function registerProjectQueueJobs(
     readonly name: string
     readonly sourcePath: string
     readonly job: NonNullable<ReturnType<typeof resolveQueueJobExport>>
-    readonly replaced?: ReturnType<QueueModule['getRegisteredQueueJob']>
+    readonly replaceExisting: boolean
   }> = []
   for (const entry of registry.jobs) {
     const existing = queueModule.getRegisteredQueueJob(entry.name)
@@ -1353,7 +1351,7 @@ async function registerProjectQueueJobs(
       name: entry.name,
       sourcePath: entry.sourcePath,
       job,
-      replaced: existing?.sourcePath ? existing : undefined,
+      replaceExisting: Boolean(existing?.sourcePath),
     })
   }
 
@@ -1363,30 +1361,9 @@ async function registerProjectQueueJobs(
   })))
 
   const registeredJobNames: string[] = []
-  const replacedJobs: NonNullable<(typeof resolvedJobs)[number]['replaced']>[] = []
-  try {
-    for (const { name, sourcePath, job, replaced } of resolvedJobs) {
-      queueModule.registerQueueJob(job, {
-        name,
-        sourcePath,
-        replaceExisting: Boolean(replaced),
-      })
-      registeredJobNames.push(name)
-      if (replaced) {
-        replacedJobs.push(replaced)
-      }
-    }
-  } catch (error) {
-    const replacedNames = new Set(replacedJobs.map(job => job.name))
-    unregisterProjectQueueJobs(queueModule, registeredJobNames.filter(name => !replacedNames.has(name)))
-    for (const replaced of replacedJobs) {
-      queueModule.registerQueueJob(replaced.definition, {
-        name: replaced.name,
-        sourcePath: replaced.sourcePath,
-        replaceExisting: true,
-      })
-    }
-    throw error
+  for (const { name, sourcePath, job, replaceExisting } of resolvedJobs) {
+    queueModule.registerQueueJob(job, { name, sourcePath, replaceExisting })
+    registeredJobNames.push(name)
   }
 
   return Object.freeze(registeredJobNames)
@@ -2123,38 +2100,29 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
   const bootRuntimeServices = async (): Promise<void> => {
     await runOptionalSubsystemsSerially(() => configureRuntimeSubsystems(bootOptions))
+    await bootHoloPluginModules(projectRoot, loadedConfig)
+    const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
+      ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
+        ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
+        : [])
     const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
     if (activeQueueModule && optionalEventsModule) {
       await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
     }
-    const queueJobsBeforeBoot = activeQueueModule?.listRegisteredQueueJobs()
-    try {
-      await bootHoloPluginModules(projectRoot, loadedConfig)
-      const importDefinition = getProjectDefinitionImporters().get(resolve(projectRoot))?.importModule
-        ?? await loadProjectDefinitionRuntimeModules(projectRoot, registry
-          ? [...(options.registerProjectQueueJobs === false ? [] : registry.jobs), ...registry.events, ...registry.listeners].map(entry => resolve(projectRoot, entry.sourcePath))
-          : [])
-      if (registryHasEvents(registry)) {
-        const eventsModule = await loadEventsModule(true)
-        if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
-        activeEventsModule = eventsModule
-        const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule, importDefinition)
-        runtimeOwnedEventNames.push(...eventRegistration.eventNames)
-        runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
-      }
-      activeAuthorizationModule = await loadAuthorizationModule()
-      const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
-      disposeAuthorizationDefinitions = authorizationRegistration.dispose
-      if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
-        if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
-        runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule, importDefinition))
-      }
-      activeQueueModule?.assertQueueJobTimeouts(activeQueueModule.listRegisteredQueueJobs())
-    } catch (error) {
-      if (activeQueueModule && queueJobsBeforeBoot) {
-        activeQueueModule.restoreRegisteredQueueJobs(queueJobsBeforeBoot)
-      }
-      throw error
+    if (registryHasEvents(registry)) {
+      const eventsModule = await loadEventsModule(true)
+      if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
+      activeEventsModule = eventsModule
+      const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule, importDefinition)
+      runtimeOwnedEventNames.push(...eventRegistration.eventNames)
+      runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
+    }
+    activeAuthorizationModule = await loadAuthorizationModule()
+    const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
+    disposeAuthorizationDefinitions = authorizationRegistration.dispose
+    if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
+      if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
+      runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule, importDefinition))
     }
   }
 

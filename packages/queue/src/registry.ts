@@ -60,6 +60,14 @@ function resolveRegistrationName(
   throw new Error('[Holo Queue] Registered jobs require an explicit name or a sourcePath-derived name.')
 }
 
+export type QueueJobRegistrationTimeoutCheck = (job: { readonly name: string, readonly definition: { readonly timeout?: number, readonly connection?: string } }) => void
+
+let registrationTimeoutCheck: QueueJobRegistrationTimeoutCheck | undefined
+
+export function setQueueJobRegistrationTimeoutCheck(check: QueueJobRegistrationTimeoutCheck): void {
+  registrationTimeoutCheck = check
+}
+
 export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
   definition: RegisterableQueueJobDefinition<TPayload, TResult>,
   options: RegisterQueueJobOptions = {},
@@ -75,6 +83,8 @@ export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
   if (registry.has(name) && options.replaceExisting !== true) {
     throw new Error(`[Holo Queue] Queue job "${name}" is already registered.`)
   }
+
+  registrationTimeoutCheck?.({ name, definition: normalizedDefinition })
 
   const entry = Object.freeze({
     name,
@@ -113,26 +123,6 @@ export function unregisterQueueJob(name: string): boolean {
   }
 
   return deleted
-}
-
-export function restoreRegisteredQueueJobs(snapshot: readonly QueueRegisteredJob[]): void {
-  const jobs = getQueueRegistryState().jobs
-  const keep = new Set(snapshot.map(job => job.name))
-  for (const name of [...jobs.keys()]) {
-    if (!keep.has(name)) {
-      unregisterQueueJob(name)
-    }
-  }
-
-  for (const job of snapshot) {
-    if (jobs.get(job.name) === job) {
-      continue
-    }
-
-    queueJobInternals.deleteQueueJobDefinitionName(job.name)
-    queueJobInternals.setQueueJobDefinitionName(job.definition, job.name)
-    jobs.set(job.name, job)
-  }
 }
 
 export function resetQueueRegistry(): void {

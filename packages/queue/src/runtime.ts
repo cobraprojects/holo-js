@@ -29,7 +29,7 @@ import { queueJobInternals } from './contracts'
 import { DEFAULT_QUEUE_NAME, assertQueueTimeoutBelowRetryAfter } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { syncQueueDriverFactory } from './drivers/sync'
-import { getRegisteredQueueJob, listRegisteredQueueJobs } from './registry'
+import { getRegisteredQueueJob, listRegisteredQueueJobs, setQueueJobRegistrationTimeoutCheck } from './registry'
 import { loadQueuePluginDriverFactories, resetQueuePluginDriverFactories } from './plugins'
 
 type RuntimeQueueState = {
@@ -809,6 +809,8 @@ export function assertQueueJobTimeouts(jobs: readonly QueueJobTimeoutCandidate[]
   assertJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config, jobs)
 }
 
+setQueueJobRegistrationTimeoutCheck(job => assertJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config, [job]))
+
 export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}): void {
   const state = getQueueRuntimeState()
   let shouldResetDrivers = false
@@ -817,7 +819,7 @@ export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}
     const config = isNormalizedQueueConfig(options.config)
       ? options.config
       : normalizeQueueConfig(options.config, options.redisConfig)
-    assertJobTimeoutsBelowRetryAfter(config, listRegisteredQueueJobs())
+    assertJobTimeoutsBelowRetryAfter(config, listRegisteredQueueJobs().filter(job => !job.sourcePath))
     state.config = config
     shouldResetDrivers = true
   }

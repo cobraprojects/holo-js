@@ -16,6 +16,7 @@ async function openHarness(connectionAfterCommit?: boolean) {
           queue: 'default',
           ...(typeof connectionAfterCommit === 'undefined' ? {} : { afterCommit: connectionAfterCommit }),
         },
+        sync: { driver: 'sync', queue: 'default' },
       },
     },
   })
@@ -129,7 +130,7 @@ describe('@holo-js/queue after-commit dispatch', () => {
 
   it('runs a job inline without checking its timeout against the connection retryAfter', async () => {
     const harness = await openHarness()
-    registerQueueJob({ timeout: 120, handle() {} }, { name: 'slow-inline' })
+    registerQueueJob({ timeout: 120, connection: 'sync', handle() {} }, { name: 'slow-inline' })
 
     await expect(dispatchSync('slow-inline', {})).resolves.toBeUndefined()
     expect(await harness.readJobRows()).toEqual([])

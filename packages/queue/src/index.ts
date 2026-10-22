@@ -86,7 +86,6 @@ export {
   registerQueueJob,
   registerQueueJobs,
   resetQueueRegistry,
-  restoreRegisteredQueueJobs,
   unregisterQueueJob,
 } from './registry'
 export {
