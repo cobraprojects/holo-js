@@ -34,6 +34,7 @@ MAIL_PORT=587
 ```
 
 - Quotes around values are removed. `\n`, `\r`, and `\t` are turned into real characters.
+- On Windows, `%NAME%` is replaced with the value of the real environment variable `NAME`, and `%%` becomes a single `%`. A `%NAME%` whose variable isn't set stays as written. Variables from other `.env` files aren't used. macOS and Linux leave values unchanged.
 - Lines starting with `#` are comments. A leading `export ` is allowed.
 - When `env('KEY', fallback)` has a boolean fallback, `true`, `1`, `yes`, and `on` mean `true`, and `false`, `0`, `no`, and `off` mean `false`. A number fallback converts the value to a number. An empty value uses the fallback. A value that doesn't convert throws an error that names the variable, so a typo like `APP_DEBUG=ture` fails at startup instead of silently using the fallback.
 

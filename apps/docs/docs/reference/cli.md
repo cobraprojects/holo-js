@@ -126,6 +126,8 @@ npx holo dev [...frameworkArgs]
 
 While it runs, `holo dev` watches your Holo folders (`config/`, `.env` files, `server/models`, `server/jobs`, and so on) and refreshes the generated files when they change, restarting the dev server when needed.
 
+Press `Ctrl+C` to stop it. A second `Ctrl+C` while it shuts down force-stops the server and its child processes and exits with status 130.
+
 | Argument / flag | Description |
 | --- | --- |
 | `...frameworkArgs` | Any extra arguments and flags are passed to the framework's dev server. |
@@ -167,6 +169,8 @@ npx holo start [...frameworkArgs]
 | Argument / flag | Description |
 | --- | --- |
 | `...frameworkArgs` | Extra arguments passed to the production server. |
+
+Press `Ctrl+C` to stop it. A second `Ctrl+C` while it shuts down force-stops the server and its child processes and exits with status 130.
 
 Like `dev`, `start` uses `PORT` when you don't pass `--port`. It loads your `.env` files and runs the server with `NODE_ENV=production`. The application environment still comes from `APP_ENV`, which is `production` when it isn't set. See [Deployment](/deployment/).
 
@@ -597,7 +601,7 @@ Accepts the same flags as `queue:work` except `--once` and `--stop-when-empty`.
 npx holo queue:listen --connection redis --queue media
 ```
 
-`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop the worker after its current job and then stop `queue:listen`. A second `Ctrl+C` while it shuts down force-stops the worker and exits with status 130, so a job in progress is interrupted and retried later. A restart waits for the old worker to exit. If the old worker reports a process error while it stops, `queue:listen` exits with that error and doesn't start a replacement. On Windows the worker's process tree is ended at once, so a job in progress is interrupted and retried later.
 
 ### queue:restart
 

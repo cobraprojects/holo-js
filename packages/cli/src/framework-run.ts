@@ -16,6 +16,8 @@ type FrameworkRunResult = (
   readonly restartRequested: boolean
 }
 
+export const FORCED_SHUTDOWN_EXIT_CODE = 130
+
 export function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' || child.pid === undefined) {
     child.kill?.(signal)
@@ -31,6 +33,19 @@ export function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Si
   }
 }
 
+function signalFrameworkProcessGroup(child: SpawnProcessLike, signal: NodeJS.Signals): void {
+  if (process.platform === 'win32' || child.pid === undefined) {
+    terminateChildProcess(child, signal)
+    return
+  }
+
+  try {
+    process.kill(-child.pid, signal)
+  } catch {
+    child.kill?.(signal)
+  }
+}
+
 function launchFrameworkRun(
   io: IoStreams,
   projectRoot: string,
@@ -38,11 +53,18 @@ function launchFrameworkRun(
   serverArgs: readonly string[],
   spawnProcess: FrameworkSpawn,
   environment: NodeJS.ProcessEnv,
-): { readonly completion: Promise<FrameworkRunResult>, readonly startedAt: number, restart(): void, shutdown(signal: NodeJS.Signals): void } {
+): {
+  readonly completion: Promise<FrameworkRunResult>
+  readonly startedAt: number
+  restart(): void
+  shutdown(signal: NodeJS.Signals): void
+  forceStop(): void
+} {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
     cwd: projectRoot,
     env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   }) as SpawnProcessLike
   const startedAt = Date.now()
   let restartRequested = false
@@ -68,7 +90,7 @@ function launchFrameworkRun(
   const terminate = (signal: NodeJS.Signals) => {
     terminationRequested = true
     try {
-      terminateChildProcess(child, signal)
+      signalFrameworkProcessGroup(child, signal)
     } catch (error) {
       const terminationError = error instanceof Error ? error : new Error(String(error))
       processError ??= terminationError
@@ -80,6 +102,13 @@ function launchFrameworkRun(
 
     shutdownSignal = signal
     terminate(signal)
+  }
+  const forceStop = () => {
+    try {
+      signalFrameworkProcessGroup(child, 'SIGKILL')
+    } catch (error) {
+      io.stderr.write(`Framework force stop failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
   }
   child.on('error', (error) => {
     if (settled) return
@@ -97,6 +126,7 @@ function launchFrameworkRun(
     completion,
     startedAt,
     shutdown,
+    forceStop,
     restart() {
       if (settled || processError || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
 
@@ -111,6 +141,7 @@ export function createFrameworkSession(
   projectRoot: string,
   spawnProcess: FrameworkSpawn,
   onShutdown?: () => void,
+  exitProcess: (code: number) => void = code => process.exit(code),
 ): {
   readonly signal: AbortSignal
   launch(
@@ -135,10 +166,20 @@ export function createFrameworkSession(
       activeRun?.shutdown(signal)
     }
   }
-  const onSigint = () => shutdown('SIGINT')
+  const onSigint = () => {
+    if (!controller.signal.aborted) {
+      shutdown('SIGINT')
+      return
+    }
+
+    activeRun?.forceStop()
+    exitProcess(FORCED_SHUTDOWN_EXIT_CODE)
+  }
   const onSigterm = () => shutdown('SIGTERM')
+  const onSighup = () => shutdown('SIGHUP')
   process.on('SIGINT', onSigint)
   process.on('SIGTERM', onSigterm)
+  process.on('SIGHUP', onSighup)
 
   return {
     signal: controller.signal,
@@ -164,6 +205,7 @@ export function createFrameworkSession(
       } finally {
         process.off('SIGINT', onSigint)
         process.off('SIGTERM', onSigterm)
+        process.off('SIGHUP', onSighup)
       }
     },
   }
