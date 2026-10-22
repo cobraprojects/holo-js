@@ -96,7 +96,7 @@ it.each(['valid', 'broken'] as const)('activates an actually installed %s plugin
     const appManifest = { name: 'native-plugin-app', private: true, type: 'module', packageManager: 'npm@10.0.0', dependencies: { ...localHoloDependencies, 'holo-plugin-native': `file:${pluginRoot}` } }
     await writeFile(join(root, 'package.json'), JSON.stringify(appManifest))
     for (const [dependency, installed] of externalDependencies) await symlinkPackageDependency(join(root, 'node_modules'), dependency, installed)
-    await execute('npm', ['install', '--offline', '--legacy-peer-deps', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: root, timeout: 30000, env: npmEnv })
+    await execute('npm', ['install', '--offline', '--legacy-peer-deps', '--ignore-scripts', '--no-bin-links', '--no-audit', '--no-fund'], { cwd: root, timeout: 30000, env: npmEnv })
     const registryHoloDependencies = Object.fromEntries(holoPackageNames.map(name => [name, `^${holoVersion}`]))
     await writeFile(join(root, 'package.json'), JSON.stringify({ ...appManifest, dependencies: { ...registryHoloDependencies, 'holo-plugin-native': `file:${pluginRoot}` } }))
     const cli = join(root, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
