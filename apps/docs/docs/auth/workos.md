@@ -241,6 +241,10 @@ Each method reads or writes an `AuthHostedIdentityRecord`: `provider`, `provider
 
 `@holo-js/auth-workos` also exports `verifyRequest()`, `verifySession()`, `syncIdentity()`, and `authenticate()`, for when you already have a WorkOS session token and need to verify it or sync the user yourself.
 
+## Signing keys
+
+Holo caches each provider's signing keys for ten minutes, and an unknown key ID refreshes them at most once a minute. If a refresh fails, Holo keeps verifying with the keys it last loaded for at most ten minutes after that last successful fetch, then rejects tokens until a refresh succeeds. Failed refreshes never extend that window.
+
 ## Next steps
 
 - [Clerk](/auth/clerk)

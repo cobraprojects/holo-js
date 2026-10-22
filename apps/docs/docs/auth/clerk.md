@@ -248,6 +248,10 @@ Each method reads or writes an `AuthHostedIdentityRecord`: `provider`, `provider
 
 `@holo-js/auth-clerk` also exports `verifyRequest()`, `verifySession()`, `syncIdentity()`, and `authenticate()`. `authenticate(request)` verifies a Clerk session on any request, syncs the user, and creates the Holo session in one call, which is useful for API routes that receive a Clerk token in the `Authorization: Bearer` header.
 
+## Signing keys
+
+Holo caches each provider's signing keys for ten minutes, and an unknown key ID refreshes them at most once a minute. If a refresh fails, Holo keeps verifying with the keys it last loaded for at most ten minutes after that last successful fetch, then rejects tokens until a refresh succeeds. Failed refreshes never extend that window.
+
 ## Next steps
 
 - [WorkOS](/auth/workos)

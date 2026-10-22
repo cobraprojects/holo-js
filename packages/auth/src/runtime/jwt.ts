@@ -70,9 +70,15 @@ function verifyJwtSignatureWithJwk(
 
 const JWKS_MAX_AGE_MS = 10 * 60 * 1000
 const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
+const JWKS_FAILURE_GRACE_MS = 10 * 60 * 1000
+
+type AuthRuntimeJwksSnapshot = {
+  readonly keys: readonly AuthRuntimeJwkKey[]
+  readonly fetchedAt: number
+}
 
 type AuthRuntimeJwksCacheEntry = {
-  readonly keys: Promise<readonly AuthRuntimeJwkKey[]>
+  readonly snapshot: Promise<AuthRuntimeJwksSnapshot>
   loadedAt: number
   expiresAt: number
 }
@@ -114,19 +120,23 @@ function loadJwks(
   const entry: AuthRuntimeJwksCacheEntry = {
     loadedAt: Date.now(),
     expiresAt: Number.POSITIVE_INFINITY,
-    keys: fetchJwks(options).then(
+    snapshot: fetchJwks(options).then(
       keys => {
         entry.expiresAt = entry.loadedAt + JWKS_MAX_AGE_MS
-        return keys
+        return { keys, fetchedAt: entry.loadedAt }
       },
       async error => {
         entry.loadedAt = Date.now()
-        entry.expiresAt = entry.loadedAt + JWKS_REFRESH_INTERVAL_MS
-        const previousKeys = await previous?.keys.catch(() => undefined)
-        if (previousKeys) {
-          return previousKeys
+        const previousSnapshot = await previous?.snapshot.catch(() => undefined)
+        if (previousSnapshot && entry.loadedAt - previousSnapshot.fetchedAt < JWKS_FAILURE_GRACE_MS) {
+          entry.expiresAt = Math.min(
+            entry.loadedAt + JWKS_REFRESH_INTERVAL_MS,
+            previousSnapshot.fetchedAt + JWKS_FAILURE_GRACE_MS,
+          )
+          return previousSnapshot
         }
 
+        entry.expiresAt = entry.loadedAt + JWKS_REFRESH_INTERVAL_MS
         throw error
       },
     ),
@@ -162,7 +172,7 @@ async function resolveCachedJwk(
   },
 ): Promise<AuthRuntimeJwkKey | undefined> {
   const entry = resolveCacheEntry(cache, cacheKey, options)
-  const key = findJwk(await entry.keys, options.kid)
+  const key = findJwk((await entry.snapshot).keys, options.kid)
   if (key || Date.now() - entry.loadedAt < JWKS_REFRESH_INTERVAL_MS) {
     return key
   }
@@ -171,7 +181,7 @@ async function resolveCachedJwk(
   const refreshed = latest && latest !== entry
     ? latest
     : loadJwks(cache, cacheKey, options)
-  return findJwk(await refreshed.keys, options.kid)
+  return findJwk((await refreshed.snapshot).keys, options.kid)
 }
 
 export const authJwtInternals = {

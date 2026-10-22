@@ -10,7 +10,7 @@
 
 Serve your [Apple callback](/auth/social-login#apple) over HTTPS. Holo now sends its state cookie with `SameSite=None; Secure`, allowing Apple's cross-site form POST while keeping state validation. Keep the callback as a POST handler and exclude it from CSRF protection. Behind a proxy that terminates TLS, list the proxy in [`trustedProxies`](/basics/security/cors-and-proxies#trusted-proxies) so Holo sees the HTTPS request and sends `Secure`; no other configuration changes are required.
 
-Apple, Clerk, and WorkOS signing keys now expire after ten minutes. An unknown key ID can refresh them at most once per minute, and concurrent requests share the fetch. A newly rotated key may therefore take up to a minute to be accepted. Tokens with invalid signatures under a known key ID no longer trigger a fetch.
+Apple, Clerk, and WorkOS signing keys now expire after ten minutes. An unknown key ID can refresh them at most once per minute, and concurrent requests share the fetch. A newly rotated key may therefore take up to a minute to be accepted. Tokens with invalid signatures under a known key ID no longer trigger a fetch. If a refresh fails, Holo keeps the keys it last loaded for at most ten minutes after that last successful fetch, then rejects tokens until a refresh succeeds. Failed refreshes never extend that window.
 
 ### Forwarded headers follow Laravel's TrustProxies
 

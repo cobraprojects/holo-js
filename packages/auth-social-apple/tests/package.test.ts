@@ -603,8 +603,9 @@ describe('@holo-js/auth-social-apple', () => {
     }
   })
 
-  it('keeps the last good Apple JWKS when a refresh fails', async () => {
+  it('keeps the last good Apple JWKS when a refresh fails within the grace period', async () => {
     let idToken = ''
+    let rotatedToken = ''
     let jwksHealthy = true
     let jwksRequests = 0
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -633,25 +634,20 @@ describe('@holo-js/auth-social-apple', () => {
       await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
 
       jwksHealthy = false
-      vi.setSystemTime(new Date('2030-01-01T00:11:00Z'))
+      vi.setSystemTime(new Date('2030-01-01T00:05:00Z'))
+      rotatedToken = createToken({ sub: 'rotated-user' }, { kid: 'apple-rotated-key', privateKey: invalidKeyPair.privateKey })
+      idToken = rotatedToken
+      await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow()
+      expect(jwksRequests).toBe(2)
+
+      vi.setSystemTime(new Date('2030-01-01T00:05:30Z'))
       idToken = createToken({ sub: 'apple-user' })
       await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
       expect(jwksRequests).toBe(2)
-
-      vi.setSystemTime(new Date('2030-01-01T00:11:30Z'))
-      idToken = createToken({ sub: 'apple-user' })
-      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
-      expect(jwksRequests).toBe(2)
-
-      vi.setSystemTime(new Date('2030-01-01T00:12:00Z'))
-      idToken = createToken({ sub: 'apple-user' })
-      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
-      expect(jwksRequests).toBe(3)
     } finally {
       vi.useRealTimers()
     }
   })
-
   it('starts the unknown key id refresh cooldown when a slow Apple JWKS refresh fails', async () => {
     let idToken = ''
     let jwksRequests = 0
@@ -669,7 +665,7 @@ describe('@holo-js/auth-social-apple', () => {
       if (url === APPLE_JWKS_URL) {
         jwksRequests += 1
         if (jwksRequests === 2) {
-          vi.setSystemTime(new Date('2030-01-01T00:12:05Z'))
+          vi.setSystemTime(new Date('2030-01-01T00:06:05Z'))
           return new Response('unavailable', { status: 503 })
         }
         return jwksResponse()
@@ -684,12 +680,12 @@ describe('@holo-js/auth-social-apple', () => {
       idToken = createToken({ sub: 'apple-user' })
       await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
 
-      vi.setSystemTime(new Date('2030-01-01T00:11:00Z'))
-      idToken = createToken({ sub: 'apple-user' })
-      await expect(exchangeCode({ clientId: 'client' })).resolves.toMatchObject({ profile: { id: 'apple-user' } })
+      vi.setSystemTime(new Date('2030-01-01T00:05:00Z'))
+      idToken = createToken({ sub: 'forged-user' }, { kid: 'forged-key', privateKey: invalidKeyPair.privateKey })
+      await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow()
       expect(jwksRequests).toBe(2)
 
-      vi.setSystemTime(new Date('2030-01-01T00:12:06Z'))
+      vi.setSystemTime(new Date('2030-01-01T00:06:06Z'))
       idToken = createToken({ sub: 'forged-user' }, { kid: 'forged-key', privateKey: invalidKeyPair.privateKey })
       await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow()
       expect(jwksRequests).toBe(2)
@@ -697,7 +693,6 @@ describe('@holo-js/auth-social-apple', () => {
       vi.useRealTimers()
     }
   })
-
   it('rejects Apple id tokens with invalid claims', async () => {
     mockAppleFetch({
       access_token: 'access',
