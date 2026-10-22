@@ -18,7 +18,7 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
-import { Entity, getEntityKeyForSave } from './Entity'
+import { Entity, captureEntityWriteState, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
@@ -1666,7 +1666,7 @@ export class ModelRepository<
   }
 
   private async insertEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
-    return this.runWriteUnit(async () => {
+    return this.writeUnit(entity, async markWritten => {
       entity.forceFill(applyGeneratedUniqueIds(this.definition, applyPendingModelAttributes(this.definition, entity.toAttributes())))
       this.applyWriteMutators(entity, Object.keys(entity.toAttributes()))
       await this.dispatchCancelableEvent('saving', entity)
@@ -1680,6 +1680,7 @@ export class ModelRepository<
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
         : { lastInsertId: await query.insertGetId(payload) }
+      markWritten()
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
@@ -1809,7 +1810,7 @@ export class ModelRepository<
       return this.insertEntity(entity)
     }
 
-    return this.runWriteUnit(async () => {
+    return this.writeUnit(entity, async markWritten => {
       const primaryKey = this.definition.primaryKey
       const id = getEntityKeyForSave(entity, primaryKey)
       if (typeof id === 'undefined' || id === null) {
@@ -1832,7 +1833,8 @@ export class ModelRepository<
         return this.finishUnchangedSave(entity)
       }
 
-      await this.query().where(primaryKey, id).getTableQueryBuilder().update(dirty)
+      await this.writeQuery().where(primaryKey, id).getTableQueryBuilder().update(dirty)
+      markWritten()
       entity.recordChanges(written)
       entity.forceFill(this.normalizeFromStorage(dirty))
       await this.dispatchEvent('updated', entity)
@@ -1840,6 +1842,29 @@ export class ModelRepository<
       await this.touchOwners(entity)
       entity.finishSave()
       return entity
+    })
+  }
+
+  private writeQuery(): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
+    return this.createQuery(false, true, false)
+  }
+
+  private async writeUnit<TResult>(
+    entity: Entity<TTable>,
+    write: (markWritten: () => void) => Promise<TResult>,
+  ): Promise<TResult> {
+    const ownsTransaction = this.getConnection().getScope().kind === 'root'
+    const state = captureEntityWriteState(entity)
+    return this.runWriteUnit(async () => {
+      let written = false
+      try {
+        return await write(() => { written = true })
+      } catch (error) {
+        if (ownsTransaction || !written) {
+          restoreEntityWriteState(entity, state)
+        }
+        throw error
+      }
     })
   }
 
@@ -1890,7 +1915,7 @@ export class ModelRepository<
   }
 
   async restoreEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
-    return this.runWriteUnit(async () => {
+    return this.writeUnit(entity, async markWritten => {
       const deletedAtColumn = this.getDeletedAtColumn()
       if (!deletedAtColumn) {
         throw new HydrationError(`${this.definition.name} does not support soft deletes.`)
@@ -1910,6 +1935,7 @@ export class ModelRepository<
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
       if (Object.keys(dirty).length > 0) {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
+        markWritten()
       }
 
       entity.recordChanges(written)
