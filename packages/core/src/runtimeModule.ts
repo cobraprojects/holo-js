@@ -3,7 +3,10 @@ import { existsSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { BuildOptions, BuildResult } from 'esbuild'
+import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
+import * as holoConfigModule from '@holo-js/config'
+import * as holoDbModule from '@holo-js/db'
+import * as holoKernelModule from '@holo-js/kernel'
 
 type EsbuildModule = {
   build(options: BuildOptions): Promise<BuildResult>
@@ -160,7 +163,9 @@ export async function importOptionalRuntimeModule<TModule>(
   if (!resolvedSpecifier) return undefined
 
   try {
-    return await importModule<TModule>(resolvedSpecifier)
+    const loaded = await importModule<TModule>(resolvedSpecifier)
+    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>)
+    return loaded
   } catch (error) {
     if (isMissingOptionalModule(error, specifier, resolvedSpecifier)) {
       return undefined
@@ -200,6 +205,52 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
   return tsconfigPath
 }
 
+const runtimeModuleInstancesKey = Symbol.for('holo-js.runtime.moduleInstances')
+const runtimeInstanceNamespace = 'holo-runtime-instance'
+
+type RuntimeModuleInstances = Map<string, Record<string, unknown>>
+
+function runtimeModuleInstances(): RuntimeModuleInstances {
+  const registry = globalThis as typeof globalThis & Record<symbol, RuntimeModuleInstances | undefined>
+  registry[runtimeModuleInstancesKey] ??= new Map()
+  return registry[runtimeModuleInstancesKey]
+}
+
+function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
+  runtimeModuleInstances().set(specifier, instance)
+}
+
+function runtimeInstanceModuleSource(specifier: string, instance: Record<string, unknown>): string {
+  const lines = [`const instance = globalThis[Symbol.for(${JSON.stringify(runtimeModuleInstancesKey.description)})].get(${JSON.stringify(specifier)})`]
+  Object.keys(instance).forEach((name, index) => {
+    lines.push(`const value${index} = instance[${JSON.stringify(name)}]`)
+    lines.push(`export { value${index} as ${JSON.stringify(name)} }`)
+  })
+
+  return lines.join('\n')
+}
+
+function bridgeRuntimeModuleInstances(): Plugin {
+  return {
+    name: 'holo-runtime-module-instances',
+    setup(build) {
+      build.onResolve({ filter: /^@holo-js\// }, args => (
+        runtimeModuleInstances().has(args.path)
+          ? { path: args.path, namespace: runtimeInstanceNamespace }
+          : undefined
+      ))
+      build.onLoad({ filter: /.*/, namespace: runtimeInstanceNamespace }, args => ({
+        contents: runtimeInstanceModuleSource(args.path, runtimeModuleInstances().get(args.path) ?? {}),
+        loader: 'js',
+      }))
+    },
+  }
+}
+
+registerRuntimeModuleInstance('@holo-js/config', holoConfigModule)
+registerRuntimeModuleInstance('@holo-js/db', holoDbModule)
+registerRuntimeModuleInstance('@holo-js/kernel', holoKernelModule)
+
 async function bundleRuntimeModule(
   projectRoot: string,
   entryPath: string,
@@ -225,6 +276,7 @@ async function bundleRuntimeModule(
       logLevel: 'silent',
       packages: 'external',
       platform: 'node',
+      plugins: [bridgeRuntimeModuleInstances()],
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
@@ -287,6 +339,7 @@ export async function loadProjectDefinitionRuntimeModules(
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
+      if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')

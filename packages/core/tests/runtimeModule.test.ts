@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import * as holoDb from '@holo-js/db'
 import { importBundledRuntimeModule, runtimeModuleInternals } from '../src/runtimeModule'
 
 const tempDirs: string[] = []
@@ -47,6 +48,27 @@ describe('@holo-js/core runtime module helpers', () => {
       '--root', projectRoot, '--config', join(projectRoot, 'vitest.config.mjs'),
       '--fileParallelism', '--maxWorkers=2', '--reporter=json', `--outputFile=${resultPath}`,
     ], { cwd: projectRoot })
+  })
+
+  it('bundles app imports of a holo package to the instance the runtime itself uses', async () => {
+    const projectRoot = await createTempProject()
+    const appCopyRoot = join(projectRoot, 'node_modules/@holo-js/db')
+    await mkdir(appCopyRoot, { recursive: true })
+    await writeFile(join(appCopyRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/db',
+      type: 'module',
+      exports: { '.': './index.mjs' },
+    }))
+    await writeFile(join(appCopyRoot, 'index.mjs'), 'export const Entity = "app copy"\n')
+    await writeFile(join(projectRoot, 'model.ts'), "export { Entity } from '@holo-js/db'\n")
+
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const source = await readFile(bundled.path, 'utf8')
+    const model = await runtimeModuleInternals.importModule<{ Entity: unknown }>(pathToFileURL(bundled.path).href)
+    await bundled.cleanup()
+
+    expect(source).not.toContain('from "@holo-js/db"')
+    expect(model.Entity).toBe(holoDb.Entity)
   })
 
   it('does not import package export targets pruned from a production artifact', async () => {

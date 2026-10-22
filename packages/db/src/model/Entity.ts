@@ -59,9 +59,9 @@ type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends 
   resolveRelationProperty?(entity: EntityBase<TTable>, key: string): unknown
 }
 
-const READ_ORIGINAL_ATTRIBUTE = Symbol.for('holo-js.db.entity.readOriginalAttribute')
-const CAPTURE_WRITE_STATE = Symbol.for('holo-js.db.entity.captureWriteState')
-const RESTORE_WRITE_STATE = Symbol.for('holo-js.db.entity.restoreWriteState')
+let readOriginalAttribute: (entity: EntityBase, key: string) => unknown
+let readWriteState: (entity: EntityBase) => EntityWriteState
+let applyWriteState: (entity: EntityBase, state: EntityWriteState) => void
 
 export interface EntityWriteState {
   readonly attributes: Record<string, unknown>
@@ -86,6 +86,22 @@ class EntityBase<
   #visibleOnly: string[] | null = null
   #appendedOverrides: string[] | null = null
 
+  static {
+    readOriginalAttribute = (entity, key) => entity.#original[key]
+    readWriteState = entity => ({
+      attributes: snapshotAttributes(entity.#attributes),
+      original: snapshotAttributes(entity.#original),
+      changes: snapshotAttributes(entity.#changes),
+      persisted: entity.#persisted,
+    })
+    applyWriteState = (entity, state) => {
+      entity.#attributes = snapshotAttributes(state.attributes)
+      entity.#original = snapshotAttributes(state.original)
+      entity.#changes = snapshotAttributes(state.changes)
+      entity.#persisted = state.persisted
+    }
+  }
+
   readonly #repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>
 
   constructor(
@@ -100,26 +116,6 @@ class EntityBase<
     this.#persisted = exists
     this.#relations = {}
     initializeEntityModelProperties(this, this.getRepositoryRuntime())
-  }
-
-  [READ_ORIGINAL_ATTRIBUTE](key: string): unknown {
-    return this.#original[key]
-  }
-
-  [CAPTURE_WRITE_STATE](): EntityWriteState {
-    return {
-      attributes: snapshotAttributes(this.#attributes),
-      original: snapshotAttributes(this.#original),
-      changes: snapshotAttributes(this.#changes),
-      persisted: this.#persisted,
-    }
-  }
-
-  [RESTORE_WRITE_STATE](state: EntityWriteState): void {
-    this.#attributes = snapshotAttributes(state.attributes)
-    this.#original = snapshotAttributes(state.original)
-    this.#changes = snapshotAttributes(state.changes)
-    this.#persisted = state.persisted
   }
 
   getRepository(): ModelRepositoryLike<TTable> {
@@ -501,7 +497,7 @@ class EntityBase<
 
   private applyPersistedEntity(persisted: EntityBase<TTable, TRelations>, changes: Record<string, unknown>): void {
     this.#attributes = { ...persisted.toAttributes() }
-    this.#original = { ...persisted[CAPTURE_WRITE_STATE]().original }
+    this.#original = { ...persisted.#original }
     this.#changes = { ...changes }
     this.#persisted = true
   }
@@ -985,18 +981,18 @@ export function getEntityKeyForSave<TTable extends TableDefinition, TRelations e
   entity: EntityBase<TTable, TRelations>,
   primaryKey: string,
 ): unknown {
-  return entity[READ_ORIGINAL_ATTRIBUTE](primaryKey) ?? entity.get(primaryKey as never)
+  return readOriginalAttribute(entity as unknown as EntityBase, primaryKey) ?? entity.get(primaryKey as never)
 }
 
 export function captureEntityWriteState<TTable extends TableDefinition, TRelations extends RelationMap>(
   entity: EntityBase<TTable, TRelations>,
 ): EntityWriteState {
-  return entity[CAPTURE_WRITE_STATE]()
+  return readWriteState(entity as unknown as EntityBase)
 }
 
 export function restoreEntityWriteState<TTable extends TableDefinition, TRelations extends RelationMap>(
   entity: EntityBase<TTable, TRelations>,
   state: EntityWriteState,
 ): void {
-  entity[RESTORE_WRITE_STATE](state)
+  applyWriteState(entity as unknown as EntityBase, state)
 }
