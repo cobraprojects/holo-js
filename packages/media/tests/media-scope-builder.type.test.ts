@@ -39,3 +39,17 @@ it('keeps model scopes after media-enabled relation and aggregate helpers', () =
     MediaPost.query().withCount('media').titled('Hello')
   }
 })
+
+it('keeps model scopes on collections returned by media-enabled reads', async () => {
+  if (false) {
+    type PostQuery = ModelQueryBuilder<typeof posts, typeof Post.definition.relations, unknown, typeof Post.definition.scopes>
+    const fromQuery = await MediaPost.query().get()
+    const fromStatic = await MediaPost.all()
+    const fromScope = await MediaPost.published().with('media').get()
+    expectTypeOf(fromQuery.toQuery().published).toEqualTypeOf<() => PostQuery>()
+    expectTypeOf(fromStatic.toQuery().titled).toEqualTypeOf<(title: string) => PostQuery>()
+    expectTypeOf(fromScope.toQuery().titled('Hello')).toEqualTypeOf<PostQuery>()
+    // @ts-expect-error unknown scope names are rejected on collection queries
+    fromQuery.toQuery().missing()
+  }
+})
