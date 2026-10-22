@@ -100,3 +100,60 @@ it('keeps a replaced Redis cache driver open until a lock release in flight on i
   await vi.waitUntil(() => events.includes('dispose'))
   expect(events).toEqual(['release:start', 'release:settled', 'dispose'])
 })
+
+it('does not close a driver that a call waiting for it to load is about to use, whatever the turn the reconfigure lands on', async () => {
+  onTestFinished(() => cacheRedisInternals.resetRedisDriverModuleLoader())
+  onTestFinished(resetCacheRuntime)
+  for (let turns = 0; turns <= 8; turns += 1) {
+    const events: string[] = []
+    let finishLoading!: () => void
+    const loading = new Promise<void>(resolve => {
+      finishLoading = resolve
+    })
+    cacheRedisInternals.setRedisDriverModuleLoader(async () => {
+      await loading
+      return { createRedisCacheDriver: () => createFakeRedisDriver(events, Promise.resolve({ hit: false })) }
+    })
+    configureCacheRuntime({ config, redisConfig })
+
+    const call = cache.get('profile')
+    finishLoading()
+    for (let turn = 0; turn < turns; turn += 1) {
+      await Promise.resolve()
+    }
+    configureCacheRuntime({ config, redisConfig })
+
+    await expect(call, `reconfigure after ${turns} turns`).resolves.toBeNull()
+    expect(events).toContain('get:start')
+    await vi.waitUntil(() => events.includes('dispose'))
+  }
+})
+
+it('creates one driver for a lock taken while the driver is still loading, even when the runtime reconfigures first', async () => {
+  const events: string[] = []
+  let created = 0
+  let finishLoading!: () => void
+  const loading = new Promise<void>(resolve => {
+    finishLoading = resolve
+  })
+  cacheRedisInternals.setRedisDriverModuleLoader(async () => {
+    await loading
+    return {
+      createRedisCacheDriver: () => {
+        created += 1
+        return createFakeRedisDriver(events, Promise.resolve({ hit: false }))
+      },
+    }
+  })
+  onTestFinished(() => cacheRedisInternals.resetRedisDriverModuleLoader())
+  onTestFinished(resetCacheRuntime)
+  configureCacheRuntime({ config, redisConfig })
+
+  const locked = cache.lock('work', 10).get()
+  configureCacheRuntime({ config, redisConfig })
+  finishLoading()
+
+  await expect(locked).resolves.toBe(true)
+  await vi.waitUntil(() => events.includes('dispose'))
+  expect(created).toBe(1)
+})

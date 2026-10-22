@@ -85,6 +85,7 @@ type LeasedCacheDriver = {
 }
 
 type LazyCacheDriverInstance<TOptions> = {
+  readonly generation: number
   readonly resources: ManagedResources<TOptions, LeasedCacheDriver>
   readonly lease: ResourceLease<LeasedCacheDriver>
 }
@@ -112,19 +113,16 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
   }
 
   private createInstance(): Promise<LazyCacheDriverInstance<TOptions>> {
-    const pendingGeneration = this.disposalGeneration
+    const generation = this.disposalGeneration
     const resources = createManagedResources<TOptions, LeasedCacheDriver>()
     const pending: Promise<LazyCacheDriverInstance<TOptions>> = this.lazyOptions.loadModule().then(async (module) => {
       const lease = await resources.acquire(
         this.lazyOptions.options,
         () => leaseCacheDriver(this.lazyOptions.createDriver(module, this.lazyOptions.options)),
       )
-      const instance = { resources, lease }
-      if (this.disposalGeneration === pendingGeneration) {
-        this.instance = instance
-      }
-      return instance
-    }).finally(() => {
+      return { generation, resources, lease }
+    })
+    pending.catch(() => {
       if (this.pending === pending) this.pending = undefined
     })
     this.pending = pending
@@ -135,6 +133,9 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
   ): Promise<TValue> {
     const instance = this.instance ?? await (this.pending ?? this.createInstance())
+    if (this.instance === undefined && instance.generation === this.disposalGeneration) {
+      this.instance = instance
+    }
     return instance.lease.hold(() => callback(instance.lease.value.driver))
   }
 
@@ -144,49 +145,46 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
     }
 
     const pending = this.pending
-    const instance = this.instance
 
     this.disposalGeneration += 1
     this.instance = undefined
     this.pending = undefined
 
-    const report = captureErrorReporter()
-    const retire = (retired: LazyCacheDriverInstance<TOptions>): void => {
-      void retired.resources.dispose().catch(error => report(error, { capability: 'cache', operation: 'driver.dispose' }))
-    }
-    if (instance) {
-      retire(instance)
+    if (!pending) {
       return
     }
 
-    void pending?.then(retire, () => undefined)
+    const report = captureErrorReporter()
+    void pending.then(
+      retired => retired.resources.dispose().catch(error => report(error, { capability: 'cache', operation: 'driver.dispose' })),
+      () => undefined,
+    )
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {
-    let lockPromise: Promise<CacheLockContract> | undefined
-
-    const resolveLock = async (): Promise<CacheLockContract> => {
-      lockPromise ??= this.withDriver((driver) => driver.lock(name, seconds))
-      return lockPromise
-    }
+    let lock: CacheLockContract | undefined
 
     const holdLock = <TValue>(operation: (lock: CacheLockContract) => Promise<TValue> | TValue): Promise<TValue> => {
-      return this.withDriver(async () => operation(await resolveLock()))
+      return this.withDriver((driver) => {
+        lock ??= driver.lock(name, seconds)
+        return operation(lock)
+      })
     }
 
     return {
       name,
       async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return holdLock(lock => lock.get(callback))
+        return holdLock(current => current.get(callback))
       },
       async release(): Promise<boolean> {
-        return holdLock(lock => lock.release())
+        return holdLock(current => current.release())
       },
       async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return holdLock(lock => lock.block(waitSeconds, callback))
+        return holdLock(current => current.block(waitSeconds, callback))
       },
     }
   }
+
 
   async get(key: string): Promise<CacheDriverGetResult> {
     return this.withDriver((driver) => driver.get(key))
