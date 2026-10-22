@@ -8,7 +8,8 @@ import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { spawnSyncBounded } from './sync-child'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -500,7 +501,7 @@ function runCliProcess(
   const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
   linkBuiltWorkspacePackagesSync(projectRoot)
 
-  return spawnSync('node', [cliBinPath, ...args], {
+  return spawnSyncBounded('node', [cliBinPath, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
@@ -588,7 +589,7 @@ function linkBuiltWorkspacePackagesSync(projectRoot: string): void {
 }
 
 function runNode(projectRoot: string, entryPath: string) {
-  return spawnSync('node', [entryPath], {
+  return spawnSyncBounded('node', [entryPath], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: process.env,
@@ -596,7 +597,7 @@ function runNode(projectRoot: string, entryPath: string) {
 }
 
 function runNodeScript(projectRoot: string, entryPath: string, args: readonly string[]) {
-  return spawnSync('node', [entryPath, ...args], {
+  return spawnSyncBounded('node', [entryPath, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: process.env,
@@ -11109,7 +11110,7 @@ export default {
           .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
       ),
     ]
-    const executed = spawnSync('node', [built.cliBinPath, 'list'], {
+    const executed = spawnSyncBounded('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,
@@ -11131,12 +11132,12 @@ export default {
   it('runs non-runtime published CLI commands without loading runtime-only deps', async () => {
     const built = ensureBuiltWorkspacePackagesSync()
 
-    const listed = spawnSync('node', [built.cliBinPath, 'list'], {
+    const listed = spawnSyncBounded('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,
     })
-    const help = spawnSync('node', [built.cliBinPath, 'make:model', '--help'], {
+    const help = spawnSyncBounded('node', [built.cliBinPath, 'make:model', '--help'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env: process.env,
