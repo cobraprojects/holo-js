@@ -96,8 +96,17 @@ jobs:
           restore-keys: v2-bun-examples-${{ runner.os }}-
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: node scripts/build-libraries.mjs
+      - name: Put the built holo CLI on the PATH for the example apps
+        run: |
+          mkdir -p "$RUNNER_TEMP/holo-bin"
+          printf '#!/usr/bin/env bash\nexec node "%s" "$@"\n' "$PWD/packages/cli/dist/bin/holo.mjs" > "$RUNNER_TEMP/holo-bin/holo"
+          chmod +x "$RUNNER_TEMP/holo-bin/holo"
+          echo "$RUNNER_TEMP/holo-bin" >> "$GITHUB_PATH"
       - name: Run the example app prepare script to generate its environment file
-        run: bun run --cwd apps/blog-${{ matrix.framework }} prepare
+        run: |
+          bun run --cwd apps/blog-${{ matrix.framework }} prepare
+          test -s apps/blog-${{ matrix.framework }}/.env
+          grep -q '^BROADCAST_APP_KEY=.' apps/blog-${{ matrix.framework }}/.env
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
