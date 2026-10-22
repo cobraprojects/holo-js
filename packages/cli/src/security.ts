@@ -1,8 +1,8 @@
-import { loadConfigDirectory } from '@holo-js/config'
 import type { NormalizedHoloSecurityConfig } from '@holo-js/security'
 import { writeLine } from './io'
 import { resolveProjectPackageImportSpecifier } from './project'
 import type { IoStreams } from './cli-types'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 type SecurityRedisAdapter = {
   connect(): Promise<void>
@@ -65,7 +65,7 @@ export async function runRateLimitClearCommand(
 ): Promise<void> {
   const loadSecurityModule = dependencies.loadSecurityModule ?? loadSecurityCliModule
   const loadConfig = dependencies.loadConfig ?? (async (root: string) => {
-    const loaded = await loadConfigDirectory(root, {
+    const loaded = await loadConfigWithNormalizers(root, {
       preferCache: false,
       processEnv: process.env,
     })

@@ -6,7 +6,6 @@ import {
   type CacheDatabaseTableColumnDefinition,
   type CacheDatabaseTableDefinition,
 } from '@holo-js/cache-db'
-import { loadConfigDirectory } from '@holo-js/config'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   getRegistryMigrationSlug,
@@ -15,6 +14,7 @@ import {
   nextMigrationTemplate,
 } from './migrations'
 import type { IoStreams } from './cli-types'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 export const DEFAULT_CACHE_DATABASE_TABLE = CACHE_DB_DEFAULT_TABLE
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = CACHE_DB_DEFAULT_LOCK_TABLE
@@ -39,7 +39,7 @@ type CacheConfigShape = {
 }
 
 export async function loadCacheConfig(projectRoot: string) {
-  const loadedConfig = await loadConfigDirectory(projectRoot)
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot)
   if (
     !loadedConfig
     || typeof loadedConfig !== 'object'

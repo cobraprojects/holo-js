@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { chromium } from 'playwright'
 import { configureSecurityRuntime, csrf, cors, defineSecurityConfig, resetSecurityRuntime } from '../packages/security/dist/index.mjs'
 import * as session from '../packages/session/dist/index.mjs'
-import { createCsrfSessionAccessor } from '../packages/core/src/portable/csrfSession.ts'
+import { holoRuntimeInternals } from '../packages/core/dist/index.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const directory = await mkdtemp(join(tmpdir(), 'holo-native-browser-forms-'))
@@ -164,7 +164,7 @@ try {
             }),
             cors: { paths: ['*'], origins: [url], credentials: true },
             csrfSigningKey: 'native-cross-origin-key',
-            csrfSession: createCsrfSessionAccessor(session, () => 'holo_session'),
+            csrfSession: holoRuntimeInternals.createCsrfSessionAccessor(session, () => 'holo_session'),
           })
           const api = createServer(async (incoming, outgoing) => {
             const headers = new Headers()

@@ -1,6 +1,6 @@
 import { basename, extname, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { loadConfigDirectory } from '@holo-js/config'
+import type { loadConfigDirectory } from '@holo-js/config'
 import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
 import type {} from '@holo-js/broadcast/config'
 import {
@@ -14,6 +14,7 @@ import { initializeProjectRuntime } from './runtime'
 import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 type BroadcastCliModule = {
   startBroadcastWorker(bindings: {
@@ -391,12 +392,12 @@ export async function runBroadcastWorkCommand(
   io: IoStreams,
   projectRoot: string,
   dependencies: {
-    loadConfig?: typeof loadConfigDirectory
+    loadConfig?: typeof loadConfigWithNormalizers
     loadModule?: typeof loadBroadcastCliModule
     loadRegistry?: typeof loadGeneratedProjectRegistry
   } = {},
 ): Promise<void> {
-  const loadConfig = dependencies.loadConfig ?? loadConfigDirectory
+  const loadConfig = dependencies.loadConfig ?? loadConfigWithNormalizers
   const loadModule = dependencies.loadModule ?? loadBroadcastCliModule
   const config = await loadConfig(projectRoot)
   const project = await loadProjectConfig(projectRoot)
