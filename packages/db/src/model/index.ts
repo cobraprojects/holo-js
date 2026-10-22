@@ -91,6 +91,8 @@ export type {
   RelationMap,
   RelationNameConstraintMapGuarded,
   RelatedColumnNameForRelationPath,
+  AggregateRelatedColumnNameOfKeys,
+  AggregateRelationConstraintMap,
   ModelScopeArgs,
   ModelScopeMap,
   ModelUpdatePayload,

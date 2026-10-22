@@ -246,6 +246,8 @@ export type {
   RelationConstraintFor,
   RelationConstraintMap,
   RelationNameConstraintMapGuarded,
+  AggregateRelatedColumnNameOfKeys,
+  AggregateRelationConstraintMap,
 } from './model'
 export type {
   AnyModelDefinition,
