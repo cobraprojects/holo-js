@@ -1,7 +1,6 @@
 import { resolveFrameworkPreparation } from './framework-preparation'
 import { mkdir, readdir } from 'node:fs/promises'
 import { dirname, extname, resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadProjectConfig,
   resolveGeneratedSchemaPath,
@@ -148,6 +147,7 @@ import {
   type AuthMigrationSlug,
   type LoadedConfigWithCache,
 } from './scaffold/types'
+import { loadConfigWithNormalizers } from './load-config'
 
 async function resolveExistingModelPath(modelsRoot: string, modelName: string): Promise<string | undefined> {
   const supportedExtensions = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs']
@@ -805,7 +805,7 @@ export async function installCacheIntoProject(
   }
 
   const cacheConfigPath = await resolveFirstExistingPath(projectRoot, CACHE_CONFIG_FILE_NAMES)
-  const loadedConfig = await loadConfigDirectory(projectRoot, {
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot, {
     preferCache: false,
     processEnv: process.env,
   }) as LoadedConfigWithCache

@@ -1,10 +1,9 @@
 import { resolve } from 'node:path'
 import {
   configEvaluationInternals,
-  configRegistryInternals,
-  loadConfigDirectory,
   loaderInternals,
 } from '@holo-js/config'
+import type { loadConfigDirectory } from '@holo-js/config'
 import type { SupportedDatabaseDriver } from '@holo-js/db'
 import type {} from '@holo-js/broadcast/config'
 import type {} from '@holo-js/mail/config'
@@ -40,13 +39,13 @@ import {
   importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
-  resolveProjectPackageImportSpecifier,
 } from '../runtime'
 import { writeTextFile } from '../atomic-file'
 import { loadGeneratedProjectRegistry } from '../registry'
 import { isWorkspaceDependencyVersion, resolveManagedHoloPackageVersion } from '../dependency-versions'
 import { resolveWorkspacePackageNames } from '../workspaces'
 import type { LoadedConfigWithCache } from './types'
+import { loadConfigWithNormalizers } from '../load-config'
 
 type ManagedHoloPackageName = `@holo-js/${string}`
 
@@ -91,19 +90,11 @@ function inferQueuePackageRequirements(queue: Pick<HoloQueueConfig, 'connections
 }
 
 async function loadNormalizedQueueConfig(projectRoot: string): Promise<HoloQueueConfig | undefined> {
-  const restoreNormalizers = configRegistryInternals.snapshotNormalizers()
-  try {
-    const queueConfigSpecifier = resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue/config')
-    await import(queueConfigSpecifier.startsWith('file:') ? `${queueConfigSpecifier}?t=${Date.now()}-${Math.random()}` : queueConfigSpecifier)
-      .catch(() => undefined)
-    return await loadConfigDirectory(projectRoot, {
-      preferCache: false,
-      processEnv: process.env,
-    }).then(config => config.queue as HoloQueueConfig | undefined)
-      .catch(() => undefined)
-  } finally {
-    restoreNormalizers()
-  }
+  return await loadConfigWithNormalizers(projectRoot, {
+    preferCache: false,
+    processEnv: process.env,
+  }).then(config => config.queue as HoloQueueConfig | undefined)
+    .catch(() => undefined)
 }
 
 async function loadQueueConfigFile(
@@ -318,10 +309,10 @@ export async function syncManagedDriverDependencies(
   registry?: GeneratedProjectRegistry,
 ): Promise<boolean> {
   await import('@holo-js/security/config')
-  const loaded = await loadConfigDirectory(projectRoot, {
+  const loaded = await loadConfigWithNormalizers(projectRoot, {
     preferCache: false,
     processEnv: process.env,
-  }) as LoadedConfigWithCache
+  }, { excludeNormalizers: ['queue'] }) as LoadedConfigWithCache
   const discoveredRegistry = registry ?? await loadGeneratedProjectRegistry(projectRoot)
   const authConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'auth')
   const broadcastConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'broadcast')
@@ -709,7 +700,7 @@ async function upsertCachePackageDependencies(
   const { packageJsonPath, parsed, dependencies, devDependencies, workspacePackageNames } = await readPackageJsonDependencyState(projectRoot)
   const cacheConfigPath = await resolveFirstExistingPath(projectRoot, CACHE_CONFIG_FILE_NAMES)
   const cacheConfig = cacheConfigPath
-    ? await loadConfigDirectory(projectRoot, {
+    ? await loadConfigWithNormalizers(projectRoot, {
         preferCache: false,
         processEnv: process.env,
       }).then(config => (config as LoadedConfigWithCache).cache)

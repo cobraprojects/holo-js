@@ -1,16 +1,16 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
 import { storageRuntimeInternals } from '@holo-js/core'
 import { normalizeModuleOptions } from '@holo-js/storage'
 import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
+import { loadConfigWithNormalizers } from './project/load-config'
 
 export async function runStorageDecodeNamesCommand(
   io: IoStreams,
   projectRoot: string,
   diskName: string,
 ): Promise<void> {
-  const loadedConfig = await loadConfigDirectory(projectRoot)
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot)
   const storage = normalizeModuleOptions({
     defaultDisk: loadedConfig.storage.defaultDisk,
     routePrefix: loadedConfig.storage.routePrefix,
