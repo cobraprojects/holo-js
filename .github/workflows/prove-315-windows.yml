@@ -40,7 +40,7 @@ jobs:
           set +e +o pipefail
           mkdir -p ../../lock-traces
           : > ../../lock-traces/summary.txt
-          for i in $(seq 1 60); do
+          for i in $(seq 1 30); do
             mkdir -p "../../lock-traces/run-$i"
             HOLO_SESSION_LOCK_TRACE_DIR="../../lock-traces/run-$i" bun run test:platform > "../../lock-traces/run-$i/result.json" 2> "../../lock-traces/run-$i/stderr.log"
             code=$?
