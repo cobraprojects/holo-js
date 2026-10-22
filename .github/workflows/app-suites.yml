@@ -98,6 +98,13 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - name: Generate the example app environment files
         run: bun install --frozen-lockfile
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: Install Playwright Chromium for the example app browser checks
+        run: bun x playwright install --with-deps chromium
       - name: Run the ${{ matrix.framework }} example app against SQLite, Postgres, and MySQL
         run: bun run test:examples
       - uses: actions/upload-artifact@v7
