@@ -507,10 +507,6 @@ export type RelatedRelationsOfRelation<TRelation extends RelationDefinition>
     ? RelatedRelationsOfDefinition<TRef>
     : RelationMap
 
-/**
- * Extracts the named scopes of a related model so relation constraint
- * callbacks expose the same scope methods as the related model's query.
- */
 export type RelatedScopesOfDefinition<TRef>
   = TRef extends { readonly scopes: infer S extends ModelScopesDefinition } ? S
     : TRef extends { readonly definition: { readonly scopes: infer S extends ModelScopesDefinition } } ? S

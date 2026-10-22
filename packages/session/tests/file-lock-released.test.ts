@@ -192,6 +192,7 @@ describe('released file locks across processes', () => {
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
     expect(await readdir(lockPath)).toHaveLength(1)
+    expect((reports[0] as Error).cause).toMatchObject({ code: 'EPERM' })
   }, 15_000)
 
   it('an I/O error while moving the lease aside rejects the release and the next operation recovers', async () => {

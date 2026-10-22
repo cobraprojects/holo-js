@@ -1,3 +1,5 @@
+import { createCookieWriteUnavailableError } from '@holo-js/kernel'
+
 type RequestAccessBindings = {
   readonly context: {
     getRequestCookie?(name: string): Promise<string | undefined> | string | undefined
@@ -65,13 +67,7 @@ export async function resolveRequestHeader(
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-export const COOKIE_WRITE_UNAVAILABLE = 'cookie_write_unavailable'
-
-function createCookieWriteUnavailableError(cause?: unknown): Error {
-  return Object.assign(new Error('Authentication cookies cannot be set in this request context.', { cause }), {
-    code: COOKIE_WRITE_UNAVAILABLE,
-  })
-}
+const COOKIE_WRITE_UNAVAILABLE_MESSAGE = 'Authentication cookies cannot be set in this request context.'
 
 export async function responseCookiesWritable(bindings: RequestAccessBindings): Promise<boolean> {
   if (bindings.context.canAppendResponseCookie) return await bindings.context.canAppendResponseCookie()
@@ -79,7 +75,7 @@ export async function responseCookiesWritable(bindings: RequestAccessBindings): 
 }
 
 export async function assertResponseCookiesWritable(bindings: RequestAccessBindings): Promise<void> {
-  if (!await responseCookiesWritable(bindings)) throw createCookieWriteUnavailableError()
+  if (!await responseCookiesWritable(bindings)) throw createCookieWriteUnavailableError(COOKIE_WRITE_UNAVAILABLE_MESSAGE)
 }
 
 export async function appendResponseCookies(
@@ -87,7 +83,7 @@ export async function appendResponseCookies(
   cookies: readonly string[],
 ): Promise<void> {
   if (!bindings.context.appendResponseCookie) {
-    if (cookies.length > 0) throw createCookieWriteUnavailableError()
+    if (cookies.length > 0) throw createCookieWriteUnavailableError(COOKIE_WRITE_UNAVAILABLE_MESSAGE)
     return
   }
 

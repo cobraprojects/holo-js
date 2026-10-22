@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   holoMailDefaults,
   type HoloAppEnv,
@@ -1213,14 +1215,6 @@ async function runQueuedMailDelivery(
   )
 }
 
-function resolveQueuedMailRetryDelaySeconds(backoff: number | readonly number[], attempt: number): number {
-  if (typeof backoff === 'number') {
-    return backoff
-  }
-
-  return backoff[Math.min(Math.max(attempt - 1, 0), backoff.length - 1)] ?? 0
-}
-
 async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
   const resolvedQueueModule = queueModule ?? await loadQueueModule()
   if (resolvedQueueModule.getRegisteredQueueJob(HOLO_MAIL_DELIVER_JOB)) {
@@ -1238,8 +1232,9 @@ async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<
           }
 
           try {
-            await context.release(resolveQueuedMailRetryDelaySeconds(payload.backoff, context.attempt))
-          } catch {
+            await context.release(resolveRetryBackoffSeconds(payload.backoff, context.attempt))
+          } catch (releaseError) {
+            reportError(releaseError, { capability: 'mail', operation: 'queuedDelivery.releaseRetry' })
             throw error
           }
 

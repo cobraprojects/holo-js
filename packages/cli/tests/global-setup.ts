@@ -4,9 +4,6 @@ import { collectLibraryBuilds } from '../../../scripts/build-libraries.mjs'
 import { generateCliWorkspaceCatalog } from '../../../scripts/generate-cli-workspace-catalog.mjs'
 import { buildWorkspacePackage, rebuildStaleWorkspacePackages, type WorkspacePackageBuild } from '../../../tests/support/workspace-dist'
 
-// Rebuilds the stale workspace packages the integration suite links. Exported so the setup can be tested against a
-// temporary repository. The CLI's build reads its generated catalog from src, so the catalog is regenerated first, with
-// the same generator build-libraries.mjs runs.
 export async function prepareWorkspaceDists(
   workspaceRoot: string,
   build: WorkspacePackageBuild = buildWorkspacePackage,
@@ -20,8 +17,6 @@ export async function prepareWorkspaceDists(
   return rebuildStaleWorkspacePackages(workspaceRoot, collectLibraryBuilds(workspaceRoot, names), buildWithCatalog)
 }
 
-// Runs once before the integration suite's workers start, so the suite links only current workspace builds. The
-// rebuilds happen here, in the main process, rather than inside a worker's beforeAll.
 export default async function setup(): Promise<void> {
   const rebuilt = await prepareWorkspaceDists(resolve(import.meta.dirname, '../../..'))
   console.log(rebuilt.length > 0

@@ -25,8 +25,6 @@ vi.mock('node:fs/promises', async importOriginal => {
   }
 })
 
-// Holds every tombstone removal until the returned function runs. A release that waited on
-// removals would never return, so the tests assert the property instead of a wall-clock bound.
 function holdTombstoneRemovals(): () => void {
   let open: () => void = () => undefined
   tombstoneUnlinks.gate = new Promise<void>(resolve => { open = resolve })
