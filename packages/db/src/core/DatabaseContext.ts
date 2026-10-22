@@ -15,6 +15,7 @@ import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from '
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { isDatabaseConcurrencyError } from './driverErrors'
+import { discardCommitFailureCallbacks, moveCommitFailureCallbacks, runCommitFailureCallbacks } from './commitFailureCallbacks'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -514,6 +515,7 @@ export class DatabaseContext {
         } catch (commitError) {
           await this._rollbackAdapterTransaction().catch(() => undefined)
           rollbackSchemaMutationScope(child)
+          runCommitFailureCallbacks(child)
           throw commitError
         }
 
@@ -534,6 +536,9 @@ export class DatabaseContext {
       committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
       frame.open = false
+      if (transaction) {
+        discardCommitFailureCallbacks(transaction)
+      }
       if (!commitStarted) {
         if (state.rollbackFailed) {
           markFailedRollback(error)
@@ -544,6 +549,7 @@ export class DatabaseContext {
     }
 
     frame.open = false
+    discardCommitFailureCallbacks(committed.transaction)
     return committed
   }
 
@@ -663,12 +669,14 @@ export class DatabaseContext {
           rollbackSchemaMutationScope(tx)
         }
         markFailedRollback(rollbackError)
+        moveCommitFailureCallbacks(tx, this)
         return { kind: 'rollback-failed', rollbackError, entry }
       }
       rollbackSchemaMutationScope(tx)
       return { kind: 'rolled-back', error, transaction: tx, entry }
     } finally {
       frame.open = false
+      discardCommitFailureCallbacks(tx)
     }
   }
 
@@ -739,6 +747,7 @@ export class DatabaseContext {
   private _mergeCommittedTransactionCallbacks(child: DatabaseContext): void {
     this._transactionCallbacks!.afterCommit.push(...child._transactionCallbacks!.afterCommit)
     this._transactionCallbacks!.afterRollback.push(...child._transactionCallbacks!.afterRollback)
+    moveCommitFailureCallbacks(child, this)
   }
 
   private async _runAfterCommitCallbacks(): Promise<void> {

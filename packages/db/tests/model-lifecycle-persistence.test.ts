@@ -27,6 +27,17 @@ async function openDatabase(): Promise<DatabaseContext> {
   return db
 }
 
+async function openDatabaseWithDeferredForeignKey(): Promise<DatabaseContext> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  onTestFinished(() => adapter.disconnect())
+  const db = createDatabase({ adapter, dialect: createDialect('sqlite') })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  await adapter.execute('PRAGMA foreign_keys = ON')
+  await adapter.execute('CREATE TABLE parents (id INTEGER PRIMARY KEY)')
+  await adapter.execute('CREATE TABLE children (id INTEGER PRIMARY KEY, parentId INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED, name TEXT NOT NULL)')
+  return db
+}
+
 const accounts = defineTable('accounts', {
   id: column.id(),
   name: column.string(),
@@ -829,5 +840,166 @@ describe('model save writes', () => {
 
     expect(await db.table('posts').where('id', 1).get()).toMatchObject([{ deleted_at: null }])
     expect(post.trashed()).toBe(false)
+  })
+
+  describe('when the COMMIT itself fails after the write succeeded', () => {
+    const children = defineTable('children', {
+      id: column.id(),
+      parentId: column.integer(),
+      name: column.string(),
+    })
+
+    function defineChildModel(seen: string[]) {
+      return defineModelFromTable(children, {
+        timestamps: false,
+        fillable: ['parentId', 'name'],
+        mutators: {
+          name: value => {
+            seen.push(String(value))
+            return `${String(value)}!`
+          },
+        },
+      })
+    }
+
+    it('restores a created model so a retry runs mutators once and writes the row', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(child.save()).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').count()).toBe(0)
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Ada'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
+      expect(child.isDirty()).toBe(false)
+    })
+
+    it('restores an updated model so a retry runs mutators once and writes the row', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.table('parents').insert({ id: 1 })
+      await db.table('children').insert({ id: 1, parentId: 1, name: 'Ada!' })
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = await Child.findOrFail(1)
+      child.set('parentId', 99)
+      child.set('name', 'Grace')
+      await expect(child.save()).rejects.toThrow('FOREIGN KEY')
+
+      await db.table('parents').insert({ id: 99 })
+      await child.save()
+
+      expect(seen).toEqual(['Grace', 'Grace'])
+      expect(await db.table('children').where('id', 1).get()).toMatchObject([{ parentId: 99, name: 'Grace!' }])
+      expect(child.isDirty()).toBe(false)
+    })
+
+    it('restores a model saved in a caller transaction when that transaction fails to commit', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async () => {
+        await child.save()
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').count()).toBe(0)
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Ada'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
+    })
+
+    it('restores a model saved in a released savepoint when the outer transaction fails to commit', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async tx => {
+        await tx.transaction(async () => {
+          await child.save()
+        })
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').count()).toBe(0)
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Ada'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
+    })
+
+    it('restores a model whose savepoint rollback failed when the outer transaction then fails to commit', async () => {
+      const adapter = createSQLiteAdapter({ filename: ':memory:' })
+      onTestFinished(() => adapter.disconnect())
+      let failNextSavepointRollback = true
+      const failingRollbackAdapter = new Proxy(adapter, {
+        get(target, property) {
+          if (property === 'rollbackToSavepoint') {
+            return async (name: string) => {
+              if (failNextSavepointRollback) {
+                failNextSavepointRollback = false
+                throw new Error('savepoint rollback failed')
+              }
+              return target.rollbackToSavepoint?.(name)
+            }
+          }
+          const value: unknown = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const db = createDatabase({ adapter: failingRollbackAdapter, dialect: createDialect('sqlite') })
+      configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+      await adapter.execute('PRAGMA foreign_keys = ON')
+      await adapter.execute('CREATE TABLE parents (id INTEGER PRIMARY KEY)')
+      await adapter.execute('CREATE TABLE children (id INTEGER PRIMARY KEY, parentId INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED, name TEXT NOT NULL)')
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async tx => {
+        await expect(tx.transaction(async () => {
+          await child.save()
+          throw new Error('nested work failed')
+        })).rejects.toThrow('savepoint rollback failed')
+      })).rejects.toThrow('FOREIGN KEY')
+      expect(await db.table('children').count()).toBe(0)
+      expect(child.get('name')).toBe('Ada')
+      expect(child.isDirty()).toBe(true)
+
+      await db.table('parents').insert({ id: 42 })
+      await child.save()
+
+      expect(seen).toEqual(['Ada', 'Ada'])
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
+    })
+
+    it('keeps the saved state when an afterCommit callback fails after the COMMIT succeeded', async () => {
+      const db = await openDatabaseWithDeferredForeignKey()
+      await db.table('parents').insert({ id: 42 })
+      const seen: string[] = []
+      const Child = defineChildModel(seen)
+
+      const child = Child.make({ parentId: 42, name: 'Ada' })
+      await expect(db.transaction(async tx => {
+        await child.save()
+        tx.afterCommit(() => {
+          throw new Error('notification failed')
+        })
+      })).rejects.toThrow('notification failed')
+
+      expect(seen).toEqual(['Ada'])
+      expect(child.get('name')).toBe('Ada!')
+      expect(child.isDirty()).toBe(false)
+      expect(await db.table('children').get()).toMatchObject([{ parentId: 42, name: 'Ada!' }])
+    })
   })
 })

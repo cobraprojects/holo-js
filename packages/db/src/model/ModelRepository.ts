@@ -18,6 +18,7 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { onTransactionCommitFailure } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
@@ -1858,7 +1859,10 @@ export class ModelRepository<
     return this.runWriteUnit(async () => {
       let written = false
       try {
-        return await write(() => { written = true })
+        return await write(() => {
+          written = true
+          onTransactionCommitFailure(this.getConnection(), () => restoreEntityWriteState(entity, state))
+        })
       } catch (error) {
         if (ownsTransaction || !written) {
           restoreEntityWriteState(entity, state)
