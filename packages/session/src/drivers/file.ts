@@ -759,10 +759,6 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
-  heldRecordLockTokens,
-  pendingRecordLockReleaseRetries,
-  pendingTombstoneRemovals,
-  tombstoneQueueLimit: TOMBSTONE_QUEUE_LIMIT,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,

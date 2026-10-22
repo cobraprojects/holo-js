@@ -1,16 +1,68 @@
+import { execFile } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { PassThrough } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { buildQueueWorkArgs, runQueueWorkCommand } from '../src/queue'
+import { runCli } from '../src/cli'
+import { buildQueueWorkArgs } from '../src/queue'
 import { parseBackoffFlag } from '../src/parsing'
 import type { IoStreams } from '../src/cli-types'
 
-function createIo(): IoStreams {
-  const write = () => true
+const execute = promisify(execFile)
+const repoRoot = resolve(import.meta.dirname, '../../..')
+const builtCli = join(repoRoot, 'packages/cli/dist/bin/holo.mjs')
+
+function createIo(projectRoot: string): IoStreams {
   return {
-    cwd: process.cwd(),
-    stdin: process.stdin,
-    stdout: { write } as unknown as NodeJS.WriteStream,
-    stderr: { write } as unknown as NodeJS.WriteStream,
+    cwd: projectRoot,
+    stdin: new PassThrough() as never,
+    stdout: new PassThrough() as never,
+    stderr: new PassThrough() as never,
   }
+}
+
+async function createAlwaysFailingQueueProject(root: string): Promise<string> {
+  const attemptLog = join(root, 'attempts.log')
+  const write = async (name: string, content: string) => {
+    await mkdir(dirname(join(root, name)), { recursive: true })
+    await writeFile(join(root, name), content)
+  }
+  await mkdir(join(root, 'node_modules'), { recursive: true })
+  await symlink(join(repoRoot, 'packages'), join(root, 'node_modules/@holo-js'))
+  await write('package.json', JSON.stringify({ type: 'module' }))
+  await write('config/app.mjs', "import { defineAppConfig } from '@holo-js/config'; export default defineAppConfig({ name: 'Queue Worker Flags' })")
+  await write('config/database.mjs', `import { defineDatabaseConfig } from '@holo-js/db'; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'queue.sqlite'))} } } })`)
+  await write('config/queue.mjs', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'database', failed: false, connections: { database: { driver: 'database', connection: 'main' } } })")
+  await write('server/jobs/AlwaysFails.mjs', `
+import { appendFile } from 'node:fs/promises'
+import { defineJob } from '@holo-js/queue'
+export default defineJob({
+  async handle() {
+    await appendFile(${JSON.stringify(attemptLog)}, Date.now() + '\\n')
+    throw new Error('AlwaysFails always fails')
+  },
+})
+`)
+  await write('dispatch.mjs', `
+import { createHolo } from '@holo-js/core/runtime'
+const runtime = await createHolo(process.cwd())
+await runtime.initialize()
+try {
+  const { default: AlwaysFails } = await import('./server/jobs/AlwaysFails.mjs')
+  await AlwaysFails.dispatch({})
+} finally {
+  await runtime.shutdown()
+}
+`)
+  return attemptLog
+}
+
+async function readAttemptTimes(attemptLog: string): Promise<number[]> {
+  const contents = await readFile(attemptLog, 'utf8').catch(() => '')
+  return contents.trim().split('\n').filter(Boolean).map(Number)
 }
 
 describe('queue:work --backoff', () => {
@@ -39,15 +91,30 @@ describe('queue:work --backoff', () => {
     expect(buildQueueWorkArgs({ tries: '2', backoff: '5,10' })).toEqual(['queue:work', '--tries', '2', '--backoff', '5,10'])
   })
 
-  it('passes the parsed backoff to the queue worker', async () => {
-    const received: unknown[] = []
-    await runQueueWorkCommand(createIo(), process.cwd(), { once: true, backoff: [5, 10], tries: 2 }, {
-      getEnvironment: async () => ({ cleanup: async () => {} }) as never,
-      runWorker: async options => {
-        received.push({ backoff: options.backoff, tries: options.tries })
-        return { processed: 0, released: 0, failed: 0, stoppedBecause: 'once' }
-      },
-    })
-    expect(received).toEqual([{ backoff: [5, 10], tries: 2 }])
-  })
+  it('retries a failing job for exactly --tries attempts, spaced by at least --backoff, on a real database queue', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-queue-worker-flags-'))
+    try {
+      const attemptLog = await createAlwaysFailingQueueProject(root)
+      await execute(process.execPath, [builtCli, 'queue:table'], { cwd: root })
+      await execute(process.execPath, [builtCli, 'migrate'], { cwd: root })
+      await execute(process.execPath, ['dispatch.mjs'], { cwd: root })
+
+      const worker = runCli(['queue:work', '--tries', '3', '--backoff', '1', '--sleep', '0'], createIo(root))
+      while ((await readAttemptTimes(attemptLog)).length < 3) {
+        await delay(20)
+      }
+      await delay(1_500)
+      await expect(runCli(['queue:restart'], createIo(root))).resolves.toBe(0)
+      await expect(worker).resolves.toBe(0)
+
+      const attemptTimes = await readAttemptTimes(attemptLog)
+      const retryDelays = attemptTimes.slice(1).map((attemptTime, index) => attemptTime - attemptTimes[index]!)
+      expect(attemptTimes).toHaveLength(3)
+      for (const retryDelay of retryDelays) {
+        expect(retryDelay).toBeGreaterThanOrEqual(1000)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
