@@ -233,6 +233,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         })
         outsideWrite = new Promise(resolve => { setTimeout(resolve, 30) })
           .then(() => db.table(table).insert({ id: 2, name: 'outside' }))
+        outsideWrite.catch(() => undefined)
         await expect(transaction).rejects.toBeInstanceOf(TransactionError)
       })
 
@@ -266,12 +267,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
     it('rejects a write still running its query logger when a later transaction opens before it reaches the connection', async () => {
       let pauseNextQuery = false
+      let secondTransactionOpen!: () => void
+      const opened = new Promise<void>(resolve => { secondTransactionOpen = resolve })
       const { db, schema, table } = await openDatabase(driver, {
         logger: {
           onQueryStart: async () => {
             if (!pauseNextQuery) return
             pauseNextQuery = false
-            await new Promise(resolve => { setTimeout(resolve, 20) })
+            await opened
           },
         },
       })
@@ -283,12 +286,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
           pauseNextQuery = true
           strayOutcome = db.table(table).insert({ id: 2, name: 'stray' }).then(() => 'ran', (error: unknown) => error)
         })
+        let strayResult: unknown
         await expect(db.transaction(async tx => {
+          secondTransactionOpen()
           await tx.table(table).insert({ id: 3, name: 'second' })
-          await new Promise(resolve => { setTimeout(resolve, 60) })
+          strayResult = await strayOutcome
           throw new Error('second failed')
         })).rejects.toThrow('second failed')
-        expect(await strayOutcome).toBeInstanceOf(TransactionError)
+        expect(strayResult).toBeInstanceOf(TransactionError)
       })
 
       expect(await db.table(table).select('id').orderBy('id').get()).toEqual([{ id: 1 }])
@@ -383,6 +388,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.withoutForeignKeyConstraints(async () => {
         sibling = new Promise(resolve => { setTimeout(resolve, 20) })
           .then(() => db.table(table).insert({ id: 2, name: 'sibling' }))
+        sibling.catch(() => undefined)
       })
       const siblingOutcome = await sibling.then(() => 'committed' as const, (error: unknown) => error)
       const rows = (await db.table(table).select('id').orderBy('id').get()).map(row => row.id)
