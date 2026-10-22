@@ -8,7 +8,11 @@ const DISPOSE = Symbol.for('holo.cache.driver.dispose')
 const config = { default: 'redis', prefix: 'lease:', drivers: { redis: { driver: 'redis', connection: 'shared' } } } as const
 const redisConfig = normalizeRedisConfig({ default: 'shared', connections: { shared: { host: '127.0.0.1', port: 6379, db: 0 } } })
 
-function createFakeRedisDriver(events: string[], pendingGet: Promise<{ readonly hit: boolean, readonly payload?: string }>) {
+function createFakeRedisDriver(
+  events: string[],
+  pendingGet: Promise<{ readonly hit: boolean, readonly payload?: string }>,
+  pendingRelease: Promise<boolean> = Promise.resolve(true),
+) {
   return {
     name: 'redis',
     driver: 'redis',
@@ -24,7 +28,19 @@ function createFakeRedisDriver(events: string[], pendingGet: Promise<{ readonly 
     async flush() {},
     async increment() { return 0 },
     async decrement() { return 0 },
-    lock() { throw new Error('locks are not used in this test') },
+    lock(name: string) {
+      return {
+        name,
+        async get() { return true },
+        async release() {
+          events.push('release:start')
+          const released = await pendingRelease
+          events.push('release:settled')
+          return released
+        },
+        async block() { return true },
+      }
+    },
     [DISPOSE]() {
       events.push('dispose')
     },
@@ -55,4 +71,32 @@ it('keeps a replaced Redis cache driver open until the call in flight on it sett
   await expect(inFlight).resolves.toBeNull()
   await vi.waitUntil(() => events.includes('dispose'))
   expect(events).toEqual(['get:start', 'get:settled', 'dispose'])
+})
+
+it('keeps a replaced Redis cache driver open until a lock release in flight on it settles', async () => {
+  const events: string[] = []
+  let resolveRelease!: (released: boolean) => void
+  const pendingRelease = new Promise<boolean>(resolve => {
+    resolveRelease = resolve
+  })
+  cacheRedisInternals.setRedisDriverModuleLoader(async () => ({
+    createRedisCacheDriver: () => createFakeRedisDriver(events, Promise.resolve({ hit: false }), pendingRelease),
+  }))
+  onTestFinished(() => cacheRedisInternals.resetRedisDriverModuleLoader())
+  onTestFinished(resetCacheRuntime)
+  configureCacheRuntime({ config, redisConfig })
+
+  const lock = cache.lock('work', 10)
+  expect(await lock.get()).toBe(true)
+  const released = lock.release()
+  await vi.waitUntil(() => events.includes('release:start'))
+
+  configureCacheRuntime({ config, redisConfig })
+  await Promise.resolve()
+  expect(events).not.toContain('dispose')
+
+  resolveRelease(true)
+  await expect(released).resolves.toBe(true)
+  await vi.waitUntil(() => events.includes('dispose'))
+  expect(events).toEqual(['release:start', 'release:settled', 'dispose'])
 })

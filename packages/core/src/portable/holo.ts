@@ -174,6 +174,7 @@ export interface HoloQueueDriverBinding {
 }
 
 type QueueModule = Pick<typeof QueueFeature,
+  | 'assertRegisteredQueueJobTimeouts'
   | 'configureQueueRuntime'
   | 'loadQueuePluginDriverFactories'
   | 'getRegisteredQueueJob'
@@ -1349,6 +1350,7 @@ async function registerProjectQueueJobs(
       })
       registeredJobNames.push(entry.name)
     }
+    queueModule.assertRegisteredQueueJobTimeouts()
   } catch (error) {
     unregisterProjectQueueJobs(queueModule, registeredJobNames)
     throw error

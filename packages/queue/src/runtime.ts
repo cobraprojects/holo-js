@@ -794,6 +794,10 @@ function assertRegisteredJobTimeoutsBelowRetryAfter(config: NormalizedHoloQueueC
   }
 }
 
+export function assertRegisteredQueueJobTimeouts(): void {
+  assertRegisteredJobTimeoutsBelowRetryAfter(getQueueRuntimeState().config)
+}
+
 export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}): void {
   const state = getQueueRuntimeState()
   let shouldResetDrivers = false

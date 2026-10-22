@@ -93,6 +93,7 @@ export {
   syncQueueDriverInternals,
 } from './drivers/sync'
 export {
+  assertRegisteredQueueJobTimeouts,
   configureQueueRuntime,
   dispatch,
   dispatchSync,

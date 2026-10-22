@@ -504,7 +504,7 @@ await DB.transaction(async () => {
 })
 ```
 
-The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. The connection's driver must accept a caller-supplied job ID. Otherwise `.afterCommit()` throws at dispatch, naming the connection. If queuing fails at commit, `onFailed` runs with the error, and the `DB.transaction()` call that committed rejects with that same error. Catch it there if the request should carry on. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
+The awaited result is returned straight away. `onComplete` runs when the job is queued at commit. The connection's driver must accept a caller-supplied job ID. Otherwise `.afterCommit()` throws at dispatch, naming the connection. If queuing fails at commit, `onFailed` runs with the error, and the `DB.transaction()` call that committed rejects with that same error. Catch it there if the request should carry on. The rejection skips any after-commit callbacks registered after this dispatch in the same transaction, as [`DB.afterCommit()`](/database/transactions) does. See [Dispatch after a database commit](#dispatch-after-a-database-commit) for the connection-wide `afterCommit` setting.
 
 ### `.onComplete(callback)` {#oncomplete-callback}
 

@@ -273,7 +273,7 @@ Queued mail, notifications, and event listeners accept `tries` and `backoff`, an
 
 ### After-commit queue failures reach the transaction
 
-A job dispatched with `.afterCommit()`, or on a connection with `afterCommit: true`, that can't be queued when its transaction commits now makes the `DB.transaction()` call reject with that error. Before, Holo reported the error and the call resolved, so the caller never saw the failure. Catch the error around `DB.transaction()` if the request should carry on. `onFailed` still runs first. See [Dispatch after a database commit](/queue/jobs#dispatch-after-a-database-commit).
+A job dispatched with `.afterCommit()`, or on a connection with `afterCommit: true`, that can't be queued when its transaction commits now makes the `DB.transaction()` call reject with that error. Before, Holo reported the error and the call resolved, so the caller never saw the failure. Catch the error around `DB.transaction()` if the request should carry on. `onFailed` still runs first, and after-commit callbacks registered after the failed dispatch in that transaction are skipped. See [Dispatch after a database commit](/queue/jobs#dispatch-after-a-database-commit).
 
 ### Event listener order and after-commit notification failures
 

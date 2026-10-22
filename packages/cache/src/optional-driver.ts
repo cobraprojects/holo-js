@@ -170,16 +170,20 @@ class LazyOptionalCacheDriver<TModule, TOptions> implements CacheDriverContract 
       return lockPromise
     }
 
+    const holdLock = <TValue>(operation: (lock: CacheLockContract) => Promise<TValue> | TValue): Promise<TValue> => {
+      return this.withDriver(async () => operation(await resolveLock()))
+    }
+
     return {
       name,
       async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return (await resolveLock()).get(callback)
+        return holdLock(lock => lock.get(callback))
       },
       async release(): Promise<boolean> {
-        return (await resolveLock()).release()
+        return holdLock(lock => lock.release())
       },
       async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return (await resolveLock()).block(waitSeconds, callback)
+        return holdLock(lock => lock.block(waitSeconds, callback))
       },
     }
   }

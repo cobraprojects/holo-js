@@ -52,7 +52,7 @@ type NotificationDispatchResult = {
 
 A failing channel doesn't stop the others, and `notify()` doesn't throw for it. If you need a failure to surface as an error, check the result and throw yourself.
 
-A send that waits for a transaction to commit has no result to check once the commit happens. Holo reports each channel that fails after commit through [`exceptions.report`](/basics/errors#reporting-errors), with capability `notifications` and operation `channel.afterCommit`. The transaction has already committed, so a failed channel doesn't make the transaction call throw.
+A send that waits for a transaction to commit has no result to check once the commit happens. Holo reports each channel that fails after commit through [`exceptions.report`](/basics/errors#reporting-errors), with capability `notifications` and operation `channel.afterCommit`. The transaction has already committed, so a failed channel doesn't make the transaction call throw. If an earlier after-commit callback in the same transaction throws, such as a queued dispatch that can't be queued, the callbacks after it don't run, including this one.
 
 ## Find who a failure belongs to
 
