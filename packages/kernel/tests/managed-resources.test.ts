@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createManagedResources, holdOperations } from '../src/portable/managedResources'
-import { errorReportingInternals } from '@holo-js/kernel/error-reporting'
+import { createManagedResources, holdOperations } from '../src/managedResources'
+import { errorReportingInternals } from '../src/errorReporting'
 
 function createRecordingResource(name: string, closed: string[]): { readonly name: string, close(): Promise<void> } {
   return {
@@ -131,6 +131,20 @@ describe('managed resources', () => {
     finishClose()
     await dispose
     expect(closed.sort()).toEqual(['first', 'second'])
+  })
+
+  it('disposes a resource acquired but never committed once its held operation settles', async () => {
+    const closed: string[] = []
+    const resources = createManagedResources<string, ReturnType<typeof createRecordingResource>>()
+    const only = await resources.acquire('only', config => createRecordingResource(config, closed))
+    let settle: () => void = () => undefined
+    const operation = only.hold(() => new Promise<void>(resolve => { settle = resolve }))
+
+    const disposing = resources.dispose()
+    settle()
+    await operation
+    await disposing
+    expect(closed).toEqual(['only'])
   })
 
   it('keeps an active resource open during dispose until its held operation settles', async () => {

@@ -16,6 +16,7 @@ async function openHarness(connectionAfterCommit?: boolean) {
           queue: 'default',
           ...(typeof connectionAfterCommit === 'undefined' ? {} : { afterCommit: connectionAfterCommit }),
         },
+        sync: { driver: 'sync', queue: 'default' },
       },
     },
   })
@@ -129,7 +130,7 @@ describe('@holo-js/queue after-commit dispatch', () => {
 
   it('runs a job inline without checking its timeout against the connection retryAfter', async () => {
     const harness = await openHarness()
-    registerQueueJob({ timeout: 120, handle() {} }, { name: 'slow-inline' })
+    registerQueueJob({ timeout: 120, connection: 'sync', handle() {} }, { name: 'slow-inline' })
 
     await expect(dispatchSync('slow-inline', {})).resolves.toBeUndefined()
     expect(await harness.readJobRows()).toEqual([])
@@ -193,13 +194,13 @@ describe('@holo-js/queue after-commit dispatch', () => {
     )
   })
 
-  it('fails an afterCommit dispatch whose driver returns a job ID other than the one it accepted', async () => {
+  it('rejects the committing transaction when an afterCommit dispatch returns a job ID other than the one it accepted', async () => {
     await openHarness()
     configureCustomDriverRuntime(ownIdDriver({ acceptsJobId: true, returnedJobId: 'elsewhere' }), { afterCommit: false })
     const completed: QueueDispatchResult[] = []
     const failures: unknown[] = []
 
-    await DB.transaction(async () => dispatch('receipt-sent', {})
+    await expect(DB.transaction(async () => dispatch('receipt-sent', {})
       .afterCommit()
       .onComplete(result => {
         completed.push(result)
@@ -207,12 +208,29 @@ describe('@holo-js/queue after-commit dispatch', () => {
       .onFailed(error => {
         failures.push(error)
       })
-      .dispatch())
+      .dispatch())).rejects.toThrow('returned job ID "elsewhere"')
 
     expect(completed).toEqual([])
     expect(failures).toEqual([expect.objectContaining({
       message: expect.stringContaining('returned job ID "elsewhere"'),
     })])
+  })
+
+  it('rejects the committing transaction with the enqueue error when queuing fails at commit', async () => {
+    await openHarness()
+    const enqueueError = new Error('broker unavailable')
+    configureCustomDriverRuntime(ownIdDriver({ acceptsJobId: true, dispatchError: enqueueError }), { afterCommit: false })
+    const failures: unknown[] = []
+
+    const committed = DB.transaction(async () => dispatch('receipt-sent', {})
+      .afterCommit()
+      .onFailed(error => {
+        failures.push(error)
+      })
+      .dispatch())
+
+    await expect(committed).rejects.toBe(enqueueError)
+    expect(failures).toEqual([enqueueError])
   })
 })
 
@@ -229,13 +247,18 @@ function configureCustomDriverRuntime(driver: QueueDriver, connection: { readonl
   })
 }
 
-function ownIdDriver(options: { readonly acceptsJobId?: boolean, readonly returnedJobId?: string } = {}): QueueDriver {
+function ownIdDriver(options: {
+  readonly acceptsJobId?: boolean
+  readonly returnedJobId?: string
+  readonly dispatchError?: Error
+} = {}): QueueDriver {
   return {
     name: 'custom',
     driver: 'assigns-ids',
     mode: 'sync',
     ...(typeof options.acceptsJobId === 'undefined' ? {} : { acceptsJobId: options.acceptsJobId }),
     async dispatch() {
+      if (options.dispatchError) throw options.dispatchError
       return { jobId: options.returnedJobId ?? 'assigned-by-driver', synchronous: true }
     },
     async clear() {

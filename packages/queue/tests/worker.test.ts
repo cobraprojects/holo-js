@@ -351,8 +351,8 @@ describe('@holo-js/queue native worker behavior', () => {
 
   it('rejects dispatching a job whose timeout is not below the connection retryAfter', async () => {
     const harness = await openWorker({ retryAfter: 2 })
-    registerQueueJob({ timeout: 2, handle() {} }, { name: 'too-slow' })
-    await expect(dispatch('too-slow', {}).dispatch())
+    registerQueueJob({ timeout: 2, connection: 'sync', handle() {} }, { name: 'too-slow' })
+    await expect(dispatch('too-slow', {}).onConnection('database').dispatch())
       .rejects.toThrow('[Holo Queue] Queue job "too-slow" timeout of 2 seconds must be less than connection "database" retryAfter of 2 seconds.')
     expect(await harness.readJobRows()).toEqual([])
   })
