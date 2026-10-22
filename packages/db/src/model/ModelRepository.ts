@@ -1859,15 +1859,21 @@ export class ModelRepository<
     const dirtyKeys = Object.keys(entity.getDirty())
     return this.runWriteUnit(async () => {
       let written = false
+      const pending: { recordWritten?: () => void } = {}
       try {
-        return await write(() => {
+        const result = await write(() => {
           written = true
           const restore = commitFailureRestoreFor(this.getConnection(), entity, () => createEntityCommitRestore(entity, state))
           restore.recordWrite(state, dirtyKeys)
+          pending.recordWritten = () => restore.recordWritten()
         })
+        pending.recordWritten?.()
+        return result
       } catch (error) {
         if (ownsTransaction || !written) {
           restoreEntityWriteState(entity, state)
+        } else {
+          pending.recordWritten?.()
         }
         throw error
       }

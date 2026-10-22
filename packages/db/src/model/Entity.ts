@@ -988,6 +988,7 @@ class EntityCommitRestore<TTable extends TableDefinition, TRelations extends Rel
   readonly #entity: EntityBase<TTable, TRelations>
   readonly #first: EntityWriteState
   #inputs: Record<string, unknown> = {}
+  #written: Record<string, unknown> = {}
 
   constructor(entity: EntityBase<TTable, TRelations>, first: EntityWriteState) {
     this.#entity = entity
@@ -998,12 +999,36 @@ class EntityCommitRestore<TTable extends TableDefinition, TRelations extends Rel
     this.#inputs = { ...this.#inputs, ...Object.fromEntries(dirtyKeys.map(key => [key, state.attributes[key]])) }
   }
 
+  recordWritten(): void {
+    this.#written = captureEntityWriteState(this.#entity).attributes
+  }
+
   absorb(later: EntityCommitRestore<TTable, TRelations>): void {
     this.#inputs = { ...this.#inputs, ...later.#inputs }
+    this.#written = later.#written
   }
 
   restore(): void {
-    restoreEntityWriteState(this.#entity, { ...this.#first, attributes: { ...this.#first.attributes, ...this.#inputs } })
+    const current = captureEntityWriteState(this.#entity).attributes
+    const attributes: Record<string, unknown> = {}
+    const keys = new Set([...Object.keys(current), ...Object.keys(this.#inputs), ...Object.keys(this.#first.attributes)])
+    for (const key of keys) {
+      const editedSinceWrite = Object.hasOwn(current, key)
+        && (!Object.hasOwn(this.#written, key) || !valuesAreEqual(current[key], this.#written[key]))
+      if (editedSinceWrite) {
+        attributes[key] = current[key]
+      } else if (Object.hasOwn(this.#inputs, key)) {
+        attributes[key] = this.#inputs[key]
+      } else if (Object.hasOwn(this.#first.attributes, key)) {
+        attributes[key] = this.#first.attributes[key]
+      }
+    }
+    restoreEntityWriteState(this.#entity, {
+      persisted: this.#first.persisted,
+      original: this.#first.original,
+      changes: this.#first.changes,
+      attributes,
+    })
   }
 }
 
