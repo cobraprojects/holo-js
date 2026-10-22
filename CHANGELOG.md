@@ -180,6 +180,8 @@
 
 - PostgreSQL model and query-builder writes of `Date` values, Holo's auth and notification timestamps, and `Date` defaults on PostgreSQL columns use `app.timezone`, as MySQL does. Before, a `timestamp` column stored them as UTC wall-clock time, so in an app whose `app.timezone` is not UTC, password-reset, email-verification, access-token, and database-session expiries were off by the zone offset. ISO text with a `Z` or an offset is written as its instant in `app.timezone`, and text without a zone is written unchanged. `timestamptz` columns still store the exact instant. The PostgreSQL expiry check for password-reset and email-verification tokens compares against the current time in `app.timezone`, not UTC.
 - `@holo-js/kernel` declares `file-type` as a regular dependency. Before, it was an optional peer, but file-content checks import it unconditionally, so installs that couldn't resolve it from kernel's location failed every S3 write and every file-content check, such as `stat()` and file validation.
+- Saving a soft-deleted model loaded with `withTrashed()` updates its row. Before, the update matched no rows and `save()` reported success. Global scopes still apply to the update, so a row a scope hides is not written.
+- Retrying a failed `save()` or `create()` runs set mutators once. Before, a retry ran them again on the values the failed attempt had already mutated, so a hashing mutator hashed twice. When a save, create, or restore fails inside Holo's transaction, the model keeps the attributes and persisted state it had before the call. Inside a transaction you start yourself, a write that completed before the failure stays in that transaction, so the model keeps its written state.
 
 ### Compatibility and upgrade requirements
 
