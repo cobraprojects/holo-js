@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,9 +56,17 @@ async function readPids(pidPath: string): Promise<WorkerPids> {
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
-    return true
   } catch {
     return false
+  }
+  return readProcessState(pid) !== 'Z'
+}
+
+function readProcessState(pid: number): string | undefined {
+  try {
+    return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim().charAt(0)
+  } catch {
+    return undefined
   }
 }
 
@@ -131,5 +139,68 @@ it.skipIf(process.platform === 'win32')('stops the run when the terminal hangs u
   } finally {
     session.dispose()
     if (pids && isAlive(pids.grandchild)) process.kill(pids.grandchild, 'SIGKILL')
+  }
+})
+
+it.skipIf(process.platform === 'win32')('restarts by signalling only the direct child, which forwards the signal once', async () => {
+  const projectRoot = await createProjectRoot()
+  const countPath = join(projectRoot, 'count.txt')
+  const readyPath = join(projectRoot, 'ready.txt')
+  const innerScript = [
+    `const { writeFileSync } = require('node:fs')`,
+    `let count = 0`,
+    `process.on('SIGTERM', () => { count += 1; writeFileSync(${JSON.stringify(countPath)}, String(count)); setTimeout(() => process.exit(0), 300) })`,
+    `writeFileSync(${JSON.stringify(readyPath)}, 'ready')`,
+    `setInterval(() => {}, 1000)`,
+  ].join('\n')
+  const runnerScript = [
+    `const { spawn } = require('node:child_process')`,
+    `const inner = spawn(process.execPath, ['-e', ${JSON.stringify(innerScript)}], { stdio: 'ignore' })`,
+    `let forwarded = false`,
+    `process.on('SIGTERM', () => { if (!forwarded) { forwarded = true; inner.kill('SIGTERM') } })`,
+    `inner.on('exit', code => process.exit(code ?? 0))`,
+    `setInterval(() => {}, 1000)`,
+  ].join('\n')
+  const exits: number[] = []
+  const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, code => exits.push(code))
+  try {
+    const run = await session.launch({ command: process.execPath, args: ['-e', runnerScript] }, [])
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (await readFile(readyPath, 'utf8').then(() => true, () => false)) break
+      await delay(20)
+    }
+
+    run.restart()
+    await expect(run.completion).resolves.toMatchObject({ kind: 'close', restartRequested: true })
+    await expect(readFile(countPath, 'utf8')).resolves.toBe('1')
+    expect(exits).toEqual([])
+  } finally {
+    session.dispose()
+  }
+})
+
+it.skipIf(process.platform === 'win32')('turns a terminal hang-up into a graceful SIGTERM the worker can handle', async () => {
+  const projectRoot = await createProjectRoot()
+  const markerPath = join(projectRoot, 'stopped.txt')
+  const readyPath = join(projectRoot, 'ready.txt')
+  const workerScript = [
+    `const { writeFileSync } = require('node:fs')`,
+    `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(markerPath)}, 'graceful'); process.exit(0) })`,
+    `writeFileSync(${JSON.stringify(readyPath)}, 'ready')`,
+    `setInterval(() => {}, 1000)`,
+  ].join('\n')
+  const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, () => {})
+  try {
+    const run = await session.launch({ command: process.execPath, args: ['-e', workerScript] }, [])
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (await readFile(readyPath, 'utf8').then(() => true, () => false)) break
+      await delay(20)
+    }
+
+    process.emit('SIGHUP')
+    await expect(run.completion).resolves.toMatchObject({ kind: 'close' })
+    await expect(readFile(markerPath, 'utf8')).resolves.toBe('graceful')
+  } finally {
+    session.dispose()
   }
 })

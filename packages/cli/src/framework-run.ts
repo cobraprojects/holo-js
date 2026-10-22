@@ -87,10 +87,10 @@ function launchFrameworkRun(
     if (child.stdin) io.stdin.unpipe(child.stdin)
     finish({ ...result, restartRequested })
   }
-  const terminate = (signal: NodeJS.Signals) => {
+  const terminate = (signal: NodeJS.Signals, deliver: (child: SpawnProcessLike, signal: NodeJS.Signals) => void = signalFrameworkProcessGroup) => {
     terminationRequested = true
     try {
-      signalFrameworkProcessGroup(child, signal)
+      deliver(child, signal)
     } catch (error) {
       const terminationError = error instanceof Error ? error : new Error(String(error))
       processError ??= terminationError
@@ -131,7 +131,7 @@ function launchFrameworkRun(
       if (settled || processError || restartRequested || shutdownSignal || (!child.kill && child.pid === undefined)) return
 
       restartRequested = true
-      terminate('SIGTERM')
+      terminate('SIGTERM', terminateChildProcess)
     },
   }
 }
@@ -178,7 +178,7 @@ export function createFrameworkSession(
     exitProcess(FORCED_SHUTDOWN_EXIT_CODE)
   }
   const onSigterm = () => shutdown('SIGTERM')
-  const onSighup = () => shutdown('SIGHUP')
+  const onSighup = () => shutdown('SIGTERM')
   process.on('SIGINT', onSigint)
   process.on('SIGTERM', onSigterm)
   process.on('SIGHUP', onSighup)
