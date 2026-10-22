@@ -349,18 +349,18 @@ function packageRootFromBase(base: string, packageName: string): string | undefi
   return undefined
 }
 
-function holoPackageSharesRuntime(packageName: string, projectRoot: string): boolean {
+function holoPackageSharesRuntime(packageName: string, importerPath: string): boolean {
   const runtimeRoot = packageRootFromBase(import.meta.url, packageName)
-  return runtimeRoot !== undefined && runtimeRoot === packageRootFromBase(join(projectRoot, 'package.json'), packageName)
+  return runtimeRoot !== undefined && runtimeRoot === packageRootFromBase(importerPath, packageName)
 }
 
 function importRequiresBundle(
   dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
-  projectRoot: string,
+  importerPath: string,
 ): boolean {
   const original = dependency.original ?? dependency.path
   const holoPackage = /^@holo-js\/[^/]+/.exec(original)?.[0]
-  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, projectRoot)
+  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, importerPath)
 
   return /^[@~]\//.test(original)
     || !dependency.external && (
@@ -393,7 +393,7 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       if (nativeSourceLoader) continue
-      if (input.imports.some(dependency => importRequiresBundle(dependency, projectRoot))) nativeGraph = false
+      if (input.imports.some(dependency => importRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {
@@ -454,6 +454,7 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 
 export const runtimeModuleInternals = {
   bundleRuntimeModule,
+  definitionGraphIsNative: (projectRoot: string): boolean | undefined => definitionGraphSources.get(projectRoot)?.native,
   importModule,
   importOptionalRuntimeModule,
   isMissingOptionalModule,

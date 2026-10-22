@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
-import { importBundledRuntimeModule, runtimeModuleInternals } from '../src/runtimeModule'
+import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const tempDirs: string[] = []
@@ -118,6 +119,24 @@ describe('@holo-js/core runtime module helpers', () => {
 
     expect(firstModel.marker).toBe('first')
     expect(secondModel.marker).toBe('second')
+  })
+
+  it('bundles definitions whose nested workspace resolves a different holo copy', async () => {
+    const projectRoot = await createTempProject()
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+    const nestedCopyRoot = join(projectRoot, 'server/workspace/node_modules/@holo-js/config')
+    await mkdir(nestedCopyRoot, { recursive: true })
+    await writeFile(join(nestedCopyRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(nestedCopyRoot, 'index.mjs'), 'export const defineAppConfig = "nested copy"\n')
+    const definitionPath = join(projectRoot, 'server/workspace/job.mjs')
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
+
+    const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+    const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
+
+    expect(runtimeModuleInternals.definitionGraphIsNative(projectRoot)).toBe(false)
+    expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
   })
 
   it('does not import package export targets pruned from a production artifact', async () => {
