@@ -74,6 +74,14 @@ jobs:
       - run: bun x playwright install --with-deps chromium
       - name: Install Redis for isolated socket and cluster behavior tests
         run: sudo apt-get update && sudo apt-get install -y redis-server
+      - name: Load MySQL time zone tables for named-zone tests
+        run: |
+          container=$(docker ps --filter "ancestor=mysql:8.0" --format '{{.ID}}' | head -n 1)
+          test -n "$container"
+          if [ "$(docker exec "$container" mysql -uroot -N -B -e "SELECT COUNT(*) FROM mysql.time_zone_name" mysql)" = "0" ]; then
+            docker exec "$container" sh -c "mysql_tzinfo_to_sql /usr/share/zoneinfo | sed 's/Local time zone must be set--see zic manual page/FCTY/' | mysql -uroot mysql"
+          fi
+          test "$(docker exec "$container" mysql -uroot -N -B -e "SELECT CONVERT_TZ('2000-01-01 00:00:00', 'UTC', 'Asia/Tokyo')" mysql)" = "2000-01-01 09:00:00"
       - name: Run every library package against real services
         run: bun run test:libraries
       - uses: actions/upload-artifact@v7
