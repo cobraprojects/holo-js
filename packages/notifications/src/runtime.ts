@@ -1,3 +1,4 @@
+import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   dispatchNotificationDelivery,
   resolveNotificationDelay,
@@ -475,7 +476,8 @@ async function ensureNotificationsQueueJobRegistered(queueModule?: QueueModule):
 
           try {
             await context.release(resolveNotificationRetryDelaySeconds(payload.backoff, context.attempt))
-          } catch {
+          } catch (releaseError) {
+            reportError(releaseError, { capability: 'notifications', operation: 'queuedDelivery.releaseRetry' })
             throw error
           }
 

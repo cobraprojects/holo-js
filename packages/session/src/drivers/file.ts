@@ -605,7 +605,9 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
     } finally {
       sweeping = false
       if (directory) {
-        idleTimer = setTimeout(() => { void closeDirectory().catch(() => undefined) }, 60_000)
+        idleTimer = setTimeout(() => {
+          void closeDirectory().catch(error => reportError(error, { capability: 'session', operation: 'file.closeDirectory' }))
+        }, 60_000)
         idleTimer.unref()
       }
     }

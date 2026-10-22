@@ -27,8 +27,10 @@ import {
   registerListener,
   resetEventsRegistry,
   resetEventsRuntime,
+  runQueuedListenerInvocation,
   unregisterListener,
 } from '../src'
+import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 
 const execFileAsync = promisify(execFile)
 type PackageManifest = {
@@ -266,6 +268,37 @@ describe('@holo-js/events queue integration', () => {
       expect(await listFailedQueueJobs()).toHaveLength(1)
     } finally {
       await database.cleanup()
+    }
+  })
+
+  it('reports a failed backoff release and still rethrows the listener error', async () => {
+    const event = defineEvent<{ userId: string }, 'user.registered'>({ name: 'user.registered' })
+    registerEvent(event)
+    const handlerError = new Error('transient')
+    const releaseError = new Error('queue unavailable')
+    const listener = registerListener(defineListener({
+      name: 'send.welcome', listensTo: [event], queue: true, backoff: 1,
+      handle() {
+        throw handlerError
+      },
+    }))
+    const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
+    errorReportingInternals.configure({
+      report(error, context) {
+        reports.push({ error, context })
+      },
+    })
+    try {
+      await expect(runQueuedListenerInvocation(
+        { listenerId: listener.id, eventName: 'user.registered', occurredAt: 0, payload: { userId: 'usr-1' } },
+        { attempt: 1, maxAttempts: 2, release: async () => { throw releaseError } } as never,
+      )).rejects.toBe(handlerError)
+      expect(reports).toEqual([{
+        error: releaseError,
+        context: { capability: 'events', operation: 'listener.releaseRetry' },
+      }])
+    } finally {
+      errorReportingInternals.configure(undefined)
     }
   })
 

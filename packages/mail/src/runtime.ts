@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { reportError } from '@holo-js/kernel/error-reporting'
 import {
   holoMailDefaults,
   type HoloAppEnv,
@@ -1239,7 +1240,8 @@ async function ensureMailQueueJobRegistered(queueModule?: QueueModule): Promise<
 
           try {
             await context.release(resolveQueuedMailRetryDelaySeconds(payload.backoff, context.attempt))
-          } catch {
+          } catch (releaseError) {
+            reportError(releaseError, { capability: 'mail', operation: 'queuedDelivery.releaseRetry' })
             throw error
           }
 

@@ -798,6 +798,7 @@
       "version": "0.3.28",
       "dependencies": {
         "@holo-js/db": "catalog:",
+        "@holo-js/kernel": "catalog:",
       },
       "devDependencies": {
         "@holo-js/queue": "catalog:",
