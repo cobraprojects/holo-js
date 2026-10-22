@@ -1741,6 +1741,25 @@ export default defineQueueConfig({
     expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
   }, 90000)
 
+  it.each([
+    ['cts', 'export default { paths: { jobs: \'modules/queues/jobs\' } }\n', 'export default {}\n'],
+    ['mjs', 'export default { paths: { jobs: \'modules/queues/jobs\' } }\n', 'export default {}\n'],
+    ['cjs', 'module.exports = { paths: { jobs: \'modules/queues/jobs\' } }\n', 'module.exports = {}\n'],
+  ])('loads config/app.%s and config/database.%s through the CLI process', async (extension, appContents, databaseContents) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await rm(join(projectRoot, 'config/app.ts'), { force: true })
+    await rm(join(projectRoot, 'config/database.ts'), { force: true })
+    await writeProjectFile(projectRoot, `config/app.${extension}`, appContents)
+    await writeProjectFile(projectRoot, `config/database.${extension}`, databaseContents)
+
+    const result = runCliProcess(projectRoot, ['install', 'queue'])
+    expect(result.stderr).not.toContain('Unexpected token')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('created server/jobs')
+    await expect(stat(join(projectRoot, 'modules/queues/jobs'))).resolves.toBeDefined()
+  }, 90000)
+
   it('installs auth support into an existing project with local defaults', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

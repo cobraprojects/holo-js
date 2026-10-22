@@ -498,6 +498,7 @@ export function defineAppConfig<TConfig extends HoloAppConfig>(config: TConfig):
 export const loaderInternals = {
   collectConfigEntries,
   configExtensionPriority: CONFIG_EXTENSION_PRIORITY,
+  importConfigModule,
   getDeferredConfigNames,
   getNormalizerConfigNames,
   getConfigExtensionPriority,

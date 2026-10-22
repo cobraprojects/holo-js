@@ -4,6 +4,7 @@ import { extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   configEvaluationInternals,
+  loaderInternals,
   loadConfigDirectory,
   holoAppDefaults,
   normalizeAppConfig,
@@ -32,30 +33,6 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 import { writeTextFile } from './atomic-file'
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
-  if (isObject(moduleValue) && isObject(moduleValue.default)) {
-    return moduleValue.default as TConfig
-  }
-
-  if (isObject(moduleValue) && isObject(moduleValue.config)) {
-    return moduleValue.config as TConfig
-  }
-
-  if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
-    return {} as TConfig
-  }
-
-  if (isObject(moduleValue)) {
-    return moduleValue as TConfig
-  }
-
-  return {} as TConfig
-}
 
 type ProjectConfigImportState = {
   readonly hash: string
@@ -104,19 +81,19 @@ async function importProjectConfigFile<TConfig extends object>(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
-  const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
   const configExtension = extname(filePath)
-  const bundled = configExtension === '.ts' || configExtension === '.mts'
-    ? await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
-    : undefined
-  const resolvedImportUrl = bundled
-    ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
-    : importUrl
+  if (configExtension !== '.ts' && configExtension !== '.mts') {
+    return loaderInternals.resolveConfigExport<TConfig>(await loaderInternals.importConfigModule(filePath))
+  }
+
+  const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
+  const bundled = await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
+  const resolvedImportUrl = `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
 
   try {
-    return resolveConfigExport<TConfig>(await import(resolvedImportUrl))
+    return loaderInternals.resolveConfigExport<TConfig>(await import(resolvedImportUrl))
   } finally {
-    await bundled?.cleanup()
+    await bundled.cleanup()
   }
 }
 
