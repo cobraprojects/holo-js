@@ -188,8 +188,7 @@
     "unused-file:tests/example-app-request-security.mjs",
     "unused-file:tests/example-app-storage-metadata.mjs",
     "unused-file:tests/example-app-storage-runtime.mjs",
-    "unused-file:tests/example-app-token-auth-flow.mjs",
-    "unused-file:tests/support/local-package-registry-server.mjs"
+    "unused-file:tests/example-app-token-auth-flow.mjs"
   ],
   "unused_exports": [
     "unused-export:apps/blog-next/server/events/blog/post-saved.ts:BlogPostSaved",
