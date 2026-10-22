@@ -234,8 +234,13 @@ function buildGeneratedSchemaModuleLines(
   options: { withTypeAugmentation: boolean },
 ): string[] {
   const renderedTables = [...tables].sort((left, right) => left.tableName.localeCompare(right.tableName))
+  const usedBuilders = [
+    ...(renderedTables.some(table => Object.keys(table.columns).length > 0) ? ['column'] : []),
+    ...(renderedTables.length > 0 ? ['defineGeneratedTable'] : []),
+    'registerGeneratedTables',
+  ]
   const declarations: string[] = [
-    'import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'',
+    `import { ${usedBuilders.join(', ')} } from '@holo-js/db'`,
     '',
   ]
   const exportedTableEntries: string[] = []
