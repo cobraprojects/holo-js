@@ -204,3 +204,36 @@ it.skipIf(process.platform === 'win32')('turns a terminal hang-up into a gracefu
     session.dispose()
   }
 })
+
+it.skipIf(process.platform === 'win32')('a graceful SIGTERM reaches only the direct child, so its subprocesses finish their work', async () => {
+  const projectRoot = await createProjectRoot()
+  const markerPath = join(projectRoot, 'finished.txt')
+  const readyPath = join(projectRoot, 'ready.txt')
+  const jobScript = `setTimeout(() => { require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'finished'); process.exit(0) }, 400)`
+  const workerScript = [
+    `const { spawn } = require('node:child_process')`,
+    `const { writeFileSync } = require('node:fs')`,
+    `spawn(process.execPath, ['-e', ${JSON.stringify(jobScript)}], { stdio: 'ignore' })`,
+    `process.on('SIGTERM', () => process.exit(0))`,
+    `writeFileSync(${JSON.stringify(readyPath)}, 'ready')`,
+    `setInterval(() => {}, 1000)`,
+  ].join('\n')
+  const session = createFrameworkSession(createIo(projectRoot), projectRoot, spawn as never, undefined, () => {})
+  try {
+    const run = await session.launch({ command: process.execPath, args: ['-e', workerScript] }, [])
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (await readFile(readyPath, 'utf8').then(() => true, () => false)) break
+      await delay(20)
+    }
+
+    process.emit('SIGTERM')
+    await expect(run.completion).resolves.toMatchObject({ kind: 'close' })
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (await readFile(markerPath, 'utf8').then(() => true, () => false)) break
+      await delay(20)
+    }
+    await expect(readFile(markerPath, 'utf8')).resolves.toBe('finished')
+  } finally {
+    session.dispose()
+  }
+})

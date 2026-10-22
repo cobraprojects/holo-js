@@ -18,6 +18,8 @@ type FrameworkRunResult = (
 
 const FORCED_SHUTDOWN_EXIT_CODE = 130
 
+type ShutdownScope = 'group' | 'child'
+
 export function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' || child.pid === undefined) {
     child.kill?.(signal)
@@ -57,7 +59,7 @@ function launchFrameworkRun(
   readonly completion: Promise<FrameworkRunResult>
   readonly startedAt: number
   restart(): void
-  shutdown(signal: NodeJS.Signals): void
+  shutdown(signal: NodeJS.Signals, scope: ShutdownScope): void
   forceStop(): void
 } {
   const child = spawnProcess(invocation.command, [...invocation.args, ...serverArgs], {
@@ -87,7 +89,7 @@ function launchFrameworkRun(
     if (child.stdin) io.stdin.unpipe(child.stdin)
     finish({ ...result, restartRequested })
   }
-  const terminate = (signal: NodeJS.Signals, deliver: (child: SpawnProcessLike, signal: NodeJS.Signals) => void = signalFrameworkProcessGroup) => {
+  const terminate = (signal: NodeJS.Signals, deliver: (child: SpawnProcessLike, signal: NodeJS.Signals) => void) => {
     terminationRequested = true
     try {
       deliver(child, signal)
@@ -97,11 +99,11 @@ function launchFrameworkRun(
       io.stderr.write(`Framework termination failed: ${terminationError.message}\n`)
     }
   }
-  const shutdown = (signal: NodeJS.Signals) => {
+  const shutdown = (signal: NodeJS.Signals, scope: ShutdownScope) => {
     if (settled || shutdownSignal) return
 
     shutdownSignal = signal
-    terminate(signal)
+    terminate(signal, scope === 'group' ? signalFrameworkProcessGroup : terminateChildProcess)
   }
   const forceStop = () => {
     try {
@@ -115,7 +117,7 @@ function launchFrameworkRun(
 
     processError ??= error
     if (terminationRequested) io.stderr.write(`Framework termination failed: ${error.message}\n`)
-    else terminate('SIGTERM')
+    else terminate('SIGTERM', terminateChildProcess)
   })
   child.on('close', code => settle(processError ? { kind: 'error', error: processError } : { kind: 'close', code }))
   child.stdout?.on('data', forwardOutput)
@@ -154,31 +156,31 @@ export function createFrameworkSession(
 } {
   const controller = new AbortController()
   let activeRun: ReturnType<typeof launchFrameworkRun> | undefined
-  let shutdownSignal: NodeJS.Signals | undefined
-  const shutdown = (signal: NodeJS.Signals) => {
+  let shutdownRequest: { readonly signal: NodeJS.Signals, readonly scope: ShutdownScope } | undefined
+  const shutdown = (signal: NodeJS.Signals, scope: ShutdownScope) => {
     if (controller.signal.aborted) return
 
-    shutdownSignal = signal
+    shutdownRequest = { signal, scope }
     controller.abort()
     try {
       onShutdown?.()
     } finally {
-      activeRun?.shutdown(signal)
+      activeRun?.shutdown(signal, scope)
     }
   }
   let interruptReceived = false
   const onSigint = () => {
     if (!interruptReceived) {
       interruptReceived = true
-      shutdown('SIGINT')
+      shutdown('SIGINT', 'group')
       return
     }
 
     activeRun?.forceStop()
     exitProcess(FORCED_SHUTDOWN_EXIT_CODE)
   }
-  const onSigterm = () => shutdown('SIGTERM')
-  const onSighup = () => shutdown('SIGTERM')
+  const onSigterm = () => shutdown('SIGTERM', 'child')
+  const onSighup = () => shutdown('SIGTERM', 'group')
   process.on('SIGINT', onSigint)
   process.on('SIGTERM', onSigterm)
   process.on('SIGHUP', onSighup)
@@ -198,12 +200,12 @@ export function createFrameworkSession(
         ...environment.values,
         ...environmentOverrides,
       })
-      if (shutdownSignal) activeRun.shutdown(shutdownSignal)
+      if (shutdownRequest) activeRun.shutdown(shutdownRequest.signal, shutdownRequest.scope)
       return activeRun
     },
     dispose() {
       try {
-        shutdown('SIGTERM')
+        shutdown('SIGTERM', 'child')
       } finally {
         process.off('SIGINT', onSigint)
         process.off('SIGTERM', onSigterm)
