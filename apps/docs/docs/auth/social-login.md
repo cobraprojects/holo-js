@@ -178,6 +178,10 @@ Apple sends users back with a `POST` form instead of a `GET`. Export your callba
 
 Holo never treats a Facebook email as verified. If `emailVerification.required` is `true`, new users can't sign up with Facebook. If it's `false`, new Facebook users get a placeholder email (`<id>@facebook.social.local`) instead of being linked to an existing account by email.
 
+## Signing keys
+
+Holo caches each provider's signing keys for ten minutes, and an unknown key ID refreshes them at most once a minute. If a refresh fails, Holo keeps verifying with the keys it last loaded for at most ten minutes after that last successful fetch, then rejects tokens until a refresh succeeds. Failed refreshes never extend that window.
+
 ## How Holo finds the local user
 
 1. If this social account signed in before, Holo loads the user it's linked to.

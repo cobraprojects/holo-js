@@ -1,4 +1,4 @@
-import { decryptCookieValue, encryptCookieValue, resolveRequestUrl } from '@holo-js/kernel'
+import { cookieEncryptionInternals, resolveRequestUrl } from '@holo-js/kernel'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,
@@ -64,11 +64,11 @@ function csrfCookieName(): string {
 }
 
 function encryptCsrfToken(token: string): string {
-  return encryptCookieValue(csrfCookieName(), token, getSecurityRuntime().csrfSigningKey)
+  return cookieEncryptionInternals.encryptCookieValue(csrfCookieName(), token, getSecurityRuntime().csrfSigningKey)
 }
 
 function decryptCsrfToken(value: string): string | undefined {
-  return decryptCookieValue(csrfCookieName(), value, getSecurityRuntime().csrfSigningKey)
+  return cookieEncryptionInternals.decryptCookieValue(csrfCookieName(), value, getSecurityRuntime().csrfSigningKey)
 }
 
 function tokensMatch(expected: string, submitted: string | undefined): boolean {
