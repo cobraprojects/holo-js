@@ -115,6 +115,11 @@ export async function prepareProjectDiscovery(
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
   prepareFramework = true,
 ): Promise<GeneratedProjectRegistry> {
+  const jobsRoot = resolve(projectRoot, config.paths.jobs)
+  const jobFiles = await collectFiles(jobsRoot)
+  const queueDiscovery = jobFiles.length > 0
+    ? await loadQueueDiscoveryModule(projectRoot)
+    : undefined
   const loadedConfig = await loadConfigDirectory(projectRoot, {
     processEnv: process.env,
   })
@@ -122,7 +127,6 @@ export async function prepareProjectDiscovery(
   const migrationsRoot = resolve(projectRoot, config.paths.migrations)
   const seedersRoot = resolve(projectRoot, config.paths.seeders)
   const commandsRoot = resolve(projectRoot, config.paths.commands)
-  const jobsRoot = resolve(projectRoot, config.paths.jobs)
   const eventsRoot = resolve(projectRoot, config.paths.events)
   const listenersRoot = resolve(projectRoot, config.paths.listeners)
   const broadcastPath = resolveBroadcastArtifactsPath(config, 'broadcast')
@@ -137,12 +141,11 @@ export async function prepareProjectDiscovery(
     await importProjectModule(projectRoot, generatedSchemaPath)
   }
 
-  const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
+  const [modelFiles, migrationFiles, seederFiles, commandFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
     collectFiles(migrationsRoot),
     collectFiles(seedersRoot),
     collectFiles(commandsRoot),
-    collectFiles(jobsRoot),
     collectFiles(eventsRoot),
     collectFiles(listenersRoot),
     collectFiles(broadcastRoot),
@@ -242,9 +245,6 @@ export async function prepareProjectDiscovery(
   assertUniqueCommandTokens(commands)
 
   const jobs: GeneratedJobRegistryEntry[] = []
-  const queueDiscovery = jobFiles.length > 0
-    ? await loadQueueDiscoveryModule(projectRoot)
-    : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const moduleValue = await importProjectModule(projectRoot, filePath)
