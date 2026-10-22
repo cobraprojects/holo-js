@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryUrl = 'git+https://github.com/cobraprojects/holo-js.git'
 const releaseWorkflowPath = '.github/workflows/release.yml'
+const sharedJobFailure = '.github/workflows/release.yml must build and publish in one job, because the built packages must reach the publish step on the same filesystem.'
 const requiredRootFiles = ['LICENSE', 'SECURITY.md']
 
 async function exists(filePath) {
@@ -57,6 +58,16 @@ async function collectPackageFailures(root, directory) {
   return failures
 }
 
+function releaseWorkflowJobs(workflow) {
+  const jobsSection = workflow.split(/^jobs:\s*$/m)[1] ?? ''
+  const headers = [...jobsSection.matchAll(/^ {2}("[^"\n]+"|'[^'\n]+'|[\w-]+)\s*:(?:\s+#.*)?\s*$/gm)]
+
+  return headers.map((header, index) => ({
+    id: header[1].replace(/^["']|["']$/g, ''),
+    body: jobsSection.slice(header.index, headers[index + 1]?.index ?? jobsSection.length),
+  }))
+}
+
 async function collectReleaseWorkflowFailures(root) {
   const workflowPath = join(root, releaseWorkflowPath)
   if (!(await exists(workflowPath))) {
@@ -80,9 +91,6 @@ async function collectReleaseWorkflowFailures(root) {
   if (!/GITHUB_REF" = refs\/heads\/main \|\| .*exit 1/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must reject runs from refs other than main in an early step.`)
   }
-  if (!/^ {10}ref: \$\{\{ github\.sha \}\}$/m.test(workflow)) {
-    failures.push(`${releaseWorkflowPath} must check out github.sha, not a user-chosen ref.`)
-  }
   if (!/^ {4}environment: release$/m.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must declare environment: release so NPM_TOKEN sits behind its protection rules.`)
   }
@@ -104,12 +112,36 @@ async function collectReleaseWorkflowFailures(root) {
   if (buildIndex === -1 || buildIsConditional || buildFollowsPublish) {
     failures.push(`${releaseWorkflowPath} must build packages with \`node scripts/build-libraries.mjs\` in an unconditional step without continue-on-error, before the publish step, so declarations resolve in dependency order.`)
   }
-  const jobHeaders = (workflow.split(/^jobs:\s*$/m)[1] ?? '').match(/^ {2}(?:[\w-]+|"[^"\n]+"|'[^'\n]+')\s*:(?:\s+#.*)?\s*$/gm) ?? []
-  if (jobHeaders.length !== 1) {
-    failures.push(`${releaseWorkflowPath} must build and publish in one job, because the built packages must reach the publish step on the same filesystem.`)
+  const jobs = releaseWorkflowJobs(workflow)
+  const publishJob = jobs.find(job => /release:skip-build|\bbun run release\b|changeset publish/.test(job.body))
+  const buildJob = jobs.find(job => job.body.includes('node scripts/build-libraries.mjs'))
+  if (buildJob && buildJob !== publishJob) {
+    failures.push(sharedJobFailure)
   }
-  if (!/::notice\b/.test(workflow) || !/-z "\$NODE_AUTH_TOKEN"/.test(workflow)) {
-    failures.push(`${releaseWorkflowPath} must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.`)
+  if (!/^ {10}ref: \$\{\{ github\.sha \}\}$/m.test(publishJob?.body ?? '')) {
+    failures.push(`${releaseWorkflowPath} must check out github.sha in the publish job, not a user-chosen ref.`)
+  }
+  const gateJob = jobs.find(job => job.body.includes('scripts/wait-for-release-ci.mjs'))
+  if (!gateJob || gateJob === publishJob) {
+    failures.push(`${releaseWorkflowPath} must wait for CI on this commit with \`node scripts/wait-for-release-ci.mjs\` in its own job before publishing.`)
+  } else {
+    if (/continue-on-error\s*:\s*true/.test(gateJob.body) || /^ {8}if\s*:/m.test(gateJob.body)) {
+      failures.push(`${releaseWorkflowPath} must let a failed CI run fail the CI gate job, so it may not use continue-on-error or a step-level if.`)
+    }
+    if (!/^ {6}actions:\s*read\s*$/m.test(gateJob.body)) {
+      failures.push(`${releaseWorkflowPath} must grant actions: read to the CI gate job so it can list workflow runs for this commit.`)
+    }
+    const needs = publishJob ? /^ {4}needs:\s*(\[[^\]\n]*\]|[^\n]+?)\s*$/m.exec(publishJob.body)?.[1] : undefined
+    const needsIds = needs?.replace(/[[\]]/g, '').split(',').map(id => id.trim()) ?? []
+    if (!needsIds.includes(gateJob.id)) {
+      failures.push(`${releaseWorkflowPath} must make the publish job depend on the CI gate job \`${gateJob.id}\` with needs, so nothing publishes unless CI passed for this commit.`)
+    }
+  }
+  const dueBranch = /::error title=NPM_TOKEN is missing[\s\S]*?::notice/.exec(workflow)?.[0] ?? ''
+  const skipBranch = /::notice[\s\S]*?exit 0/.exec(workflow)?.[0] ?? ''
+  const unpublishedCheck = /list-unpublished-packages\.mjs/.test(workflow)
+  if (!unpublishedCheck || !/-z "\$NODE_AUTH_TOKEN"/.test(workflow) || !/\bexit 1\b/.test(dueBranch) || skipBranch === '') {
+    failures.push(`${releaseWorkflowPath} must fail when NPM_TOKEN is not configured and a package version is not on npm yet, and skip with a notice only when every version is already published.`)
   }
   if (!/git push origin --tags/.test(workflow)) {
     failures.push(`${releaseWorkflowPath} must push the tags that changeset publish creates with \`git push origin --tags\`.`)
