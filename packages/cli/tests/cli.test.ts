@@ -1579,6 +1579,42 @@ export default defineAppConfig({
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
   })
 
+  it('reruns redis queue install without rewriting the manifest or requesting installs', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/queue'
+import { env } from '@holo-js/config'
+
+export default defineQueueConfig({
+  default: env('QUEUE_CONNECTION', 'redis'),
+  connections: {
+    redis: {
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, '.env', 'APP_NAME=Fixture\n')
+    await writeProjectFile(projectRoot, '.env.example', 'APP_NAME=\n')
+
+    const first = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
+    expect(first.status).toBe(0)
+    const manifestAfterFirstInstall = await readFile(join(projectRoot, 'package.json'), 'utf8')
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+    expect(installRequests).toBeGreaterThan(0)
+
+    const rerun = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
+    expect(rerun.status).toBe(0)
+    expect(rerun.stdout).toContain('Queue support is already installed.')
+    expect(rerun.stdout).not.toContain('updated package.json')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toBe(manifestAfterFirstInstall)
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
+  }, 90000)
+
   it('installs auth support into an existing project with local defaults', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
