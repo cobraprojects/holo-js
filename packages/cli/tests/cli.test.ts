@@ -1632,6 +1632,27 @@ export const connections = {
     expect(dependencies).not.toHaveProperty('@holo-js/queue-redis')
   })
 
+  it.each([
+    ['config/queue.cjs', 'exports.default = { failed: false, connections: { redis: { driver: \'redis\', queue: \'default\', retryAfter: 90, blockFor: 5 } } }\n'],
+    ['config/queue.cts', 'export default { failed: false, connections: { redis: { driver: \'redis\', queue: \'default\', retryAfter: 90, blockFor: 5 } } }\n'],
+  ])('adds the redis queue package when %s requires it', async (configPath, contents) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, configPath, contents)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        esbuild: ESBUILD_PACKAGE_VERSION,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies
+    expect(dependencies).toHaveProperty('@holo-js/queue-redis')
+  })
+
   it('keeps a redis queue package listed as a dev dependency when config/queue.ts cannot be read', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
