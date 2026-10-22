@@ -16,7 +16,7 @@ type FrameworkRunResult = (
   readonly restartRequested: boolean
 }
 
-export const FORCED_SHUTDOWN_EXIT_CODE = 130
+const FORCED_SHUTDOWN_EXIT_CODE = 130
 
 export function terminateChildProcess(child: SpawnProcessLike, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' || child.pid === undefined) {
