@@ -117,6 +117,29 @@ Now relationship methods work after the scope too:
 const posts = await Post.published().with('author').get()
 ```
 
+### Reusing scope logic
+
+A scope's `query` parameter has the builder's methods, not the model's other scopes. Inside `recent` below, `query.published()` is a type error, even though it works at runtime. TypeScript doesn't know the sibling scopes while it types the object that defines them.
+
+To share a constraint between scopes, move it into a plain function typed against the builder. Each scope calls that function:
+
+```ts [server/models/Post.ts]
+import { defineModel, type GeneratedSchemaTable, type ModelQueryBuilder } from '@holo-js/db'
+
+type PostQuery = ModelQueryBuilder<GeneratedSchemaTable<'posts'>>
+
+const whereLive = (query: PostQuery) => query
+  .where('status', 'published')
+  .whereNotNull('published_at')
+
+export default defineModel('posts', {
+  scopes: {
+    published: (query: PostQuery) => whereLive(query),
+    recent: (query: PostQuery) => whereLive(query).orderBy('published_at', 'desc'),
+  },
+})
+```
+
 ## Global scopes
 
 A global scope runs on every query for the model: `get()`, `first()`, `count()`, `paginate()`, and query-level `update()` and `delete()`. Use it for rules that should never be forgotten, like hiding unpublished content or filtering by tenant.
