@@ -1596,10 +1596,11 @@ export default defineAppConfig({
     }, null, 2))
 
     await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toMatchObject({
-      updatedPackageJson: false,
+      updatedPackageJson: true,
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toMatchObject({
       '@holo-js/queue-redis': expectedHoloPackageRange,
+      '@holo-js/queue-db': expectedHoloPackageRange,
     })
   })
 
@@ -1675,6 +1676,34 @@ export const connections = {
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
     expect(packageJson.dependencies).toHaveProperty('@holo-js/queue-redis')
   })
+
+  it('adds queue-db for a primitive queue config that the runtime normalizes to a database failed store', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/queue.ts', 'export default "keep-me"\n')
+    await writeProjectFile(projectRoot, '.env', 'APP_NAME=Fixture\n')
+    await writeProjectFile(projectRoot, '.env.example', 'APP_NAME=\n')
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        esbuild: ESBUILD_PACKAGE_VERSION,
+      },
+    }, null, 2))
+
+    const first = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
+    expect(first.status).toBe(0)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toHaveProperty('@holo-js/queue-db')
+    const manifestAfterFirstInstall = await readFile(join(projectRoot, 'package.json'), 'utf8')
+    const installRequests = await packageManagerInstallRequestCount(projectRoot)
+
+    const rerun = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
+    expect(rerun.status).toBe(0)
+    expect(rerun.stdout).toContain('Queue support is already installed.')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toBe(manifestAfterFirstInstall)
+    expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
+  }, 90000)
 
   it('reruns redis queue install without rewriting the manifest or requesting installs', async () => {
     const projectRoot = await createTempProject()
