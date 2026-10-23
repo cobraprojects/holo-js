@@ -151,7 +151,7 @@ If you run `queue:listen` under a process manager, check that it stops when the 
 
 ### Windows `.env` percent references
 
-On Windows, `.env` values expand `%NAME%` from the real environment variables, as `cmd.exe` does, and `%%` becomes `%`. A value such as `DATA_DIR=%USERPROFILE%\data` now resolves to your profile folder, and a value that contains `%%` now contains a single `%`. A `%NAME%` whose variable isn't set stays as written. A value that contains `%NAME%` is rewritten when `NAME` is set, including a secret, so write `%%` for a literal `%`. Check Windows `.env` values that contain a percent sign. Values on macOS and Linux are unchanged. See [Values and types](/reference/environment#values-and-types).
+On Windows, `.env` values expand `%NAME%` from the process environment variables, as `cmd.exe` does, and `%%` becomes `%`. Variables defined elsewhere in the same `.env` file are not used for expansion. A value such as `DATA_DIR=%USERPROFILE%\data` now resolves to your profile folder, and a value that contains `%%` now contains a single `%`. A `%NAME%` whose variable isn't set stays as written. A value that contains `%NAME%` is rewritten when `NAME` is set in the process environment, including a secret, so write `%%` for a literal `%`. Check Windows `.env` values that contain a percent sign. Values on macOS and Linux are unchanged. See [Values and types](/reference/environment#values-and-types).
 
 ### Sensitive input in validation failures
 
@@ -551,7 +551,7 @@ Check three behaviors when you upgrade:
 
 ### Models after a rolled-back transaction
 
-If you roll back a transaction yourself after a model's `save()` in it succeeded, Holo doesn't restore the model. The row is gone, but the model still reports `exists()`, keeps the values its set mutators produced, and is clean, so a `save()` with no changes writes nothing. To write the record again, create a new model with `make()` and `save()`, or reload a model that was loaded from the database with `refresh()`. `refresh()` throws for a model that was never saved. A failed `save()`, or a failed COMMIT, still restores the model's state.
+If you roll back a transaction yourself after a model's `save()` in it succeeded, Holo doesn't restore the model. The row is gone, but the model still reports `exists()`, keeps the values its set mutators produced, and is clean, so a `save()` with no changes writes nothing. To write the record again, create a new model with `make()` and `save()`, or reload a model that was loaded from the database with `refresh()`. `refresh()` throws for a model that was never saved. A `save()` that fails restores the model's state, unless it ran inside a transaction you started and its SQL had already completed. A failed COMMIT restores the model to its persisted state from before the transaction's first save.
 
 ### Query logger hooks run outside the connection
 
