@@ -1,12 +1,5 @@
 [
   {
-    "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
-    "package": "braces",
-    "version": "3.0.3",
-    "expires": "2026-12-17",
-    "reason": "No patched braces release exists. Reachable only through Nuxt/Nitro build tooling: nuxt -> @nuxt/nitro-server -> nitropack -> globby -> micromatch -> braces. Nitro expands developer-authored file patterns at build and dev time. The nitropack runtime (dist/runtime) and holo-js sources never import these modules, so no request data reaches braces in a production app. Remove when Nitro drops globby or upgrades micromatch."
-  },
-  {
     "advisory": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
     "package": "node-forge",
     "version": "1.4.0",
