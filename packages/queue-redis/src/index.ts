@@ -2,6 +2,7 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import {
   Queue as BullQueue,
+  UnrecoverableError,
   Worker as BullWorker,
   type ConnectionOptions,
   type Job,
@@ -573,8 +574,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
   async delete(job: QueueReservedJob): Promise<void> {
     await this.settleReservation(job, 'delete job', async (reservation) => {
-      reservation.job.discard()
-      await reservation.job.moveToFailed(new Error('[Holo Queue] Job deleted.'), reservation.token, false)
+      await reservation.job.moveToFailed(new UnrecoverableError('[Holo Queue] Job deleted.'), reservation.token, false)
     })
   }
 
@@ -595,7 +595,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
       for (const queueName of queueNames) {
         const queue = this.getQueue(queueName)
-        cleared += await queue.getJobCountByTypes('wait', 'paused', 'prioritized', 'delayed')
+        cleared += await queue.getJobCountByTypes('wait', 'prioritized', 'delayed')
         await queue.drain(true)
       }
 
