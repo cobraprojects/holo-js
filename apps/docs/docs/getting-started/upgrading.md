@@ -306,9 +306,9 @@ Image conversions reject images over 40 million pixels or 1,000 frames, the same
 
 The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
 
-### Node.js 22.14 or newer
+### Node.js 22.18 or newer
 
-Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.
+Holo now requires Node.js 22.18 or newer on the 22 line, or Node.js 24 or 26. The build tooling (tsup 9) needs 22.18, so Node.js 22.14 through 22.17 no longer install the framework. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.18 or newer before installing 0.4.0.
 
 ### Queue job timeouts, dispatch, and retries
 
