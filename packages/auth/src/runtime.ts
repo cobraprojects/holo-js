@@ -2860,16 +2860,7 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   await rotateGuardSession(bindings, retainedGuard)
 }
 
-async function hasValidSessionForProvider(bindings: RuntimeBindings, providerName: string): Promise<boolean> {
-  for (const guardName of sessionGuardNames(bindings)) {
-    if (getGuardConfig(guardName).provider !== providerName) continue
-    await hydrateGuardContextFromRequest(guardName)
-    if (await readGuardSessionState(guardName)) return true
-  }
-  return false
-}
-
-async function assertPasswordResetCanComplete(bindings: RuntimeBindings, record: PasswordResetTokenRecord): Promise<void> {
+async function assertPasswordResetCanStart(bindings: RuntimeBindings, record: PasswordResetTokenRecord): Promise<void> {
   if (!bindings.sessionRevocations) {
     throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
   }
@@ -2880,11 +2871,20 @@ async function assertPasswordResetCanComplete(bindings: RuntimeBindings, record:
       provider: record.provider,
     })
   }
-  if (adapter.getRememberToken && !adapter.updateRememberToken) {
-    throwAuthError('runtime_unconfigured', `Auth provider "${record.provider}" cannot store remember tokens.`)
+}
+
+async function assertResetUserCanComplete(
+  bindings: RuntimeBindings,
+  providerName: string,
+  adapter: ErasedAuthProviderAdapter,
+  user: unknown,
+  userId: string | number,
+): Promise<void> {
+  if (getRememberToken(adapter, user)) {
+    requireRememberTokenUpdates(adapter, providerName)
   }
 
-  if (!await hasValidSessionForProvider(bindings, record.provider)) {
+  if (!await findSessionGuardOwnedBy(bindings, providerName, userId)) {
     return
   }
 
@@ -2916,8 +2916,14 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
 
-    await assertPasswordResetCanComplete(getRuntimeBindings(), record)
+    await assertPasswordResetCanStart(getRuntimeBindings(), record)
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
+    const checkUserPreconditions = async () => {
+      const { adapter } = getProviderAdapter(record.provider)
+      const user = await adapter.findByCredentials({ email: record.email })
+      if (!user) return
+      await assertResetUserCanComplete(getRuntimeBindings(), record.provider, adapter, user, requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.'))
+    }
     const updated = await store.redeem(record, async () => {
       await store.deleteByEmail(record.provider, record.email, { table: record.table })
       const { adapter } = getProviderAdapter(record.provider)
@@ -2929,11 +2935,12 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
         })
       }
       const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
+      await assertResetUserCanComplete(getRuntimeBindings(), record.provider, adapter, user, userId)
       const resetUser = await updateUserRecord(record.provider, userId, { password })
       await rotateRememberToken(record.provider, userId)
       await signOutOtherSessionsAfterPasswordReset(record.provider, userId)
       return resetUser
-    })
+    }, checkUserPreconditions)
     if (!updated) {
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }

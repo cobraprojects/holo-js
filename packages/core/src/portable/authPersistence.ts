@@ -180,6 +180,7 @@ function createAuthRedemptionContext() {
       provider: string,
       claim: (connection: DatabaseContext) => Promise<boolean>,
       operation: () => Promise<TResult>,
+      precondition?: () => Promise<void>,
     ): Promise<TResult | null> {
       const connection = DB.connection()
       const repository = repositories.get(provider)?.()
@@ -187,15 +188,17 @@ function createAuthRedemptionContext() {
         return connection.writeTransaction(transaction => connectionAsyncContext.run({
           connectionName: transaction.getConnectionName(),
           connection: transaction,
-        }, async () => {
+        }, () => active.run({ provider, repository }, async () => {
+          if (precondition) await precondition()
           if (!await claim(transaction)) return null
-          return active.run({ provider, repository }, operation)
-        }))
+          return operation()
+        })))
       }
 
       if (connection.getScope().kind !== 'root') {
         throw new TransactionError('[Holo Auth] Token redemption for an external persistence context must run outside a database transaction.')
       }
+      if (precondition) await precondition()
       if (!await claim(connection)) return null
       return operation()
     },
@@ -324,7 +327,11 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
     }),
     passwordResetTokens: Object.freeze({
-      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+      async redeem<TResult>(
+        record: PasswordResetTokenRecord,
+        operation: () => Promise<TResult>,
+        precondition?: () => Promise<void>,
+      ): Promise<TResult | null> {
         const table = record.table ?? 'password_reset_tokens'
         if (!Object.values(loadedConfig.auth.passwords).some(broker => broker.provider === record.provider && broker.table === table)) return null
         return redemption.redeem(record.provider, async (connection) => {
@@ -341,7 +348,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
-        }, operation)
+        }, operation, precondition)
       },
       async create(record: PasswordResetTokenRecord) {
         await DB.table(record.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(record, DB.connection().getDriver()))
