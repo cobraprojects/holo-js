@@ -153,6 +153,23 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(1)
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps a hand-built or copied raw predicate gated when it carries the trusted marker on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+    const injected = `name = 'Safe' OR 1=1`
+
+    const forged = { kind: 'raw', boolean: 'and', sql: injected, bindings: [], trusted: true }
+    await expect(db.table(table).withPredicates([forged as never]).delete()).rejects.toThrow(policyError)
+
+    const trusted = holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table), 'expires_at').getPlan().predicates[0]!
+    const copied = { ...trusted, sql: injected, bindings: [] }
+    await expect(db.table(table).withPredicates([copied as never]).delete()).rejects.toThrow(policyError)
+    await expect(db.table(table).withPredicates([copied as never]).update({ name: 'Changed' })).rejects.toThrow(policyError)
+
+    expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+  })
+
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
     const { db, table } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])

@@ -3,6 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError } from '../core/errors'
 import { isInlineIntegerValue } from './ast'
 import { validateQueryPlan } from './validator'
+import { isTrustedRawPredicate } from './trustedRawPredicate'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type {
   DeleteQueryPlan,
@@ -786,7 +787,7 @@ export class SQLQueryCompiler {
 
   protected isUnsafePredicate(predicate: QueryPredicateNode): boolean {
     if (predicate.kind === 'raw') {
-      return predicate.trusted !== true
+      return !isTrustedRawPredicate(predicate)
     }
 
     if (predicate.kind === 'group') {

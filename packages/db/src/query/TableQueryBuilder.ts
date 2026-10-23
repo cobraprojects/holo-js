@@ -2,6 +2,7 @@ import { CompilerError, ConfigurationError, SecurityError } from '../core/errors
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { createTrustedRawPredicate } from './trustedRawPredicate'
 import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
@@ -2879,13 +2880,12 @@ function trustedRawWhere<
   return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
     query.getTableName() as TTableOrName,
     query.getConnection(),
-    withPredicate(query.getPlan(), {
+    withPredicate(query.getPlan(), createTrustedRawPredicate({
       kind: 'raw',
       boolean: 'and',
       sql,
       bindings: Object.freeze([...bindings]),
-      trusted: true,
-    }),
+    })),
   )
 }
 
