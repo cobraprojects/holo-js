@@ -489,6 +489,8 @@ const euUsers = await DB.table('users')
   .get()
 ```
 
+Each segment between `->` is one key, so a key that contains a comma is matched whole. A key can't contain `->`, and surrounding spaces are trimmed from each segment. On SQLite, a path can't name a key with a NUL character or an unpaired surrogate, so a query or update that uses one throws an error. Rename that key to use it in a path.
+
 | Method | Use it to… |
 | --- | --- |
 | `whereJson(path, operator?, value)` / `orWhereJson(...)` | compare a scalar value (string, number, boolean, `null`) at a path |

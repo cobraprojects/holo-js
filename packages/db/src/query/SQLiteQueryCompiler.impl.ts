@@ -1,8 +1,13 @@
+import { CompilerError } from '../core/errors'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
+}
+
+function hasSqliteUnaddressableJsonKey(segment: string): boolean {
+  return segment.includes('\u0000') || /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(segment)
 }
 
 function sqliteJsonType(value: unknown): string {
@@ -38,6 +43,22 @@ const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
   protected override compileLockClause(_lockMode: QueryLockMode): string {
     return ''
+  }
+
+  protected override createJsonPathLiteral(path: readonly string[]): string {
+    const serializedPath = path.reduce((current, segment) => {
+      if (hasSqliteUnaddressableJsonKey(segment)) {
+        throw new CompilerError('SQLite JSON paths cannot address keys containing NUL or unpaired surrogate characters.')
+      }
+
+      if (/^[A-Z_]\w*$/i.test(segment)) {
+        return `${current}.${segment}`
+      }
+
+      return `${current}."${segment.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+    }, '$')
+
+    return this.createSqlStringLiteral(serializedPath)
   }
 
   protected override compileJsonPredicate(predicate: QueryJsonPredicate, bindings: unknown[]): string {
