@@ -8,8 +8,11 @@ import {
   type CacheLockContract,
   type CacheDriverPutInput,
 } from './contracts'
+import { heapifyExpiryRecords, peekExpiryRecord, popExpiryRecord, pushExpiryRecord, type ExpiryHeapRecord } from './expiry-heap'
 
 export const DEFAULT_CACHE_MEMORY_MAX_ENTRIES = 10_000
+
+const EXPIRY_COMPACTION_FLOOR = 64
 
 type MemoryCacheEntry = {
   payload: string
@@ -21,9 +24,15 @@ type MemoryCacheLockEntry = {
   expiresAt: number
 }
 
+type MemoryCacheExpiryTarget = {
+  readonly key: string
+  readonly entry: MemoryCacheEntry
+}
+
 type MemoryCacheDriverState = {
   readonly entries: Map<string, MemoryCacheEntry>
   readonly locks: Map<string, MemoryCacheLockEntry>
+  readonly expiries: ExpiryHeapRecord<MemoryCacheExpiryTarget>[]
 }
 
 type CreateMemoryCacheDriverOptions = {
@@ -37,6 +46,7 @@ function createMemoryCacheDriverState(): MemoryCacheDriverState {
   return {
     entries: new Map<string, MemoryCacheEntry>(),
     locks: new Map<string, MemoryCacheLockEntry>(),
+    expiries: [],
   }
 }
 
@@ -170,16 +180,48 @@ function setEntry(
   input: CacheDriverPutInput,
 ): void {
   state.entries.delete(input.key)
-  state.entries.set(input.key, {
+  const entry: MemoryCacheEntry = {
     payload: input.payload,
     expiresAt: input.expiresAt,
-  })
+  }
+  state.entries.set(input.key, entry)
+  if (typeof input.expiresAt === 'number') {
+    pushExpiryRecord(state.expiries, { expiresAt: input.expiresAt, value: { key: input.key, entry } })
+    compactExpiryRecords(state)
+  }
+}
+
+function compactExpiryRecords(state: MemoryCacheDriverState): void {
+  if (state.expiries.length <= (2 * state.entries.size) + EXPIRY_COMPACTION_FLOOR) return
+
+  state.expiries.length = 0
+  for (const [key, entry] of state.entries) {
+    if (typeof entry.expiresAt === 'number') {
+      state.expiries.push({ expiresAt: entry.expiresAt, value: { key, entry } })
+    }
+  }
+  heapifyExpiryRecords(state.expiries)
+}
+
+function dropExpiredEntries(state: MemoryCacheDriverState, timestamp: number): void {
+  let top = peekExpiryRecord(state.expiries)
+  while (top && top.expiresAt <= timestamp) {
+    popExpiryRecord(state.expiries)
+    if (state.entries.get(top.value.key) === top.value.entry) {
+      state.entries.delete(top.value.key)
+    }
+    top = peekExpiryRecord(state.expiries)
+  }
 }
 
 function enforceMaxEntries(
   state: MemoryCacheDriverState,
   maxEntries: number,
+  timestamp: number,
 ): void {
+  if (state.entries.size <= maxEntries) return
+
+  dropExpiredEntries(state, timestamp)
   while (state.entries.size > maxEntries) {
     const oldestKey = state.entries.keys().next().value
     /* v8 ignore next 3 -- Map iteration only returns undefined here if the map changes unexpectedly between size and iteration checks. */
@@ -214,14 +256,15 @@ export function createMemoryCacheDriver(
     },
     async put(input: CacheDriverPutInput): Promise<boolean> {
       setEntry(state, input)
-      enforceMaxEntries(state, maxEntries)
+      enforceMaxEntries(state, maxEntries, now())
       return true
     },
     async add(input: CacheDriverPutInput): Promise<boolean> {
-      if (pruneExpiredEntry(state, input.key, now())) return false
+      const timestamp = now()
+      if (pruneExpiredEntry(state, input.key, timestamp)) return false
 
       setEntry(state, input)
-      enforceMaxEntries(state, maxEntries)
+      enforceMaxEntries(state, maxEntries, timestamp)
       return true
     },
     async forget(key: string): Promise<boolean> {
@@ -232,6 +275,7 @@ export function createMemoryCacheDriver(
     async flush(): Promise<void> {
       state.entries.clear()
       state.locks.clear()
+      state.expiries.length = 0
     },
     async increment(key: string, amount: number): Promise<number> {
       const entry = pruneExpiredEntry(state, key, now())
@@ -249,7 +293,7 @@ export function createMemoryCacheDriver(
         payload: serializeCacheValue(nextValue),
         expiresAt: entry?.expiresAt,
       })
-      enforceMaxEntries(state, maxEntries)
+      enforceMaxEntries(state, maxEntries, now())
       return nextValue
     },
     async decrement(key: string, amount: number): Promise<number> {
