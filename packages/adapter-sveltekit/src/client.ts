@@ -653,20 +653,13 @@ async function hydrateActionFormState<TData, TSuccess>(
     return
   }
 
-  const stores = await import('$app/stores') as {
-    readonly page: {
-      subscribe(listener: (value: { readonly form: unknown }) => void): () => void
-    }
+  const { page } = await import('$app/state') as {
+    readonly page: { readonly form: unknown }
   }
-  let unsubscribe = () => {}
-  unsubscribe = stores.page.subscribe((value) => {
-    const state = value.form
-    if (isFormState<TData>(state) && stateMatchesSchema(schemaDefinition, state)) {
-      form.applyServerState(state)
-    }
-
-    queueMicrotask(() => unsubscribe())
-  })
+  const state = page.form
+  if (isFormState<TData>(state) && stateMatchesSchema(schemaDefinition, state)) {
+    form.applyServerState(state)
+  }
 }
 
 ensureSubmitListener()

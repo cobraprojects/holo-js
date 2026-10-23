@@ -644,25 +644,6 @@ export function renderSvelteManagedRuntimeFiles(): readonly ScaffoldedFile[] {
   ]
 }
 
-function renderSvelteConfig(): string {
-  return [
-    'import adapter from \'@sveltejs/adapter-node\'',
-    'import { withHoloSvelteKit } from \'@holo-js/adapter-sveltekit/config\'',
-    'import { vitePreprocess } from \'@sveltejs/vite-plugin-svelte\'',
-    '',
-    '/** @type {import(\'@sveltejs/kit\').Config} */',
-    'const config = withHoloSvelteKit({',
-    '  preprocess: vitePreprocess(),',
-    '  kit: {',
-    '    adapter: adapter(),',
-    '  },',
-    '})',
-    '',
-    'export default config',
-    '',
-  ].join('\n')
-}
-
 function renderSvelteUserHooks(): string {
   return [
     'export {}',
@@ -719,14 +700,20 @@ export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled
   ]
 
   return [
+    'import adapter from \'@sveltejs/adapter-node\'',
+    'import { withHoloSvelteKit } from \'@holo-js/adapter-sveltekit/config\'',
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
     ...(realtimeEnabled
       ? ['import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'']
       : []),
+    'import { vitePreprocess } from \'@sveltejs/vite-plugin-svelte\'',
     'import { defineConfig, searchForWorkspaceRoot } from \'vite\'',
     '',
     'export default defineConfig({',
-    `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit()],`,
+    `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit(withHoloSvelteKit({`,
+    '    adapter: adapter(),',
+    '    preprocess: vitePreprocess(),',
+    '  }))],',
     '  server: {',
     '    fs: {',
     '      allow: [searchForWorkspaceRoot(process.cwd()), \'.holo-js/generated\'],',
@@ -962,7 +949,6 @@ const FRAMEWORK_RENDERERS = {
       const realtimeEnabled = optionalPackages.includes('realtime')
 
       return [
-        { path: 'svelte.config.js', contents: renderSvelteConfig() },
         { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
         { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
         { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },

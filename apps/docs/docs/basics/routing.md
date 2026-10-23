@@ -36,7 +36,7 @@ export default defineEventHandler(async () => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/+server.ts
-import { json } from '@sveltejs/kit'
+
 import Post from '../../../../server/models/Post'
 
 export async function GET() {
@@ -45,7 +45,7 @@ export async function GET() {
     .latest('published_at')
     .paginate(20)
 
-  return json(posts)
+  return Response.json(posts)
 }
 ```
 
@@ -115,7 +115,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { validate } from '@holo-js/validation'
 import { createPostInput } from '../../../../server/schemas/post'
 import Post from '../../../../server/models/Post'
@@ -124,7 +124,7 @@ export async function POST({ request }) {
   const data = await validate(request, createPostInput)
   const post = await Post.create(data)
 
-  return json(post, { status: 201 })
+  return Response.json(post, { status: 201 })
 }
 ```
 
@@ -176,7 +176,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/[slug]/+server.ts
-import { error, json } from '@sveltejs/kit'
+import { error } from '@sveltejs/kit'
 import Post from '../../../../../server/models/Post'
 
 export async function GET({ params }) {
@@ -186,7 +186,7 @@ export async function GET({ params }) {
     error(404, 'Post not found.')
   }
 
-  return json(post)
+  return Response.json(post)
 }
 ```
 

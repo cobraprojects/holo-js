@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { resetPasswordForm } from '$lib/schemas/auth'
+  import { resetPasswordForm } from '#lib/schemas/auth.js'
 
   export let data: {
     token: string

@@ -213,7 +213,7 @@ import Tag from '../../../server/models/Tag'
 
 :::
 
-In SvelteKit, the `src/lib/server/` folder keeps this file out of browser code, and you can import it as `$lib/server/blog`.
+In SvelteKit, the `src/lib/server/` folder keeps this file out of browser code, and you can import it as `#lib/server/blog`.
 
 Then add the queries below the imports. This part is the same in every framework:
 

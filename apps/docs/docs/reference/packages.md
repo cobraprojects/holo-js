@@ -22,7 +22,7 @@ Install the one for your framework. The installer adds it for you.
 | --- | --- | --- | --- |
 | `@holo-js/adapter-next` | `withHolo()` for `next.config.ts`, plus client helpers | Next.js apps | [Next.js](/getting-started/frameworks/next) |
 | `@holo-js/adapter-nuxt` | The Nuxt module, plus client composables | Nuxt apps | [Nuxt](/getting-started/frameworks/nuxt) |
-| `@holo-js/adapter-sveltekit` | `withHoloSvelteKit()` for `svelte.config.js`, plus client helpers | SvelteKit apps | [SvelteKit](/getting-started/frameworks/sveltekit) |
+| `@holo-js/adapter-sveltekit` | `withHoloSvelteKit()` for the `sveltekit()` options in `vite.config.ts`, plus client helpers | SvelteKit apps | [SvelteKit](/getting-started/frameworks/sveltekit) |
 | `@holo-js/adapter-shared` | Code shared by the three adapters | Installed automatically; you don't import it | — |
 
 ## Database drivers

@@ -220,7 +220,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/exports/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { protect } from '@holo-js/security'
 import type { RequestHandler } from './$types'
 
@@ -229,7 +229,7 @@ export const POST: RequestHandler = async ({ request }) => {
     throttle: 'api',
   })
 
-  return json({ ok: true })
+  return Response.json({ ok: true })
 }
 ```
 

@@ -1,4 +1,4 @@
-import type { Config } from '@sveltejs/kit'
+import type { Config } from '@sveltejs/kit/vite'
 import type { PreprocessorGroup } from 'svelte/compiler'
 import {
   HOLO_SVELTE_PREPROCESS_NAME,
@@ -21,7 +21,7 @@ function hasHoloPreprocess(preprocessors: readonly PreprocessorGroup[]): boolean
 }
 
 function assertNoCustomManagedHooks(config: Config): void {
-  const hooks = config.kit?.files?.hooks
+  const hooks = config.files?.hooks
   const customServerHook = hooks?.server && hooks.server !== managedServerHooksPath
   const customUniversalHook = hooks?.universal && hooks.universal !== managedUniversalHooksPath
   if (customServerHook || customUniversalHook) {
@@ -39,18 +39,18 @@ export function withHoloSvelteKit<TConfig extends Config = Config>(
     ? preprocessors
     : [...preprocessors, holoSveltePreprocess()]
 
+  const publicOrigin = config.paths?.origin ?? process.env.APP_URL
+
   return {
     ...config,
+    ...(publicOrigin ? { paths: { ...(config.paths ?? {}), origin: publicOrigin } } : {}),
     preprocess: mergedPreprocessors,
-    kit: {
-      ...(config.kit ?? {}),
-      files: {
-        ...(config.kit?.files ?? {}),
-        hooks: {
-          ...(config.kit?.files?.hooks ?? {}),
-          server: managedServerHooksPath,
-          universal: managedUniversalHooksPath,
-        },
+    files: {
+      ...(config.files ?? {}),
+      hooks: {
+        ...(config.files?.hooks ?? {}),
+        server: managedServerHooksPath,
+        universal: managedUniversalHooksPath,
       },
     },
   } as TConfig

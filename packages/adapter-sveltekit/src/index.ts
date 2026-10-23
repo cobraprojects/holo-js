@@ -1,6 +1,7 @@
 import { getCurrentSvelteKitRequestEvent, runWithSvelteKitRequestEvent as runWithRequestEvent, type SvelteKitRequestEvent } from '@holo-js/adapter-shared/sveltekit/request-context'
 import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
-import { error as svelteKitError, type Handle, type HandleServerError } from '@sveltejs/kit'
+import { error as svelteKitError } from '@sveltejs/kit'
+import type { Handle, HandleServerError } from '@sveltejs/kit/hooks'
 import {
   createHoloFrameworkAdapter,
   type HoloAdapterProject,
@@ -37,7 +38,7 @@ type SvelteKitActionResult = {
 }
 
 type SvelteKitModule = {
-  readonly redirect: (status: SvelteKitRedirectStatus, location: string) => never
+  readonly redirect: (status: SvelteKitRedirectStatus, location: string, options?: { readonly external: true }) => never
 }
 
 type SvelteKitRedirectStatus = 301 | 302 | 303 | 307 | 308
@@ -66,6 +67,20 @@ type ValidationRequestState = {
 }
 
 const validationRequests = new WeakMap<object, ValidationRequestState>()
+
+type CaughtErrorInput = Parameters<HandleServerError>[0]
+
+function caughtErrorStatus(input: CaughtErrorInput): number {
+  return input.kind === 'unknown' ? 500 : input.error.status
+}
+
+function caughtErrorMessage(input: CaughtErrorInput): string {
+  return input.kind === 'unknown' ? 'Internal Error' : input.error.message
+}
+
+function isAbsoluteHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
 
 function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
   return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
@@ -595,7 +610,7 @@ function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOption
     },
     async redirectResponse(url: string, status: SvelteKitRedirectStatus = 307) {
       const { redirect } = await import('@sveltejs/kit') as SvelteKitModule
-      redirect(status, url)
+      redirect(status, url, isAbsoluteHttpUrl(url) ? { external: true } : undefined)
     },
   }
 }
@@ -655,7 +670,7 @@ export function createSvelteKitHoloHooks(hooks: {
         state.payload = undefined
       }
     }),
-    handleError: async (input) => {
+    handleError: (input) => {
       const payload = serializeValidationException(input.error)
       if (payload) {
         const state = validationRequests.get(input.event.request)
@@ -663,9 +678,9 @@ export function createSvelteKitHoloHooks(hooks: {
         return payload
       }
       if (hooks.handleError) return hooks.handleError(input)
-      if (input.status >= 500) reportError(input.error, { capability: 'sveltekit', operation: 'handleError' })
+      if (caughtErrorStatus(input) >= 500) reportError(input.error, { capability: 'sveltekit', operation: 'handleError' })
       if (input.error instanceof Error && isDebugEnabled()) return { message: input.error.message }
-      return { message: input.message }
+      return { message: caughtErrorMessage(input) }
     },
   }
 }
@@ -694,6 +709,7 @@ export async function resetSvelteKitHoloProject(): Promise<void> {
 
 export const adapterSvelteKitInternals = {
   ...svelteKitAdapter.internals,
+  resolveSvelteKitAuthRequestAccessors,
   createValidationActionFailureResponse,
   createValidationActionRedirectResponse,
   createValidationFlashCookie,

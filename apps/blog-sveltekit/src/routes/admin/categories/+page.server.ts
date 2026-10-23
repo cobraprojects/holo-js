@@ -1,7 +1,7 @@
 import { error, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 
-import { createCategory, deleteCategory, getAdminCategoriesData } from '$lib/server/blog'
+import { createCategory, deleteCategory, getAdminCategoriesData } from '#lib/server/blog.js'
 import Category from '../../../../server/models/Category'
 import type { Actions, PageServerLoad } from './$types'
 

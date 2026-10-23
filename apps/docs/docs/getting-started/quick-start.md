@@ -162,14 +162,13 @@ export default defineEventHandler(async () => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/+server.ts
-import { json } from '@sveltejs/kit'
 
 import Post from '../../../../server/models/Post'
 
 export async function GET() {
   const posts = await Post.latest().get()
 
-  return json(posts)
+  return Response.json(posts)
 }
 ```
 

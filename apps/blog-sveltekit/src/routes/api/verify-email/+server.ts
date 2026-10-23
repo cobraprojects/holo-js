@@ -1,8 +1,7 @@
-import { json } from '@sveltejs/kit'
 import { check, verifyEmail } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
-import { verifyEmailForm } from '$lib/schemas/auth'
+import { verifyEmailForm } from '#lib/schemas/auth.js'
 
 export async function POST({ request }: { request: Request }) {
   const input = await validate(request, verifyEmailForm)
@@ -11,7 +10,7 @@ export async function POST({ request }: { request: Request }) {
   const verificationResult = verifyEmail(input.token)
   const [wasAuthenticated] = await Promise.all([authenticationCheck, verificationResult])
 
-  return json({
+  return Response.json({
     ok: true,
     status: 200,
     data: {

@@ -1,4 +1,3 @@
-import { json } from '@sveltejs/kit'
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
@@ -8,7 +7,7 @@ import type { RequestHandler } from './$types'
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
 function resendSuccessResponse() {
-  return json({
+  return Response.json({
     ok: true,
     status: 200,
     data: {
@@ -20,7 +19,7 @@ function resendSuccessResponse() {
 export const POST: RequestHandler = async () => {
   const current = await user()
   if (!current) {
-    return json({
+    return Response.json({
       ok: false,
       status: 401,
       errors: { _root: ['Sign in before requesting another verification email.'] },
@@ -32,7 +31,7 @@ export const POST: RequestHandler = async () => {
     await resendEmailVerification()
   } catch (failure) {
     if (failure instanceof SecurityRateLimitError) {
-      return json({
+      return Response.json({
         ok: false,
         status: 429,
         errors: { _root: [failure.message] },
@@ -44,7 +43,7 @@ export const POST: RequestHandler = async () => {
       throw failure
     }
 
-    return json(payload, { status: payload.status })
+    return Response.json(payload, { status: payload.status })
   }
 
   return resendSuccessResponse()

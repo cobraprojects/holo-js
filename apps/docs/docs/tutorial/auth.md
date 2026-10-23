@@ -234,7 +234,7 @@ import { redirect } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
-import { loginForm } from '$lib/schemas/auth'
+import { loginForm } from '#lib/schemas/auth.js'
 import type { Actions } from './$types'
 
 export const actions = {
@@ -256,7 +256,7 @@ import { redirect } from '@sveltejs/kit'
 import { loginUsing, register } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
-import { registerForm } from '$lib/schemas/auth'
+import { registerForm } from '#lib/schemas/auth.js'
 import type { Actions } from './$types'
 
 export const actions = {
@@ -498,7 +498,7 @@ const form = useForm(registerForm, {
 <!-- src/routes/login/+page.svelte -->
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { loginForm } from '$lib/schemas/auth'
+  import { loginForm } from '#lib/schemas/auth.js'
 
   import type { PageData } from './$types'
 
@@ -539,7 +539,7 @@ const form = useForm(registerForm, {
 <!-- src/routes/register/+page.svelte -->
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { registerForm } from '$lib/schemas/auth'
+  import { registerForm } from '#lib/schemas/auth.js'
 
   import type { PageData } from './$types'
 
@@ -906,8 +906,8 @@ import { redirect } from '@sveltejs/kit'
 import { auth } from '@holo-js/auth/sveltekit/server'
 import { validate } from '@holo-js/forms'
 
-import { postForm } from '$lib/schemas/blog'
-import { createPost, getAdminPostFormData } from '$lib/server/blog'
+import { postForm } from '#lib/schemas/blog.js'
+import { createPost, getAdminPostFormData } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {

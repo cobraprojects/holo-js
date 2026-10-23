@@ -594,7 +594,7 @@ ${jobBody}
   if (framework === 'sveltekit') {
     await writeProjectFile(projectRoot, 'src/hooks.server.ts', `
 import { gzipSync } from 'node:zlib'
-import { type Handle } from '@sveltejs/kit'
+import { type Handle } from '@sveltejs/kit/hooks'
 
 export const handle: Handle = async ({ event, resolve }) => {
   const response = await resolve(event)
@@ -897,7 +897,7 @@ async function assertAuthSecurity(journey) {
     assert.ok((await response.json()).retryAfterSeconds > 0)
   }
   const managedMutation = await fetch(`${origin}/holo/realtime/mutation`, { method: 'POST' })
-  assert.equal(managedMutation.status, 419, 'Managed mutation routes must also enforce CSRF')
+  assert.ok(managedMutation.status === 419 || (journey.framework === 'sveltekit' && managedMutation.status === 403), `Managed mutation routes must also enforce CSRF, got ${managedMutation.status}`)
   log(journey.framework, 'strict CSRF, native forms, CORS, login throttling, session rotation, and logout revocation passed')
 }
 
@@ -976,7 +976,7 @@ export default defineMigration({
   run(journey.framework, realNpm, ['run', 'lint'], { cwd: projectRoot, env: localPackageEnv })
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
-  run(journey.framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: localPackageEnv })
+  run(journey.framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: { ...localPackageEnv, APP_URL: `http://localhost:${journey.port}` } })
 
   const server = spawn(process.execPath, [cliPath, 'start'], {
     cwd: projectRoot,

@@ -64,7 +64,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/+server.ts
-import { json } from '@sveltejs/kit'
+
 import type { RequestHandler } from './$types'
 import Post from '../../../../server/models/Post'
 
@@ -76,7 +76,7 @@ export const GET: RequestHandler = async ({ url }) => {
     .latest('published_at')
     .paginate(15, Math.max(1, page))
 
-  return json(posts)
+  return Response.json(posts)
 }
 ```
 

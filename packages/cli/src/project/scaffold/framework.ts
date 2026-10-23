@@ -174,6 +174,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     name: packageName,
     private: true,
     type: 'module',
+    ...(options.framework === 'sveltekit' ? { imports: { '#lib': './src/lib/index.js', '#lib/*': './src/lib/*' } } : {}),
     packageManager: resolvePackageManagerVersion(options.packageManager),
     scripts: {
       ...framework.scaffold.scripts,

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { loginForm } from '$lib/schemas/auth'
+  import { loginForm } from '#lib/schemas/auth.js'
   import type { PageData } from './$types'
 
   export let data: PageData

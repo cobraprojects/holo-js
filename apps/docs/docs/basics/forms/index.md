@@ -46,15 +46,15 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/contact/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { validate } from '@holo-js/forms'
-import { contactForm } from '$lib/schemas/contact'
+import { contactForm } from '#lib/schemas/contact.js'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request }) => {
   const data = await validate(request, contactForm)
 
-  return json({ ok: true, status: 200, data: { name: data.name } })
+  return Response.json({ ok: true, status: 200, data: { name: data.name } })
 }
 ```
 
@@ -144,7 +144,7 @@ const form = useForm(contactForm, {
 <!-- src/routes/contact/+page.svelte -->
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { contactForm } from '$lib/schemas/contact'
+  import { contactForm } from '#lib/schemas/contact.js'
 
   import type { PageData } from './$types'
 
