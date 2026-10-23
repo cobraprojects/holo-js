@@ -64,7 +64,7 @@ function cookieHeaderToBrowserCookies(baseUrl, cookieHeader) {
 async function waitForLinkHydration(page, linkName) {
   await page.waitForFunction(name => [...globalThis.document.querySelectorAll('a')].some(link => (
     link.textContent?.trim() === name
-    && Object.keys(link).some(key => key.startsWith('__reactProps$'))
+    && Object.entries(link).some(([key, props]) => key.startsWith('__reactProps$') && typeof props?.onClick === 'function')
   )), linkName)
 }
 
@@ -284,7 +284,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     assert.ok(postId, 'Expected the realtime query to return posts without a broadcast worker.')
 
     await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
-    await waitForLinkHydration(page, 'Realtime demo')
+    if (appName === 'blog-next') await waitForLinkHydration(page, 'Realtime demo')
     const navigationQueryResponsePromise = page.waitForResponse(response => (
       response.url().includes('/holo/realtime/query')
       && response.request().method() === 'POST'
