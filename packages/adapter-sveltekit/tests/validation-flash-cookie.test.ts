@@ -158,6 +158,25 @@ describe('validation flash cookie', () => {
     expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
   })
 
+  it('shrinks a form with thousands of fields to one that fits, keeping the errors and the small fields', () => {
+    setAppKey(appKey)
+    const values: Record<string, string> = {}
+    for (let index = 0; index < 3000; index += 1) {
+      values[`field${index}`] = index < 3 ? 'x'.repeat(3000) : 'ok'
+    }
+    const flash = { ...failure, values, errors: { email: ['Invalid email.'] } }
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test/posts/new'),
+    } as never, flash as never)
+
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
+
+    expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
+    expect(restored).toMatchObject({ errors: { email: ['Invalid email.'] } })
+    expect(restored?.values).not.toHaveProperty('field0')
+    expect(restored?.values).toHaveProperty('field3', 'ok')
+  })
+
   it('exposes the generic failure to the page through useValidationErrors when the errors cannot fit', () => {
     setAppKey(appKey)
     const flash = { ...failure, values: { email: 'ava@example.com' }, errors: { email: ['z'.repeat(4500)] } }

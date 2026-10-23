@@ -286,74 +286,92 @@ function validationFlashCookieHeader(value: string, cookiePath: string): string 
   ].join('; ')
 }
 
-// Degrades in order so the errors survive: drop the largest old-input values until the flash fits,
-// then keep only the first message for each field, then fall back to a generic failure with no input.
+// Old input is sized from at most this many fields, so a form with thousands of fields costs bounded work.
+const VALIDATION_FLASH_FIELD_LIMIT = 200
+// AES-GCM adds a 12-byte IV and a 16-byte tag. base64url then encodes the bytes without padding.
+const FLASH_CIPHER_OVERHEAD_BYTES = 12 + 16
+
+function encryptedFlashLength(plaintextBytes: number): number {
+  return Math.ceil(((FLASH_CIPHER_OVERHEAD_BYTES + plaintextBytes) * 4) / 3)
+}
+
+// Degrades in order so the errors survive: drop the largest input values until the flash fits, then keep
+// only the first message for each field, then fall back to a generic failure with no input. Sizes come from
+// the plaintext arithmetically, so nothing is encrypted until the one value that is written. If the estimate
+// is ever off, the generic flash is written directly.
 function fitValidationFlash(payload: SerializedValidationException, pathname: string | undefined): string | undefined {
   const { pagePath, cookiePath } = validationFlashPaths(pathname)
-  const encodeWithin = (candidate: SerializedValidationException): string | undefined => {
+  const headerOverhead = validationFlashCookieHeader('', cookiePath).length
+  // The encoder writes "values":{} and "errors":{}; those four bytes are replaced by the real sizes below.
+  const plaintextFrame = Buffer.byteLength(JSON.stringify({ ...payload, values: {}, errors: {}, path: pagePath, cookiePath })) - 4
+  const fitsBudget = (plaintextBytes: number): boolean =>
+    headerOverhead + encryptedFlashLength(plaintextBytes) <= VALIDATION_FLASH_COOKIE_BUDGET
+
+  const fields = Object.entries(filterFlashValues(payload.values))
+  const considered = new Map(fields.slice(0, VALIDATION_FLASH_FIELD_LIMIT))
+  const capped = fields.slice(VALIDATION_FLASH_FIELD_LIMIT).map(([key]) => `values.${key}`)
+  const sized = [...considered].map(([key, value]) => ({
+    key,
+    bytes: Buffer.byteLength(`${JSON.stringify(key)}:${JSON.stringify(value)}`),
+  })).sort((a, b) => b.bytes - a.bytes)
+
+  // The smallest number of largest fields to drop so the plaintext fits, or undefined when even none fit.
+  const largestFirstDropCount = (errors: SerializedValidationException['errors']): number | undefined => {
+    const errorsBytes = Buffer.byteLength(JSON.stringify(errors))
+    let remainingBytes = sized.reduce((sum, field) => sum + field.bytes, 0)
+    let remainingCount = sized.length
+    for (let dropped = 0; ; dropped += 1) {
+      if (fitsBudget(plaintextFrame + 2 + remainingBytes + Math.max(0, remainingCount - 1) + errorsBytes)) {
+        return dropped
+      }
+
+      const next = sized[dropped]
+      if (!next) {
+        return undefined
+      }
+
+      remainingBytes -= next.bytes
+      remainingCount -= 1
+    }
+  }
+  const keptValues = (dropped: number) => Object.fromEntries(
+    sized.slice(dropped).map(({ key }) => [key, considered.get(key)]),
+  )
+  const droppedNames = (dropped: number) => sized.slice(0, dropped).map(({ key }) => `values.${key}`)
+
+  const encodeOnce = (candidate: SerializedValidationException): string | undefined => {
     const value = encodeValidationFlashPayload(candidate, pagePath)
     return value && validationFlashCookieHeader(value, cookiePath).length <= VALIDATION_FLASH_COOKIE_BUDGET
       ? value
       : undefined
   }
-
-  const allValues = filterFlashValues(payload.values) as Record<string, unknown>
-  const full = encodeValidationFlashPayload({ ...payload, values: allValues }, pagePath)
-  if (!full) {
-    return undefined
+  const generic = (): string | undefined => {
+    warnDroppedFlashFields([
+      ...fields.map(([key]) => `values.${key}`),
+      ...Object.keys(payload.errors).map(field => `errors.${field}`),
+    ])
+    return encodeOnce({ ...payload, message: 'Validation failed.', values: {}, errors: { _root: ['Validation failed.'] } })
   }
 
-  if (validationFlashCookieHeader(full, cookiePath).length <= VALIDATION_FLASH_COOKIE_BUDGET) {
-    return full
-  }
-
-  const largestFirst = Object.keys(allValues).sort((a, b) => flashValueSize(allValues[b]) - flashValueSize(allValues[a]))
-  const dropValuesUntilFits = (errors: SerializedValidationException['errors']) => {
-    for (let count = 0; count <= largestFirst.length; count += 1) {
-      const dropped = largestFirst.slice(0, count)
-      const values = Object.fromEntries(Object.entries(allValues).filter(([key]) => !dropped.includes(key)))
-      const value = encodeWithin({ ...payload, values, errors })
-      if (value) {
-        return { value, dropped: dropped.map(key => `values.${key}`) }
-      }
-    }
-
-    return undefined
-  }
-
-  const withAllErrors = dropValuesUntilFits(payload.errors)
-  if (withAllErrors) {
-    warnDroppedFlashFields(withAllErrors.dropped)
-    return withAllErrors.value
+  const dropped = largestFirstDropCount(payload.errors)
+  if (dropped !== undefined) {
+    warnDroppedFlashFields([...capped, ...droppedNames(dropped)])
+    return encodeOnce({ ...payload, values: keptValues(dropped) }) ?? generic()
   }
 
   const firstErrors = Object.fromEntries(
     Object.entries(payload.errors).map(([field, messages]) => [field, messages.slice(0, 1)]),
   )
-  const withFirstErrors = dropValuesUntilFits(firstErrors)
-  if (withFirstErrors) {
+  const droppedWithFirstErrors = largestFirstDropCount(firstErrors)
+  if (droppedWithFirstErrors !== undefined) {
     const trimmed = Object.entries(payload.errors)
       .filter(([, messages]) => messages.length > 1)
       .map(([field]) => `errors.${field}`)
-    warnDroppedFlashFields([...withFirstErrors.dropped, ...trimmed])
-    return withFirstErrors.value
+    warnDroppedFlashFields([...capped, ...droppedNames(droppedWithFirstErrors), ...trimmed])
+    return encodeOnce({ ...payload, values: keptValues(droppedWithFirstErrors), errors: firstErrors }) ?? generic()
   }
 
-  warnDroppedFlashFields([
-    ...Object.keys(allValues).map(key => `values.${key}`),
-    ...Object.keys(payload.errors).map(field => `errors.${field}`),
-  ])
-  // The page renders form-level errors from `_root`, so the generic message goes there.
-  return encodeWithin({
-    ...payload,
-    message: 'Validation failed.',
-    values: {},
-    errors: { _root: ['Validation failed.'] },
-  })
-}
-
-function flashValueSize(value: unknown): number {
-  return (JSON.stringify(value) ?? '').length
+  return generic()
 }
 
 function warnDroppedFlashFields(fields: readonly string[]): void {
