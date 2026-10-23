@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cookieEncryptionInternals } from '@holo-js/kernel'
 import { field, schema } from '@holo-js/validation'
 import { adapterSvelteKitInternals, runWithSvelteKitRequestEvent, readValidationFlash } from '../src'
-import { svelteClientInternals } from '../src/client'
+import { svelteClientInternals, useValidationErrors } from '../src/client'
 
 const flashCookieName = 'HOLO-SVELTEKIT-VALIDATION'
 const appKey = 'flash-cookie-test-app-key'
@@ -154,8 +154,22 @@ describe('validation flash cookie', () => {
 
     const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
 
-    expect(restored).toMatchObject({ status: 422, message: 'Validation failed.', values: {}, errors: {} })
+    expect(restored).toMatchObject({ status: 422, message: 'Validation failed.', values: {}, errors: { _root: ['Validation failed.'] } })
     expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
+  })
+
+  it('exposes the generic failure to the page through useValidationErrors when the errors cannot fit', () => {
+    setAppKey(appKey)
+    const flash = { ...failure, values: { email: 'ava@example.com' }, errors: { email: ['z'.repeat(4500)] } }
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test/login'),
+    } as never, flash as never)
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
+
+    const bag = useValidationErrors('default', { pageData: { holoValidationFlash: restored } })
+
+    expect(bag.first('_root')).toBe('Validation failed.')
+    expect(bag.has('email')).toBe(false)
   })
 
   it('is encrypted, so the submitted values never appear in plaintext', () => {

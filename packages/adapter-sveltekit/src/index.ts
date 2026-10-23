@@ -343,7 +343,13 @@ function fitValidationFlash(payload: SerializedValidationException, pathname: st
     ...Object.keys(allValues).map(key => `values.${key}`),
     ...Object.keys(payload.errors).map(field => `errors.${field}`),
   ])
-  return encodeWithin({ ...payload, message: 'Validation failed.', values: {}, errors: {} })
+  // The page renders form-level errors from `_root`, so the generic message goes there.
+  return encodeWithin({
+    ...payload,
+    message: 'Validation failed.',
+    values: {},
+    errors: { _root: ['Validation failed.'] },
+  })
 }
 
 function flashValueSize(value: unknown): number {
