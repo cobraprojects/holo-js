@@ -1717,6 +1717,31 @@ export default new PluginCacheDriver()
     expect(await cache.get('third')).toBe(3)
   })
 
+  it('evicts exactly the least recently written entry when a write reaches capacity', async () => {
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+            maxEntries: 3,
+          },
+        },
+      },
+    })
+
+    await cache.put('a', 1, 60)
+    await cache.put('b', 2, 60)
+    await cache.put('c', 3, 60)
+    await cache.put('a', 10, 60)
+    await cache.put('d', 4, 60)
+
+    expect(await cache.get('b')).toBeNull()
+    expect(await cache.get('a')).toBe(10)
+    expect(await cache.get('c')).toBe(3)
+    expect(await cache.get('d')).toBe(4)
+  })
+
   it('bounds the memory store with a default maxEntries when none is configured', async () => {
     expect(normalizeCacheConfig({
       drivers: { memory: { driver: 'memory' } },

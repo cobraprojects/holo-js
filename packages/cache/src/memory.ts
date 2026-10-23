@@ -165,18 +165,11 @@ function pruneExpiredEntry(state: MemoryCacheDriverState, key: string, timestamp
   return entry
 }
 
-function pruneExpiredEntries(state: MemoryCacheDriverState, timestamp: number): void {
-  for (const [key, entry] of state.entries.entries()) {
-    if (isExpired(entry, timestamp)) {
-      state.entries.delete(key)
-    }
-  }
-}
-
 function setEntry(
   state: MemoryCacheDriverState,
   input: CacheDriverPutInput,
 ): void {
+  state.entries.delete(input.key)
   state.entries.set(input.key, {
     payload: input.payload,
     expiresAt: input.expiresAt,
@@ -186,9 +179,7 @@ function setEntry(
 function enforceMaxEntries(
   state: MemoryCacheDriverState,
   maxEntries: number,
-  timestamp: number,
 ): void {
-  pruneExpiredEntries(state, timestamp)
   while (state.entries.size > maxEntries) {
     const oldestKey = state.entries.keys().next().value
     /* v8 ignore next 3 -- Map iteration only returns undefined here if the map changes unexpectedly between size and iteration checks. */
@@ -223,15 +214,14 @@ export function createMemoryCacheDriver(
     },
     async put(input: CacheDriverPutInput): Promise<boolean> {
       setEntry(state, input)
-      enforceMaxEntries(state, maxEntries, now())
+      enforceMaxEntries(state, maxEntries)
       return true
     },
     async add(input: CacheDriverPutInput): Promise<boolean> {
-      const timestamp = now()
-      if (pruneExpiredEntry(state, input.key, timestamp)) return false
+      if (pruneExpiredEntry(state, input.key, now())) return false
 
       setEntry(state, input)
-      enforceMaxEntries(state, maxEntries, timestamp)
+      enforceMaxEntries(state, maxEntries)
       return true
     },
     async forget(key: string): Promise<boolean> {
@@ -259,7 +249,7 @@ export function createMemoryCacheDriver(
         payload: serializeCacheValue(nextValue),
         expiresAt: entry?.expiresAt,
       })
-      enforceMaxEntries(state, maxEntries, now())
+      enforceMaxEntries(state, maxEntries)
       return nextValue
     },
     async decrement(key: string, amount: number): Promise<number> {
