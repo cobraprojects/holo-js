@@ -17,6 +17,7 @@ const EXPIRY_COMPACTION_FLOOR = 64
 type MemoryCacheEntry = {
   payload: string
   expiresAt?: number
+  generation: number
 }
 
 type MemoryCacheLockEntry = {
@@ -26,13 +27,14 @@ type MemoryCacheLockEntry = {
 
 type MemoryCacheExpiryTarget = {
   readonly key: string
-  readonly entry: MemoryCacheEntry
+  readonly generation: number
 }
 
 type MemoryCacheDriverState = {
   readonly entries: Map<string, MemoryCacheEntry>
   readonly locks: Map<string, MemoryCacheLockEntry>
   readonly expiries: ExpiryHeapRecord<MemoryCacheExpiryTarget>[]
+  nextGeneration: number
 }
 
 type CreateMemoryCacheDriverOptions = {
@@ -47,6 +49,7 @@ function createMemoryCacheDriverState(): MemoryCacheDriverState {
     entries: new Map<string, MemoryCacheEntry>(),
     locks: new Map<string, MemoryCacheLockEntry>(),
     expiries: [],
+    nextGeneration: 0,
   }
 }
 
@@ -180,13 +183,15 @@ function setEntry(
   input: CacheDriverPutInput,
 ): void {
   state.entries.delete(input.key)
-  const entry: MemoryCacheEntry = {
+  state.nextGeneration += 1
+  const generation = state.nextGeneration
+  state.entries.set(input.key, {
     payload: input.payload,
     expiresAt: input.expiresAt,
-  }
-  state.entries.set(input.key, entry)
+    generation,
+  })
   if (typeof input.expiresAt === 'number') {
-    pushExpiryRecord(state.expiries, { expiresAt: input.expiresAt, value: { key: input.key, entry } })
+    pushExpiryRecord(state.expiries, { expiresAt: input.expiresAt, value: { key: input.key, generation } })
     compactExpiryRecords(state)
   }
 }
@@ -197,7 +202,7 @@ function compactExpiryRecords(state: MemoryCacheDriverState): void {
   state.expiries.length = 0
   for (const [key, entry] of state.entries) {
     if (typeof entry.expiresAt === 'number') {
-      state.expiries.push({ expiresAt: entry.expiresAt, value: { key, entry } })
+      state.expiries.push({ expiresAt: entry.expiresAt, value: { key, generation: entry.generation } })
     }
   }
   heapifyExpiryRecords(state.expiries)
@@ -207,7 +212,7 @@ function dropExpiredEntries(state: MemoryCacheDriverState, timestamp: number): v
   let top = peekExpiryRecord(state.expiries)
   while (top && top.expiresAt <= timestamp) {
     popExpiryRecord(state.expiries)
-    if (state.entries.get(top.value.key) === top.value.entry) {
+    if (state.entries.get(top.value.key)?.generation === top.value.generation) {
       state.entries.delete(top.value.key)
     }
     top = peekExpiryRecord(state.expiries)
