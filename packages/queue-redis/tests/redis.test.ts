@@ -96,6 +96,17 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
     expect(survivors.map(item => item.id)).toEqual([expect.stringMatching(/^repeat:nightly:\d+$/)])
   })
 
+  it('keeps a prioritized job scheduler job when clearing', async () => {
+    const { driver, service, queue, job } = await openQueue()
+    const nativeQueue = new Queue(queue, { connection: { host: '127.0.0.1', port: service.ports[0] } })
+    onTestFinished(() => nativeQueue.close())
+    await nativeQueue.upsertJobScheduler('urgent', { every: 60_000 }, { name: 'deliver', data: { message: 'scheduled' }, opts: { priority: 1 } })
+    await driver.dispatch({ ...job(), availableAt: Date.now() + 60_000 })
+    expect(await driver.clear()).toBe(1)
+    const survivors = await nativeQueue.getJobs(['prioritized'])
+    expect(survivors.map(item => item.id)).toEqual([expect.stringMatching(/^repeat:urgent:\d+$/)])
+  })
+
   it('keeps a due job scheduler job in the wait list when clearing', async () => {
     const { driver, service, queue, job } = await openQueue()
     const nativeQueue = new Queue(queue, { connection: { host: '127.0.0.1', port: service.ports[0] } })
