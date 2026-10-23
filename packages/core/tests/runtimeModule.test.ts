@@ -159,7 +159,13 @@ describe('@holo-js/core runtime module helpers', () => {
     }
   })
 
-  it('binds a definition to the runtime instance when symlinks are preserved', async () => {
+  it.each([
+    { label: 'NODE_PRESERVE_SYMLINKS=1', env: { NODE_PRESERVE_SYMLINKS: '1' }, execArgv: [] as string[], bridged: true },
+    { label: '--preserve-symlinks in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks' }, execArgv: [] as string[], bridged: true },
+    { label: '--preserve-symlinks=true in NODE_OPTIONS', env: { NODE_OPTIONS: '--no-warnings --preserve-symlinks=true' }, execArgv: [] as string[], bridged: true },
+    { label: '--preserve-symlinks-main=true in execArgv', env: {}, execArgv: ['--preserve-symlinks-main=true'], bridged: true },
+    { label: '--preserve-symlinks=false in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks=false' }, execArgv: [] as string[], bridged: false },
+  ])('treats symlink preservation as set for ', async ({ env, execArgv, bridged }) => {
     const projectRoot = await createTempProject()
     await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
     await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
@@ -168,14 +174,20 @@ describe('@holo-js/core runtime module helpers', () => {
     await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
     const definitionPath = join(jobsRoot, 'job.mjs')
     await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
-    vi.stubEnv('NODE_PRESERVE_SYMLINKS', '1')
+    vi.stubEnv('NODE_OPTIONS', '')
+    vi.stubEnv('NODE_PRESERVE_SYMLINKS', '')
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    const originalExecArgv = process.execArgv
+    process.execArgv = execArgv
 
     try {
       const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
       const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
 
-      expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+      if (bridged) expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+      else expect(definition.defineAppConfig).not.toBe(holoConfig.defineAppConfig)
     } finally {
+      process.execArgv = originalExecArgv
       vi.unstubAllEnvs()
     }
   })

@@ -349,11 +349,18 @@ function packageRootFromBase(base: string, packageName: string): string | undefi
   return undefined
 }
 
+function isPreserveSymlinksOption(option: string): boolean {
+  const [name, value] = option.split('=', 2)
+  if (name !== '--preserve-symlinks' && name !== '--preserve-symlinks-main') return false
+
+  return value === undefined || value === 'true'
+}
+
 function symlinksPreserved(): boolean {
   if (process.env.NODE_PRESERVE_SYMLINKS === '1') return true
 
   return [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)]
-    .some(option => option === '--preserve-symlinks' || option === '--preserve-symlinks-main')
+    .some(isPreserveSymlinksOption)
 }
 
 function holoPackageSharesRuntime(packageName: string, importerPath: string): boolean {
