@@ -73,8 +73,30 @@ async function findUserByEmail(email: string, input: HostedIdentitySyncInput): P
   return user ? requireUserRecord(user, input, 'Auth provider lookups must return object users.') : null
 }
 
+function applyVerifiedEmailRule(
+  user: LocalUser,
+  attributes: Readonly<Record<string, unknown>>,
+  verifiedEmail: string | undefined,
+): Readonly<Record<string, unknown>> {
+  const verified = verifiedEmail?.trim() || undefined
+  const candidate = typeof attributes.email === 'string' ? attributes.email.trim() : attributes.email
+  let next: Readonly<Record<string, unknown>> = attributes
+  if (typeof candidate !== 'undefined') {
+    const trusted = typeof candidate === 'string' && candidate !== '' && (candidate === user.email || candidate === verified)
+    next = trusted
+      ? { ...attributes, email: candidate }
+      : Object.fromEntries(Object.entries(attributes).filter(([key]) => key !== 'email' && key !== 'email_verified_at'))
+  }
+
+  const finalEmail = typeof next.email === 'string' ? next.email : user.email
+  if (next.email_verified_at instanceof Date && finalEmail !== verified) {
+    next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'email_verified_at'))
+  }
+  return resetVerificationOnEmailChange(user, next)
+}
+
 async function updateLocalUser(user: LocalUser, input: HostedIdentitySyncInput): Promise<{ user: LocalUser, changed: boolean }> {
-  const attributes = resetVerificationOnEmailChange(user, input.updateUserInput())
+  const attributes = applyVerifiedEmailRule(user, input.updateUserInput(), input.verifiedEmail)
   const changed = Object.entries(attributes).some(([key, value]) => key === 'email_verified_at'
     ? value instanceof Date && !user.email_verified_at
     : !Object.is(value, user[key]))

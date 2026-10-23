@@ -1897,6 +1897,42 @@ describe('@holo-js/auth-workos', () => {
     })
   })
 
+  it('applies the verified-email rule after a custom user mapper, so a mapped unverified email never replaces the stored one', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({ email: 'owner@app.test', name: 'Owner', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'dashboard',
+      providerUserId: 'workos_mapped_owner',
+      guard: 'web',
+      authProvider: 'users',
+      userId: user.id,
+      email: 'owner@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    await expect(syncIdentity({
+      sessionId: 'mapped-unverified-email',
+      identity: {
+        id: 'workos_mapped_owner',
+        email: 'victim@app.test',
+        emailVerified: false,
+        name: 'Owner',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })).resolves.toBeDefined()
+    expect(await runtime.usersProvider.findById(user.id)).toMatchObject({
+      email: 'owner@app.test',
+      email_verified_at: verifiedAt,
+    })
+  })
+
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {
     const runtime = await configureRuntime()
     const linkedUser = await runtime.usersProvider.create({
