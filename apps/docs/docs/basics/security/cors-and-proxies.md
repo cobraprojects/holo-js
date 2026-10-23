@@ -169,7 +169,11 @@ A failed request doesn't share a rate-limit bucket with other visitors, and it d
 - **Vercel**: set `TRUSTED_PROXIES=*` in the project's environment variables. Vercel's edge overwrites `X-Forwarded-For`, so `*` is safe there.
 - **Self-hosted**: set `TRUSTED_PROXIES` to the address of your reverse proxy, such as `127.0.0.1`. Also make sure the app is reachable only through that proxy.
 
-New Next.js projects write `TRUSTED_PROXIES=*` to their local `.env` and leave `.env.example` empty. A deployment that never sets the variable fails on its first IP-keyed rate-limit check.
+New Next.js projects write `TRUSTED_PROXIES=*` to their local `.env` and leave `.env.example` empty. The local value works with `next dev` and `holo dev`: when a request has no `X-Forwarded-For`, Next fills it in from the connection address, which is `127.0.0.1` or `::1` for a local visitor. A deployment that never sets the variable fails on its first IP-keyed rate-limit check.
+
+::: warning
+Don't use `*` on a `next start` server that clients reach directly. Next fills in `X-Forwarded-For` only when the request doesn't have one. A client that sends its own header keeps it, and with `*` Holo trusts that value, so the client can pick its IP. Use `*` only behind a proxy that overwrites the header, such as Vercel's edge, or set `TRUSTED_PROXIES` to the proxy's address.
+:::
 
 Next.js itself applies `X-Forwarded-Proto` to the request URL before Holo sees it, whatever `trustedProxies` says.
 

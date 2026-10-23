@@ -75,6 +75,12 @@ describe('trusted proxies', () => {
     expect(ip(request({}))).toBe('10.0.0.8')
   })
 
+  it('resolves a direct Next.js visitor to loopback under "*", because Next fills in X-Forwarded-For from the socket', () => {
+    trustProxies('*')
+    expect(ip(request({ 'x-forwarded-for': '::ffff:127.0.0.1' }))).toBe('127.0.0.1')
+    expect(ip(request({ 'x-forwarded-for': '::1' }))).toBe('::1')
+  })
+
   it('trusts the proxy in front of a framework that does not expose the connection address', () => {
     trustProxies('*')
     expect(ip(request({ 'x-forwarded-for': '203.0.113.66, 192.0.2.10' }))).toBe('192.0.2.10')
