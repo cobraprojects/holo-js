@@ -637,6 +637,29 @@ describe('@holo-js/forms contracts', () => {
     expect(throttled.fail()).toMatchObject({ status: 429 })
   })
 
+  it('returns the controlled malformed-input failure for throttled submissions instead of throwing', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    await configureNativeSecurity()
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.9',
+      },
+      body: new URLSearchParams([
+        ['profile[__proto__][x]', 'owned'],
+        ['email', 'ava@example.com'],
+      ]),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+  })
+
   it('requires Request inputs for throttle-aware validation', async () => {
     const login = schema({
       email: field.string().required().email(),

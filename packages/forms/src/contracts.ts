@@ -679,7 +679,7 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
 }
 
 async function submittedRequestValues(input: Request): Promise<Readonly<Record<string, unknown>> | undefined> {
-  const { value } = await validationInternals.normalizeRequestInput(input.clone())
+  const { value } = await validationInternals.normalizeRequestInput(input.clone()).catch(() => ({ value: undefined }))
   return isPlainFormObject(value) ? value : undefined
 }
 
