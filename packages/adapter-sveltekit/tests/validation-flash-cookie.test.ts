@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { cookieEncryptionInternals } from '@holo-js/kernel'
 import { field, schema } from '@holo-js/validation'
 import { adapterSvelteKitInternals, runWithSvelteKitRequestEvent, readValidationFlash } from '../src'
 import { svelteClientInternals } from '../src/client'
@@ -99,6 +100,14 @@ describe('validation flash cookie', () => {
     setAppKey(undefined)
 
     expect(redirectFor().headers.get('set-cookie')).toBeNull()
+  })
+
+  it('decrypts the flash cookie with the same raw key the session cookies use, including surrounding whitespace', () => {
+    setAppKey('  flash-test-key  ')
+    const value = flashValueFrom(redirectFor())
+
+    expect(cookieEncryptionInternals.decryptCookieValue(flashCookieName, value, '  flash-test-key  ')).toContain('ava@example.com')
+    expect(cookieEncryptionInternals.decryptCookieValue(flashCookieName, value, 'flash-test-key')).toContain('ava@example.com')
   })
 
   it('writes no flash when the app key is whitespace only', () => {
