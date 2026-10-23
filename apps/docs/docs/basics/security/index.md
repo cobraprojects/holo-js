@@ -116,6 +116,10 @@ export default defineSecurityConfig({
 The CSRF cookie is encrypted, and signed tokens are signed, with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
 :::
 
+## Timing and account enumeration
+
+Auth endpoints that answer differently for known and unknown accounts can reveal which emails have accounts. Holo's login and reset-link requests take at least 200 ms for both cases. A reset-link request still waits on mail delivery when the email is sent synchronously, so queue the reset email to remove that difference. See [Request a reset link](/auth/password-reset#request-a-reset-link).
+
 ## Error statuses
 
 | Failure | Status | Where it comes from |

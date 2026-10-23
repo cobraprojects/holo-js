@@ -3,6 +3,7 @@ import { normalizeDialectReadValue, normalizeDialectWriteValue } from '../schema
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
+import { ownEntry } from './entityRuntime'
 import { getModelRuntimeSettings } from './runtimeSettings'
 import type { BuiltInCastName, ModelCastDefinition, ModelDefinition, ModelRecord } from './types'
 
@@ -15,7 +16,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   ) {}
 
   resolveAttribute(key: string, entity: Entity<TTable>, value: unknown): unknown {
-    const accessor = this.definition.accessors[key]
+    const accessor = ownEntry(this.definition.accessors, key)
     return accessor ? accessor(value, entity) : value
   }
 
@@ -109,7 +110,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   serializeAttributeValue(key: string, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(this.definition.casts[key])
+    const builtInCast = this.parseBuiltInCast(ownEntry(this.definition.casts, key))
     if (
       value instanceof Date
       && builtInCast
@@ -159,7 +160,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   applyMutator(key: string, value: unknown): unknown {
-    const mutator = this.definition.mutators[key]
+    const mutator = ownEntry(this.definition.mutators, key)
     return mutator ? mutator(value) : value
   }
 
@@ -168,17 +169,17 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   castForStorage(key: string, value: unknown): unknown {
-    const cast = this.definition.casts[key]
+    const cast = ownEntry(this.definition.casts, key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
   }
 
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {
-    return this.definition.table.columns[key]?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
+    return ownEntry(this.definition.table.columns, key)?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
   }
 
   private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database'): unknown {
-    const column = this.definition.table.columns[key]
+    const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
       return value
     }
@@ -192,7 +193,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
-    const column = this.definition.table.columns[key]
+    const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
       return value
     }

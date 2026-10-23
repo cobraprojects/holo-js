@@ -424,7 +424,7 @@ Creates a reset token and emails it. It doesn't reveal whether the email exists:
 
 `resetPassword(input: { token: string, password: string, passwordConfirmation: string }): Promise<AuthenticatedAuthUser>`
 
-Checks the token, saves the new password, cycles the user's remember token, deletes the email's other reset tokens, and returns the user. Browsers that are still signed in keep their sessions. An invalid or expired token, or mismatched passwords, throw a validation exception.
+Checks the token, saves the new password, cycles the user's remember token, signs the user out of every other browser, rotates the session of the browser that reset the password so it stays signed in, deletes the email's other reset tokens, and returns the user. An invalid or expired token, or mismatched passwords, throw a validation exception.
 
 **Email verification**
 

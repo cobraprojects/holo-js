@@ -242,7 +242,7 @@ Store options by driver:
 | Driver | Options |
 | --- | --- |
 | `file` | `path` (default `./storage/framework/cache/data`), `prefix`. |
-| `memory` | `maxEntries`, `prefix`. Lives in one process only. |
+| `memory` | `maxEntries` (default `10000`), `prefix`. Lives in one process only. |
 | `redis` | `connection` (default `'default'`), `prefix`. |
 | `database` | `connection` (default `'default'`), `table` (default `'cache'`), `lockTable` (default `'cache_locks'`), `prefix`. Run `npx holo cache:table` to create the tables. |
 

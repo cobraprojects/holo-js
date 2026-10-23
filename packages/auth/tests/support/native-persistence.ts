@@ -14,6 +14,7 @@ import type { HoloAuthConfig } from '../../src'
 import verificationMigration from '../../../../apps/blog-next/server/db/migrations/2026_04_25_044037_create_email_verification_tokens'
 import identityMigration from '../../../../apps/blog-next/server/db/migrations/2026_04_25_044034_create_auth_identities'
 import passwordMigration from '../../../../apps/blog-next/server/db/migrations/2026_04_25_044036_create_password_reset_tokens'
+import sessionRevocationMigration from '../../../../apps/blog-next/server/db/migrations/2026_10_08_000001_create_auth_session_revocations'
 
 const projectRoot = resolve(import.meta.dirname, '../../../../apps/blog-next')
 let config: ReturnType<typeof loadConfigDirectory> | undefined
@@ -37,6 +38,7 @@ export async function createNativeAuthPersistence(authConfig?: HoloAuthConfig, m
   await verificationMigration.up({ db, schema })
   await passwordMigration.up({ db, schema })
   await identityMigration.up({ db, schema })
+  await sessionRevocationMigration.up({ db, schema })
   await userMigration.up({ db, schema })
   await adminMigration.up({ db, schema })
   for (const name of ['users', 'admins']) {

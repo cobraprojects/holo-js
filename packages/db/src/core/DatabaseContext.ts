@@ -14,6 +14,7 @@ import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegis
 import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
+import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import type { ModelDefinitionLike } from '../model/types'
@@ -156,6 +157,7 @@ export class DatabaseContext {
   constructor(options: DatabaseContextOptions | ContextInternals) {
     if (!options.adapter) throw new ConfigurationError('DatabaseContext requires an adapter.')
     if (!options.dialect) throw new ConfigurationError('DatabaseContext requires a dialect.')
+    markGenuineDatabaseContext(this)
 
     this._contextId = 'contextId' in options ? options.contextId : nextDatabaseContextId += 1
     this._connectionName = options.connectionName || 'default'
