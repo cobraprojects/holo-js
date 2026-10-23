@@ -1,3 +1,4 @@
+import { readBoundedRequestBody, readBoundedRequestText } from '@holo-js/kernel/request-body'
 import {
   type FieldBuilderInput,
   type FieldDefinition,
@@ -521,39 +522,11 @@ function parseJsonInput(text: string): unknown {
 
 async function parseFormBody(input: Request): Promise<FormData> {
   if (input.bodyUsed) return input.formData()
-  const reader = input.body?.getReader()
-  let readFailure: { readonly error: unknown } | undefined
-  let finished = !reader
-  const body = reader ? new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const result = await reader.read().catch((error: unknown) => {
-        readFailure = { error }
-        finished = true
-        throw error
-      })
-      if (result.done) {
-        finished = true
-        controller.close()
-      } else {
-        controller.enqueue(result.value)
-      }
-    },
-    cancel(reason) {
-      return reader.cancel(reason)
-    },
-  }) : null
-  const form = new Response(body, { headers: input.headers })
+  const bytes = await readBoundedRequestBody(input)
   try {
-    return await form.formData()
+    return await new Response(bytes, { headers: input.headers }).formData()
   } catch {
-    if (readFailure) throw readFailure.error
     return new FormData()
-  } finally {
-    try {
-      if (!finished) await reader?.cancel()
-    } finally {
-      reader?.releaseLock()
-    }
   }
 }
 
@@ -571,7 +544,7 @@ export async function normalizeRequestInput(input: Request): Promise<{ readonly 
   if (contentType === 'application/json') {
     return {
       source: 'request',
-      value: parseJsonInput(await input.text()),
+      value: parseJsonInput(await readBoundedRequestText(input)),
     }
   }
 
@@ -582,7 +555,7 @@ export async function normalizeRequestInput(input: Request): Promise<{ readonly 
     }
   }
 
-  const text = await input.text()
+  const text = await readBoundedRequestText(input)
   if (!text.trim()) {
     return {
       source: 'request',

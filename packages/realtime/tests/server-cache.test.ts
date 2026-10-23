@@ -39,7 +39,7 @@ async function createProject() {
       const chunks = []
       for await (const chunk of request) chunks.push(chunk)
       const result = await handleRealtimeQueryRequest(new Request('https://app.test/realtime/query', {
-        method: 'POST', body: Buffer.concat(chunks)
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: Buffer.concat(chunks)
       }), { projectRoot: ${JSON.stringify(projectRoot)} })
       response.writeHead(result.status, Object.fromEntries(result.headers))
       response.end(await result.text())

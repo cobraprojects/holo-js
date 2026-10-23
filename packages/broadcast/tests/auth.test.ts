@@ -1022,7 +1022,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
     const unknownErrorResponse = await renderBroadcastAuthResponse({
       method: 'POST',
       headers: new Headers(),
-      async formData() {
+      get body() {
         throw 'boom'
       },
     } as never, {

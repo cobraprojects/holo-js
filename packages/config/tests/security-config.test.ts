@@ -115,6 +115,8 @@ describe('@holo-js/config security normalization', () => {
         },
       },
       trustedProxies: [],
+      maxBodyBytes: 1048576,
+      maxUploadBodyBytes: 8388608,
     })
   })
 
@@ -147,6 +149,8 @@ describe('@holo-js/config security normalization', () => {
         limiters: {},
       },
       trustedProxies: [],
+      maxBodyBytes: 1048576,
+      maxUploadBodyBytes: 8388608,
     })
     expect(normalizeSecurityConfig({
       csrf: true,
@@ -276,6 +280,8 @@ describe('@holo-js/config security normalization', () => {
         limiters: {},
       },
       trustedProxies: [],
+      maxBodyBytes: 1048576,
+      maxUploadBodyBytes: 8388608,
     })
 
     expect(() => normalizeSecurityConfig({

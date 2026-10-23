@@ -1,0 +1,211 @@
+import { Readable } from 'node:stream'
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
+  readBoundedBufferedBody,
+  DEFAULT_MAX_UPLOAD_BODY_BYTES,
+  requestBodyLimitFor,
+  HoloRequestBodyTooLargeError,
+  readBoundedNodeRequestBody,
+  readBoundedCachedBody,
+  readBoundedRequestBody,
+  readBoundedRequestFormData,
+  readBoundedRequestJson,
+  readBoundedRequestText,
+} from '../src/index'
+
+function streamOf(chunks: readonly Uint8Array[], onPull?: (index: number) => void): ReadableStream<Uint8Array> {
+  let index = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      onPull?.(index)
+      const chunk = chunks[index++]
+      if (chunk) controller.enqueue(chunk)
+      else controller.close()
+    },
+  }, { highWaterMark: 0 })
+}
+
+describe('bounded request bodies', () => {
+  it('defaults to one mebibyte', () => {
+    expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBe(1024 * 1024)
+  })
+
+  it('returns the bytes of a body at the limit', async () => {
+    const request = new Request('https://example.test', { method: 'POST', body: new Uint8Array(8) })
+
+    const bytes = await readBoundedRequestBody(request, 8)
+
+    expect(bytes.byteLength).toBe(8)
+  })
+
+  it('rejects a declared Content-Length above the limit without reading the stream', async () => {
+    let pulls = 0
+    const request = new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-length': '9' },
+      body: streamOf([new Uint8Array(9)], () => pulls++),
+      duplex: 'half',
+    } as RequestInit)
+
+    await expect(readBoundedRequestBody(request, 8)).rejects.toMatchObject({ status: 413 })
+    expect(pulls).toBe(0)
+  })
+
+  it('rejects a streamed body above the limit before reading past it', async () => {
+    const pulled: number[] = []
+    const request = new Request('https://example.test', {
+      method: 'POST',
+      body: streamOf(Array.from({ length: 100 }, () => new Uint8Array(4)), index => pulled.push(index)),
+      duplex: 'half',
+    } as RequestInit)
+
+    const error = await readBoundedRequestBody(request, 10).catch(caught => caught)
+
+    expect(error).toBeInstanceOf(HoloRequestBodyTooLargeError)
+    expect(pulled.length).toBeLessThan(5)
+  })
+
+  it('returns an empty buffer for a request without a body', async () => {
+    const bytes = await readBoundedRequestBody(new Request('https://example.test', { method: 'POST' }), 1)
+
+    expect(bytes.byteLength).toBe(0)
+  })
+
+  it('rejects a declared Node Content-Length above the limit before reading', async () => {
+    await expect(readBoundedNodeRequestBody(Readable.from([Buffer.alloc(1)]), 10, '11'))
+      .rejects.toBeInstanceOf(HoloRequestBodyTooLargeError)
+  })
+
+  it('bounds Node request streams the same way', async () => {
+    await expect(readBoundedNodeRequestBody(Readable.from([Buffer.alloc(6), Buffer.alloc(6)]), 10))
+      .rejects.toBeInstanceOf(HoloRequestBodyTooLargeError)
+    await expect(readBoundedNodeRequestBody(Readable.from([Buffer.alloc(4), Buffer.alloc(6)]), 10))
+      .resolves.toHaveProperty('byteLength', 10)
+  })
+})
+
+describe('bounded request body decoding', () => {
+  it('decodes JSON, text and form bodies within the limit', async () => {
+    await expect(readBoundedRequestJson(new Request('https://example.test', {
+      method: 'POST',
+      body: '{"name":"query"}',
+    }), 64)).resolves.toEqual({ name: 'query' })
+    await expect(readBoundedRequestText(new Request('https://example.test', { method: 'POST', body: 'plain' }), 64))
+      .resolves.toBe('plain')
+    await expect(readBoundedRequestFormData(new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'title=Guide',
+    }), 64).then(form => form.get('title'))).resolves.toBe('Guide')
+  })
+
+  it('applies the limit to form bodies', async () => {
+    await expect(readBoundedRequestFormData(new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'title=' + 'x'.repeat(64),
+    }), 16)).rejects.toBeInstanceOf(HoloRequestBodyTooLargeError)
+  })
+})
+
+describe('upload body limit', () => {
+  it('defaults multipart uploads to eight mebibytes, as PHP post_max_size does', () => {
+    expect(DEFAULT_MAX_UPLOAD_BODY_BYTES).toBe(8 * 1024 * 1024)
+    expect(requestBodyLimitFor('multipart/form-data; boundary=x')).toBe(DEFAULT_MAX_UPLOAD_BODY_BYTES)
+    expect(requestBodyLimitFor('application/json')).toBe(DEFAULT_MAX_REQUEST_BODY_BYTES)
+    expect(requestBodyLimitFor(null)).toBe(DEFAULT_MAX_REQUEST_BODY_BYTES)
+  })
+
+  it('accepts a multipart upload above one mebibyte and below the upload limit', async () => {
+    const request = new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=x' },
+      body: new Uint8Array(2 * 1024 * 1024 + 1),
+    })
+
+    await expect(readBoundedRequestBody(request)).resolves.toHaveProperty('byteLength', 2 * 1024 * 1024 + 1)
+  })
+
+  it('rejects a multipart upload above the upload limit', async () => {
+    const request = new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=x' },
+      body: new Uint8Array(DEFAULT_MAX_UPLOAD_BODY_BYTES + 1),
+    })
+
+    await expect(readBoundedRequestBody(request)).rejects.toMatchObject({ status: 413 })
+  })
+
+  it('keeps the request body limit for non-multipart bodies', async () => {
+    const request = new Request('https://example.test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: new Uint8Array(DEFAULT_MAX_REQUEST_BODY_BYTES + 1),
+    })
+
+    await expect(readBoundedRequestBody(request)).rejects.toMatchObject({ status: 413 })
+  })
+})
+
+describe('cached request bodies', () => {
+  it('rejects an oversized cached body without copying any of its bytes', async () => {
+    const target = new Uint8Array(17)
+    let indexReads = 0
+    const cached = new Proxy(target, {
+      get(source, property) {
+        if (typeof property === 'string' && /^\d+$/.test(property)) indexReads += 1
+        return Reflect.get(source, property, source)
+      },
+    })
+
+    await expect(readBoundedCachedBody(cached, 16)).rejects.toMatchObject({ status: 413 })
+    expect(indexReads).toBe(0)
+  })
+
+  it('returns a copy of a cached body within the limit', async () => {
+    const cached = new Uint8Array([1, 2, 3])
+
+    const bytes = await readBoundedCachedBody(cached, 16)
+
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]))
+    expect(bytes?.buffer).not.toBe(cached.buffer)
+  })
+})
+
+describe('buffered body shapes', () => {
+  it('serializes a parsed object, URLSearchParams and a web stream the way H3 reads them', async () => {
+    await expect(readBoundedCachedBody({ name: 'parsed' }, 64)).resolves.toEqual(new TextEncoder().encode('{"name":"parsed"}'))
+    await expect(readBoundedCachedBody(new URLSearchParams({ a: '1' }), 64)).resolves.toEqual(new TextEncoder().encode('a=1'))
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('streamed'))
+        controller.close()
+      },
+    })
+    await expect(readBoundedCachedBody(stream, 64)).resolves.toEqual(new TextEncoder().encode('streamed'))
+  })
+
+  it('rejects a parsed object or web stream over the limit', async () => {
+    await expect(readBoundedCachedBody({ padding: 'x'.repeat(64) }, 16)).rejects.toMatchObject({ status: 413 })
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(64)))
+        controller.close()
+      },
+    })
+    await expect(readBoundedCachedBody(stream, 16)).rejects.toMatchObject({ status: 413 })
+  })
+})
+
+describe('pre-parsed FormData bodies', () => {
+  it('reports the boundary its re-encoded bytes use', async () => {
+    const form = new FormData()
+    form.set('title', 'Guide')
+    const buffered = await readBoundedBufferedBody(form, 1024)
+
+    expect(buffered?.contentType).toMatch(/^multipart\/form-data; boundary=/)
+    expect(new TextDecoder().decode(buffered?.bytes)).toContain('Guide')
+  })
+})
+

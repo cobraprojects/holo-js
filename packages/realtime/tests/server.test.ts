@@ -51,10 +51,12 @@ describe('@holo-js/realtime server definition resolution', () => {
 
     const queryResponse = await handleRealtimeQueryRequest(new Request('http://localhost/holo/realtime/query', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'posts.list', args: { page: 2 } }),
     }), options)
     const mutationResponse = await handleRealtimeMutationRequest(new Request('http://localhost/holo/realtime/mutation', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'posts.rename', args: { title: 'Renamed' } }),
     }), options)
 
@@ -109,6 +111,7 @@ describe('@holo-js/realtime server definition resolution', () => {
       const imported: string[] = []
       const response = await handle(new Request('http://localhost/holo/realtime', {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, args: {} }),
       }), {
         projectRoot,
@@ -241,5 +244,51 @@ export { definition }
     } finally {
       await rm(projectRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('@holo-js/realtime request body contract', () => {
+  const options = {
+    projectRoot: '/unused',
+    definitions: [
+      defineRealtimeQuery({ name: 'posts.list', access: 'public', handler: () => [{ id: 1 }] }),
+      defineRealtimeMutation({ name: 'posts.rename', access: 'public', handler: () => ({ renamed: true }) }),
+    ],
+  }
+  const endpoints = [
+    ['query', handleRealtimeQueryRequest, 'posts.list'],
+    ['mutation', handleRealtimeMutationRequest, 'posts.rename'],
+  ] as const
+
+  it.each(endpoints)('rejects a %s whose body is not JSON with 415 before reading it', async (_kind, handle, name) => {
+    for (const contentType of [undefined, 'application/x-www-form-urlencoded', 'text/plain', 'multipart/form-data; boundary=x']) {
+      const response = await handle(new Request('http://localhost/holo/realtime', {
+        method: 'POST',
+        headers: contentType ? { 'content-type': contentType } : {},
+        body: `name=${name}&args=%7B%7D`,
+      }), options)
+
+      expect(response.status, contentType).toBe(415)
+    }
+  })
+
+  it.each(endpoints)('does not reject a %s whose body is application/json with parameters', async (_kind, handle, name) => {
+    const response = await handle(new Request('http://localhost/holo/realtime', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ name, args: {} }),
+    }), options)
+
+    expect(response.status).not.toBe(415)
+  })
+
+  it.each(endpoints)('rejects a %s body above the default one mebibyte limit with 413', async (_kind, handle, name) => {
+    const response = await handle(new Request('http://localhost/holo/realtime', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, args: { padding: 'x'.repeat(1024 * 1024) } }),
+    }), options)
+
+    expect(response.status).toBe(413)
   })
 })
