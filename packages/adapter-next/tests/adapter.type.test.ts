@@ -23,7 +23,7 @@ function expectCommandToPass(command: string, args: readonly string[], options: 
     throw new Error([
       failure.stdout?.toString(),
       failure.stderr?.toString(),
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   }
 }
 

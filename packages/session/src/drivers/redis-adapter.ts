@@ -207,7 +207,7 @@ function parseClusterNodeUrl(node: string, label: string): RedisClusterStartupNo
     }
   } catch (error) {
     const message = String(error).replace(/^[A-Z][A-Za-z]*Error: /, '')
-    throw new Error(`[@holo-js/session] ${label} is invalid: ${message}`)
+    throw new Error(`[@holo-js/session] ${label} is invalid: ${message}`, { cause: error })
   }
 }
 

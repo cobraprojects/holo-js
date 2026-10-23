@@ -7,6 +7,7 @@
   }
 
   const form = useForm(resetPasswordForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { token: data.token, password: '', passwordConfirmation: '' },
     async submitter({ formData }) {

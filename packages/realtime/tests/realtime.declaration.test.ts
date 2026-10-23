@@ -18,7 +18,7 @@ async function expectDeclarationEmitToPass(tsconfigPath: string): Promise<void> 
     })
   } catch (error) {
     const failure = error as ExecFileError
-    throw new Error([failure.message, failure.stdout, failure.stderr].filter(Boolean).join('\n'))
+    throw new Error([failure.message, failure.stdout, failure.stderr].filter(Boolean).join('\n'), { cause: error })
   }
 }
 

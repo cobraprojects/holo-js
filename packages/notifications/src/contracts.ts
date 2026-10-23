@@ -206,7 +206,7 @@ export type InferNotificationNotifiable<TNotification>
       : never
 
 export type InferNotificationChannels<TNotification>
-  = TNotification extends NotificationDefinition<unknown, infer TBuild>
+  = TNotification extends { readonly build: infer TBuild }
     ? Extract<keyof TBuild, string>
     : never
 
@@ -464,9 +464,11 @@ export function defineNotification<
   TNotifiable,
   const TBuild extends NotificationBuildFactories<TNotifiable>,
 >(
-  definition: NotificationDefinitionInput<TNotifiable, TBuild>,
+  definition: NotificationDefinitionInput<TNotifiable, TBuild> & {
+    build: TBuild & NotificationBuildFactories<TNotifiable>
+  },
 ): NotificationDefinition<TNotifiable, TBuild> {
-  return normalizeNotificationDefinition(definition)
+  return normalizeNotificationDefinition<TNotifiable, TBuild>(definition)
 }
 
 export function createAnonymousNotificationTarget<

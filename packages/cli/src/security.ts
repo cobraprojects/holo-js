@@ -42,7 +42,7 @@ export async function loadSecurityCliModule(projectRoot: string): Promise<Securi
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `Unable to load @holo-js/security from ${projectRoot}. Install it with "holo install security". ${details}`,
+      `Unable to load @holo-js/security from ${projectRoot}. Install it with "holo install security". ${details}`, { cause: error },
     )
   }
 }

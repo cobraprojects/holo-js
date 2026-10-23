@@ -1003,7 +1003,7 @@ export default defineMigration({
       error instanceof Error ? error.message : String(error),
       serverStdout,
       serverStderr,
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   } finally {
     await stopServer(server)
   }

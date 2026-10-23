@@ -118,7 +118,7 @@ async function loadQueueModule(): Promise<QueueModule> {
         && 'code' in error
         && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
       ) {
-        throw new Error('[@holo-js/notifications] Queued or delayed notifications require @holo-js/queue to be installed.')
+        throw new Error('[@holo-js/notifications] Queued or delayed notifications require @holo-js/queue to be installed.', { cause: error })
       }
 
       throw error
@@ -135,7 +135,7 @@ async function loadQueueModule(): Promise<QueueModule> {
       && 'code' in error
       && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
     ) {
-      throw new Error('[@holo-js/notifications] Queued or delayed notifications require @holo-js/queue to be installed.')
+      throw new Error('[@holo-js/notifications] Queued or delayed notifications require @holo-js/queue to be installed.', { cause: error })
     }
 
     throw error

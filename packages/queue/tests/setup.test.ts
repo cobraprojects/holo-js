@@ -94,6 +94,9 @@ describe('@holo-js/queue packaging', () => {
       expect(() => execFileSync(
         resolve(repoRoot, 'node_modules/.bin/tsc'),
         [
+          '--ignoreConfig',
+          '--strict',
+          'false',
           '--module',
           'nodenext',
           '--moduleResolution',

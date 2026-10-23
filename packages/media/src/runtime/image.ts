@@ -108,7 +108,7 @@ export function createDefaultMediaConversionExecutor(): MediaConversionExecutor 
         }
       } catch (error) {
         throw new Error(
-          `[Holo Media] Failed to generate conversion "${conversion.name}" for "${source.fileName}": ${(error as Error).message}`,
+          `[Holo Media] Failed to generate conversion "${conversion.name}" for "${source.fileName}": ${(error as Error).message}`, { cause: error },
         )
       }
     },

@@ -4,7 +4,6 @@
     "outDir": "./dist",
     "declaration": true,
     "declarationMap": true,
-    "baseUrl": ".",
     "paths": {
       "@holo-js/authorization": [
         "../authorization/src/index.ts"

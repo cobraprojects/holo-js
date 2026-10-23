@@ -499,11 +499,13 @@ const form = useForm(registerForm, {
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { loginForm } from '$lib/schemas/auth'
+
   import type { PageData } from './$types'
 
   export let data: PageData
 
   const login = useForm(loginForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
   })
@@ -538,11 +540,13 @@ const form = useForm(registerForm, {
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { registerForm } from '$lib/schemas/auth'
+
   import type { PageData } from './$types'
 
   export let data: PageData
 
   const register = useForm(registerForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
   })

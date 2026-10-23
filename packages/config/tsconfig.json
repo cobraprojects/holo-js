@@ -2,10 +2,9 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
-      "@holo-js/config": ["src/index.ts"],
-      "@holo-js/config/registry": ["src/registry.ts"],
+      "@holo-js/config": ["./src/index.ts"],
+      "@holo-js/config/registry": ["./src/registry.ts"],
       "@holo-js/queue/config": ["../queue/src/config.ts"],
       "@holo-js/kernel": [
         "../kernel/src/index.ts"

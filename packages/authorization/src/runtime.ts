@@ -358,7 +358,7 @@ async function installAuthorizationDefinitions(
       try {
         restore(true)
       } catch (restorationError) {
-        throw new AggregateError([error, restorationError], 'Authorization definition installation and restoration failed.')
+        throw new AggregateError([error, restorationError], 'Authorization definition installation and restoration failed.', { cause: restorationError })
       }
       throw error
     } finally {

@@ -358,7 +358,7 @@ function assertPublicEntrypointsImport(appRoot: string, imports: readonly string
       execError.message,
       formatExecOutput(execError.stdout),
       formatExecOutput(execError.stderr),
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   }
 }
 
@@ -387,7 +387,7 @@ await runtime.shutdown()
       execError.message,
       formatExecOutput(execError.stdout),
       formatExecOutput(execError.stderr),
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   }
 }
 

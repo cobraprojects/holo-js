@@ -185,7 +185,7 @@ function parseClusterNodeUrl(url: string, label: string): RedisClusterStartupNod
   /* v8 ignore start -- URL parsing failures surface as Error instances in supported Node runtimes. */
   } catch (error) {
     throw new Error(
-      `[@holo-js/cache-redis] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      `[@holo-js/cache-redis] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`, { cause: error },
     )
   }
   }

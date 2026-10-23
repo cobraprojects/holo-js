@@ -218,7 +218,7 @@ async function importRealtimeModule(filePath: string, options: RealtimeServerOpt
       try {
         await rm(loaded.bundleRoot, { recursive: true, force: true })
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], `Failed to clean up realtime module bundle "${loaded.bundleRoot}".`)
+        throw new AggregateError([error, cleanupError], `Failed to clean up realtime module bundle "${loaded.bundleRoot}".`, { cause: cleanupError })
       }
     }
     throw error

@@ -1,8 +1,12 @@
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { forgotPasswordForm } from '$lib/schemas/auth'
+  import type { PageData } from './$types'
+
+  export let data: PageData
 
   const form = useForm(forgotPasswordForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { email: '' },
     async submitter({ formData }) {

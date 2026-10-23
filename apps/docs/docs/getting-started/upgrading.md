@@ -208,6 +208,27 @@ A JSON or form body that can't be parsed is now validated as `{}` instead of thr
 
 Errors thrown inside `custom()` and `customAsync()` are no longer turned into a validation message on `_root`. They reach your framework's error handling and respond with a 500. If a custom rule calls code that can throw for invalid input, catch the error in the rule and return a message string instead.
 
+### SvelteKit validation flash
+
+The cookie that carries validation errors and submitted values to the next page in SvelteKit is now `HttpOnly` and encrypted with `APP_KEY`, like Holo's session cookies. Scripts can no longer read it, so `useForm` and `useValidationErrors` no longer read `document.cookie`. Instead, the root layout passes the flash through page data:
+
+```ts [src/routes/+layout.server.ts]
+import { readValidationFlash } from '@holo-js/adapter-sveltekit'
+
+export const load = ({ url }) => ({
+  holoValidationFlash: readValidationFlash(url),
+})
+```
+
+Pass `url` as shown. SvelteKit reruns the layout load on each navigation because it reads the URL, and `readValidationFlash(url)` hands the flash only to the page it was written for, so errors from one form never appear on another page. Pass the page data to each form that shows flashed errors or restores its input:
+
+```svelte
+const login = useForm(loginForm, { pageData: data })
+const errors = useValidationErrors('default', { pageData: data })
+```
+
+Passing `pageData` is required for flash restoration. Without the layout load and `pageData`, a failed submission shows no field errors and doesn't restore the submitted input, on the server or in the browser. If `APP_KEY` is empty, Holo writes no flash cookie and logs a warning when debugging is on.
+
 ### Request body limit
 
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).

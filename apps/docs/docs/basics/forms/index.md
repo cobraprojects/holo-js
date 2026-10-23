@@ -146,7 +146,12 @@ const form = useForm(contactForm, {
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { contactForm } from '$lib/schemas/contact'
 
+  import type { PageData } from './$types'
+
+  export let data: PageData
+
   const form = useForm(contactForm, {
+    pageData: data,
     action: '/api/contact',
     validateOn: 'blur',
     initialValues: { name: '', email: '', message: '' },

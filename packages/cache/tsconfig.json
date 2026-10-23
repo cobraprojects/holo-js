@@ -17,6 +17,9 @@
       ],
       "@holo-js/queue": [
         "../queue/src/index.ts"
+      ],
+      "@holo-js/cache-redis": [
+        "../cache-redis/src/index.ts"
       ]
     }
   },
