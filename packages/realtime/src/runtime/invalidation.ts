@@ -343,7 +343,7 @@ async function refreshRemoteEntry(refreshKey: string): Promise<void> {
 
   const generation = remoteRefreshGeneration
   const acquired = await acquireRemoteRefreshSlot()
-  if (!acquired) {
+  if (!acquired || generation !== remoteRefreshGeneration) {
     return
   }
 

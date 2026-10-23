@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -86,4 +86,23 @@ test('fails instead of treating a registry outage as an unpublished package', as
     listUnpublishedPackages({ root, fetchImpl }),
     /npm registry responded 503 for @holo-js\/core@0\.3\.28/,
   )
+})
+
+const canRevokeTraversal = process.platform !== 'win32' && process.getuid?.() !== 0
+
+test('fails when a package manifest cannot be checked instead of dropping the package from the release gate', { skip: !canRevokeTraversal }, async () => {
+  const root = await createTempRepo({
+    core: { name: '@holo-js/core', version: '0.3.28' },
+  })
+  const lockedDirectory = join(root, 'packages', 'locked')
+  await mkdir(lockedDirectory)
+  await writeFile(join(lockedDirectory, 'package.json'), JSON.stringify({ name: '@holo-js/locked', version: '0.3.29' }))
+  await chmod(lockedDirectory, 0o000)
+
+  try {
+    const { fetchImpl } = registryWith(new Set())
+    await assert.rejects(listUnpublishedPackages({ root, fetchImpl }), { code: 'EACCES' })
+  } finally {
+    await chmod(lockedDirectory, 0o755)
+  }
 })

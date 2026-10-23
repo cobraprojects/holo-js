@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -11,6 +11,19 @@ import { CONFIG_NORMALIZER_PACKAGES } from '../src/project/load-config'
 import { initializeQueueMaintenanceEnvironment } from '../src/queue'
 
 const tempDirs: string[] = []
+
+type PackageManifest = {
+  readonly name: string
+  readonly exports?: Readonly<Record<string, string | { readonly '@holo-js/source'?: string }>>
+}
+
+function readPackageManifest(path: string): PackageManifest | undefined {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as PackageManifest
+  } catch {
+    return undefined
+  }
+}
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 
 async function createProject(): Promise<string> {
@@ -101,15 +114,27 @@ export const sendEmailJob = defineJob({
     }
   })
 
-  it('lists every workspace package that registers a config normalizer', () => {
+  it('lists exactly the workspace packages whose config module registers a normalizer', async () => {
     const packagesRoot = join(workspaceRoot, 'packages')
-    const owners = readdirSync(packagesRoot)
-      .filter(name => name !== 'config' && existsSync(join(packagesRoot, name, 'src')))
-      .filter(name => readdirSync(join(packagesRoot, name, 'src')).some(file =>
-        file.endsWith('.ts') && /registerConfigNormalizer[<(]/.test(readFileSync(join(packagesRoot, name, 'src', file), 'utf8')),
-      ))
-      .map(name => (JSON.parse(readFileSync(join(packagesRoot, name, 'package.json'), 'utf8')) as { name: string }).name)
+    const registering: string[] = []
+    for (const directory of readdirSync(packagesRoot)) {
+      const manifest = readPackageManifest(join(packagesRoot, directory, 'package.json'))
+      const configExport = manifest?.exports?.['./config']
+      const configModule = typeof configExport === 'string' ? configExport : configExport?.['@holo-js/source']
+      if (!manifest || !configModule) continue
 
-    expect([...CONFIG_NORMALIZER_PACKAGES].sort()).toEqual(owners.sort())
+      const restoreNormalizers = configRegistryInternals.snapshotNormalizers()
+      resetConfigNormalizers()
+      vi.resetModules()
+      try {
+        await import(join(packagesRoot, directory, configModule))
+
+        if (configRegistryInternals.getRegisteredNames().length > 0) registering.push(manifest.name)
+      } finally {
+        restoreNormalizers()
+      }
+    }
+
+    expect(registering.sort()).toEqual([...CONFIG_NORMALIZER_PACKAGES].sort())
   })
 })

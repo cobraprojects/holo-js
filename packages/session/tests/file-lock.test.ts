@@ -92,7 +92,7 @@ describe('file session locking with real processes', () => {
     await flash
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
-  }, 15_000)
+  })
 
   it('reclaims a lock after its actual owner process terminates', async () => {
     const { root, store, record, lockPath } = await createSession()
@@ -111,7 +111,7 @@ describe('file session locking with real processes', () => {
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
     await stopWorker(owner)
-  }, 15_000)
+  })
 
   it('takes over a lease its live owner publishes as released while another writer is already waiting', async () => {
     const { root, store, record, lockPath } = await createSession()
@@ -123,7 +123,7 @@ describe('file session locking with real processes', () => {
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
     await stopWorker(owner)
-  }, 15_000)
+  })
 
   it('times out on a live native lock and writes successfully after release', async () => {
     const { root, store, record, lockPath } = await createSession()
