@@ -58,7 +58,7 @@ The CLI's package-manager tests run real `npm`, `pnpm`, and `yarn` installs, so 
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on Node 24, the runtime audit and dead-code gate, and native package loading and server lifecycle checks on Linux, Windows, and macOS with Node 22.14.0, 24, and 26. The example apps and the published-package, scaffold, and browser-bundle acceptance checks run locally with `bun run test`; run them under each supported Node version before a release.
+CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.14.0, 24, and 26), the runtime audit and dead-code gate, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
 
 The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit.
 
@@ -101,7 +101,7 @@ Keep the example apps in `apps/` in line with what new projects get.
 
 ## Releases
 
-Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. It builds the packages, then runs `bun run release:skip-build`, which publishes every package whose version is not on npm yet with npm provenance, and pushes a git tag for each published version. The publish job runs only for `main` and declares the `release` environment. Publishing needs an `NPM_TOKEN` secret with publish access to the `@holo-js` scope, stored as a secret of the `release` environment rather than a repository secret. Until that secret exists, the publish step logs a notice and the run succeeds without publishing. Only the publish step receives the token.
+Merging to `main` runs the Release workflow in `.github/workflows/release.yml`. Its `ci` job waits until every required CI workflow (Quality gates, Library tests, Node platform compatibility, and App and acceptance suites) has finished for that commit, and fails if any of them failed or was cancelled. Only then does the publish job build the packages, run `bun run release:skip-build`, which publishes every package whose version is not on npm yet with npm provenance, and push a git tag for each published version. The publish job runs only for `main` and declares the `release` environment. Publishing needs an `NPM_TOKEN` secret with publish access to the `@holo-js` scope, stored as a secret of the `release` environment rather than a repository secret. While that secret is missing, the publish step fails if any package version is not on npm yet, so a due release is never skipped silently. It logs a notice and succeeds only when every version is already published. Only the publish step receives the token.
 
 Repository owners must create the `release` environment in the GitHub repository settings, with these rules:
 

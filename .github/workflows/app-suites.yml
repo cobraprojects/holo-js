@@ -1,0 +1,123 @@
+name: App and acceptance suites
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: Acceptance suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - name: Cache Bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install Playwright Chromium for the browser bundle check
+        run: bun x playwright install --with-deps chromium
+      - name: Run the published package, scaffold, and browser bundle acceptance checks
+        run: bun run test:acceptance
+
+  examples:
+    name: Example app (${{ matrix.framework }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        framework:
+          - next
+          - nuxt
+          - sveltekit
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      HOLO_TEST_FRAMEWORK: ${{ matrix.framework }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - name: Cache Bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: v2-bun-examples-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: v2-bun-examples-${{ runner.os }}-
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: node scripts/build-libraries.mjs
+      - name: Put the built holo CLI on the PATH for the example apps
+        run: |
+          mkdir -p "$RUNNER_TEMP/holo-bin"
+          printf '#!/usr/bin/env bash\nexec node "%s" "$@"\n' "$PWD/packages/cli/dist/bin/holo.mjs" > "$RUNNER_TEMP/holo-bin/holo"
+          chmod +x "$RUNNER_TEMP/holo-bin/holo"
+          echo "$RUNNER_TEMP/holo-bin" >> "$GITHUB_PATH"
+      - name: Run the example app prepare script to generate its environment file
+        run: |
+          bun run --cwd apps/blog-${{ matrix.framework }} prepare
+          test -s apps/blog-${{ matrix.framework }}/.env
+          grep -q '^BROADCAST_APP_KEY=.' apps/blog-${{ matrix.framework }}/.env
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: v2-playwright-examples-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: Install Playwright Chromium for the example app browser checks
+        run: bun x playwright install --with-deps chromium
+      - name: Run the ${{ matrix.framework }} example app against SQLite, Postgres, and MySQL
+        run: bun run test:examples
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: example-app-logs-${{ matrix.framework }}
+          path: coverage/app-*.log

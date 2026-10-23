@@ -15,8 +15,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    name: Wait for CI on this commit
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Require every CI workflow to pass for this commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-release-ci.mjs
+
   publish:
     name: Publish packages
+    needs: ci
     if: github.ref == 'refs/heads/main'
     environment: release
     runs-on: ubuntu-latest
@@ -47,7 +65,13 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::notice title=Release skipped::NPM_TOKEN is not configured, so no packages were published."
+            unpublished="$(node scripts/list-unpublished-packages.mjs)"
+            if [ -n "$unpublished" ]; then
+              echo "::error title=NPM_TOKEN is missing::A publish is due, but NPM_TOKEN is not configured. Package versions missing from npm:"
+              echo "$unpublished"
+              exit 1
+            fi
+            echo "::notice title=Release skipped::NPM_TOKEN is not configured, and every package version is already on npm."
             exit 0
           fi
           bun run release:skip-build

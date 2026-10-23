@@ -18,6 +18,8 @@ afterEach(async () => {
 
 const buildOrderFailure = '.github/workflows/release.yml must build packages with `node scripts/build-libraries.mjs` in an unconditional step without continue-on-error, before the publish step, so declarations resolve in dependency order.'
 const sharedJobFailure = '.github/workflows/release.yml must build and publish in one job, because the built packages must reach the publish step on the same filesystem.'
+const tokenFailure = '.github/workflows/release.yml must fail when NPM_TOKEN is not configured and a package version is not on npm yet, and skip with a notice only when every version is already published.'
+const ciGateFailure = '.github/workflows/release.yml must wait for CI on this commit with `node scripts/wait-for-release-ci.mjs` in its own job before publishing.'
 
 const rejectOtherRefsRun = 'test "$GITHUB_REF" = refs/heads/main || { echo "::error::Releases publish only from main."; exit 1; }'
 
@@ -27,7 +29,21 @@ const validReleaseWorkflow = [
   '  contents: write',
   '  id-token: write',
   'jobs:',
+  '  ci:',
+  `    if: github.ref == 'refs/heads/main'`,
+  '    permissions:',
+  '      actions: read',
+  '      contents: read',
+  '    steps:',
+  '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+  '        with:',
+  '          ref: ${{ github.sha }}',
+  '      - name: Require every CI workflow to pass for this commit',
+  '        env:',
+  '          GITHUB_TOKEN: ${{ github.token }}',
+  '        run: node scripts/wait-for-release-ci.mjs',
   '  publish:',
+  '    needs: ci',
   `    if: github.ref == 'refs/heads/main'`,
   '    environment: release',
   '    steps:',
@@ -45,7 +61,13 @@ const validReleaseWorkflow = [
   `          NPM_CONFIG_PROVENANCE: 'true'`,
   '        run: |',
   '          if [ -z "$NODE_AUTH_TOKEN" ]; then',
-  '            echo "::notice title=Release skipped::NPM_TOKEN is not configured, so no packages were published."',
+  '            unpublished="$(node scripts/list-unpublished-packages.mjs)"',
+  '            if [ -n "$unpublished" ]; then',
+  '              echo "::error title=NPM_TOKEN is missing::A publish is due, but NPM_TOKEN is not configured."',
+  '              echo "$unpublished"',
+  '              exit 1',
+  '            fi',
+  '            echo "::notice title=Release skipped::NPM_TOKEN is not configured, and every package version is already on npm."',
   '            exit 0',
   '          fi',
   '          bun run release:skip-build',
@@ -323,19 +345,86 @@ test('release metadata counts job headers that carry a trailing comment', async 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [sharedJobFailure])
 })
 
-test('release metadata requires the publish step to skip with a notice when NPM_TOKEN is not configured', async () => {
+test('release metadata requires the publish step to skip with a notice when every version is already on npm', async () => {
   const root = await createTempRepo(completeRepo({
     '.github/workflows/release.yml': validReleaseWorkflow.replace('::notice title=Release skipped::', 'Release skipped: '),
   }))
 
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [tokenFailure])
+})
+
+test('release metadata requires the publish step to fail when NPM_TOKEN is missing and a publish is due', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('unpublished="$(node scripts/list-unpublished-packages.mjs)"', 'unpublished=""'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [tokenFailure])
+})
+
+test('release metadata requires the publish job to wait for the CI gate with needs', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('    needs: ci\n', ''),
+  }))
+
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
-    '.github/workflows/release.yml must skip the publish with a notice, not fail, when NPM_TOKEN is not configured.',
+    '.github/workflows/release.yml must make the publish job depend on the CI gate job `ci` with needs, so nothing publishes unless CI passed for this commit.',
+  ])
+})
+
+test('release metadata requires a job that waits for CI on the commit before publishing', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('        run: node scripts/wait-for-release-ci.mjs', '        run: echo skipped'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [ciGateFailure])
+})
+
+test('release metadata checks out the triggering commit in the publish job, not only in the CI gate', async () => {
+  const publishCheckout = validReleaseWorkflow.lastIndexOf('          ref: ${{ github.sha }}')
+  const mutated = validReleaseWorkflow.slice(0, publishCheckout) + '          ref: main' + validReleaseWorkflow.slice(publishCheckout + '          ref: ${{ github.sha }}'.length)
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': mutated,
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must check out github.sha in the publish job, not a user-chosen ref.',
+  ])
+})
+
+test('release metadata rejects a CI gate that continues on error, so failed CI could still publish', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace(
+      '        run: node scripts/wait-for-release-ci.mjs',
+      '        continue-on-error: true\n        run: node scripts/wait-for-release-ci.mjs',
+    ),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must let a failed CI run fail the CI gate job, so it may not use continue-on-error or a step-level if.',
+  ])
+})
+
+test('release metadata requires the due-publish branch to exit non-zero when NPM_TOKEN is missing', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('              exit 1\n', '              exit 0\n'),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [tokenFailure])
+})
+
+test('release metadata grants the CI gate job read access to workflow runs', async () => {
+  const root = await createTempRepo(completeRepo({
+    '.github/workflows/release.yml': validReleaseWorkflow.replace('      actions: read\n', ''),
+  }))
+
+  assert.deepEqual(await collectReleaseMetadataFailures(root), [
+    '.github/workflows/release.yml must grant actions: read to the CI gate job so it can list workflow runs for this commit.',
   ])
 })
 
 test('release metadata runs the publish job only for refs/heads/main', async () => {
   const root = await createTempRepo(completeRepo({
-    '.github/workflows/release.yml': validReleaseWorkflow.replace("    if: github.ref == 'refs/heads/main'\n", ''),
+    '.github/workflows/release.yml': validReleaseWorkflow.replaceAll("    if: github.ref == 'refs/heads/main'\n", ''),
   }))
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
@@ -355,11 +444,11 @@ test('release metadata rejects a run from another ref in an early step', async (
 
 test('release metadata pins checkout to the triggering commit', async () => {
   const root = await createTempRepo(completeRepo({
-    '.github/workflows/release.yml': validReleaseWorkflow.replace('          ref: ${{ github.sha }}\n', ''),
+    '.github/workflows/release.yml': validReleaseWorkflow.replaceAll('          ref: ${{ github.sha }}\n', ''),
   }))
 
   assert.deepEqual(await collectReleaseMetadataFailures(root), [
-    '.github/workflows/release.yml must check out github.sha, not a user-chosen ref.',
+    '.github/workflows/release.yml must check out github.sha in the publish job, not a user-chosen ref.',
   ])
 })
 
