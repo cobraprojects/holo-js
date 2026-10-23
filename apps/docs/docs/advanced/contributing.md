@@ -41,6 +41,7 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run typecheck` | Typecheck every library package and the tests. |
 | `bun run lint` | Run ESLint across the repo. |
 | `bun run lint:fix` | Lint and auto-fix. |
+| `bun run audit:dependencies` | Fail on moderate or higher advisories in any locked package, unless an unexpired entry in `audit-exceptions.json` covers them. |
 | `bun run audit:runtime` | Report dependency advisories; fail on high or critical advisories reachable from published packages. |
 | `bun run check:dead-code` | Fail on new Fallow findings against the committed baseline. |
 | `bun run --cwd packages/<name> test` | Run one package's tests while you work. |
@@ -58,11 +59,11 @@ The CLI's package-manager tests run real `npm`, `pnpm`, and `yarn` installs, so 
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.14.0, 24, and 26), the runtime audit and dead-code gate, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
+CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
 
-The dependency job runs `bun run audit:runtime`. It follows dependencies, optional dependencies, and installed peers from every published package through the lockfile. High and critical advisories on those resolved versions fail the job. Other advisories, including versions used only by examples or tooling, are reported without failing it. A failed registry request or invalid report fails the audit.
+The dependency job runs `bun run audit:dependencies`. Every advisory of moderate or higher on any package in the lockfile fails the job, including versions used only by examples, docs, or tooling. Advisories covered by an unexpired exception are reported as `EXCEPT` and do not fail it. `bun run audit:runtime` keeps the narrower published-package rule for local checks: only high and critical advisories reachable from published packages block. A failed registry request or invalid report fails the audit.
 
-When a blocking advisory has no patched release, add a time-boxed entry to `audit-exceptions.json` with the advisory URL, the exact package and version, the reason it is reachable, and an `expires` date. Excepted advisories are reported as `EXCEPT` until that date, then block again. An exception that no longer matches a blocking advisory also fails the audit, so remove entries once the dependency is patched. An invalid exceptions file fails the audit.
+When a blocking advisory has no patched release, add a time-boxed entry to `audit-exceptions.json` with the advisory URL, the exact package and version, the reason it is reachable, and an `expires` date. Excepted advisories are reported as `EXCEPT` until that date, then block again. An exception that no longer matches a blocking advisory also fails the audit, so remove entries once the dependency is patched. Low-severity advisories are reported but never fail the audit, so they do not belong in this file. An invalid exceptions file fails the audit.
 
 Dependabot checks npm dependencies and GitHub Actions weekly.
 
