@@ -12,6 +12,7 @@ import {
   resolveGeneratedSchemaPath,
   CLI_RUNTIME_ROOT,
 } from './project'
+import { runProjectPrepare } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { fileExists } from './fs-utils'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
@@ -44,10 +45,27 @@ export function resolveConfigModuleUrl(
   return pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), '../node_modules/@holo-js/config/dist/index.mjs')).href
 }
 
+const generatingNuxtTsconfigSnapshot = new Set<string>()
+
+async function ensureNuxtTsconfigSnapshot(projectRoot: string): Promise<void> {
+  if (generatingNuxtTsconfigSnapshot.has(projectRoot)) return
+
+  const { projectTsconfigInternals } = await import('@holo-js/core')
+  if (!await projectTsconfigInternals.missingNuxtTsconfigSnapshot(projectRoot)) return
+
+  generatingNuxtTsconfigSnapshot.add(projectRoot)
+  try {
+    await runProjectPrepare(projectRoot)
+  } finally {
+    generatingNuxtTsconfigSnapshot.delete(projectRoot)
+  }
+}
+
 export async function initializeProjectRuntime(
   projectRoot: string,
   options: ProjectRuntimeInitializationOptions = {},
 ): Promise<HoloRuntime> {
+  await ensureNuxtTsconfigSnapshot(projectRoot)
   const { initializeHolo } = await import('@holo-js/core')
   return initializeHolo(projectRoot, options)
 }
