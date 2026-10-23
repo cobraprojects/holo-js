@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,6 +10,48 @@ import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
 import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
+
+const aliasConfig = JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['./*'] } } })
+const noAliasConfig = JSON.stringify({ compilerOptions: {} })
+const bunAvailable = spawnSync('bun', ['--version']).status === 0
+
+async function createAliasDefinitionProject(configs: Partial<Record<string, string>>): Promise<{ projectRoot: string, definitionPath: string }> {
+  const projectRoot = await realpath(await createTempProject())
+  await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+  await mkdir(join(projectRoot, 'models'), { recursive: true })
+  await mkdir(join(projectRoot, 'jobs'), { recursive: true })
+  await writeFile(join(projectRoot, 'models/Post.ts'), "export const Post = { title: 'post' }\n")
+  const definitionPath = join(projectRoot, 'jobs/report.ts')
+  await writeFile(definitionPath, "import { Post } from '@/models/Post'\nexport const job = { title: Post.title }\n")
+  for (const [name, contents] of Object.entries(configs)) {
+    if (contents !== undefined) await writeFile(join(projectRoot, name), contents)
+  }
+  return { projectRoot, definitionPath }
+}
+
+async function runAliasDefinitionChild(
+  projectRoot: string,
+  definitionPath: string,
+  runtime: { readonly command: string, readonly args: readonly string[], readonly env: Record<string, string> },
+): Promise<{ title: string, shared: boolean }> {
+  const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+  const childPath = join(projectRoot, 'child.mjs')
+  await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+const loaded = await importDefinition(${JSON.stringify(definitionPath)})
+let direct
+try {
+  direct = await import(${JSON.stringify(pathToFileURL(definitionPath).href)})
+} catch {}
+console.log(JSON.stringify({ title: loaded.job.title, shared: direct !== undefined && loaded.job === direct.job }))
+`)
+  const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' }
+  delete env.TSX_TSCONFIG_PATH
+  const { stdout } = await promisify(execFile)(runtime.command, [...runtime.args, childPath], { cwd: projectRoot, env: { ...env, ...runtime.env } })
+  return JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { title: string, shared: boolean }
+}
 
 const tempDirs: string[] = []
 
@@ -188,14 +230,13 @@ console.log(JSON.stringify({ shared: loaded.job === direct.job }))
     expect(result.shared).toBe(true)
   }, 30_000)
 
-  it('bundles app definitions that import a path alias when the project has no root tsconfig', async () => {
-    const projectRoot = await realpath(await createTempProject())
-    await mkdir(join(projectRoot, 'models'), { recursive: true })
-    await mkdir(join(projectRoot, 'jobs'), { recursive: true })
-    await writeFile(join(projectRoot, 'models/Post.ts'), "export const Post = { title: 'post' }\n")
-    const definitionPath = join(projectRoot, 'jobs/report.ts')
-    await writeFile(definitionPath, "import { Post } from '@/models/Post'\nexport const job = { title: Post.title }\n")
-    vi.stubGlobal('Bun', {})
+  it('bundles app definitions that import a path alias when the loader cannot resolve it', async () => {
+    const { projectRoot, definitionPath } = await createAliasDefinitionProject({})
+    vi.stubGlobal('Bun', {
+      resolveSync() {
+        throw new Error('Cannot find module')
+      },
+    })
 
     try {
       const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
@@ -208,44 +249,37 @@ console.log(JSON.stringify({ shared: loaded.job === direct.job }))
   })
 
   it.each([
-    { label: 'the root tsconfig defines the alias', tsconfig: true, override: false, bundled: false },
-    { label: 'the project has no root tsconfig', tsconfig: false, override: false, bundled: true },
-    { label: 'TSX_TSCONFIG_PATH points tsx at another tsconfig', tsconfig: true, override: true, bundled: true },
-  ])('loads a definition that imports a path alias under tsx when $label', async ({ tsconfig, override, bundled }) => {
-    const projectRoot = await realpath(await createTempProject())
-    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
-    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
-    await mkdir(join(projectRoot, 'models'), { recursive: true })
-    await mkdir(join(projectRoot, 'jobs'), { recursive: true })
-    await writeFile(join(projectRoot, 'models/Post.ts'), "export const Post = { title: 'post' }\n")
-    const definitionPath = join(projectRoot, 'jobs/report.ts')
-    await writeFile(definitionPath, "import { Post } from '@/models/Post'\nexport const job = { title: Post.title }\n")
-    if (tsconfig) {
-      await writeFile(join(projectRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['./*'] } } }))
-    }
-    await writeFile(join(projectRoot, 'tsconfig.tsx.json'), JSON.stringify({ compilerOptions: {} }))
-    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    { label: 'the root tsconfig defines the alias', files: { 'tsconfig.json': aliasConfig }, bundled: false },
+    { label: 'the project has no root tsconfig', files: {}, bundled: true },
+    { label: 'TSX_TSCONFIG_PATH points tsx at another tsconfig', files: { 'tsconfig.json': aliasConfig, 'tsconfig.tsx.json': noAliasConfig }, tsxConfig: 'tsconfig.tsx.json', bundled: true },
+  ])('loads a definition that imports a path alias under tsx when $label', async ({ files, tsxConfig, bundled }) => {
+    const { projectRoot, definitionPath } = await createAliasDefinitionProject(files)
     const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
-    const childPath = join(projectRoot, 'child.mjs')
-    await writeFile(childPath, `
-const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
-const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
-const loaded = await importDefinition(${JSON.stringify(definitionPath)})
-let direct
-try {
-  direct = await import(${JSON.stringify(pathToFileURL(definitionPath).href)})
-} catch {}
-console.log(JSON.stringify({ title: loaded.job.title, shared: direct !== undefined && loaded.job === direct.job }))
-`)
-    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' }
-    delete env.TSX_TSCONFIG_PATH
-    if (override) env.TSX_TSCONFIG_PATH = join(projectRoot, 'tsconfig.tsx.json')
-    const { stdout } = await promisify(execFile)(process.execPath, ['--import', tsxLoaderUrl, childPath], { cwd: projectRoot, env })
-    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { title: string, shared: boolean }
+
+    const result = await runAliasDefinitionChild(projectRoot, definitionPath, {
+      command: process.execPath,
+      args: ['--import', tsxLoaderUrl],
+      env: tsxConfig ? { TSX_TSCONFIG_PATH: join(projectRoot, tsxConfig) } : {},
+    })
 
     expect(result.title).toBe('post')
     expect(result.shared).toBe(!bundled)
   }, 30_000)
+
+  describe.skipIf(!bunAvailable)('under Bun', () => {
+    it.each([
+      { label: 'only a jsconfig defines the alias', files: { 'jsconfig.json': aliasConfig }, args: [], bundled: false },
+      { label: 'the root tsconfig defines the alias', files: { 'tsconfig.json': aliasConfig }, args: [], bundled: false },
+      { label: '--tsconfig-override points Bun at a tsconfig without the alias', files: { 'tsconfig.json': aliasConfig, 'tsconfig.none.json': noAliasConfig }, args: ['--tsconfig-override', 'tsconfig.none.json'], bundled: true },
+    ])('loads a definition that imports a path alias when $label', async ({ files, args, bundled }) => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject(files)
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: 'bun', args, env: {} })
+
+      expect(result.title).toBe('post')
+      expect(result.shared).toBe(!bundled)
+    }, 30_000)
+  })
 
   it.each([
     { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },

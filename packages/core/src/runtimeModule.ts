@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import * as nodeModule from 'node:module'
-import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
 import * as holoConfigModule from '@holo-js/config'
@@ -374,16 +374,29 @@ function isBunRuntime(): boolean {
   return typeof globalThis === 'object' && 'Bun' in globalThis
 }
 
-function nativeLoaderResolvesProjectAliases(projectRoot: string): boolean {
-  if (!existsSync(join(projectRoot, 'tsconfig.json'))) return false
+type BunResolver = { resolveSync(specifier: string, parent: string): string }
 
-  return isBunRuntime() || !process.env.TSX_TSCONFIG_PATH
+function activeLoaderResolves(specifier: string, importerPath: string): boolean {
+  try {
+    if (isBunRuntime()) {
+      (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
+    } else {
+      nodeModule.createRequire(importerPath).resolve(specifier)
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
-function importsProjectAlias(
-  dependency: { readonly path: string, readonly original?: string },
+function importIsProjectAliasUnresolved(
+  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+  importerPath: string,
 ): boolean {
-  return /^[@~]\//.test(dependency.original ?? dependency.path)
+  const original = dependency.original ?? dependency.path
+  if (dependency.external || /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i.test(original)) return false
+
+  return !activeLoaderResolves(original, importerPath)
 }
 
 function importNeedsNodeResolutionBundle(
@@ -415,7 +428,6 @@ export async function loadProjectDefinitionRuntimeModules(
     const sources = new Map<string, string>()
     const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
-    const nativeAliases = nativeSourceLoader && nativeLoaderResolvesProjectAliases(projectRoot)
     let nativeGraph = true
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
@@ -425,7 +437,7 @@ export async function loadProjectDefinitionRuntimeModules(
       sources.set(sourcePath, source)
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) {
-        if (!nativeAliases && input.imports.some(dependency => importsProjectAlias(dependency))) nativeGraph = false
+        if (input.imports.some(dependency => importIsProjectAliasUnresolved(dependency, sourcePath))) nativeGraph = false
         continue
       }
       if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
@@ -442,9 +454,13 @@ export async function loadProjectDefinitionRuntimeModules(
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
-    if (nativeGraph) await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(pathToFileURL(sourcePath).href)}`).join('\n'), 'utf8')
-    const modules = await importModule<Record<string, unknown>>(pathToFileURL(nativeGraph ? entryPath : bundled.path).href)
-    const definitions = new Map(entryPaths.map((sourcePath, index) => [sourcePath, modules[`definition${index}`]]))
+    const definitions = new Map<string, unknown>()
+    if (nativeGraph) {
+      for (const sourcePath of entryPaths) definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
+    } else {
+      const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundled.path).href)
+      entryPaths.forEach((sourcePath, index) => definitions.set(sourcePath, modules[`definition${index}`]))
+    }
     return async sourcePath => {
       if (!definitions.has(sourcePath)) throw new Error(`No discovered definition exists at "${sourcePath}".`)
       return definitions.get(sourcePath)
