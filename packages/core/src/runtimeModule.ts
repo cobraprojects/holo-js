@@ -495,7 +495,7 @@ export async function loadProjectDefinitionRuntimeModules(
     bundled = await bundleRuntimeModule(projectRoot, entryPath, true)
     const sources = new Map<string, string>()
     const nativeSourceLoader = isBunRuntime()
-      || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
+      || [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)].some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
     const projectImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {

@@ -460,6 +460,20 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     }, 30_000)
   })
 
+  describe('detects tsx passed through NODE_OPTIONS', () => {
+    it('keeps an extensionless relative import native and shares the instance, under NODE_OPTIONS=--import tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        definition: "import { label } from './label'\nexport const job = { title: label }\n",
+        files: { 'jobs/label.ts': "export const label = 'label'\n" },
+      })
+      await symlink(realpathSync(resolve(import.meta.dirname, '../../../node_modules/tsx')), join(projectRoot, 'node_modules/tsx'), 'dir')
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: [], env: { NODE_OPTIONS: '--import tsx' } })
+
+      expect(result).toEqual({ title: 'label', shared: true })
+    }, 30_000)
+  })
+
   describe('preflights literal dynamic aliases', () => {
     it('bundles a definition whose literal dynamic alias import the active tsx loader cannot resolve, under tsx', async () => {
       const { projectRoot, definitionPath } = await createAliasDefinitionProject({
