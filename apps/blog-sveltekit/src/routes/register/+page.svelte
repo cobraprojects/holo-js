@@ -6,6 +6,7 @@
   export let data: PageData
 
   const register = useForm(registerForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
   })

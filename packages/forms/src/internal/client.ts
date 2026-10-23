@@ -29,6 +29,7 @@ import { validationExceptionToFailure } from './validation-exception'
 import { FormClientState } from './state'
 import { normalizeHoloHttpError } from '@holo-js/kernel/http-errors'
 export { FormClientState, collectFormDirtyPaths } from './state'
+export { sanitizeFlashedInput } from '../sensitiveInput'
 import {
   buildFormData,
   cloneFormValue as cloneValue,

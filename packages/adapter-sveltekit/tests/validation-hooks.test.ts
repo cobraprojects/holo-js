@@ -1,7 +1,7 @@
 import type { RequestEvent } from '@sveltejs/kit'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { ValidationException, field, schema, validate } from '@holo-js/validation'
-import { createSvelteKitHoloHooks } from '../src'
+import { adapterSvelteKitInternals, createSvelteKitHoloHooks } from '../src'
 
 function createEvent(value: string, accept = 'application/json', path = '/login') {
   const flashed = new Map<string, string>()
@@ -54,6 +54,7 @@ describe('SvelteKit validation hooks', () => {
     }
   })
   it('preserves browser redirects and filters sensitive flashed values', async () => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'hooks-test-app-key', debug: false } } }
     const { event, flashed } = createEvent('invalid-email', 'text/html', '/login?/submit')
     const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
     const response = await hooks.handle({ event, resolve: async (event) => {
@@ -69,8 +70,8 @@ describe('SvelteKit validation hooks', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     const cookie = flashed.get('HOLO-SVELTEKIT-VALIDATION')
     expect(cookie).toBeDefined()
-    expect(JSON.parse(decodeURIComponent(cookie ?? ''))).toMatchObject({ values: { email: 'invalid-email' } })
-    expect(decodeURIComponent(cookie ?? '')).not.toContain('private-password')
+    expect(adapterSvelteKitInternals.readValidationFlashCookie(cookie)).toMatchObject({ values: { email: 'invalid-email' } })
+    expect(cookie ?? '').not.toContain('invalid-email')
     expect(response.headers.get('set-cookie')).toContain('HOLO-SVELTEKIT-VALIDATION=')
   })
 
@@ -109,4 +110,8 @@ describe('SvelteKit validation hooks', () => {
     expect(flashed.size).toBe(0)
   })
 
+})
+
+afterEach(() => {
+  (adapterSvelteKitInternals.getState() as { project?: unknown }).project = undefined
 })

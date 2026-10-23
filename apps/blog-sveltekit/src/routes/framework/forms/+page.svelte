@@ -1,21 +1,26 @@
 <script lang="ts">
   import { useForm, useValidationErrors } from '@holo-js/adapter-sveltekit/client'
   import { field, schema } from '@holo-js/validation'
+  import type { PageData } from './$types'
+
+  export let data: PageData
 
   const form = useForm(schema({
     profile: { city: field.string().optional() },
     tags: field.array(field.string()).optional(),
     intent: field.string().optional(),
   }), {
+    pageData: data,
     initialValues: { tags: ['first'] },
     submitter({ values }) {
       if (values.intent === 'deny') throw Object.assign(new Error('Forbidden sample submission.'), { status: 403 })
       return { ok: true, status: 200, data: { city: values.profile?.city, tags: values.tags } }
     },
   })
-  const defaultErrors = useValidationErrors()
-  const profileErrors = useValidationErrors('profile')
+  const defaultErrors = useValidationErrors('default', { pageData: data })
+  const profileErrors = useValidationErrors('profile', { pageData: data })
   const contact = useForm(schema({ email: field.string().required().email() }), {
+    pageData: data,
     action: '/api/framework/forms',
     credentials: 'include',
     csrf: { endpoint: '/api/framework/forms' },

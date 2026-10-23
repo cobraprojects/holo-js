@@ -12,7 +12,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { createCookieWriteUnavailableError, requestUrlInternals } from '@holo-js/kernel'
+import { cookieEncryptionInternals, createCookieWriteUnavailableError, requestUrlInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -159,11 +159,23 @@ async function mapValidationActionResponse(
   return createValidationActionFailureResponse(actionResult.error, response, false)
 }
 
-function encodeValidationFlashPayload(payload: SerializedValidationException): string {
-  return encodeURIComponent(JSON.stringify({
+function resolveValidationFlashAppKey(): string | undefined {
+  return svelteKitAdapter.internals.getState().project?.config.app.key || undefined
+}
+
+function encodeValidationFlashPayload(payload: SerializedValidationException): string | undefined {
+  const appKey = resolveValidationFlashAppKey()
+  if (!appKey) {
+    if (isDebugEnabled()) {
+      console.warn('[@holo-js/adapter-sveltekit] Validation flash is skipped because the app key is empty. Set APP_KEY.')
+    }
+    return undefined
+  }
+
+  return cookieEncryptionInternals.encryptCookieValue(validationFlashCookie, JSON.stringify({
     ...payload,
     values: filterFlashValues(payload.values),
-  }))
+  }), appKey)
 }
 
 function isSensitiveFlashKey(key: string): boolean {
@@ -210,14 +222,16 @@ function filterFlashValues<TData extends Record<string, unknown>>(values: TData)
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
-  if (!event.url) {
+  const value = event.url ? encodeValidationFlashPayload(payload) : undefined
+  if (!value) {
     return
   }
 
-  event.cookies.set(validationFlashCookie, encodeValidationFlashPayload(payload), {
+  event.cookies.set(validationFlashCookie, value, {
     path: normalizeCookiePath(event),
     maxAge: 60,
     sameSite: 'lax',
+    httpOnly: true,
   })
 }
 
@@ -225,13 +239,47 @@ function normalizeCookiePath(event: SvelteKitRequestEvent): string {
   return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
 }
 
-function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string {
+function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string | undefined {
+  const value = encodeValidationFlashPayload(payload)
+  if (!value) {
+    return undefined
+  }
+
   return [
-    `${validationFlashCookie}=${encodeValidationFlashPayload(payload)}`,
+    `${validationFlashCookie}=${value}`,
     'Max-Age=60',
     `Path=${normalizeCookiePath(event)}`,
     'SameSite=Lax',
+    'HttpOnly',
   ].join('; ')
+}
+
+function readValidationFlashCookie(value: string | undefined): SerializedValidationException | undefined {
+  const appKey = resolveValidationFlashAppKey()
+  const json = value && appKey
+    ? cookieEncryptionInternals.decryptCookieValue(validationFlashCookie, value, appKey)
+    : undefined
+  if (!json) {
+    return undefined
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return isSerializedValidationException(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function readValidationFlash(): SerializedValidationException | undefined {
+  const event = getCurrentSvelteKitRequestEvent()
+  const value = event?.cookies.get(validationFlashCookie)
+  if (!event || !value) {
+    return undefined
+  }
+
+  event.cookies.delete(validationFlashCookie, { path: normalizeCookiePath(event) })
+  return readValidationFlashCookie(value)
 }
 
 function createValidationActionFailureResponse(
@@ -261,14 +309,16 @@ function createValidationActionRedirectResponse(
   event: SvelteKitRequestEvent,
   payload: SerializedValidationException,
 ): Response {
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location: event.url?.pathname || '/',
-      'cache-control': 'no-store',
-      'set-cookie': createValidationFlashCookie(event, payload),
-    },
-  })
+  const headers: Record<string, string> = {
+    location: event.url?.pathname || '/',
+    'cache-control': 'no-store',
+  }
+  const flashCookie = createValidationFlashCookie(event, payload)
+  if (flashCookie) {
+    headers['set-cookie'] = flashCookie
+  }
+
+  return new Response(null, { status: 303, headers })
 }
 
 function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedValidationException | undefined {
@@ -507,6 +557,7 @@ export const adapterSvelteKitInternals = {
   createValidationActionRedirectResponse,
   createValidationFlashCookie,
   encodeValidationFlashPayload,
+  readValidationFlashCookie,
   filterFlashValue,
   filterFlashValues,
   flashValidationPayload,

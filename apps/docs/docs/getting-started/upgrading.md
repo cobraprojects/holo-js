@@ -184,6 +184,27 @@ A JSON or form body that can't be parsed is now validated as `{}` instead of thr
 
 Errors thrown inside `custom()` and `customAsync()` are no longer turned into a validation message on `_root`. They reach your framework's error handling and respond with a 500. If a custom rule calls code that can throw for invalid input, catch the error in the rule and return a message string instead.
 
+### SvelteKit validation flash
+
+The cookie that carries validation errors and submitted values to the next page in SvelteKit is now `HttpOnly` and encrypted with `APP_KEY`, like Holo's session cookies. Scripts can no longer read it, so `useForm` and `useValidationErrors` no longer read `document.cookie`. Instead, the root layout passes the flash through page data:
+
+```ts [src/routes/+layout.server.ts]
+import { readValidationFlash } from '@holo-js/adapter-sveltekit'
+
+export const load = () => ({
+  holoValidationFlash: readValidationFlash(),
+})
+```
+
+Pass the page data to each form that shows flashed errors or restores its input:
+
+```svelte
+const login = useForm(loginForm, { pageData: data })
+const errors = useValidationErrors('default', { pageData: data })
+```
+
+Without the layout load, a failed submission still shows its errors on the server-rendered page, but the browser doesn't restore the input after hydration. If `APP_KEY` is empty, Holo writes no flash cookie and logs a warning when debugging is on.
+
 ### S3 file names with special characters
 
 S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:

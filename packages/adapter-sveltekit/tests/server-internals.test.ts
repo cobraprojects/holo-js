@@ -34,6 +34,8 @@ function createEvent(path = '/posts', method = 'POST', accept = 'text/html') {
 }
 
 afterEach(() => {
+  (adapterSvelteKitInternals.getState() as { project?: unknown }).project = undefined
+
   vi.restoreAllMocks()
 })
 
@@ -64,13 +66,17 @@ describe('SvelteKit server adapter internals', () => {
       nested: { safe: true },
       list: [1, { value: 'ok' }],
     })
+    const state = adapterSvelteKitInternals.getState() as { project?: unknown }
+    state.project = { config: { app: { key: 'encode-test-app-key', debug: false } } }
     const encoded = adapterSvelteKitInternals.encodeValidationFlashPayload(payload as never)
-    expect(JSON.parse(decodeURIComponent(encoded))).toMatchObject({
+    expect(adapterSvelteKitInternals.readValidationFlashCookie(encoded)).toMatchObject({
       values: { title: 'Post', nested: { safe: true } },
     })
+    state.project = undefined
   })
 
   it('validates serialized payloads and creates action responses', async () => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'redirect-test-app-key', debug: false } } }
     expect(adapterSvelteKitInternals.isSerializedValidationException(payload)).toBe(true)
     expect(adapterSvelteKitInternals.isSerializedValidationException({ ...payload, errors: null })).toBe(false)
     const event = createEvent()

@@ -12,6 +12,7 @@ import {
   type UseFormOptions,
   type UseFormResult,
   createFormClient,
+  sanitizeFlashedInput,
   runWithBrowserFormElement,
 } from '@holo-js/forms/internal/client'
 import { normalizeSvelteKitClientHttpError, renderSvelteKitClientHttpErrorPage } from './client-errors'
@@ -102,7 +103,6 @@ type RegisteredForm = {
 
 const registeredForms = new Set<RegisteredForm>()
 const invalidActionFailureMessage = 'Unable to read the form response. Please try again.'
-const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let submitListenerTarget: BrowserEventTarget | undefined
 
 export {
@@ -300,84 +300,46 @@ function isFormFailurePayload<TData>(value: unknown): value is FormFailurePayloa
     && isPlainObject(value.errors)
 }
 
-function parseValidationFlashCookie<TData>(value: string | undefined): FlashedValidationPayload<TData> | undefined {
-  if (!value) {
-    return undefined
-  }
-
-  const parsed = parseJsonObject(value) ?? parseJsonObject(safeDecodeURIComponent(value))
-  if (!isFormFailurePayload<TData>(parsed)) {
-    return undefined
-  }
-
-  return parsed
-}
-
-function readBrowserCookie(name: string): string | undefined {
-  const cookie = (globalThis as { readonly document?: BrowserDocument }).document?.cookie
-  if (!cookie) {
-    return undefined
-  }
-
-  for (const segment of cookie.split(';')) {
-    const trimmed = segment.trim()
-    const separator = trimmed.indexOf('=')
-    if (separator <= 0 || trimmed.slice(0, separator) !== name) {
-      continue
-    }
-
-    return trimmed.slice(separator + 1)
-  }
-
-  return undefined
-}
-
-function clearBrowserCookie(name: string): void {
-  const document = (globalThis as { readonly document?: BrowserDocument }).document
-  if (!document) {
-    return
-  }
-
-  document.cookie = `${name}=; Max-Age=0; Path=${getBrowserCookiePath()}; SameSite=Lax`
+function readPageValidationFlash<TData>(
+  pageData: Readonly<Record<string, unknown>> | undefined,
+): FlashedValidationPayload<TData> | undefined {
+  const payload = pageData?.holoValidationFlash
+  return isFormFailurePayload<TData>(payload) ? payload : undefined
 }
 
 function takeFlashedValidationState<TData>(
   schemaDefinition: ValidationSchema,
+  pageData?: Readonly<Record<string, unknown>>,
 ): FormFailurePayload<TData> | undefined {
-  const event = getCurrentSvelteKitRequestEvent()
-  const payload = parseValidationFlashCookie<TData>(event
-    ? event.cookies.get(validationFlashCookie)
-    : readBrowserCookie(validationFlashCookie))
+  const payload = readPageValidationFlash<TData>(pageData)
   if (!payload || (payload.bag ?? DEFAULT_VALIDATION_BAG) !== DEFAULT_VALIDATION_BAG || !stateMatchesSchema(schemaDefinition, payload)) {
     return undefined
   }
 
-  if (!event) {
-    scheduleBrowserFormValueRestore(payload.values)
-    clearBrowserCookie(validationFlashCookie)
+  const restored: FlashedValidationPayload<TData> = {
+    ...payload,
+    values: sanitizeFlashedInput(payload.values, schemaDefinition) as Partial<TData>,
+  }
+  if (!getCurrentSvelteKitRequestEvent()) {
+    scheduleBrowserFormValueRestore(restored.values)
   }
 
-  return payload
+  return restored
 }
 
 function takeValidationErrors<TData>(
   bag: string,
+  pageData?: Readonly<Record<string, unknown>>,
 ): FlashedValidationPayload<TData> | undefined {
-  const event = getCurrentSvelteKitRequestEvent()
-  const payload = event
-    ? parseValidationFlashCookie<TData>(event.cookies.get(validationFlashCookie))
-    : parseValidationFlashCookie<TData>(readBrowserCookie(validationFlashCookie))
-
+  const payload = readPageValidationFlash<TData>(pageData)
   if (!payload || (payload.bag ?? DEFAULT_VALIDATION_BAG) !== bag) {
     return undefined
   }
 
-  if (event) {
-    return payload
+  if (!getCurrentSvelteKitRequestEvent()) {
+    scheduleBrowserFormValueRestore(payload.values)
   }
 
-  scheduleBrowserFormValueRestore(payload.values)
-  clearBrowserCookie(validationFlashCookie)
   return payload
 }
 
@@ -586,18 +548,6 @@ function redirectBrowser(location: string): void {
   }
 }
 
-function getBrowserCookiePath(): string {
-  const pathname = (globalThis as {
-    readonly window?: {
-      readonly location?: {
-        readonly pathname?: string
-      }
-    }
-  }).window?.location?.pathname
-
-  return (pathname || '/').replace(/[;\r\n]/g, '') || '/'
-}
-
 async function submitSvelteKitAction<TData, TSuccess>(
   context: ClientSubmitContext<TData>,
 ): Promise<ClientSubmitResult<TData, TSuccess>> {
@@ -766,15 +716,16 @@ function createHttpHandledForm<TData, TSuccess, TFields>(
 
 export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
-  options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
+  options: UseFormOptions<InferFormData<TSchema>, TSuccess> & { readonly pageData?: Readonly<Record<string, unknown>> } = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
+  const { pageData, ...formInput } = options
   const formOptions: UseFormOptions<TData, TSuccess> = {
-    ...options,
-    action: options.action ?? currentLocationHref(),
-    initialState: options.initialState ?? takeFlashedValidationState<TData>(schemaDefinition),
-    submitter: options.submitter
-      ?? (options.credentials || options.csrf ? undefined : submitSvelteKitAction),
+    ...formInput,
+    action: formInput.action ?? currentLocationHref(),
+    initialState: formInput.initialState ?? takeFlashedValidationState<TData>(schemaDefinition, pageData),
+    submitter: formInput.submitter
+      ?? (formInput.credentials || formInput.csrf ? undefined : submitSvelteKitAction),
   }
 
   const form = createHttpHandledForm(createFormClient(schemaDefinition, formOptions))
@@ -797,13 +748,13 @@ export function useForm<TSchema extends ValidationSchema, TSuccess = unknown>(
 
 export function useValidationErrors<TData = Record<string, unknown>>(
   bag = DEFAULT_VALIDATION_BAG,
+  options: { readonly pageData?: Readonly<Record<string, unknown>> } = {},
 ): ValidationErrorBag<TData> {
-  const payload = takeValidationErrors<TData>(bag)
+  const payload = takeValidationErrors<TData>(bag, options.pageData)
   return createErrorBag<TData>(payload?.errors ?? {})
 }
 
 export const svelteClientInternals = {
-  clearBrowserCookie,
   collectSchemaPaths,
   collectValuePaths,
   countMatchingFormFields,
@@ -812,7 +763,6 @@ export const svelteClientInternals = {
   currentLocationHref,
   ensureSubmitListener,
   flattenRestorableValues,
-  getBrowserCookiePath,
   hydrateActionFormState,
   isFormFailurePayload,
   isFormState,
@@ -823,8 +773,6 @@ export const svelteClientInternals = {
   isSvelteKitActionForm,
   isSvelteKitActionResult,
   normalizeFormDataName,
-  parseValidationFlashCookie,
-  readBrowserCookie,
   redirectBrowser,
   registerForm,
   renderFormHttpFailure,
