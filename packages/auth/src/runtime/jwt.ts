@@ -71,6 +71,8 @@ function verifyJwtSignatureWithJwk(
 const JWKS_MAX_AGE_MS = 10 * 60 * 1000
 const JWKS_REFRESH_INTERVAL_MS = 60 * 1000
 const JWKS_FAILURE_GRACE_MS = 10 * 60 * 1000
+const JWKS_FETCH_TIMEOUT_MS = 5 * 1000
+const JWKS_MAX_RESPONSE_BYTES = 1024 * 1024
 
 type AuthRuntimeJwksSnapshot = {
   readonly keys: readonly AuthRuntimeJwkKey[]
@@ -91,21 +93,68 @@ function findJwk(keys: readonly AuthRuntimeJwkKey[], kid: string | undefined): A
     : keys[0]
 }
 
+async function readJwksBody(response: Response, errorMessage: string): Promise<string> {
+  const declaredLengthBytes = Number(response.headers.get('content-length') ?? 0)
+  if (declaredLengthBytes > JWKS_MAX_RESPONSE_BYTES) {
+    await response.body?.cancel()
+    throw new Error(errorMessage)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    return ''
+  }
+
+  const chunks: Uint8Array[] = []
+  let receivedBytes = 0
+  for (let result = await reader.read(); !result.done; result = await reader.read()) {
+    receivedBytes += result.value.byteLength
+    if (receivedBytes > JWKS_MAX_RESPONSE_BYTES) {
+      await reader.cancel()
+      throw new Error(errorMessage)
+    }
+    chunks.push(result.value)
+  }
+
+  return new TextDecoder().decode(Buffer.concat(chunks))
+}
+
 async function fetchJwks(options: {
   readonly requestUrl: string
   readonly errorMessage: string
 }): Promise<readonly AuthRuntimeJwkKey[]> {
-  const response = await fetch(options.requestUrl, {
-    headers: {
-      accept: 'application/json',
-    },
+  const controller = new AbortController()
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timeoutHandle = setTimeout(() => {
+      const error = new Error(options.errorMessage)
+      controller.abort(error)
+      reject(error)
+    }, JWKS_FETCH_TIMEOUT_MS)
   })
-  if (!response.ok) {
-    throw new Error(options.errorMessage)
+
+  const load = async (): Promise<readonly AuthRuntimeJwkKey[]> => {
+    const response = await fetch(options.requestUrl, {
+      headers: {
+        accept: 'application/json',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      throw new Error(options.errorMessage)
+    }
+
+    const payload = JSON.parse(await readJwksBody(response, options.errorMessage)) as {
+      keys?: readonly AuthRuntimeJwkKey[]
+    }
+    return payload.keys ?? []
   }
 
-  const payload = await response.json() as { keys?: readonly AuthRuntimeJwkKey[] }
-  return payload.keys ?? []
+  try {
+    return await Promise.race([load(), timedOut])
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
 }
 
 function loadJwks(
