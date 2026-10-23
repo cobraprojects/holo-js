@@ -14,7 +14,7 @@ const tempDirs: string[] = []
 
 type PackageManifest = {
   readonly name: string
-  readonly exports?: Readonly<Record<string, string | { readonly import?: string }>>
+  readonly exports?: Readonly<Record<string, string | { readonly '@holo-js/source'?: string }>>
 }
 
 function readPackageManifest(path: string): PackageManifest | undefined {
@@ -114,13 +114,13 @@ export const sendEmailJob = defineJob({
     }
   })
 
-  it('lists exactly the workspace packages whose built config module registers a normalizer', async () => {
+  it('lists exactly the workspace packages whose config module registers a normalizer', async () => {
     const packagesRoot = join(workspaceRoot, 'packages')
     const registering: string[] = []
     for (const directory of readdirSync(packagesRoot)) {
       const manifest = readPackageManifest(join(packagesRoot, directory, 'package.json'))
       const configExport = manifest?.exports?.['./config']
-      const configModule = typeof configExport === 'string' ? configExport : configExport?.import
+      const configModule = typeof configExport === 'string' ? configExport : configExport?.['@holo-js/source']
       if (!manifest || !configModule) continue
 
       const restoreNormalizers = configRegistryInternals.snapshotNormalizers()
