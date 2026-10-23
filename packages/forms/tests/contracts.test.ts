@@ -666,6 +666,43 @@ describe('@holo-js/forms contracts', () => {
     expect(keyedEmails).toEqual(['ava@example.com'])
   })
 
+  it('aborts the rebuilt submitted request when the original request is aborted', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-form-abort-'))
+    connectThroughLocalProxy()
+    onTestFinished(async () => {
+      await rm(directory, { recursive: true, force: true })
+    })
+    const seenSignals: AbortSignal[] = []
+    configureSecurityRuntime({
+      config: {
+        trustedProxies: ['127.0.0.1'],
+        rateLimit: {
+          driver: 'file',
+          limiters: {
+            login: limit.perMinute(5).by(({ request }) => {
+              seenSignals.push(request.signal)
+              return ip(request)
+            }),
+          },
+        },
+      },
+      rateLimitStore: createFileRateLimitStore(directory),
+    })
+    const login = schema({ email: field.string().required().email() })
+    const controller = new AbortController()
+
+    await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.14' },
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+      signal: controller.signal,
+    }), login, { throttle: 'login' })
+    controller.abort()
+
+    expect(seenSignals).toHaveLength(1)
+    expect(seenSignals[0]?.aborted).toBe(true)
+  })
+
   it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
     const login = schema({
       email: field.string().required().transform(value => value.trim().toLowerCase()),
