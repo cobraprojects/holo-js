@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -374,29 +374,60 @@ function isBunRuntime(): boolean {
   return typeof globalThis === 'object' && 'Bun' in globalThis
 }
 
-type BunResolver = { resolveSync(specifier: string, parent: string): string }
+const unresolvedImportCodes = new Set([
+  'ERR_INVALID_MODULE_SPECIFIER',
+  'ERR_MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
+  'MODULE_NOT_FOUND',
+])
 
-function activeLoaderResolves(specifier: string, importerPath: string): boolean {
-  try {
-    if (isBunRuntime()) {
-      (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
-    } else {
-      nodeModule.createRequire(importerPath).resolve(specifier)
-    }
-    return true
-  } catch {
-    return false
+function isUnresolvedImportError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && typeof error.code === 'string' && unresolvedImportCodes.has(error.code)
+}
+
+function isCommonJsSource(sourcePath: string): boolean {
+  if (/\.m[jt]s$/.test(sourcePath)) return false
+  if (/\.c[jt]s$/.test(sourcePath)) return true
+
+  for (let directory = dirname(sourcePath); ; directory = dirname(directory)) {
+    const manifest = join(directory, 'package.json')
+    if (existsSync(manifest)) return JSON.parse(readFileSync(manifest, 'utf8')).type !== 'module'
+    if (dirname(directory) === directory) return true
   }
 }
 
-function importIsProjectAliasUnresolved(
-  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+function commonJsAliasUnresolved(
+  dependency: { readonly path: string, readonly original?: string },
   importerPath: string,
 ): boolean {
   const original = dependency.original ?? dependency.path
-  if (dependency.external || /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i.test(original)) return false
+  if (/^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i.test(original)) return false
 
-  return !activeLoaderResolves(original, importerPath)
+  try {
+    nodeModule.createRequire(importerPath).resolve(original)
+    return false
+  } catch {
+    return true
+  }
+}
+
+async function importBundledDefinitions(
+  projectRoot: string,
+  tempDir: string,
+  sourcePaths: readonly string[],
+): Promise<Map<string, unknown>> {
+  const entry = join(tempDir, `unresolved-${randomUUID()}.mjs`)
+  await writeFile(entry, sourcePaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
+  const bundle = await bundleRuntimeModule(projectRoot, entry)
+
+  try {
+    const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundle.path).href)
+    return new Map(sourcePaths.map((sourcePath, index) => [sourcePath, modules[`definition${index}`]]))
+  } finally {
+    await bundle.cleanup()
+  }
 }
 
 function importNeedsNodeResolutionBundle(
@@ -437,7 +468,7 @@ export async function loadProjectDefinitionRuntimeModules(
       sources.set(sourcePath, source)
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) {
-        if (input.imports.some(dependency => importIsProjectAliasUnresolved(dependency, sourcePath))) nativeGraph = false
+        if (!isBunRuntime() && isCommonJsSource(sourcePath) && input.imports.some(dependency => commonJsAliasUnresolved(dependency, sourcePath))) nativeGraph = false
         continue
       }
       if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
@@ -456,7 +487,18 @@ export async function loadProjectDefinitionRuntimeModules(
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
     const definitions = new Map<string, unknown>()
     if (nativeGraph) {
-      for (const sourcePath of entryPaths) definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
+      const unresolved: string[] = []
+      for (const sourcePath of entryPaths) {
+        try {
+          definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
+        } catch (error) {
+          if (!nativeSourceLoader || !isUnresolvedImportError(error)) throw error
+          unresolved.push(sourcePath)
+        }
+      }
+      if (unresolved.length) {
+        for (const [sourcePath, definition] of await importBundledDefinitions(projectRoot, tempDir, unresolved)) definitions.set(sourcePath, definition)
+      }
     } else {
       const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundled.path).href)
       entryPaths.forEach((sourcePath, index) => definitions.set(sourcePath, modules[`definition${index}`]))
