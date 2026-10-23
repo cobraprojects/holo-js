@@ -96,7 +96,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "typescript": "^5.7.2",
   "typescript-eslint": "^8.30.1",
   "ulid": "^3.0.1",
-  "uuid": "^12.0.0",
+  "uuid": "^14.0.3",
   "valibot": "^1.1.0",
   "vite": "^8.3.4",
   "vitepress": "^1.6.3",
