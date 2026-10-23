@@ -3,6 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
+import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
@@ -150,6 +151,13 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+
+const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
+const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
+
+function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
+  return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
+}
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
@@ -187,10 +195,20 @@ export class TableQueryBuilder<
     private readonly connection: DatabaseContext,
     plan?: SelectQueryPlan,
     private readonly queryCacheConfig?: NormalizedQueryCacheConfig,
+    handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
     this.source = source.table ? source : { ...source, table: this.connection.getSchemaRegistry().get(source.tableName) }
-    this.plan = plan ? withSource(plan, this.source) : createSelectQueryPlan(this.source)
+    const ownPlan = plan && handoff !== internalPlanHandoff
+      ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
+      : plan
+    this.plan = ownPlan ? withSource(ownPlan, this.source) : createSelectQueryPlan(this.source)
+    trustedRawWhereAppenders.set(this, (sql, bindings) => this.clone(withPredicate(this.plan, createTrustedRawPredicate({
+      kind: 'raw',
+      boolean: 'and',
+      sql,
+      bindings: Object.freeze([...bindings]),
+    }))))
   }
 
   getTableName(): string {
@@ -210,7 +228,7 @@ export class TableQueryBuilder<
   }
 
   withPredicates(predicates: readonly QueryPredicateNode[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone({ ...this.plan, predicates: Object.freeze([...predicates]) })
+    return this.clone({ ...this.plan, predicates: copyTopLevelPredicates(predicates) })
   }
 
   from(table: string): TableQueryBuilder<string, TSelectedRow> {
@@ -219,6 +237,7 @@ export class TableQueryBuilder<
       this.connection,
       withSource(this.plan, createTableSource(table)),
       this.queryCacheConfig,
+      internalPlanHandoff,
     )
   }
 
@@ -1368,6 +1387,7 @@ export class TableQueryBuilder<
       this.connection,
       this.plan,
       normalizeQueryCacheConfig(config),
+      internalPlanHandoff,
     )
   }
 
@@ -2266,6 +2286,7 @@ export class TableQueryBuilder<
         transaction,
         this.plan,
         this.queryCacheConfig,
+        internalPlanHandoff,
       ).update(values))
     }
     const mutationRows = needsPreviousRows
@@ -2343,8 +2364,9 @@ export class TableQueryBuilder<
     plan: SelectQueryPlan,
   ): TableQueryBuilder<TTableOrName, TRow, TNextColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig)
+    return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff)
   }
+
 
   private async captureUpdatedMutationRows(
     values: Readonly<Record<string, unknown>>,
@@ -2678,6 +2700,8 @@ export class TableQueryBuilder<
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
       withSelections(this.plan, [primaryKey as never, column as never]),
+      undefined,
+      internalPlanHandoff,
     )
     const rows = await uncachedSelection.get() as Record<string, unknown>[]
     for (const row of rows) {
@@ -2868,27 +2892,6 @@ export class TableQueryBuilder<
   }
 }
 
-function trustedRawWhere<
-  TTableOrName extends TableReference,
-  TSelectedRow extends Record<string, unknown>,
-  TAvailableColumns extends Record<string, unknown>,
->(
-  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
-  sql: string,
-  bindings: readonly unknown[],
-): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-  return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
-    query.getTableName() as TTableOrName,
-    query.getConnection(),
-    withPredicate(query.getPlan(), createTrustedRawPredicate({
-      kind: 'raw',
-      boolean: 'and',
-      sql,
-      bindings: Object.freeze([...bindings]),
-    })),
-  )
-}
-
 export function whereColumnNotExpiredByDatabaseClock<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,
@@ -2897,19 +2900,30 @@ export function whereColumnNotExpiredByDatabaseClock<
   query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
   column: string,
 ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  if (!appendTrusted) {
+    throw new SecurityError('whereColumnNotExpiredByDatabaseClock() needs a query builder that Holo created.')
+  }
+  const append = (sql: string, bindings: readonly unknown[]) => appendTrusted(sql, bindings) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+
   if (!/^[A-Za-z_]\w*$/.test(column)) {
     throw new SecurityError(`Database-clock predicates need a plain column name, received "${column}".`)
   }
 
-  const dialect = query.getConnection().getDialect()
-  const quoted = dialect.quoteIdentifier(column)
-  if (dialect.name === 'sqlite') {
-    return trustedRawWhere(query, `${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
+  const connection = query.getConnection()
+  if (!isGenuineDatabaseContext(connection)) {
+    throw new SecurityError('whereColumnNotExpiredByDatabaseClock() needs a connection that Holo created.')
   }
 
-  if (dialect.name === 'postgres') {
-    return trustedRawWhere(query, `${quoted} > (clock_timestamp() AT TIME ZONE ?)`, [getApplicationTimezone()])
+  const dialectName = connection.getDialect().name
+  const quoted = dialectName === 'mysql' ? `\`${column}\`` : `"${column}"`
+  if (dialectName === 'sqlite') {
+    return append(`${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
   }
 
-  return trustedRawWhere(query, `${quoted} > CURRENT_TIMESTAMP(3)`, [])
+  if (dialectName === 'postgres') {
+    return append(`${quoted} > (clock_timestamp() AT TIME ZONE ?)`, [getApplicationTimezone()])
+  }
+
+  return append(`${quoted} > CURRENT_TIMESTAMP(3)`, [])
 }

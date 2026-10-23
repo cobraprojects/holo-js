@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, holoRuntimeInternals, resetDB } from '../src'
+import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, onDatabaseDependencyInvalidated, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -208,6 +208,79 @@ describe('native database security boundaries', () => {
     await expect(db.table(table).withPredicates([copied as never]).update({ name: 'Changed' })).rejects.toThrow(policyError)
 
     expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects a duck-typed query whose dialect returns attacker SQL on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert({ id: 1, name: 'Safe' })
+    const duck = {
+      getTableName: () => table.tableName,
+      getPlan: () => db.table(table).getPlan(),
+      getConnection: () => ({ getDialect: () => ({ name: driver, quoteIdentifier: () => 'x" OR 1=1 --' }) }),
+    }
+    expect(() => holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(duck as never, 'expires_at')).toThrow(SecurityError)
+    expect(await db.table(table).count()).toBe(1)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('strips trust from a database-clock predicate transplanted through getPlan on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+    const predicates = holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table), 'expires_at').getPlan().predicates
+
+    await expect(db.table(table).withPredicates(predicates).delete()).rejects.toThrow(policyError)
+    await expect(db.table(table).withPredicates([{ kind: 'group', boolean: 'and', predicates }] as never).delete()).rejects.toThrow(policyError)
+    await expect(new TableQueryBuilder(table, db, { ...db.table(table).getPlan(), predicates }).delete()).rejects.toThrow(policyError)
+    expect(await db.table(table).count()).toBe(2)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('does not let reflection reach a method that mints trusted raw SQL on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+    const prototype = TableQueryBuilder.prototype as unknown as Record<PropertyKey, unknown>
+    const methods = Object.getOwnPropertySymbols(TableQueryBuilder.prototype)
+      .map(symbol => prototype[symbol])
+      .filter((method): method is (...args: unknown[]) => unknown => typeof method === 'function')
+
+    for (const method of methods) {
+      let attempt: unknown
+      try {
+        attempt = method.call(db.table(table), `name = 'Safe' OR 1=1`, [])
+      } catch {
+        attempt = undefined
+      }
+      if (attempt && typeof (attempt as { delete?: unknown }).delete === 'function') {
+        await expect((attempt as { delete: () => Promise<unknown> }).delete()).rejects.toThrow(policyError)
+      }
+    }
+    expect(await db.table(table).count()).toBe(2)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('deletes and updates by database-clock expiry under the default policy while a realtime listener is installed on %s', async driver => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_clock_${randomUUID().replaceAll('-', '')}`
+    const futureExpiry = driver === 'sqlite' ? '2030-01-01T00:00:00.000Z' : '2030-01-01 00:00:00'
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.timestamp('expires_at')
+    })
+    const unsubscribe = onDatabaseDependencyInvalidated(() => {})
+    try {
+      await db.table(name).insert([{ id: 1, expires_at: futureExpiry }, { id: 2, expires_at: futureExpiry }])
+      const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(name), 'expires_at')
+        .where('id', 1)
+        .delete()
+      expect(claimed.affectedRows).toBe(1)
+      expect(await db.table(name).count()).toBe(1)
+      const extended = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(name), 'expires_at')
+        .where('id', 2)
+        .update({ expires_at: futureExpiry })
+      expect(extended.affectedRows).toBe(1)
+    } finally {
+      unsubscribe()
+      await schema.dropTable(name)
+    }
   })
 
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {

@@ -9,6 +9,7 @@ export default defineConfig({
     'http-errors': 'src/httpErrors.ts',
     'managed-resources': 'src/managedResources.ts',
     'file-content': 'src/fileContent.ts',
+    'request-body': 'src/requestBody.ts',
     'image-decoding': 'src/imageDecoding.ts',
     'image-decoding.browser': 'src/imageDecoding.browser.ts',
     'image-decoding.node': 'src/imageDecoding.node.ts',

@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -54,19 +54,24 @@ async function readPids(pidPath: string): Promise<WorkerPids> {
 }
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-  } catch {
-    return false
-  }
-  return readProcessState(pid) !== 'Z'
+  const state = readProcessState(pid)
+  return state !== undefined && state !== 'Z'
 }
 
 function readProcessState(pid: number): string | undefined {
+  const result = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' })
+  if (result.error) throw result.error
+  const state = result.stdout.trim().charAt(0)
+  if (result.status === 0 && state) return state
+  if (result.status === 1 && !state && !result.stderr.trim()) return undefined
+  throw new Error(`ps failed for pid ${pid} (status ${result.status}): ${result.stderr.trim()}`)
+}
+
+function killProcess(pid: number): void {
   try {
-    return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim().charAt(0)
-  } catch {
-    return undefined
+    process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
   }
 }
 
@@ -100,7 +105,7 @@ it.skipIf(process.platform === 'win32')('force-stops the run on a second SIGINT 
     await waitUntilGone(pids.grandchild)
   } finally {
     session.dispose()
-    if (pids && isAlive(pids.grandchild)) process.kill(pids.grandchild, 'SIGKILL')
+    if (pids) killProcess(pids.grandchild)
   }
 })
 
@@ -120,7 +125,7 @@ it.skipIf(process.platform === 'win32')('delivers the first SIGINT to the whole 
     expect(exits).toEqual([])
   } finally {
     session.dispose()
-    if (pids && isAlive(pids.grandchild)) process.kill(pids.grandchild, 'SIGKILL')
+    if (pids) killProcess(pids.grandchild)
   }
 })
 
@@ -138,7 +143,7 @@ it.skipIf(process.platform === 'win32')('stops the run when the terminal hangs u
     await waitUntilGone(pids.grandchild)
   } finally {
     session.dispose()
-    if (pids && isAlive(pids.grandchild)) process.kill(pids.grandchild, 'SIGKILL')
+    if (pids) killProcess(pids.grandchild)
   }
 })
 

@@ -1,3 +1,4 @@
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData } from '@holo-js/kernel'
 import { protect } from '../index'
 import { cors } from '../cors'
 import { getSecurityRuntime } from '../runtime'
@@ -80,7 +81,7 @@ async function actionRequest(request: Request): Promise<Request> {
     || !request.headers.get('content-type')?.startsWith('multipart/form-data')) return request
 
   try {
-    const data = await request.clone().formData()
+    const data = await readBoundedRequestFormData(request.clone())
     const root = data.get('0')
     if (typeof root !== 'string') return request
     const args: unknown = JSON.parse(root)
@@ -95,7 +96,8 @@ async function actionRequest(request: Request): Promise<Request> {
       headers.set(header, token)
       return new Request(request.clone(), { headers })
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) throw error
     return request
   }
   return request
