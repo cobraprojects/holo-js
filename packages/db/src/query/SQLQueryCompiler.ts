@@ -304,7 +304,7 @@ export class SQLQueryCompiler {
         hasSubqueries: false,
       },
       safety: {
-        unsafe: predicates.some(predicate => this.isUnsafePredicate(predicate)),
+        unsafe: this.isUnsafeWritePredicates(predicates),
         containsRawSql: predicates.some(predicate => this.predicateContainsRawSql(predicate)),
       },
       debug: {
@@ -782,12 +782,18 @@ export class SQLQueryCompiler {
   }
 
   protected isUnsafeWritePlan(plan: UpdateQueryPlan | DeleteQueryPlan): boolean {
-    return plan.predicates.some(predicate => this.isUnsafePredicate(predicate))
+    return this.isUnsafeWritePredicates(plan.predicates)
+  }
+
+  private isUnsafeWritePredicates(predicates: readonly QueryPredicateNode[]): boolean {
+    return predicates.some(predicate => (
+      predicate.kind === 'raw' ? !isTrustedRawPredicate(predicate) : this.isUnsafePredicate(predicate)
+    ))
   }
 
   protected isUnsafePredicate(predicate: QueryPredicateNode): boolean {
     if (predicate.kind === 'raw') {
-      return !isTrustedRawPredicate(predicate)
+      return true
     }
 
     if (predicate.kind === 'group') {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, holoRuntimeInternals, resetDB } from '../src'
+import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -168,6 +168,30 @@ describe('native database security boundaries', () => {
     await expect(db.table(table).withPredicates([copied as never]).update({ name: 'Changed' })).rejects.toThrow(policyError)
 
     expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects a duck-typed query whose dialect returns attacker SQL on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert({ id: 1, name: 'Safe' })
+    const duck = {
+      getTableName: () => table.tableName,
+      getPlan: () => db.table(table).getPlan(),
+      getConnection: () => ({ getDialect: () => ({ name: driver, quoteIdentifier: () => 'x" OR 1=1 --' }) }),
+    }
+    expect(() => holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(duck as never, 'expires_at')).toThrow(SecurityError)
+    expect(await db.table(table).count()).toBe(1)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('strips trust from a database-clock predicate transplanted through getPlan on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+    const predicates = holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table), 'expires_at').getPlan().predicates
+
+    await expect(db.table(table).withPredicates(predicates).delete()).rejects.toThrow(policyError)
+    await expect(db.table(table).withPredicates([{ kind: 'group', boolean: 'and', predicates }] as never).delete()).rejects.toThrow(policyError)
+    await expect(new TableQueryBuilder(table, db, { ...db.table(table).getPlan(), predicates }).delete()).rejects.toThrow(policyError)
+    expect(await db.table(table).count()).toBe(2)
   })
 
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
