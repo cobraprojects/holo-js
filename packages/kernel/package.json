@@ -40,6 +40,12 @@
       "import": "./dist/file-content.mjs",
       "default": "./dist/file-content.mjs"
     },
+    "./request-body": {
+      "@holo-js/source": "./src/requestBody.ts",
+      "types": "./dist/request-body.d.ts",
+      "import": "./dist/request-body.mjs",
+      "default": "./dist/request-body.mjs"
+    },
     "./image-decoding": {
       "types": "./dist/image-decoding.d.ts",
       "browser": {

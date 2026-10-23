@@ -94,6 +94,18 @@ export default defineSecurityConfig({
 
 See [CSRF protection](/basics/security/csrf) for the `csrf` block, [rate limiting](/basics/security/rate-limiting) for `rateLimit`, and [CORS and proxies](/basics/security/cors-and-proxies) for `config/cors.ts`.
 
+### Request body limit
+
+`maxBodyBytes` caps every request body Holo reads before it runs your code: CSRF token checks, form validation, social sign-in callbacks, broadcast auth, and Realtime requests. The default is 1 MiB (`1048576`). A request larger than the limit gets a `413` response and is rejected before the body is buffered. The limit is a whole number of bytes:
+
+```ts [config/security.ts]
+export default defineSecurityConfig({
+  maxBodyBytes: 8 * 1024 * 1024,
+})
+```
+
+Raise the limit for forms that accept file uploads. Uploads are part of the request body, so a file larger than the limit needs a larger `maxBodyBytes`.
+
 ::: warning
 The CSRF cookie is encrypted, and signed tokens are signed, with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
 :::

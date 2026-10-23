@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readBoundedRequestFormData, readBoundedRequestJson } from '@holo-js/kernel'
 import { parse } from '@holo-js/validation'
 import { requireBroadcastCredentials } from './config'
 import {
@@ -452,13 +453,13 @@ export async function parseBroadcastAuthEndpointPayload(request: Request): Promi
   let rawSocketId: string | undefined
 
   if (contentType.includes('application/json')) {
-    const body = await request.json() as Record<string, unknown>
+    const body = await readBoundedRequestJson(request) as Record<string, unknown>
     rawChannel = typeof body.channel_name === 'string' ? body.channel_name : undefined
     rawChannel ??= typeof body.channel === 'string' ? body.channel : undefined
     rawSocketId = typeof body.socket_id === 'string' ? body.socket_id : undefined
     rawSocketId ??= typeof body.socketId === 'string' ? body.socketId : undefined
   } else {
-    const formData = await request.formData()
+    const formData = await readBoundedRequestFormData(request)
     const channel = formData.get('channel_name') ?? formData.get('channel')
     const socketId = formData.get('socket_id') ?? formData.get('socketId')
     rawChannel = typeof channel === 'string' ? channel : undefined

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { basename, extname, join, resolve } from 'node:path'
 import type { Dirent } from 'node:fs'
 import { build } from 'esbuild'
+import { HoloRequestBodyTooLargeError, readBoundedRequestBody } from '@holo-js/kernel'
 import {
   configureRealtimeRuntime,
   executeRealtimeMutation,
@@ -71,14 +72,37 @@ function normalizeRequestName(value: unknown): string {
   return value
 }
 
+function parseRealtimeRequestBody(bytes: Uint8Array): RealtimeRequestBody {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as RealtimeRequestBody
+  } catch {
+    return {}
+  }
+}
+
+function isJsonContentType(value: string | null): boolean {
+  return value?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
+}
+
 async function readRealtimeRequest(request: Request): Promise<{
   readonly name: string
   readonly args: Record<string, unknown>
 }> {
-  const body = await request.json().catch(() => ({})) as RealtimeRequestBody
+  if (!isJsonContentType(request.headers.get('content-type'))) {
+    throw new RealtimeUnsupportedMediaTypeError()
+  }
+
+  const body = parseRealtimeRequestBody(await readBoundedRequestBody(request))
   return {
     name: normalizeRequestName(body.name),
     args: isPlainObject(body.args) ? body.args : {},
+  }
+}
+
+class RealtimeUnsupportedMediaTypeError extends Error {
+  constructor() {
+    super('Realtime requests must use the application/json content type.')
+    this.name = 'RealtimeUnsupportedMediaTypeError'
   }
 }
 
@@ -92,6 +116,14 @@ class RealtimeDefinitionNotFoundError extends Error {
 function errorStatus(error: unknown): number {
   if (error instanceof RealtimeDefinitionNotFoundError) {
     return 404
+  }
+
+  if (error instanceof RealtimeUnsupportedMediaTypeError) {
+    return 415
+  }
+
+  if (error instanceof HoloRequestBodyTooLargeError) {
+    return 413
   }
 
   if (error instanceof RealtimeUnauthorizedError) {

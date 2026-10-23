@@ -63,4 +63,25 @@ describe('Nuxt route request', () => {
     const response = await postRaw(base, { host: 'app.test', 'content-type': 'application/json' }, '{"name":"query"}')
     expect(response.body).toBe('{"name":"query"}')
   })
+
+  it('answers 413 for a request body above the default limit before buffering it', async () => {
+    const base = await serve(probeApp())
+    const { hostname, port } = new URL(base)
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest({
+        hostname,
+        port,
+        path: '/probe',
+        method: 'POST',
+        headers: { host: 'app.test', 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 1) },
+      }, (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode ?? 0))
+      })
+      req.on('error', reject)
+      req.end(Buffer.alloc(1024 * 1024 + 1, 'x'))
+    })
+
+    expect(status).toBe(413)
+  })
 })

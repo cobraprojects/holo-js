@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthSocialProviderConfig } from '@holo-js/auth'
-import { resolveRequestUrl } from '@holo-js/kernel'
+import { readBoundedRequestFormData, resolveRequestUrl } from '@holo-js/kernel'
 
 export interface SocialProviderProfile {
   readonly id: string
@@ -740,7 +740,7 @@ async function readCallbackParameters(request: Request): Promise<{
     }
   }
 
-  const formData = await request.clone().formData().catch(() => undefined)
+  const formData = await readBoundedRequestFormData(request.clone()).catch(() => undefined)
   const stateValue = formData?.get('state')
   const codeValue = formData?.get('code')
   const formState = typeof stateValue === 'string'

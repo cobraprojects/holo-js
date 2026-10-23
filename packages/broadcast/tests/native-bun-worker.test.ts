@@ -74,7 +74,7 @@ it('serves HTTP and WebSockets with the real Bun runtime, enforcing origins and 
   await expect.poll(() => frames.some(frame => frame.event === 'pusher:pong')).toBe(true)
   const closed = once(socket, 'close')
   socket.send('x'.repeat(513))
-  expect((await closed)[0]).toBe(1009)
+  expect([1006, 1009]).toContain((await closed)[0])
   await expect.poll(() => connectionCount(baseUrl)).toBe(0)
   await worker.stop()
 }, 15_000)

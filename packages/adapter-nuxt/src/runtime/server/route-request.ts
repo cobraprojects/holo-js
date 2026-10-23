@@ -1,5 +1,18 @@
 import type { H3Event } from 'h3'
-import { getHeaders, getRequestURL, readRawBody } from '#imports'
+import { createError, getHeaders, getRequestHeader, getRequestURL } from '#imports'
+import { HoloRequestBodyTooLargeError, readBoundedNodeRequestBody } from '@holo-js/kernel'
+
+async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
+  try {
+    return await readBoundedNodeRequestBody(event.node.req, undefined, getRequestHeader(event, 'content-length'))
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) {
+      throw createError({ statusCode: error.status, statusMessage: 'Payload Too Large', cause: error })
+    }
+
+    throw error
+  }
+}
 
 export async function createWebRequest(event: H3Event): Promise<Request> {
   const headers = new Headers()
@@ -10,7 +23,7 @@ export async function createWebRequest(event: H3Event): Promise<Request> {
   }
 
   return new Request(getRequestURL(event, { xForwardedProto: false }), {
-    body: await readRawBody(event),
+    body: await readBoundedEventBody(event),
     headers,
     method: event.method,
   })

@@ -1,12 +1,13 @@
+import { readBoundedNodeRequestBody } from '@holo-js/kernel'
 import {
   createError,
   defineEventHandler,
   appendResponseHeader,
   getCookie,
   getMethod,
+  getRequestHeader,
   getRequestHeaders,
   getRequestURL,
-  readRawBody,
   setCookie,
   setResponseHeader,
   type H3Event,
@@ -43,6 +44,12 @@ function createRequestBody(body: Uint8Array | undefined): RequestInit['body'] {
   return copy.buffer
 }
 
+async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
+  const bytes = await readBoundedNodeRequestBody(event.node.req, undefined, getRequestHeader(event, 'content-length'))
+  event._requestBody = bytes
+  return bytes
+}
+
 async function createRequest(event: H3Event): Promise<Request> {
   if (event.web?.request) {
     const request = event.web.request.clone()
@@ -53,7 +60,7 @@ async function createRequest(event: H3Event): Promise<Request> {
   const headers = createHeaders(event)
   const body = isSafeMethod(method)
     ? undefined
-    : await readRawBody(event, false)
+    : await readBoundedEventBody(event)
 
   return new Request(getRequestURL(event, { xForwardedProto: false }), {
     method,
@@ -95,12 +102,12 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
       })
     }
 
-    const request = await createRequest(event)
-    const preflight = cors.preflight(request)
-    if (preflight) return preflight
-    cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))
-
     try {
+      const request = await createRequest(event)
+      const preflight = cors.preflight(request)
+      if (preflight) return preflight
+      cors.headers(request).forEach((value, name) => setResponseHeader(event, name, value))
+
       await protect(request)
       await issueCsrfCookie(event, request)
     } catch (error) {

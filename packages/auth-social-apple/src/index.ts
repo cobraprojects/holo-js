@@ -1,4 +1,5 @@
 import { authRuntimeInternals } from '@holo-js/auth'
+import { readBoundedRequestFormData } from '@holo-js/kernel'
 import type {
   SocialCallbackContext,
   SocialProviderProfile,
@@ -25,7 +26,7 @@ async function readAppleUserPayload(request: Request): Promise<{
     return undefined
   }
 
-  const formData = await request.clone().formData().catch(() => undefined)
+  const formData = await readBoundedRequestFormData(request.clone()).catch(() => undefined)
   const userValue = formData?.get('user')
   if (typeof userValue !== 'string' || !userValue.trim()) {
     return undefined
