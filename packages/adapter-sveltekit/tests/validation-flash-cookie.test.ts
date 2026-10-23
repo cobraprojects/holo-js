@@ -103,6 +103,61 @@ describe('validation flash cookie', () => {
     expect(response.headers.get('set-cookie')).toContain('Path=/admin/posts/new;')
   })
 
+  it('keeps a small payload unchanged', () => {
+    setAppKey(appKey)
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(redirectFor('/login')))
+
+    expect(restored).toMatchObject({ message: 'Invalid input.', values: { email: 'ava@example.com' }, errors: failure.errors })
+  })
+
+  it('keeps the errors and small fields when a large textarea would push the cookie past the budget', () => {
+    setAppKey(appKey)
+    const large = {
+      ...failure,
+      values: { email: 'ava@example.com', body: 'x'.repeat(3000) },
+      errors: { email: ['Invalid email.'], body: ['Too long.'] },
+    }
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test/posts/new'),
+    } as never, large as never)
+
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
+
+    expect(restored).toMatchObject({
+      values: { email: 'ava@example.com' },
+      errors: { email: ['Invalid email.'], body: ['Too long.'] },
+    })
+    expect(restored?.values).not.toHaveProperty('body')
+    expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
+  })
+
+  it('keeps only the first message for each field when the errors alone exceed the budget', () => {
+    setAppKey(appKey)
+    const messages = Array.from({ length: 100 }, (_, index) => `Message ${index} ${'y'.repeat(50)}`)
+    const flash = { ...failure, values: { email: 'ava@example.com' }, errors: { email: messages } }
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test/login'),
+    } as never, flash as never)
+
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
+
+    expect(restored).toMatchObject({ values: { email: 'ava@example.com' }, errors: { email: [messages[0]] } })
+    expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
+  })
+
+  it('falls back to a generic failure with no input when even the first message cannot fit', () => {
+    setAppKey(appKey)
+    const flash = { ...failure, values: { email: 'ava@example.com' }, errors: { email: ['z'.repeat(4500)] } }
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test/login'),
+    } as never, flash as never)
+
+    const restored = adapterSvelteKitInternals.readValidationFlashCookie(flashValueFrom(response))
+
+    expect(restored).toMatchObject({ status: 422, message: 'Validation failed.', values: {}, errors: {} })
+    expect((response.headers.get('set-cookie') ?? '').length).toBeLessThanOrEqual(4000)
+  })
+
   it('is encrypted, so the submitted values never appear in plaintext', () => {
     setAppKey(appKey)
 

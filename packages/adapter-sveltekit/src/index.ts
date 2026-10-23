@@ -226,7 +226,7 @@ function filterFlashValues<TData extends Record<string, unknown>>(values: TData)
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
-  const value = event.url ? encodeValidationFlashPayload(payload, event.url.pathname) : undefined
+  const value = event.url ? fitValidationFlash(payload, event.url.pathname) : undefined
   if (!value) {
     return
   }
@@ -273,13 +273,10 @@ function isValidCookiePath(path: string): boolean {
   })
 }
 
-function createValidationFlashCookie(pathname: string | undefined, payload: SerializedValidationException): string | undefined {
-  const { pagePath, cookiePath } = validationFlashPaths(pathname)
-  const value = encodeValidationFlashPayload(payload, pagePath)
-  if (!value) {
-    return undefined
-  }
+// Browsers drop a Set-Cookie over about 4096 bytes, so the whole header has to stay under this budget.
+const VALIDATION_FLASH_COOKIE_BUDGET = 4000
 
+function validationFlashCookieHeader(value: string, cookiePath: string): string {
   return [
     `${validationFlashCookie}=${value}`,
     'Max-Age=60',
@@ -287,6 +284,85 @@ function createValidationFlashCookie(pathname: string | undefined, payload: Seri
     'SameSite=Lax',
     'HttpOnly',
   ].join('; ')
+}
+
+// Degrades in order so the errors survive: drop the largest old-input values until the flash fits,
+// then keep only the first message for each field, then fall back to a generic failure with no input.
+function fitValidationFlash(payload: SerializedValidationException, pathname: string | undefined): string | undefined {
+  const { pagePath, cookiePath } = validationFlashPaths(pathname)
+  const encodeWithin = (candidate: SerializedValidationException): string | undefined => {
+    const value = encodeValidationFlashPayload(candidate, pagePath)
+    return value && validationFlashCookieHeader(value, cookiePath).length <= VALIDATION_FLASH_COOKIE_BUDGET
+      ? value
+      : undefined
+  }
+
+  const allValues = filterFlashValues(payload.values) as Record<string, unknown>
+  const full = encodeValidationFlashPayload({ ...payload, values: allValues }, pagePath)
+  if (!full) {
+    return undefined
+  }
+
+  if (validationFlashCookieHeader(full, cookiePath).length <= VALIDATION_FLASH_COOKIE_BUDGET) {
+    return full
+  }
+
+  const largestFirst = Object.keys(allValues).sort((a, b) => flashValueSize(allValues[b]) - flashValueSize(allValues[a]))
+  const dropValuesUntilFits = (errors: SerializedValidationException['errors']) => {
+    for (let count = 0; count <= largestFirst.length; count += 1) {
+      const dropped = largestFirst.slice(0, count)
+      const values = Object.fromEntries(Object.entries(allValues).filter(([key]) => !dropped.includes(key)))
+      const value = encodeWithin({ ...payload, values, errors })
+      if (value) {
+        return { value, dropped: dropped.map(key => `values.${key}`) }
+      }
+    }
+
+    return undefined
+  }
+
+  const withAllErrors = dropValuesUntilFits(payload.errors)
+  if (withAllErrors) {
+    warnDroppedFlashFields(withAllErrors.dropped)
+    return withAllErrors.value
+  }
+
+  const firstErrors = Object.fromEntries(
+    Object.entries(payload.errors).map(([field, messages]) => [field, messages.slice(0, 1)]),
+  )
+  const withFirstErrors = dropValuesUntilFits(firstErrors)
+  if (withFirstErrors) {
+    const trimmed = Object.entries(payload.errors)
+      .filter(([, messages]) => messages.length > 1)
+      .map(([field]) => `errors.${field}`)
+    warnDroppedFlashFields([...withFirstErrors.dropped, ...trimmed])
+    return withFirstErrors.value
+  }
+
+  warnDroppedFlashFields([
+    ...Object.keys(allValues).map(key => `values.${key}`),
+    ...Object.keys(payload.errors).map(field => `errors.${field}`),
+  ])
+  return encodeWithin({ ...payload, message: 'Validation failed.', values: {}, errors: {} })
+}
+
+function flashValueSize(value: unknown): number {
+  return (JSON.stringify(value) ?? '').length
+}
+
+function warnDroppedFlashFields(fields: readonly string[]): void {
+  if (fields.length > 0 && isDebugEnabled()) {
+    console.warn(`[@holo-js/adapter-sveltekit] Validation flash dropped ${fields.join(', ')} to fit the ${VALIDATION_FLASH_COOKIE_BUDGET}-byte cookie budget.`)
+  }
+}
+
+function createValidationFlashCookie(pathname: string | undefined, payload: SerializedValidationException): string | undefined {
+  const value = fitValidationFlash(payload, pathname)
+  if (!value) {
+    return undefined
+  }
+
+  return validationFlashCookieHeader(value, validationFlashPaths(pathname).cookiePath)
 }
 
 type ValidationFlashRecord = SerializedValidationException & { readonly path?: string, readonly cookiePath?: string }
