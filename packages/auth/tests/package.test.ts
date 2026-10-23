@@ -3271,6 +3271,25 @@ describe('@holo-js/auth package runtime', () => {
     expect(await tokenStore.findById(tokenId)).not.toBeNull()
   })
 
+  it('rejects a session scanned earlier in the same request once a reset has revoked it', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const request = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    configureAuthRuntime({ ...bindings, providers, context: request })
+    const session = unwrapAuthResult(await loginUsing(created!))
+    request.setSessionId('web', session.sessionId)
+    await expect(check()).resolves.toBe(true)
+
+    request.sessionIds.delete('web')
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+
+    request.setSessionId('web', session.sessionId)
+    await expect(check()).resolves.toBe(false)
+  })
+
   it('keeps the browser that resets the password signed in on a rotated session', async () => {
     const runtime = await configurePasswordResetRuntime()
     const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })

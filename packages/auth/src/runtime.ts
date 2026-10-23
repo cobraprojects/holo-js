@@ -2853,6 +2853,7 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   const retainedGuard = await findSessionGuardOwnedBy(bindings, providerName, userId)
   if (!retainedGuard) {
     await revokeAllSessionsForIdentity(bindings.sessionRevocations, { provider: providerName, userId })
+    clearSessionRevocationReads(bindings.context)
     return
   }
 
