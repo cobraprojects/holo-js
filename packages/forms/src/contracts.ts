@@ -682,10 +682,28 @@ function captureBodyTooLarge(error: unknown): HoloRequestBodyTooLargeError {
   throw error
 }
 
+function submittedRequestInit(request: Request, body: Uint8Array<ArrayBuffer>): RequestInit {
+  return {
+    method: request.method,
+    headers: new Headers(request.headers),
+    body,
+    duplex: 'half',
+    signal: request.signal,
+    credentials: request.credentials,
+    redirect: request.redirect,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    cache: request.cache === 'only-if-cached' ? undefined : request.cache,
+    mode: request.mode === 'navigate' ? undefined : request.mode,
+  } as RequestInit
+}
+
 async function bufferSubmittedRequest(request: Request): Promise<Request> {
   if (request.method === 'GET' || request.method === 'HEAD') return request
   const body = await readBoundedRequestBody(request.clone())
-  return new Request(request, { body })
+  return new Request(request.url, submittedRequestInit(request, body))
 }
 
 export async function safeParse<TShape extends SchemaInputShape>(

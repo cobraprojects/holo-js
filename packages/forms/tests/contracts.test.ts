@@ -703,6 +703,36 @@ describe('@holo-js/forms contracts', () => {
     expect(seenSignals[0]?.aborted).toBe(true)
   })
 
+  it('accepts a Request-like object from another implementation without passing it to the Request constructor', async () => {
+    const payload = new TextEncoder().encode('email=ava%40example.com')
+    const url = 'https://app.test/login'
+    const headers = new Headers({ 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': '203.0.113.15' })
+    const fields = {
+      url,
+      method: 'POST',
+      headers,
+      signal: new AbortController().signal,
+      credentials: 'same-origin',
+      mode: 'cors',
+      redirect: 'follow',
+      referrer: 'about:client',
+      referrerPolicy: '',
+      integrity: '',
+      keepalive: false,
+      cache: 'default',
+      clone: () => new Request(url, { method: 'POST', headers, body: payload }),
+    }
+    const foreign = Object.create(Request.prototype, Object.fromEntries(
+      Object.entries(fields).map(([name, value]) => [name, { value, enumerable: true }]),
+    )) as Request
+    await configureNativeSecurity()
+    const login = schema({ email: field.string().required().email() })
+
+    const result = await safeParse(foreign, login, { throttle: 'login' })
+
+    expect(result.valid).toBe(true)
+  })
+
   it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
     const login = schema({
       email: field.string().required().transform(value => value.trim().toLowerCase()),
