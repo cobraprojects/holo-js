@@ -148,6 +148,54 @@ describe('validation flash cookie', () => {
     expect(restored?.values).toEqual({ email: 'ava@example.com' })
   })
 
+  it('does not hand a flash to a different page, and still consumes it', () => {
+    setAppKey(appKey)
+    const value = flashValueFrom(redirectFor('/admin/posts/new'))
+    const deleted: string[] = []
+    const event = {
+      url: new URL('https://app.test/admin/posts/1/edit'),
+      cookies: {
+        get: (name: string) => (name === flashCookieName ? value : undefined),
+        delete: (name: string) => deleted.push(name),
+      },
+    }
+
+    const page = runWithSvelteKitRequestEvent(event as never, () => readValidationFlash(new URL('https://app.test/admin/posts/1/edit')))
+
+    expect(page).toBeUndefined()
+    expect(deleted).toEqual([flashCookieName])
+  })
+
+  it('does not restore a flash on a browser page other than the one it was written for', () => {
+    const globalWithLocation = globalThis as { location?: { pathname: string } }
+    const previous = globalWithLocation.location
+    globalWithLocation.location = { pathname: '/admin/posts/1/edit' }
+    try {
+      const restored = svelteClientInternals.takeFlashedValidationState(schema({ email: field.string().required() }), {
+        holoValidationFlash: { ...failure, path: '/admin/posts/new', values: { email: 'ava@example.com' } },
+      })
+
+      expect(restored).toBeUndefined()
+    } finally {
+      globalWithLocation.location = previous
+    }
+  })
+
+  it('restores a flash on the browser page it was written for', () => {
+    const globalWithLocation = globalThis as { location?: { pathname: string } }
+    const previous = globalWithLocation.location
+    globalWithLocation.location = { pathname: '/admin/posts/new' }
+    try {
+      const restored = svelteClientInternals.takeFlashedValidationState(schema({ email: field.string().required() }), {
+        holoValidationFlash: { ...failure, path: '/admin/posts/new', values: { email: 'ava@example.com' } },
+      })
+
+      expect(restored).toMatchObject({ values: { email: 'ava@example.com' } })
+    } finally {
+      globalWithLocation.location = previous
+    }
+  })
+
   it('reads and clears the flash for the page load from the server event', () => {
     setAppKey(appKey)
     const value = flashValueFrom(redirectFor())

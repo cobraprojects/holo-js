@@ -164,7 +164,7 @@ function resolveValidationFlashAppKey(): string | undefined {
   return appKey?.trim() ? appKey : undefined
 }
 
-function encodeValidationFlashPayload(payload: SerializedValidationException): string | undefined {
+function encodeValidationFlashPayload(payload: SerializedValidationException, pathname: string): string | undefined {
   const appKey = resolveValidationFlashAppKey()
   if (!appKey) {
     if (isDebugEnabled()) {
@@ -176,6 +176,7 @@ function encodeValidationFlashPayload(payload: SerializedValidationException): s
   return cookieEncryptionInternals.encryptCookieValue(validationFlashCookie, JSON.stringify({
     ...payload,
     values: filterFlashValues(payload.values),
+    path: pathname,
   }), appKey)
 }
 
@@ -223,7 +224,7 @@ function filterFlashValues<TData extends Record<string, unknown>>(values: TData)
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
-  const value = event.url ? encodeValidationFlashPayload(payload) : undefined
+  const value = event.url ? encodeValidationFlashPayload(payload, normalizeCookiePath(event)) : undefined
   if (!value) {
     return
   }
@@ -241,7 +242,7 @@ function normalizeCookiePath(event: SvelteKitRequestEvent): string {
 }
 
 function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string | undefined {
-  const value = encodeValidationFlashPayload(payload)
+  const value = encodeValidationFlashPayload(payload, normalizeCookiePath(event))
   if (!value) {
     return undefined
   }
@@ -255,7 +256,9 @@ function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: Seri
   ].join('; ')
 }
 
-function readValidationFlashCookie(value: string | undefined): SerializedValidationException | undefined {
+type ValidationFlashRecord = SerializedValidationException & { readonly path?: string }
+
+function readValidationFlashCookie(value: string | undefined): ValidationFlashRecord | undefined {
   const appKey = resolveValidationFlashAppKey()
   const json = value && appKey
     ? cookieEncryptionInternals.decryptCookieValue(validationFlashCookie, value, appKey)
@@ -272,7 +275,7 @@ function readValidationFlashCookie(value: string | undefined): SerializedValidat
   }
 }
 
-export function readValidationFlash(): SerializedValidationException | undefined {
+export function readValidationFlash(url?: { readonly pathname: string }): ValidationFlashRecord | undefined {
   const event = getCurrentSvelteKitRequestEvent()
   const value = event?.cookies.get(validationFlashCookie)
   if (!event || !value) {
@@ -280,7 +283,9 @@ export function readValidationFlash(): SerializedValidationException | undefined
   }
 
   event.cookies.delete(validationFlashCookie, { path: normalizeCookiePath(event) })
-  return readValidationFlashCookie(value)
+  const payload = readValidationFlashCookie(value)
+  const pathname = url?.pathname ?? event.url?.pathname
+  return payload && payload.path === pathname ? payload : undefined
 }
 
 function createValidationActionFailureResponse(

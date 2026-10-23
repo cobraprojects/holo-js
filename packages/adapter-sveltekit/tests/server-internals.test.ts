@@ -68,7 +68,7 @@ describe('SvelteKit server adapter internals', () => {
     })
     const state = adapterSvelteKitInternals.getState() as { project?: unknown }
     state.project = { config: { app: { key: 'encode-test-app-key', debug: false } } }
-    const encoded = adapterSvelteKitInternals.encodeValidationFlashPayload(payload as never)
+    const encoded = adapterSvelteKitInternals.encodeValidationFlashPayload(payload as never, '/posts')
     expect(adapterSvelteKitInternals.readValidationFlashCookie(encoded)).toMatchObject({
       values: { title: 'Post', nested: { safe: true } },
     })

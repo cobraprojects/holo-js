@@ -21,6 +21,7 @@ import { createReactiveView } from './reactive-view'
 type InitialFormState<TData> = UseFormOptions<TData>['initialState']
 type FlashedValidationPayload<TData> = FormFailurePayload<TData> & {
   readonly bag?: string
+  readonly path?: string
 }
 
 type BrowserDocument = {
@@ -300,11 +301,21 @@ function isFormFailurePayload<TData>(value: unknown): value is FormFailurePayloa
     && isPlainObject(value.errors)
 }
 
+function flashAppliesToBrowserPage(payload: { readonly path?: string }): boolean {
+  const pathname = (globalThis as { readonly location?: { readonly pathname?: string } }).location?.pathname
+  return pathname === undefined || payload.path === pathname
+}
+
 function readPageValidationFlash<TData>(
   pageData: Readonly<Record<string, unknown>> | undefined,
 ): FlashedValidationPayload<TData> | undefined {
   const payload = pageData?.holoValidationFlash
-  return isFormFailurePayload<TData>(payload) ? payload : undefined
+  if (!isFormFailurePayload<TData>(payload)) {
+    return undefined
+  }
+
+  const flashed = payload as FlashedValidationPayload<TData>
+  return flashAppliesToBrowserPage(flashed) ? flashed : undefined
 }
 
 function takeFlashedValidationState<TData>(

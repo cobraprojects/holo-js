@@ -191,12 +191,12 @@ The cookie that carries validation errors and submitted values to the next page 
 ```ts [src/routes/+layout.server.ts]
 import { readValidationFlash } from '@holo-js/adapter-sveltekit'
 
-export const load = () => ({
-  holoValidationFlash: readValidationFlash(),
+export const load = ({ url }) => ({
+  holoValidationFlash: readValidationFlash(url),
 })
 ```
 
-Pass the page data to each form that shows flashed errors or restores its input:
+Pass `url` as shown. SvelteKit reruns the layout load on each navigation because it reads the URL, and `readValidationFlash(url)` hands the flash only to the page it was written for, so errors from one form never appear on another page. Pass the page data to each form that shows flashed errors or restores its input:
 
 ```svelte
 const login = useForm(loginForm, { pageData: data })

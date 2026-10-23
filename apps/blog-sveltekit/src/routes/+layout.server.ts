@@ -3,12 +3,12 @@ import { readValidationFlash } from '@holo-js/adapter-sveltekit'
 import { csrf } from '@holo-js/security'
 import type { LayoutServerLoad } from './$types'
 
-export const load = (async ({ request }) => {
+export const load = (async ({ request, url }) => {
   const currentAuth = await auth()
 
   return {
     auth: currentAuth,
     csrf: { input: await csrf.input(request) },
-    holoValidationFlash: readValidationFlash(),
+    holoValidationFlash: readValidationFlash(url),
   }
 }) satisfies LayoutServerLoad
