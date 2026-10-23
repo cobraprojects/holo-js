@@ -38,7 +38,7 @@ Security fixes ship in the latest release. If a fix needs an application change,
 
 ## Node.js support
 
-Every package declares its supported Node.js versions in `engines`. Currently that is Node.js 22.14 or newer on the 22 line, and Node.js 24 and 26.
+Every package declares its supported Node.js versions in `engines`. Currently that is Node.js 22.18 or newer on the 22 line, and Node.js 24 and 26.
 
 ## Next steps
 

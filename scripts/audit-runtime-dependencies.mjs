@@ -7,11 +7,15 @@ import ts from 'typescript'
 
 const execFileAsync = promisify(execFile)
 
+const usage = 'Usage: node scripts/audit-runtime-dependencies.mjs [--all] [--report audit.json]'
+const options = process.argv.slice(2)
+const blockEveryPackage = options.includes('--all')
+const reportArgs = options.filter(arg => arg !== '--all')
+
 async function readAdvisories() {
-  const args = process.argv.slice(2)
-  if (args.length > 0) {
-    if (args.length !== 2 || args[0] !== '--report') throw new Error('Usage: node scripts/audit-runtime-dependencies.mjs [--report audit.json]')
-    return JSON.parse(await readFile(args[1], 'utf8'))
+  if (reportArgs.length > 0) {
+    if (reportArgs.length !== 2 || reportArgs[0] !== '--report') throw new Error(usage)
+    return JSON.parse(await readFile(reportArgs[1], 'utf8'))
   }
   const result = await execFileAsync('bun', ['audit', '--json'], { maxBuffer: 16 * 1024 * 1024 })
     .catch(error => {
@@ -116,7 +120,9 @@ async function main() {
       for (const version of inventory.get(name) ?? []) {
         if (!semver.satisfies(version, finding.vulnerable_versions, { includePrerelease: true })) continue
         const identity = `${name}@${version}`
-        const blocked = runtime.has(identity) && ['high', 'critical'].includes(finding.severity)
+        const blocked = blockEveryPackage
+          ? ['moderate', 'high', 'critical'].includes(finding.severity)
+          : runtime.has(identity) && ['high', 'critical'].includes(finding.severity)
         const exception = blocked
           ? exceptions.find(candidate => candidate.advisory === finding.url && candidate.package === name && candidate.version === version)
           : undefined
@@ -133,11 +139,13 @@ async function main() {
       }
     }
   }
-  for (const exception of exceptions.filter(candidate => !usedExceptions.has(candidate))) {
+  const isToolingOnly = candidate => inventory.get(candidate.package)?.has(candidate.version) && !runtime.has(`${candidate.package}@${candidate.version}`)
+  const checkedExceptions = blockEveryPackage ? exceptions : exceptions.filter(candidate => !isToolingOnly(candidate))
+  for (const exception of checkedExceptions.filter(candidate => !usedExceptions.has(candidate))) {
     failures++
     console.log(`Unused exception for ${exception.package}@${exception.version} ${exception.advisory}`)
   }
-  console.log(`Published runtime audit: ${failures} blocking advisories.`)
+  console.log(`${blockEveryPackage ? 'Dependency' : 'Published runtime'} audit: ${failures} blocking advisories.`)
   process.exitCode = failures > 0 ? 1 : 0
 }
 
