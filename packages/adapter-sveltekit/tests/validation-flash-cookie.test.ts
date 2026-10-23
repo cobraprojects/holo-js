@@ -148,6 +148,32 @@ describe('validation flash cookie', () => {
     expect(restored?.values).toEqual({ email: 'ava@example.com' })
   })
 
+  it('deletes the flash cookie with the path it was written with, even when read on a deeper page', () => {
+    setAppKey(appKey)
+    const written: Array<{ name: string, value: string, path: string }> = []
+    adapterSvelteKitInternals.flashValidationPayload({
+      url: new URL('https://app.test/admin'),
+      cookies: {
+        get: () => undefined,
+        set: (name: string, value: string, options: { path: string }) => written.push({ name, value, path: options.path }),
+        delete: () => undefined,
+      },
+    } as never, failure as never)
+    const deleted: Array<{ name: string, path: string }> = []
+    const readEvent = {
+      url: new URL('https://app.test/admin/posts/1'),
+      cookies: {
+        get: (name: string) => (name === flashCookieName ? written[0]?.value : undefined),
+        delete: (name: string, options: { path: string }) => deleted.push({ name, path: options.path }),
+      },
+    }
+
+    const page = runWithSvelteKitRequestEvent(readEvent as never, () => readValidationFlash(new URL('https://app.test/admin/posts/1')))
+
+    expect(page).toBeUndefined()
+    expect(deleted).toEqual([{ name: flashCookieName, path: '/admin' }])
+  })
+
   it('does not hand a flash to a different page, and still consumes it', () => {
     setAppKey(appKey)
     const value = flashValueFrom(redirectFor('/admin/posts/new'))

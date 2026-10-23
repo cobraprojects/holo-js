@@ -282,8 +282,8 @@ export function readValidationFlash(url?: { readonly pathname: string }): Valida
     return undefined
   }
 
-  event.cookies.delete(validationFlashCookie, { path: normalizeCookiePath(event) })
   const payload = readValidationFlashCookie(value)
+  event.cookies.delete(validationFlashCookie, { path: payload?.path ?? normalizeCookiePath(event) })
   const pathname = url?.pathname ?? event.url?.pathname
   return payload && payload.path === pathname ? payload : undefined
 }
