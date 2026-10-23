@@ -137,12 +137,27 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id').whereJson('settings->a,b->q"c', 'updated').get()).toEqual([{ id: 1 }])
   })
 
-  it('rejects SQLite JSON path segments with NUL or unpaired surrogate characters instead of matching nothing', async () => {
+  it('matches SQLite JSON path keys containing NUL, unpaired surrogates, emoji, and a literal backslash-u', async () => {
     const { db, table } = await openDatabase('sqlite')
-    await db.table(table).insert({ id: 1, name: 'plain', settings: JSON.stringify({ 'a\u0000b': { c: 'matched' } }) })
-    await expect(db.table(table).select('id').whereJson('settings->a\u0000b->c', 'matched').get()).rejects.toThrow('SQLite JSON paths cannot address keys containing NUL or unpaired surrogate characters.')
-    await expect(db.table(table).select('id').whereJson('settings->a\ud800b->c', 'matched').get()).rejects.toThrow('SQLite JSON paths cannot address keys containing NUL or unpaired surrogate characters.')
-    await expect(db.table(table).where('id', 1).updateJson('settings->a\u0000b', 'x')).rejects.toThrow('SQLite JSON paths cannot address keys containing NUL or unpaired surrogate characters.')
+    await db.table(table).insert([
+      { id: 1, name: 'nul', settings: JSON.stringify({ 'a\u0000b': { c: 'matched' } }) },
+      { id: 2, name: 'lone', settings: JSON.stringify({ 'a\ud800b': { c: 'matched' } }) },
+      { id: 3, name: 'emoji', settings: JSON.stringify({ 'e😀': { c: 'matched' } }) },
+      { id: 4, name: 'literal', settings: JSON.stringify({ 'a\\u0000b': { c: 'matched' } }) },
+    ])
+    expect(await db.table(table).select('id').whereJson('settings->a\u0000b->c', 'matched').get()).toEqual([{ id: 1 }])
+    expect(await db.table(table).select('id').whereJson('settings->a\ud800b->c', 'matched').get()).toEqual([{ id: 2 }])
+    expect(await db.table(table).select('id').whereJson('settings->e😀->c', 'matched').get()).toEqual([{ id: 3 }])
+    expect(await db.table(table).select('id').whereJson('settings->a\\u0000b->c', 'matched').get()).toEqual([{ id: 4 }])
+  })
+
+  it('matches SQLite JSON path keys with special characters in whereJsonContains, whereJsonLength, and updateJson', async () => {
+    const { db, table } = await openDatabase('sqlite')
+    await db.table(table).insert({ id: 1, name: 'special', settings: JSON.stringify({ 'b\\s[0].c': ['x', 'y'] }) })
+    expect(await db.table(table).select('id').whereJsonContains('settings->b\\s[0].c', 'y').get()).toEqual([{ id: 1 }])
+    expect(await db.table(table).select('id').whereJsonLength('settings->b\\s[0].c', 2).get()).toEqual([{ id: 1 }])
+    await db.table(table).where('id', 1).updateJson('settings->b\\s[0].c', ['z'])
+    expect(await db.table(table).select('id').whereJsonLength('settings->b\\s[0].c', 1).get()).toEqual([{ id: 1 }])
   })
 
   it('matches Postgres JSON path segments containing quotes, backslashes, braces, and NULL', async () => {

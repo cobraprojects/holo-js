@@ -489,7 +489,7 @@ const euUsers = await DB.table('users')
   .get()
 ```
 
-Each segment between `->` is one key, so a key that contains a comma is matched whole. A key can't contain `->`, and surrounding spaces are trimmed from each segment. On SQLite, a path can't name a key with a NUL character or an unpaired surrogate, so a query or update that uses one throws an error. Rename that key to use it in a path.
+Each segment between `->` is one key, so a key that contains a comma is matched whole. A key can't contain `->`, `->>`, `#>`, or `@>`, and surrounding spaces are trimmed from each segment.
 
 | Method | Use it to… |
 | --- | --- |
