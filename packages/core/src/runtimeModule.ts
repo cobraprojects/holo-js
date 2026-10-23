@@ -362,13 +362,19 @@ function holoPackageSharesRuntime(packageName: string, importerPath: string): bo
   return runtimeEntry !== undefined && runtimeEntry === packageEntryFromBase(importerPath, packageName)
 }
 
-function importRequiresBundle(
-  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+function holoImportRequiresBundle(
+  dependency: { readonly path: string, readonly original?: string },
   importerPath: string,
 ): boolean {
+  const holoPackage = /^@holo-js\/[^/]+/.exec(dependency.original ?? dependency.path)?.[0]
+  return holoPackage !== undefined && !holoPackageSharesRuntime(holoPackage, importerPath)
+}
+
+function importNeedsNodeResolutionBundle(
+  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+): boolean {
   const original = dependency.original ?? dependency.path
-  const holoPackage = /^@holo-js\/[^/]+/.exec(original)?.[0]
-  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, importerPath)
+  if (/^@holo-js\//.test(original)) return false
 
   return /^[@~]\//.test(original)
     || !dependency.external && (
@@ -400,8 +406,9 @@ export async function loadProjectDefinitionRuntimeModules(
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
-      if (input.imports.some(dependency => importRequiresBundle(dependency, sourcePath))) nativeGraph = false
+      if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
+      if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {

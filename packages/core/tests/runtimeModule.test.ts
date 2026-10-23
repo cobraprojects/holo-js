@@ -160,6 +160,34 @@ describe('@holo-js/core runtime module helpers', () => {
     }
   })
 
+  it('loads app definitions natively under a source loader so the runtime and the app share each definition object', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+    const jobsRoot = join(projectRoot, 'server/jobs')
+    await mkdir(jobsRoot, { recursive: true })
+    await writeFile(join(jobsRoot, 'label.ts'), "export const label = 'report'\n")
+    const definitionPath = join(jobsRoot, 'report.ts')
+    await writeFile(definitionPath, "import { label } from './label'\nexport const job = { label }\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+const loaded = await importDefinition(${JSON.stringify(definitionPath)})
+const direct = await import(${JSON.stringify(pathToFileURL(definitionPath).href)})
+console.log(JSON.stringify({ shared: loaded.job === direct.job }))
+`)
+    const { stdout } = await promisify(execFile)(process.execPath, ['--import', tsxLoaderUrl, childPath], {
+      cwd: projectRoot,
+      env: { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' },
+    })
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { shared: boolean }
+
+    expect(result.shared).toBe(true)
+  }, 30_000)
+
   it.each([
     { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },
     { label: '--preserve-symlinks', args: ['--preserve-symlinks'], env: {}, bundled: true },
