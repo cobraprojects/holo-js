@@ -302,7 +302,7 @@ With `useForm()`, keep a normal `<form method="post">`. The adapter takes over t
 </form>
 ```
 
-Without JavaScript, read the flashed errors with `useValidationErrors()` instead. In SvelteKit the flash is `HttpOnly`, so the page reads it through its layout load. Add the load once, passing `url` so SvelteKit reruns it on each navigation and the flash reaches only its own page. Then pass the page data to every form and `useValidationErrors()` call. Without `pageData`, the page shows no flashed errors or input:
+In SvelteKit the flash is `HttpOnly`, so pages read it through the root layout load, with or without JavaScript. Add the load once, passing `url` so SvelteKit reruns it on each navigation and the flash reaches only the page it was written for. Then pass `pageData: data` to both `useForm()` and `useValidationErrors()`. Without `pageData`, the page shows no flashed errors or input.
 
 ```ts [src/routes/+layout.server.ts]
 import { readValidationFlash } from '@holo-js/adapter-sveltekit'
@@ -312,7 +312,7 @@ export const load = ({ url }) => ({
 })
 ```
 
-Without JavaScript, read the flashed errors with `useValidationErrors()` instead:
+Here is a page that shows the flashed errors with a plain HTML form:
 
 ```svelte [src/routes/posts/new/+page.svelte]
 <script lang="ts">
