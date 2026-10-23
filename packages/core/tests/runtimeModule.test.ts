@@ -488,6 +488,28 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     }, 30_000)
   })
 
+  describe('probes hash-prefixed tsconfig aliases', () => {
+    it('bundles a #shared/ alias that the active tsx loader cannot resolve, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        specifier: '#shared/util',
+        files: {
+          'shared/util.ts': "export const Post = { title: 'shared' }\n",
+          'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '#shared/*': ['./shared/*'] } } }),
+          'tsconfig.tsx.json': JSON.stringify({ compilerOptions: {} }),
+        },
+      })
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, {
+        command: process.execPath,
+        args: ['--import', tsxLoaderUrl],
+        env: { TSX_TSCONFIG_PATH: join(projectRoot, 'tsconfig.tsx.json') },
+      })
+
+      expect(result).toEqual({ title: 'shared', shared: false })
+    }, 30_000)
+  })
+
   describe('keeps package-scoped imports native', () => {
     const packageImportsManifest = { type: 'module', imports: { '#internal': './internal.ts' } }
 
@@ -510,6 +532,18 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
       const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: 'bun', args: [], env: {} })
 
       expect(result).toEqual({ title: 'internal', shared: true })
+    }, 30_000)
+
+    it('keeps an ESM definition that imports a # pattern declared in package imports native, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: "import { label } from '#lib/util'\nexport const job = { title: label }\n" })
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module', imports: { '#lib/*': './lib/*.ts' } }))
+      await mkdir(join(projectRoot, 'lib'), { recursive: true })
+      await writeFile(join(projectRoot, 'lib/util.ts'), "export const label = 'pattern'\n")
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(result).toEqual({ title: 'pattern', shared: true })
     }, 30_000)
 
     it('keeps an ESM definition native when its package is installed only in a node_modules next to it, under tsx', async () => {

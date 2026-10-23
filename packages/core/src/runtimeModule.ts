@@ -374,7 +374,7 @@ function isBunRuntime(): boolean {
   return typeof globalThis === 'object' && 'Bun' in globalThis
 }
 
-const nonAliasSpecifier = /^(?:\.|\/|#|[a-z][a-z\d+.-]*:|@holo-js\/)/i
+const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
 
 type MetafileImport = {
   readonly path: string
@@ -383,14 +383,16 @@ type MetafileImport = {
   readonly original?: string
 }
 
-function isStaticProjectImport(dependency: MetafileImport): boolean {
+function isStaticProjectImport(dependency: MetafileImport, importerPath: string): boolean {
+  const specifier = dependency.original ?? dependency.path
   return (dependency.kind === 'import-statement' || dependency.kind === 'require-call')
-    && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
+    && !nonAliasSpecifier.test(specifier) && !packageImportsDeclares(specifier, importerPath)
 }
 
-function isDynamicAliasImport(dependency: MetafileImport): boolean {
+function isDynamicAliasImport(dependency: MetafileImport, importerPath: string): boolean {
+  const specifier = dependency.original ?? dependency.path
   return dependency.kind === 'dynamic-import' && dependency.external !== true
-    && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
+    && !nonAliasSpecifier.test(specifier) && !packageImportsDeclares(specifier, importerPath)
 }
 
 function isCommonJsSource(sourcePath: string): boolean {
@@ -430,19 +432,36 @@ function packageNameOf(specifier: string): string {
   return scopeOrName.startsWith('@') && name ? `${scopeOrName}/${name}` : scopeOrName
 }
 
-function nearestPackageName(importerPath: string): string | undefined {
+function nearestPackageManifest(importerPath: string): Record<string, unknown> | undefined {
   for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
     const manifest = join(directory, 'package.json')
     if (existsSync(manifest)) {
       try {
-        const name = JSON.parse(readFileSync(manifest, 'utf8')).name
-        return typeof name === 'string' ? name : undefined
+        return JSON.parse(readFileSync(manifest, 'utf8'))
       } catch {
         return undefined
       }
     }
     if (dirname(directory) === directory) return undefined
   }
+}
+
+function nearestPackageName(importerPath: string): string | undefined {
+  const name = nearestPackageManifest(importerPath)?.name
+  return typeof name === 'string' ? name : undefined
+}
+
+function packageImportsDeclares(specifier: string, importerPath: string): boolean {
+  if (!specifier.startsWith('#')) return false
+
+  const imports = nearestPackageManifest(importerPath)?.imports
+  if (typeof imports !== 'object' || imports === null) return false
+
+  return Object.keys(imports).some(key => {
+    const star = key.indexOf('*')
+    if (star < 0) return key === specifier
+    return specifier.startsWith(key.slice(0, star)) && specifier.endsWith(key.slice(star + 1))
+  })
 }
 
 function packageVisibleFrom(importerPath: string, specifier: string): boolean {
@@ -505,7 +524,7 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       for (const dependency of input.imports) {
-        if (isStaticProjectImport(dependency) || isDynamicAliasImport(dependency)) projectImports.push({ dependency, importerPath: sourcePath })
+        if (isStaticProjectImport(dependency, sourcePath) || isDynamicAliasImport(dependency, sourcePath)) projectImports.push({ dependency, importerPath: sourcePath })
       }
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
