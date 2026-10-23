@@ -173,10 +173,12 @@ function encodeValidationFlashPayload(payload: SerializedValidationException, pa
     return undefined
   }
 
+  const { pagePath, cookiePath } = validationFlashPaths(pathname)
   return cookieEncryptionInternals.encryptCookieValue(validationFlashCookie, JSON.stringify({
     ...payload,
     values: filterFlashValues(payload.values),
-    path: pathname,
+    path: pagePath,
+    cookiePath,
   }), appKey)
 }
 
@@ -224,30 +226,56 @@ function filterFlashValues<TData extends Record<string, unknown>>(values: TData)
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
-  const value = event.url ? encodeValidationFlashPayload(payload, flashPathFor(event.url.pathname)) : undefined
+  const value = event.url ? encodeValidationFlashPayload(payload, event.url.pathname) : undefined
   if (!value) {
     return
   }
 
   event.cookies.set(validationFlashCookie, value, {
-    path: flashPathFor(event.url?.pathname),
+    path: validationFlashPaths(event.url?.pathname).cookiePath,
     maxAge: 60,
     sameSite: 'lax',
     httpOnly: true,
   })
 }
 
-function flashPathFor(pathname: string | undefined): string {
-  return sameOriginRedirectPath(pathname).replace(/[;\r\n]/g, '') || '/'
+type ValidationFlashPaths = {
+  // The exact same-origin page path. The flash only applies on this path.
+  readonly pagePath: string
+  // The cookie Path attribute. It may be broader than pagePath so the browser sends the cookie back.
+  readonly cookiePath: string
 }
 
-function normalizeCookiePath(event: SvelteKitRequestEvent): string {
-  return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
+function validationFlashPaths(pathname: string | undefined): ValidationFlashPaths {
+  const pagePath = sameOriginRedirectPath(pathname)
+  return { pagePath, cookiePath: cookiePathFor(pagePath) }
+}
+
+// A cookie Path cannot contain ';' or control characters (RFC 6265 §5.4). When the page path has one,
+// use the nearest ancestor directory that is valid. It still path-matches the page (RFC 6265 §5.1.4).
+function cookiePathFor(pagePath: string): string {
+  if (isValidCookiePath(pagePath)) {
+    return pagePath
+  }
+
+  let end = pagePath.lastIndexOf('/')
+  while (end > 0 && !isValidCookiePath(pagePath.slice(0, end + 1))) {
+    end = pagePath.lastIndexOf('/', end - 1)
+  }
+
+  return end > 0 ? pagePath.slice(0, end + 1) : '/'
+}
+
+function isValidCookiePath(path: string): boolean {
+  return !path.includes(';') && ![...path].some((char) => {
+    const code = char.charCodeAt(0)
+    return code < 0x20 || code === 0x7f
+  })
 }
 
 function createValidationFlashCookie(pathname: string | undefined, payload: SerializedValidationException): string | undefined {
-  const path = flashPathFor(pathname)
-  const value = encodeValidationFlashPayload(payload, path)
+  const { pagePath, cookiePath } = validationFlashPaths(pathname)
+  const value = encodeValidationFlashPayload(payload, pagePath)
   if (!value) {
     return undefined
   }
@@ -255,13 +283,13 @@ function createValidationFlashCookie(pathname: string | undefined, payload: Seri
   return [
     `${validationFlashCookie}=${value}`,
     'Max-Age=60',
-    `Path=${path}`,
+    `Path=${cookiePath}`,
     'SameSite=Lax',
     'HttpOnly',
   ].join('; ')
 }
 
-type ValidationFlashRecord = SerializedValidationException & { readonly path?: string }
+type ValidationFlashRecord = SerializedValidationException & { readonly path?: string, readonly cookiePath?: string }
 
 function readValidationFlashCookie(value: string | undefined): ValidationFlashRecord | undefined {
   const appKey = resolveValidationFlashAppKey()
@@ -288,9 +316,11 @@ export function readValidationFlash(url?: { readonly pathname: string }): Valida
   }
 
   const payload = readValidationFlashCookie(value)
-  event.cookies.delete(validationFlashCookie, { path: payload?.path ?? flashPathFor(event.url?.pathname) })
-  const pathname = url?.pathname ?? event.url?.pathname
-  return payload && payload.path === flashPathFor(pathname) ? payload : undefined
+  event.cookies.delete(validationFlashCookie, {
+    path: payload?.cookiePath ?? validationFlashPaths(event.url?.pathname).cookiePath,
+  })
+  const pagePath = validationFlashPaths(url?.pathname ?? event.url?.pathname).pagePath
+  return payload && payload.path === pagePath ? payload : undefined
 }
 
 function createValidationActionFailureResponse(
@@ -577,7 +607,6 @@ export const adapterSvelteKitInternals = {
   isSerializedValidationException,
   isSvelteKitActionJsonRequest,
   mapValidationActionResponse,
-  normalizeCookiePath,
   registerValidationExceptionThrower,
   resolveSvelteKitOptions,
   rememberValidationActionFailure,

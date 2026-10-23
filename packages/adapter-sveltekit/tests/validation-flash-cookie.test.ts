@@ -65,20 +65,42 @@ describe('validation flash cookie', () => {
     expect(redirectFor('/a;b').headers.get('location')).toBe('/a;b')
   })
 
-  it('reads back the flash on a path that contains a semicolon', () => {
+  it('round-trips a flash on a path that contains a semicolon: the cookie is sent back, the flash applies only on that page', () => {
     setAppKey(appKey)
+    const cookie = redirectFor('/a;b').headers.get('set-cookie') ?? ''
+    expect(cookie).toContain('Path=/;')
     const value = flashValueFrom(redirectFor('/a;b'))
-    const event = {
-      url: new URL('https://app.test/a;b'),
+    const deleted: Array<{ name: string, path: string }> = []
+    const eventFor = (pathname: string) => ({
+      url: new URL(`https://app.test${pathname}`),
       cookies: {
         get: (name: string) => (name === flashCookieName ? value : undefined),
-        delete: () => undefined,
+        delete: (name: string, options: { path: string }) => deleted.push({ name, path: options.path }),
       },
-    }
+    })
 
-    const page = runWithSvelteKitRequestEvent(event as never, () => readValidationFlash(new URL('https://app.test/a;b')))
+    const onPage = runWithSvelteKitRequestEvent(eventFor('/a;b') as never, () => readValidationFlash(new URL('https://app.test/a;b')))
+    expect(onPage).toMatchObject({ status: 422, values: { email: 'ava@example.com' } })
+    expect(deleted).toEqual([{ name: flashCookieName, path: '/' }])
 
-    expect(page).toMatchObject({ status: 422, values: { email: 'ava@example.com' } })
+    const onOtherPage = runWithSvelteKitRequestEvent(eventFor('/a') as never, () => readValidationFlash(new URL('https://app.test/a')))
+    expect(onOtherPage).toBeUndefined()
+    expect(deleted.at(-1)).toEqual({ name: flashCookieName, path: '/' })
+  })
+
+  it('scopes the cookie to the nearest valid ancestor directory when the page path has a semicolon', () => {
+    setAppKey(appKey)
+
+    expect(redirectFor('/x/a;b').headers.get('set-cookie')).toContain('Path=/x/;')
+    expect(redirectFor('/x;y/a;b').headers.get('set-cookie')).toContain('Path=/;')
+  })
+
+  it('keeps the exact page path as the cookie path when it has no semicolon', () => {
+    setAppKey(appKey)
+    const response = redirectFor('/admin/posts/new')
+
+    expect(response.headers.get('location')).toBe('/admin/posts/new')
+    expect(response.headers.get('set-cookie')).toContain('Path=/admin/posts/new;')
   })
 
   it('is encrypted, so the submitted values never appear in plaintext', () => {

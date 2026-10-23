@@ -47,10 +47,6 @@ describe('SvelteKit server adapter internals', () => {
     expect(adapterSvelteKitInternals.isApiEvent(createEvent('/posts') as never)).toBe(false)
     expect(adapterSvelteKitInternals.isSvelteKitActionJsonRequest(createEvent('/posts', 'post', 'APPLICATION/JSON') as never)).toBe(true)
     expect(adapterSvelteKitInternals.isSvelteKitActionJsonRequest(createEvent('/posts', 'GET', 'application/json') as never)).toBe(false)
-    expect(adapterSvelteKitInternals.normalizeCookiePath(createEvent('/posts;a\nb') as never)).toBe('/postsab')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({} as never)).toBe('/')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({ url: { pathname: '' } } as never)).toBe('/')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({ url: { pathname: ';' } } as never)).toBe('/')
     for (const key of ['_private', 'pass_word', 'auth-token', 'client secret', 'credential']) {
       expect(adapterSvelteKitInternals.isSensitiveFlashKey(key)).toBe(true)
     }
