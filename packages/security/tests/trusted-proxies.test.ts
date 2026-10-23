@@ -13,7 +13,7 @@ import {
 } from '../src'
 
 const cloudflareRange = '173.245.48.0/20'
-const unavailableMessage = '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. In Next.js, set TRUSTED_PROXIES=* only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For, such as Vercel\'s edge, or a reverse proxy with the Next.js server bound to localhost or a private network. In Nuxt and SvelteKit, set TRUSTED_PROXIES to your proxy\'s addresses or CIDR ranges. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies'
+const unavailableMessage = '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies in config/security.ts (scaffolded apps read it from TRUSTED_PROXIES). In Next.js, set it to \'*\' only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For, such as Vercel\'s edge, or a reverse proxy with the Next.js server bound to localhost or a private network. In Nuxt and SvelteKit, list your proxy\'s addresses or CIDR ranges. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies'
 
 function trustProxies(trustedProxies: HoloSecurityConfig['trustedProxies'], connectionAddress?: string): void {
   requestUrlInternals.provideConnectionAddress(connectionAddress === undefined ? undefined : () => connectionAddress)
@@ -47,7 +47,7 @@ describe('trusted proxies', () => {
     )
   })
 
-  it('tells Next.js apps to use "*" only behind a header-overwriting proxy, and Nuxt and SvelteKit apps to list their proxies', () => {
+  it('names the trustedProxies setting, and tells Next.js and Nuxt or SvelteKit apps which value to use', () => {
     trustProxies(['10.0.0.1'])
     let message = ''
     try {
@@ -55,9 +55,11 @@ describe('trusted proxies', () => {
     } catch (error) {
       message = error instanceof Error ? error.message : String(error)
     }
-    expect(message).toContain('In Next.js, set TRUSTED_PROXIES=* only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For')
+    expect(message).toContain('Set trustedProxies in config/security.ts (scaffolded apps read it from TRUSTED_PROXIES).')
+    expect(message).toContain('In Next.js, set it to \'*\' only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For')
     expect(message).toContain('a reverse proxy with the Next.js server bound to localhost or a private network')
-    expect(message).toContain('In Nuxt and SvelteKit, set TRUSTED_PROXIES to your proxy\'s addresses or CIDR ranges')
+    expect(message).toContain('In Nuxt and SvelteKit, list your proxy\'s addresses or CIDR ranges')
+    expect(message).not.toMatch(/set TRUSTED_PROXIES to your proxy/)
     expect(message).not.toMatch(/Next\.js[^.]*address of your reverse proxy/)
   })
 
