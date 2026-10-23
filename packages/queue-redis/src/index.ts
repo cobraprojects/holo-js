@@ -589,7 +589,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   }
 
   private async countLegacyPausedJobs(queueName: string): Promise<number> {
-    const client = await this.getQueue(queueName).client
+    const client = await this.getQueue(queueName).getBackend().client
     const pausedKey = `${this.getQueuePrefix(queueName)}:${queueName}:paused`
     const count = await client.llen(pausedKey)
     if (count === 0) {
@@ -600,16 +600,40 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     return last?.startsWith('0:') ? count - 1 : count
   }
 
+  private async countJobSchedulerJobsKeptByDrain(queueName: string): Promise<number> {
+    const client = await this.getQueue(queueName).getBackend().client
+    const queueKey = `${this.getQueuePrefix(queueName)}:${queueName}`
+    const schedulerIds = await client.zrange(`${queueKey}:repeat`, 0, -1)
+    let kept = 0
+
+    for (const schedulerId of schedulerIds) {
+      const nextRun = await client.zscore(`${queueKey}:repeat`, schedulerId)
+      if (nextRun === null) continue
+
+      const jobId = `repeat:${schedulerId}:${nextRun}`
+      if (await client.zscore(`${queueKey}:delayed`, jobId) !== null) kept += 1
+      if (await client.lpos(`${queueKey}:wait`, jobId) !== null) kept += 1
+      if (await client.lpos(`${queueKey}:paused`, jobId) !== null) kept += 1
+    }
+
+    return kept
+  }
+
+  private async countDrainedJobs(queueName: string): Promise<number> {
+    const counted = await this.getQueue(queueName).getJobCountByTypes('wait', 'prioritized', 'delayed')
+    return counted
+      + await this.countLegacyPausedJobs(queueName)
+      - await this.countJobSchedulerJobsKeptByDrain(queueName)
+  }
+
   async clear(input?: { readonly queueNames?: readonly string[] }): Promise<number> {
     try {
       const queueNames = this.normalizeQueueNames(input?.queueNames)
       let cleared = 0
 
       for (const queueName of queueNames) {
-        const queue = this.getQueue(queueName)
-        cleared += await queue.getJobCountByTypes('wait', 'prioritized', 'delayed')
-        cleared += await this.countLegacyPausedJobs(queueName)
-        await queue.drain(true)
+        cleared += await this.countDrainedJobs(queueName)
+        await this.getQueue(queueName).drain(true)
       }
 
       return cleared
