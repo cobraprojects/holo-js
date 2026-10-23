@@ -1,9 +1,13 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { BuildOptions, BuildResult } from 'esbuild'
+import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
+import * as holoConfigModule from '@holo-js/config'
+import * as holoDbModule from '@holo-js/db'
+import * as holoKernelModule from '@holo-js/kernel'
 
 type EsbuildModule = {
   build(options: BuildOptions): Promise<BuildResult>
@@ -160,7 +164,9 @@ export async function importOptionalRuntimeModule<TModule>(
   if (!resolvedSpecifier) return undefined
 
   try {
-    return await importModule<TModule>(resolvedSpecifier)
+    const loaded = await importModule<TModule>(resolvedSpecifier)
+    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>)
+    return loaded
   } catch (error) {
     if (isMissingOptionalModule(error, specifier, resolvedSpecifier)) {
       return undefined
@@ -200,6 +206,69 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
   return tsconfigPath
 }
 
+const runtimeInstanceNamespace = 'holo-runtime-instance'
+const runtimeCopyId = randomUUID()
+
+type RuntimeModuleInstances = Map<string, Record<string, unknown>>
+
+function runtimeModuleInstancesSlot(): string {
+  return `holo-js.runtime.moduleInstances.${runtimeCopyId}`
+}
+
+function runtimeModuleInstances(): RuntimeModuleInstances {
+  const registry = globalThis as typeof globalThis & Record<symbol, RuntimeModuleInstances | undefined>
+  const slot = Symbol.for(runtimeModuleInstancesSlot())
+  registry[slot] ??= new Map()
+  return registry[slot]
+}
+
+function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
+  runtimeModuleInstances().set(specifier, instance)
+}
+
+function runtimeInstanceModuleSource(specifier: string, instance: Record<string, unknown>): string {
+  const lines = [`const instance = globalThis[Symbol.for(${JSON.stringify(runtimeModuleInstancesSlot())})].get(${JSON.stringify(specifier)})`]
+  Object.keys(instance).forEach((name, index) => {
+    lines.push(`const value${index} = instance[${JSON.stringify(name)}]`)
+    lines.push(`export { value${index} as ${JSON.stringify(name)} }`)
+  })
+
+  return lines.join('\n')
+}
+
+function resolveHoloPackageFromRuntime(specifier: string): string {
+  try {
+    return import.meta.resolve(specifier)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
+      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`)
+    }
+
+    throw error
+  }
+}
+
+function bridgeRuntimeModuleInstances(): Plugin {
+  return {
+    name: 'holo-runtime-module-instances',
+    setup(build) {
+      build.onResolve({ filter: /^@holo-js\// }, args => (
+        runtimeModuleInstances().has(args.path)
+          ? { path: args.path, namespace: runtimeInstanceNamespace }
+          : { path: resolveHoloPackageFromRuntime(args.path), external: true }
+      ))
+      build.onLoad({ filter: /.*/, namespace: runtimeInstanceNamespace }, args => ({
+        contents: runtimeInstanceModuleSource(args.path, runtimeModuleInstances().get(args.path) ?? {}),
+        loader: 'js',
+      }))
+    },
+  }
+}
+
+registerRuntimeModuleInstance('@holo-js/config', holoConfigModule)
+registerRuntimeModuleInstance('@holo-js/db', holoDbModule)
+registerRuntimeModuleInstance('@holo-js/kernel', holoKernelModule)
+
 async function bundleRuntimeModule(
   projectRoot: string,
   entryPath: string,
@@ -225,6 +294,7 @@ async function bundleRuntimeModule(
       logLevel: 'silent',
       packages: 'external',
       platform: 'node',
+      plugins: [bridgeRuntimeModuleInstances()],
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
@@ -269,6 +339,44 @@ async function bundleRuntimeModule(
 
 const definitionGraphSources = new Map<string, { readonly sources: ReadonlyMap<string, string>, readonly native: boolean }>()
 
+function packageEntryFromBase(base: string, packageName: string): string | undefined {
+  const require = nodeModule.createRequire(base)
+  for (const directory of require.resolve.paths(packageName) ?? []) {
+    const candidate = join(directory, packageName)
+    if (!existsSync(join(candidate, 'package.json'))) continue
+
+    try {
+      return require.resolve(candidate)
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'MODULE_NOT_FOUND') return undefined
+
+      throw error
+    }
+  }
+
+  return undefined
+}
+
+function holoPackageSharesRuntime(packageName: string, importerPath: string): boolean {
+  const runtimeEntry = packageEntryFromBase(import.meta.url, packageName)
+  return runtimeEntry !== undefined && runtimeEntry === packageEntryFromBase(importerPath, packageName)
+}
+
+function importRequiresBundle(
+  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+  importerPath: string,
+): boolean {
+  const original = dependency.original ?? dependency.path
+  const holoPackage = /^@holo-js\/[^/]+/.exec(original)?.[0]
+  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, importerPath)
+
+  return /^[@~]\//.test(original)
+    || !dependency.external && (
+      !original.startsWith('.') && !original.startsWith('file:') && !isAbsolute(original)
+      || !extname(original) || extname(original) !== extname(dependency.path)
+    )
+}
+
 export async function loadProjectDefinitionRuntimeModules(
   projectRoot: string,
   entryPaths: readonly string[],
@@ -287,19 +395,13 @@ export async function loadProjectDefinitionRuntimeModules(
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
+      if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
+      if (input.imports.some(dependency => importRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
-      if (input.imports.some(dependency => {
-        const original = dependency.original ?? dependency.path
-        return /^[@~]\//.test(original)
-          || !dependency.external && (
-            !original.startsWith('.') && !original.startsWith('file:') && !isAbsolute(original)
-            || !extname(original) || extname(original) !== extname(dependency.path)
-          )
-      })) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {
@@ -365,6 +467,7 @@ export const runtimeModuleInternals = {
   isMissingOptionalModule,
   loadEsbuild,
   pathExists,
+  registerRuntimeModuleInstance,
   resolveRuntimeModuleSearchPaths,
   resolveOptionalImportSpecifier,
   runEsbuild,

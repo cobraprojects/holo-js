@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -18,12 +18,14 @@ const temporaryDirectories: string[] = []
 
 async function buildPublicCli(): Promise<string> {
   const packageRoot = join(repositoryRoot, 'packages/cli')
-  const outDir = await mkdtemp(join(packageRoot, '.test-build-'))
-  temporaryDirectories.push(outDir)
+  const buildRoot = await mkdtemp(join(tmpdir(), 'holo-cli-public-build-'))
+  temporaryDirectories.push(buildRoot)
+  const outDir = join(buildRoot, 'dist')
   await execFileAsync('bun', ['run', 'build'], {
     cwd: packageRoot,
     env: { ...process.env, HOLO_BUILD_OUT_DIR: outDir },
   })
+  await symlink(join(packageRoot, 'node_modules'), join(buildRoot, 'node_modules'), 'dir')
   return join(outDir, 'bin/holo.mjs')
 }
 

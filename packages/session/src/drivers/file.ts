@@ -381,7 +381,6 @@ async function acquireRecordLockBefore(
     const ownerHandle = await open(join(pendingPath, ownerFileName), 'wx', 0o600)
     try {
       await ownerHandle.writeFile(`${JSON.stringify(owner)}\n`, { encoding: 'utf8' })
-      await ownerHandle.sync()
     } finally {
       await ownerHandle.close()
     }
@@ -759,10 +758,6 @@ export function createFileSessionStore(root: string): SessionStore {
 }
 
 export const fileSessionDriverInternals = {
-  heldRecordLockTokens,
-  pendingRecordLockReleaseRetries,
-  pendingTombstoneRemovals,
-  tombstoneQueueLimit: TOMBSTONE_QUEUE_LIMIT,
   acquireRecordLock,
   deserializeRecord,
   deserializeFlashEntries,
