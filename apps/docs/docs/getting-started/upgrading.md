@@ -545,7 +545,7 @@ Users whose email changed before this upgrade keep the verified timestamp they h
 
 ### Apple email comes from the signed token
 
-Sign in with Apple takes the user's email only from the signed `id_token`. Before, Apple's form `user` field supplied it when the token had none. Apple's form field isn't signed, so Holo ignores its email now and still reads the user's name from it. A callback whose token has no email creates a user without one, and with [email verification](/auth/email-verification) required it fails as an unverified sign-in.
+Sign in with Apple takes the user's email only from the signed `id_token`. Before, Apple's form `user` field supplied it when the token had none. Apple's form field isn't signed, so Holo ignores its email now and still reads the user's name from it. A callback whose token has no email gets the placeholder address `<id>@apple.social.local` when [email verification](/auth/email-verification) is off, and fails with `requires a verified email address` when it's on. To keep the real address, capture it on the first authorization. See [Apple](/auth/social-login#apple).
 
 ### Failed logins and reset-link requests take at least 200 ms
 
