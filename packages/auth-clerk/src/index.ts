@@ -860,6 +860,14 @@ export async function verifySession(token: string, provider?: string): Promise<C
   })
 }
 
+function toOrigin(value: string): string {
+  try {
+    return new URL(value).origin
+  } catch {
+    return value
+  }
+}
+
 function resolveAuthorizedParties(config: {
   readonly authorizedParties: readonly string[]
   readonly redirectUri?: string
@@ -867,7 +875,7 @@ function resolveAuthorizedParties(config: {
   const redirectOrigin = config.redirectUri?.trim() ? new URL(config.redirectUri.trim()).origin : undefined
   return Object.freeze([
     ...new Set([
-      ...config.authorizedParties,
+      ...config.authorizedParties.map(value => toOrigin(value.trim())),
       ...(redirectOrigin ? [redirectOrigin] : []),
     ]),
   ])

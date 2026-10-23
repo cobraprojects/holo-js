@@ -2860,6 +2860,17 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   await rotateGuardSession(bindings, retainedGuard)
 }
 
+async function assertResetCanRetainSession(bindings: RuntimeBindings, providerName: string, email: string): Promise<void> {
+  const { adapter } = getProviderAdapter(providerName)
+  const user = await adapter.findByCredentials({ email })
+  if (!user) return
+
+  const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
+  if (await findSessionGuardOwnedBy(bindings, providerName, userId)) {
+    await assertResponseCookiesWritable(bindings)
+  }
+}
+
 async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
   input: TInput,
 ): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
@@ -2883,6 +2894,7 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
     }
 
+    await assertResetCanRetainSession(getRuntimeBindings(), record.provider, record.email)
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
     const updated = await store.redeem(record, async () => {
       await store.deleteByEmail(record.provider, record.email, { table: record.table })

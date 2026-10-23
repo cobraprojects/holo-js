@@ -529,6 +529,71 @@ describe('@holo-js/auth-clerk', () => {
     await expect(verifySession(siblingToken)).rejects.toThrow('authorized party')
   })
 
+  it('matches configured authorized parties by origin, so a trailing slash in APP_URL still accepts the app', async () => {
+    const runtime = await configureRuntime({
+      configureClerkRuntime: false,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const appToken = createSignedJwt({
+      sub: 'user_clerk_slash',
+      sid: 'sess_clerk_slash',
+      azp: 'https://app.test',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
+      if (url === 'https://api.clerk.com/v1/users/user_clerk_slash') {
+        return new Response(JSON.stringify({
+          id: 'user_clerk_slash',
+          first_name: 'Slash',
+          primary_email_address_id: 'email_primary',
+          email_addresses: [
+            {
+              id: 'email_primary',
+              email_address: 'slash@app.test',
+              verification: {
+                status: 'verified',
+              },
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: defineAuthConfig({
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        clerk: {
+          app: {
+            publishableKey: 'pk_test',
+            secretKey: 'sk_test',
+            sessionCookie: '__session',
+            authorizedParties: ['https://app.test/'],
+          },
+        },
+      }),
+    })
+
+    await expect(verifySession(appToken)).resolves.toMatchObject({ sessionId: 'sess_clerk_slash' })
+  })
+
   it('rejects built-in Clerk JWTs without required bound claims', async () => {
     const runtime = await configureRuntime({
       configureClerkRuntime: false,

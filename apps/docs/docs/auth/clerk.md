@@ -63,6 +63,7 @@ export default defineAuthConfig({
       apiUrl: env('CLERK_API_URL'),
       frontendApi: env('CLERK_FRONTEND_API'),
       redirectUri: env('CLERK_REDIRECT_URI'),
+      authorizedParties: [env('APP_URL', 'http://localhost:3000')],
       sessionCookie: env('CLERK_SESSION_COOKIE', '__session'),
     },
   },
@@ -78,7 +79,7 @@ export default defineAuthConfig({
 | `redirectUri` | | Callback URL. Must be a full URL |
 | `apiUrl` | Clerk's API | Custom Backend API base URL |
 | `sessionCookie` | `'__session'` | Clerk session cookie name |
-| `authorizedParties` | `[]` | Origins allowed to have issued the Clerk session tokens that this app accepts. The origin of `redirectUri` is always allowed. Holo never takes an origin from the request's `Host` header, so a session token issued for another app on the same Clerk instance is rejected. With neither set, Clerk sessions are rejected, so set `redirectUri` or list your origin here |
+| `authorizedParties` | `[]` in the config; `holo new` and `holo install auth` set `[env('APP_URL', ...)]` | Origins allowed to have issued the Clerk session tokens that this app accepts. The origin of `redirectUri` is always allowed. Holo never takes an origin from the request's `Host` header, so a session token issued for another app on the same Clerk instance is rejected. With neither set, Clerk sessions are rejected, so set `redirectUri` or list your origin here |
 | `guard` | default guard | Sign users in on this guard. Must be a `session` guard |
 | `mapToProvider` | the guard's provider | Save users with this user provider |
 

@@ -206,7 +206,7 @@
 
 ### Compatibility and upgrade requirements
 
-- **Clerk sessions need an authorized party.** Set `redirectUri` or `authorizedParties` for each Clerk provider, or Clerk sessions are rejected. Your app's own origin is no longer assumed from the request. See [Clerk sessions need an authorized party](apps/docs/docs/getting-started/upgrading.md#clerk-sessions-need-an-authorized-party).
+- **Clerk sessions need an authorized party.** `holo new` and `holo install auth --clerk` set `authorizedParties` from `APP_URL`. Existing apps add that line, or set `redirectUri`, or Clerk sessions are rejected. Your app's own origin is no longer assumed from the request. See [Clerk sessions need an authorized party](apps/docs/docs/getting-started/upgrading.md#clerk-sessions-need-an-authorized-party).
 - **Password reset needs a session revocation store.** Core persistence provides one. A custom auth persistence must provide `sessionRevocations`, or `resetPassword()` throws `runtime_unconfigured` before it changes the password.
 - **Pivot columns aren't loaded unless declared.** Code that reads `pivot` for a column that isn't in `withPivot()` or `withTimestamps()` gets `undefined`. Add the column to `withPivot()`. See [Pivot columns](apps/docs/docs/getting-started/upgrading.md#pivot-columns-and-one-of-many-relations).
 - **Sessions don't cross between 0.3 and 0.4.** A session written by 0.4 isn't readable by 0.3, so a mixed-version rolling deploy or a rollback signs users out. See [Sessions don't cross between 0.3 and 0.4](apps/docs/docs/getting-started/upgrading.md#sessions-dont-cross-between-03-and-04).

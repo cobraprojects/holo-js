@@ -520,11 +520,20 @@ Tell users who are signed in on another device that they must sign in again afte
 
 Holo accepts a Clerk session token only when its `azp` claim names an authorized party from your config: the origins in `authorizedParties`, plus the origin of `redirectUri`. Before, the origin of each request's `Host` header counted too, so a token issued for another app on the same Clerk instance was accepted for any request that named that app's host. Holo no longer reads origins from the request.
 
-Check each `auth.clerk` entry:
+New apps from `holo new` and `holo install auth --clerk` get `authorizedParties: [env('APP_URL', 'http://localhost:3000')]` in the Clerk provider, so they work out of the box.
 
-- Set `redirectUri` to your app's callback URL. Its origin is then allowed.
-- Add any other origin that serves your app, and any other origin that is allowed to issue its tokens, to `authorizedParties`.
-- A Clerk provider with neither set rejects every session token. Sign-in fails until you set one of them.
+Existing apps add that one line to the `app` entry of `clerk` in `config/auth.ts`, unless `redirectUri` is already set (its origin is then allowed):
+
+```ts
+clerk: {
+  app: {
+    // ...existing options
+    authorizedParties: [env('APP_URL', 'http://localhost:3000')],
+  },
+},
+```
+
+A Clerk provider with neither `redirectUri` nor `authorizedParties` rejects every session token, so sign-in fails until you add one of them. Add any other origin that serves your app, or that is allowed to issue its tokens, to `authorizedParties`. WorkOS isn't affected, because it doesn't use `azp`.
 
 See [Clerk configuration](/auth/clerk#configuration).
 
@@ -541,6 +550,8 @@ Sign in with Apple takes the user's email only from the signed `id_token`. Befor
 ### Failed logins and reset-link requests take at least 200 ms
 
 Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
+
+A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo auth:notifications:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
 
 ### User records load on every request
 
