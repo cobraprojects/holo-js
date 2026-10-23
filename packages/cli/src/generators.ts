@@ -520,6 +520,9 @@ export async function runMakeBroadcast(
   writeLine(io.stdout, `Created broadcast: ${makeProjectRelativePath(projectRoot, filePath)}`)
 }
 
+const CHANNEL_PATTERN_SEGMENT = '(?:[A-Za-z0-9_-]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})'
+const CHANNEL_PATTERN = new RegExp(`^${CHANNEL_PATTERN_SEGMENT}(?:\\.${CHANNEL_PATTERN_SEGMENT})*$`, 'u')
+
 export async function runMakeChannel(
   io: IoStreams,
   projectRoot: string,
@@ -531,6 +534,10 @@ export async function runMakeChannel(
   const pattern = String(input.args[0] ?? '').trim()
   if (!pattern) {
     throw new Error('A channel pattern is required.')
+  }
+
+  if (!CHANNEL_PATTERN.test(pattern)) {
+    throw new Error('Channel pattern must be dot-separated segments of letters, digits, "_" or "-", with optional {param} placeholders.')
   }
 
   if (registry.channels.some(entry => entry.pattern === pattern)) {

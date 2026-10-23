@@ -602,6 +602,41 @@ describe('@holo-js/forms contracts', () => {
     }
   })
 
+  it('throttles before validating the submitted fields', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+      password: field.string().required(),
+    })
+
+    await configureNativeSecurity()
+
+    const request = (fields: Record<string, string>) => new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.8',
+      },
+      body: new URLSearchParams(fields),
+    })
+
+    expect((await safeParse(request({ email: 'ava@example.com', password: 'secret' }), login, {
+      throttle: 'login',
+    })).valid).toBe(true)
+
+    const throttled = await safeParse(request({ email: 'ava@example.com' }), login, {
+      throttle: 'login',
+    })
+
+    expect(throttled.valid).toBe(false)
+    if (throttled.valid) {
+      throw new Error('Expected throttle failure.')
+    }
+    expect(throttled.errors.flatten()).toEqual({
+      _root: ['Too many attempts. Please try again later.'],
+    })
+    expect(throttled.values).toEqual({ email: 'ava@example.com' })
+    expect(throttled.fail()).toMatchObject({ status: 429 })
+  })
+
   it('requires Request inputs for throttle-aware validation', async () => {
     const login = schema({
       email: field.string().required().email(),
@@ -1192,7 +1227,7 @@ describe('@holo-js/forms contracts', () => {
     expect(validateCalls).toBe(1)
   })
 
-  it('merges field errors with throttled security failures without revalidating', async () => {
+  it('answers throttled submissions with the root failure and the submitted values without validating them', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
@@ -1234,7 +1269,8 @@ describe('@holo-js/forms contracts', () => {
       throw new Error('Expected throttled validation failure.')
     }
 
-    expect(throttled.errors.first('email')).toBeDefined()
+    expect(throttled.errors.first('email')).toBeUndefined()
+    expect(throttled.values).toEqual({ email: 'bad' })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
     expect(throttled.fail().status).toBe(429)
   })

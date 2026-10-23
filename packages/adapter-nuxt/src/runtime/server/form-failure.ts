@@ -1,4 +1,4 @@
-import { resolveRequestUrl } from '@holo-js/kernel'
+import { resolveRequestUrl, sameOriginRedirectPath } from '@holo-js/kernel'
 
 const FORM_FAILURE_COOKIE = 'holo_form_failure'
 
@@ -92,14 +92,14 @@ function getRedirectLocation(event: NitroEvent): string {
     try {
       const url = new URL(referer)
       if (url.host === host) {
-        return `${url.pathname}${url.search}`
+        return sameOriginRedirectPath(`${url.pathname}${url.search}`)
       }
     } catch {
       // Ignore malformed client-controlled referer headers.
     }
   }
 
-  return event.path ?? event.node?.req?.url ?? '/'
+  return sameOriginRedirectPath(event.path ?? event.node?.req?.url)
 }
 
 function appendSetCookie(event: NitroEvent, response: NitroResponse, cookie: string): void {

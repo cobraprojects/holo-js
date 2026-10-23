@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
-import { normalizeHoloHttpError, requestUrlInternals, resolveRequestUrl, type HoloRequestInput } from '../src/index'
+import { normalizeHoloHttpError, requestUrlInternals, resolveRequestUrl, sameOriginRedirectPath, type HoloRequestInput } from '../src/index'
 
 afterEach(() => {
   requestUrlInternals.configureForwardedRequestResolver(undefined)
@@ -169,5 +169,29 @@ describe('client-facing request URLs', () => {
     expect(() => resolveRequestUrl({ headers: { host: 'app.test' } })).toThrow('protocols must be http or https')
     expect(() => resolveRequestUrl({ url: 'https://user:password@app.test/' })).toThrow(TypeError)
     expect(() => resolveRequestUrl({ url: 'javascript:alert(1)' })).toThrow(TypeError)
+  })
+})
+
+describe('same-origin redirect paths', () => {
+  it.each([
+    ['/', '/'],
+    ['/login?next=/home', '/login?next=/home'],
+    ['/docs/start', '/docs/start'],
+  ])('keeps the same-origin path %s', (path, expected) => {
+    expect(sameOriginRedirectPath(path)).toBe(expected)
+  })
+
+  it.each([
+    ['//evil.example'],
+    ['//evil.example/steal'],
+    ['/\\evil.example'],
+    ['/\t/evil.example'],
+    ['/\n/evil.example'],
+    ['https://evil.example/'],
+    ['evil.example'],
+    [''],
+    [undefined],
+  ])('replaces the unsafe target %j with the root path', (path) => {
+    expect(sameOriginRedirectPath(path)).toBe('/')
   })
 })

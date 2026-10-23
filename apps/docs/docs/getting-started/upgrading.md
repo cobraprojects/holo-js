@@ -189,6 +189,13 @@ Errors thrown inside `custom()` and `customAsync()` are no longer turned into a 
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
 
 Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
+### Forms throttle before validation
+
+A form with `throttle` checks the rate limit before it validates the submitted fields. A throttled submission returns the rate-limit failure with the submitted values and no field errors. Custom rate-limit key resolvers receive the submitted values as sent, before trimming or case changes from the schema, so a key that compares normalized values should normalize them itself.
+
+### `make:channel` patterns
+
+`make:channel` accepts only dot-separated segments of letters, digits, `_`, and `-`, with optional `{param}` placeholders, such as `orders.{orderId}`. Other patterns stop the command before any file is written. The generated file quotes the pattern with double quotes.
 
 ### S3 file names with special characters
 

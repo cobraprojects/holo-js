@@ -20,6 +20,7 @@ import {
   type FormFailureOptions,
 } from './failure'
 import { sanitizeFlashedInput } from './sensitiveInput'
+import { isPlainFormObject } from './internal/formValues'
 
 export { FormContractError } from './errors'
 export {
@@ -677,37 +678,23 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
   }
 }
 
+async function submittedRequestValues(input: Request): Promise<Readonly<Record<string, unknown>> | undefined> {
+  const { value } = await validationInternals.normalizeRequestInput(input.clone())
+  return isPlainFormObject(value) ? value : undefined
+}
+
 async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   input: Request,
   schemaDefinition: ValidationSchema<TShape>,
   error: Error & { readonly status: number },
 ): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
-  let values = {} as Partial<InferSchemaData<TShape>>
-  let flattenedErrors: Record<string, readonly string[]> = {}
-
-  try {
-    const inspection = await safeParseInput(input.clone(), schemaDefinition)
-
-    if (inspection.valid) {
-      values = inspection.data
-    } else {
-      values = inspection.values
-      flattenedErrors = inspection.errors.flatten()
-    }
-  } catch {
-    values = {} as Partial<InferSchemaData<TShape>>
-    flattenedErrors = {}
-  }
+  const values = await submittedRequestValues(input).catch(() => undefined)
 
   return createFailedSubmission(
     schemaDefinition,
-    values,
+    (values ?? {}) as Partial<InferSchemaData<TShape>>,
     {
-      ...flattenedErrors,
-      _root: [
-        ...(flattenedErrors._root ?? []),
-        error.message,
-      ],
+      _root: [error.message],
     },
     error.status,
     createSecurityFailureMetadata(error),
@@ -719,9 +706,6 @@ export async function safeParse<TShape extends SchemaInputShape>(
   schemaDefinition: ValidationSchema<TShape>,
   options: FormSecurityOptions = {},
 ): Promise<FormSubmissionResult<InferSchemaData<TShape>>> {
-  let validatedSubmission:
-    | FormSubmissionResult<InferSchemaData<TShape>>
-    | undefined
   const throttle = typeof options.throttle === 'string' ? options.throttle : undefined
   const usesSecurityOptions = typeof throttle === 'string'
   const normalizedRequestInput = await normalizeRequestLikeInputForValidation(input)
@@ -740,49 +724,18 @@ export async function safeParse<TShape extends SchemaInputShape>(
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      const inspection = await safeParseInput(request.clone(), schemaDefinition)
-      const throttleValues = inspection.valid ? inspection.data : inspection.values
-      validatedSubmission = inspection.valid
-        ? createSuccessfulSubmission(schemaDefinition, inspection.data)
-        : createFailedSubmission(schemaDefinition, inspection.values, inspection.errors.flatten())
       await security.rateLimit(throttle, {
         request,
-        values: throttleValues,
+        values: await submittedRequestValues(request),
       })
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')
       if (formsSecurityInternals.isRootSecurityError(error)) {
-        if (validatedSubmission) {
-          return createFailedSubmission(
-            schemaDefinition,
-            validatedSubmission.valid
-              ? validatedSubmission.data
-              : validatedSubmission.values,
-            {
-              ...(validatedSubmission.valid
-                ? {}
-                : validatedSubmission.errors.flatten()),
-              _root: [
-                ...(!validatedSubmission.valid
-                  ? (validatedSubmission.errors.flatten()._root ?? [])
-                  : []),
-                error.message,
-              ],
-            },
-            error.status,
-            createSecurityFailureMetadata(error),
-          )
-        }
-
         return await createSecurityFailureSubmission(request, schemaDefinition, error)
       }
 
       throw error
     }
-  }
-
-  if (validatedSubmission) {
-    return validatedSubmission
   }
 
   const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
