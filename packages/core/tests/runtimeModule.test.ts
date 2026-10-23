@@ -1,11 +1,15 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
-import { importBundledRuntimeModule, runtimeModuleInternals } from '../src/runtimeModule'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as holoConfig from '@holo-js/config'
+import * as holoDb from '@holo-js/db'
+import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
+import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const tempDirs: string[] = []
 
@@ -19,6 +23,21 @@ async function createTempProject(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
+
+async function createDependencyDefinitionFixture(): Promise<{ projectRoot: string, definitionPath: string }> {
+  const projectRoot = await createTempProject()
+  await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+  const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
+  const nestedCopyRoot = join(jobsRoot, 'node_modules/@holo-js/config')
+  await mkdir(nestedCopyRoot, { recursive: true })
+  await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+  await writeFile(join(nestedCopyRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
+  await writeFile(join(nestedCopyRoot, 'index.mjs'), 'export const defineAppConfig = "nested copy"\n')
+  const definitionPath = join(jobsRoot, 'job.mjs')
+  await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
+  return { projectRoot, definitionPath }
+}
 
 describe('@holo-js/core runtime module helpers', () => {
   it('loads installed storage modules in a client module graph', async () => {
@@ -48,6 +67,132 @@ describe('@holo-js/core runtime module helpers', () => {
       '--fileParallelism', '--maxWorkers=2', '--reporter=json', `--outputFile=${resultPath}`,
     ], { cwd: projectRoot })
   })
+
+  it('bundles app imports of a holo package to the instance the runtime itself uses', async () => {
+    const projectRoot = await createTempProject()
+    const appCopyRoot = join(projectRoot, 'node_modules/@holo-js/db')
+    await mkdir(appCopyRoot, { recursive: true })
+    await writeFile(join(appCopyRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/db',
+      type: 'module',
+      exports: { '.': './index.mjs' },
+    }))
+    await writeFile(join(appCopyRoot, 'index.mjs'), 'export const Entity = "app copy"\n')
+    await writeFile(join(projectRoot, 'model.ts'), "export { Entity } from '@holo-js/db'\n")
+
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const source = await readFile(bundled.path, 'utf8')
+    const model = await runtimeModuleInternals.importModule<{ Entity: unknown }>(pathToFileURL(bundled.path).href)
+    await bundled.cleanup()
+
+    expect(source).not.toContain('from "@holo-js/db"')
+    expect(model.Entity).toBe(holoDb.Entity)
+  })
+
+  it('bundles unregistered holo packages from the runtime root, not the app copy', async () => {
+    const projectRoot = await createTempProject()
+    const appMediaRoot = join(projectRoot, 'node_modules/@holo-js/media')
+    await mkdir(appMediaRoot, { recursive: true })
+    await writeFile(join(appMediaRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/media',
+      type: 'module',
+      exports: { '.': './index.mjs' },
+    }))
+    await writeFile(join(appMediaRoot, 'index.mjs'), 'export const source = "app copy"\n')
+    await writeFile(join(projectRoot, 'model.ts'), "export { source } from '@holo-js/media'\n")
+
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const source = await readFile(bundled.path, 'utf8')
+    await bundled.cleanup()
+
+    expect(source).not.toContain('"@holo-js/media"')
+    expect(source).not.toContain(appMediaRoot)
+    expect(source).toContain('/packages/media/')
+  })
+
+  it('fails loudly when app code imports a holo package the runtime cannot resolve', async () => {
+    const projectRoot = await createTempProject()
+    await writeFile(join(projectRoot, 'model.ts'), "export { nothing } from '@holo-js/not-installed-anywhere'\n")
+
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/alongside the Holo runtime/)
+  })
+
+  it('binds each runtime copy to the instances that copy registered', async () => {
+    const projectRoot = await createTempProject()
+    await writeFile(join(projectRoot, 'model.ts'), "export { marker } from '@holo-js/fixture-instance'\n")
+    const runtimeModulePath = resolve(import.meta.dirname, '../src/runtimeModule.ts')
+    const firstCopy = await import(`${runtimeModulePath}?copy=first`) as typeof runtimeModuleInternalsModule
+    const secondCopy = await import(`${runtimeModulePath}?copy=second`) as typeof runtimeModuleInternalsModule
+    firstCopy.runtimeModuleInternals.registerRuntimeModuleInstance('@holo-js/fixture-instance', { marker: 'first' })
+    secondCopy.runtimeModuleInternals.registerRuntimeModuleInstance('@holo-js/fixture-instance', { marker: 'second' })
+
+    const firstBundle = await firstCopy.runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const firstModel = await firstCopy.runtimeModuleInternals.importModule<{ marker: string }>(pathToFileURL(firstBundle.path).href)
+    await firstBundle.cleanup()
+    const secondBundle = await secondCopy.runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))
+    const secondModel = await secondCopy.runtimeModuleInternals.importModule<{ marker: string }>(pathToFileURL(secondBundle.path).href)
+    await secondBundle.cleanup()
+
+    expect(firstModel.marker).toBe('first')
+    expect(secondModel.marker).toBe('second')
+  })
+
+  it('binds a definition shipped in a dependency to the runtime when the dependency has its own holo copy', async () => {
+    const { projectRoot, definitionPath } = await createDependencyDefinitionFixture()
+
+    const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+    const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
+
+    expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+  })
+
+  it('checks dependency-shipped definitions under a source loader too', async () => {
+    const { projectRoot, definitionPath } = await createDependencyDefinitionFixture()
+    vi.stubGlobal('Bun', {})
+
+    try {
+      const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+      const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
+
+      expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([
+    { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },
+    { label: '--preserve-symlinks', args: ['--preserve-symlinks'], env: {}, bundled: true },
+    { label: '--preserve_symlinks', args: ['--preserve_symlinks'], env: {}, bundled: true },
+    { label: 'NODE_PRESERVE_SYMLINKS=1', args: [], env: { NODE_PRESERVE_SYMLINKS: '1' }, bundled: true },
+  ])('loads a dependency-shipped definition from the runtime instance under ', async ({ args, env, bundled }) => {
+    const projectRoot = await createTempProject()
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+    const jobsRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    await mkdir(jobsRoot, { recursive: true })
+    await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    const definitionPath = join(jobsRoot, 'job.mjs')
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const runtimeConfigUrl = pathToFileURL(resolve(import.meta.dirname, '../node_modules/@holo-js/config/dist/index.mjs')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const runtimeConfig = await import(${JSON.stringify(runtimeConfigUrl)})
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+const definition = await importDefinition(${JSON.stringify(definitionPath)})
+console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source }))
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const childEnv: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', ESBUILD_BINARY_PATH: esbuildBinary, ...env }
+    const { stdout } = await promisify(execFile)(process.execPath, [...args, '--experimental-strip-types', childPath], { cwd: projectRoot, env: childEnv })
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string }
+
+    expect(result.bridged).toBe(true)
+    expect(result.source.endsWith('/job.mjs')).toBe(!bundled)
+  }, 30_000)
 
   it('does not import package export targets pruned from a production artifact', async () => {
     const projectRoot = await createTempProject()
