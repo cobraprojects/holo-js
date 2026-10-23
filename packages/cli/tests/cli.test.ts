@@ -1865,6 +1865,27 @@ export default defineQueueConfig({
     expect(await packageManagerInstallRequestCount(projectRoot)).toBe(installRequests)
   })
 
+  it.each([
+    ['next', '*'],
+    ['nuxt', ''],
+  ])('writes TRUSTED_PROXIES for an existing %s app when auth is installed, keeping existing values', async (dependency, localValue) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies: { [dependency]: '*' } }, null, 2))
+    await writeFile(join(projectRoot, '.env'), 'APP_NAME=Fixture\nTRUSTED_PROXIES=192.0.2.10\n')
+
+    await projectInternals.installAuthIntoProject(projectRoot)
+
+    const env = (await readFile(join(projectRoot, '.env'), 'utf8')).split('\n')
+    expect(env.filter(line => line.startsWith('TRUSTED_PROXIES='))).toEqual(['TRUSTED_PROXIES=192.0.2.10'])
+    const freshRoot = await createTempProject()
+    tempDirs.push(freshRoot)
+    await writeFile(join(freshRoot, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies: { [dependency]: '*' } }, null, 2))
+    await projectInternals.installAuthIntoProject(freshRoot)
+    expect((await readFile(join(freshRoot, '.env'), 'utf8')).split('\n')).toContain(`TRUSTED_PROXIES=${localValue}`)
+    expect((await readFile(join(freshRoot, '.env.example'), 'utf8')).split('\n')).toContain('TRUSTED_PROXIES=')
+  })
+
   it('keeps auth installed when authorization is added afterward', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

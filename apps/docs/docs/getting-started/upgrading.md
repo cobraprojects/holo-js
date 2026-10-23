@@ -40,7 +40,7 @@ export default defineSecurityConfig({
 })
 ```
 
-Then set `TRUSTED_PROXIES` in each production deployment: `*` on Vercel, or your reverse proxy's address when you self-host. A Next.js deployment without it doesn't fall back to a shared rate-limit bucket. Its first IP-keyed rate-limit check fails with a configuration error. Make sure your proxy is in place before you deploy. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
+Then set `TRUSTED_PROXIES` in each production deployment: `*` on Vercel, or `*` when you self-host behind a proxy that overwrites `X-Forwarded-For` and the Next.js server listens only on localhost or a private network. A list of addresses doesn't work in Next.js. A Next.js deployment without it doesn't fall back to a shared rate-limit bucket. Its first IP-keyed rate-limit check fails with a configuration error. Make sure your proxy is in place before you deploy. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
 ### Temporary URLs behind a proxy
 

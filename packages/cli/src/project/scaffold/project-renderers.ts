@@ -19,6 +19,10 @@ import {
 import { getFrameworkDescriptor } from '../frameworks'
 import { generateAppKey } from '../../app-key'
 
+export function trustedProxiesDefault(framework: string | undefined): string {
+  return framework === 'next' ? '*' : ''
+}
+
 export function renderAuthEnvFiles(
   features: AuthInstallFeatures = {},
   defaultDatabaseConnection = 'default',
@@ -602,7 +606,7 @@ export function renderScaffoldEnvFiles(
         'STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT=false',
       ]
     : []
-  const trustedProxies = options.framework === 'next' ? '*' : ''
+  const trustedProxies = trustedProxiesDefault(options.framework)
   const authLines = optionalPackageNames.includes('auth')
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection, trustedProxies).env]
     : []

@@ -13,6 +13,7 @@ import {
 } from '../src'
 
 const cloudflareRange = '173.245.48.0/20'
+const unavailableMessage = '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. In Next.js, set TRUSTED_PROXIES=* only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For, such as Vercel\'s edge, or a reverse proxy with the Next.js server bound to localhost or a private network. In Nuxt and SvelteKit, set TRUSTED_PROXIES to your proxy\'s addresses or CIDR ranges. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies'
 
 function trustProxies(trustedProxies: HoloSecurityConfig['trustedProxies'], connectionAddress?: string): void {
   requestUrlInternals.provideConnectionAddress(connectionAddress === undefined ? undefined : () => connectionAddress)
@@ -42,8 +43,22 @@ describe('trusted proxies', () => {
   it('reports how to configure trusted proxies when the framework does not expose the connection address', () => {
     trustProxies(undefined)
     expect(() => ip(request({ 'x-forwarded-for': '203.0.113.66' }))).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES to your proxy\'s addresses, or to * when the app is reachable only through your proxy. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies',
+      unavailableMessage,
     )
+  })
+
+  it('tells Next.js apps to use "*" only behind a header-overwriting proxy, and Nuxt and SvelteKit apps to list their proxies', () => {
+    trustProxies(['10.0.0.1'])
+    let message = ''
+    try {
+      ip(request({}))
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toContain('In Next.js, set TRUSTED_PROXIES=* only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For')
+    expect(message).toContain('a reverse proxy with the Next.js server bound to localhost or a private network')
+    expect(message).toContain('In Nuxt and SvelteKit, set TRUSTED_PROXIES to your proxy\'s addresses or CIDR ranges')
+    expect(message).not.toMatch(/Next\.js[^.]*address of your reverse proxy/)
   })
 
   it('takes the address appended by a trusted proxy, not the one the client supplied', () => {
@@ -98,7 +113,7 @@ describe('trusted proxies', () => {
     trustProxies(['127.0.0.1'])
     const spoofed = request({ 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' })
     expect(() => ip(spoofed)).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES to your proxy\'s addresses, or to * when the app is reachable only through your proxy. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies',
+      unavailableMessage,
     )
     expect(resolveRequestUrl(spoofed).href).toBe('http://internal.test/login')
   })
@@ -175,7 +190,7 @@ describe('trusted proxies', () => {
     trustProxies(undefined)
     const spoofed = request({ 'x-forwarded-for': '203.0.113.66' })
     await expect(rateLimit('login', { request: spoofed })).rejects.toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES to your proxy\'s addresses, or to * when the app is reachable only through your proxy. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies',
+      unavailableMessage,
     )
     await expect(rateLimit('login', { request: spoofed })).rejects.not.toMatchObject({ status: 429 })
   })
