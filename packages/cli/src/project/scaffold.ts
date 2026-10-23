@@ -778,7 +778,7 @@ export async function installSecurityIntoProject(
 
   for (const fileName of ['.env', '.env.example']) {
     const envPath = resolve(projectRoot, fileName)
-    const nextEnv = upsertEnvContents(await readTextFile(envPath), ['RATE_LIMIT_DRIVER=file'])
+    const nextEnv = upsertEnvContents(await readTextFile(envPath), ['RATE_LIMIT_DRIVER=file', 'TRUSTED_PROXIES='])
     if (nextEnv.changed && typeof nextEnv.contents === 'string') {
       await writeTextFile(envPath, nextEnv.contents)
     }

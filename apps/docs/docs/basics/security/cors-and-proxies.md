@@ -156,9 +156,20 @@ export default defineSecurityConfig({
 
 ### Next.js
 
-Next.js doesn't tell Holo the address of the connection, so Holo can't check it against a list of proxies. In a Next.js app, Holo reads forwarded headers only with `trustedProxies: '*'`. With a list, or without `trustedProxies`, Holo ignores forwarded headers. `ip(request)` then throws an error that tells you to set `'*'`. IP-keyed rate limits don't throw. Every visitor whose address is unknown shares one `ip:unknown` bucket, so set `'*'` to count each visitor separately.
+Next.js doesn't tell Holo the address of the connection, so Holo can't check it against a list of proxies. In a Next.js app, Holo reads forwarded headers only with `trustedProxies: '*'`. With a list, or without `trustedProxies`, Holo ignores forwarded headers.
 
-New Next.js projects trust no proxy until `TRUSTED_PROXIES` is set. Set it to `*` when the app runs behind a proxy or a platform such as Vercel that sets `X-Forwarded-For`.
+Holo never guesses a visitor's address. When the address is unknown, `ip(request)` and every [rate limiter](/basics/security/rate-limiting) keyed by IP throw this error, and the request fails:
+
+```text
+[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES to your proxy's addresses, or to * when the app is reachable only through your proxy. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies
+```
+
+A failed request doesn't share a rate-limit bucket with other visitors, and it doesn't skip the limit. Set `TRUSTED_PROXIES` before you deploy a Next.js app:
+
+- **Vercel**: set `TRUSTED_PROXIES=*` in the project's environment variables. Vercel's edge overwrites `X-Forwarded-For`, so `*` is safe there.
+- **Self-hosted**: set `TRUSTED_PROXIES` to the address of your reverse proxy, such as `127.0.0.1`. Also make sure the app is reachable only through that proxy.
+
+New Next.js projects write `TRUSTED_PROXIES=*` to their local `.env` and leave `.env.example` empty. A deployment that never sets the variable fails on its first IP-keyed rate-limit check.
 
 Next.js itself applies `X-Forwarded-Proto` to the request URL before Holo sees it, whatever `trustedProxies` says.
 

@@ -65,7 +65,7 @@ npx holo start --hostname 0.0.0.0 --port 3000
 ```
 
 ::: warning
-Next.js apps trust forwarded headers from any connection once `TRUSTED_PROXIES` is `*`, or `trustedProxies` is `'*'`. Set it only when the app is reachable only through your proxy, for example by listening on `127.0.0.1` behind nginx. On Vercel or another platform whose proxy address you don't know, set `TRUSTED_PROXIES=*` in the project's environment variables. See [Trusted proxies in Next.js](/basics/security/cors-and-proxies#next-js).
+Production Next.js apps must set `TRUSTED_PROXIES`. Without it, the first request that checks an IP-keyed rate limit fails with a configuration error. On Vercel, set `TRUSTED_PROXIES=*` in the project's environment variables. When you run your own reverse proxy, set `TRUSTED_PROXIES` to its address, and listen only on the path through that proxy, for example on `127.0.0.1` behind nginx. See [Trusted proxies in Next.js](/basics/security/cors-and-proxies#next-js).
 :::
 
 If you don't pass `--port`, Holo uses the `PORT` environment variable.

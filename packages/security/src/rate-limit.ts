@@ -6,7 +6,7 @@ import {
   type SecurityRateLimitHitResult,
 } from './contracts'
 import { getSecurityRuntime } from './runtime'
-import { visitorAddress } from './proxy'
+import { ip } from './proxy'
 
 function encodeBucketPart(value: string): string {
   return encodeURIComponent(value)
@@ -59,8 +59,7 @@ export async function defaultRateLimitKey(request: Request): Promise<string> {
     return normalizeResolvedLimiterKey(runtimeDefaultKey, 'Default rate limiter key resolver')
   }
 
-  const address = visitorAddress(request)
-  return address === undefined ? 'ip:unknown' : `ip:${address}`
+  return `ip:${ip(request)}`
 }
 
 async function resolveLimiterKey(

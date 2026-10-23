@@ -53,6 +53,28 @@ describe('env file groups', () => {
     }
   })
 
+  it.each([
+    ['security'],
+    ['auth', 'security'],
+  ] as const)('scaffolds TRUSTED_PROXIES once in .env and .env.example for optional packages %s', (...optionalPackages) => {
+    const files = renderScaffoldEnvFiles({ projectName: 'Fixture', databaseDriver: 'sqlite', storageDefaultDisk: 'local', optionalPackages })
+    for (const contents of [files.env, files.example]) {
+      expect(contents.split('\n').filter(line => line.startsWith('TRUSTED_PROXIES'))).toEqual(['TRUSTED_PROXIES='])
+    }
+  })
+
+  it.each([
+    ['next', '*'],
+    ['nuxt', ''],
+    ['sveltekit', ''],
+  ] as const)('sets TRUSTED_PROXIES for the local .env of a %s app and leaves .env.example empty', (framework, localValue) => {
+    const files = renderScaffoldEnvFiles({
+      projectName: 'Fixture', databaseDriver: 'sqlite', storageDefaultDisk: 'local', framework, optionalPackages: ['security'],
+    })
+    expect(files.env.split('\n')).toContain(`TRUSTED_PROXIES=${localValue}`)
+    expect(files.example.split('\n')).toContain('TRUSTED_PROXIES=')
+  })
+
   it('skips existing groups without losing separators between missing groups', () => {
     const existing = '# Keep this comment\r\nREDIS_CONNECTION=shared\r\nREDIS_HOST=remote\r\n'
     const additions = ['', 'QUEUE_CONNECTION=redis', '', 'REDIS_CONNECTION=default', 'REDIS_HOST=localhost', '', 'CACHE_DRIVER=redis', 'CACHE_DRIVER=file', '']
