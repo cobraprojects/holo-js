@@ -1,4 +1,4 @@
-import { HoloRequestBodyTooLargeError, requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestBody, requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
@@ -677,6 +677,17 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
   }
 }
 
+function captureBodyTooLarge(error: unknown): HoloRequestBodyTooLargeError {
+  if (error instanceof HoloRequestBodyTooLargeError) return error
+  throw error
+}
+
+async function bufferSubmittedRequest(request: Request): Promise<Request> {
+  if (request.method === 'GET' || request.method === 'HEAD') return request
+  const body = await readBoundedRequestBody(request)
+  return new Request(request.url, { method: request.method, headers: request.headers, body })
+}
+
 export async function safeParse<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
   schemaDefinition: ValidationSchema<TShape>,
@@ -694,10 +705,17 @@ export async function safeParse<TShape extends SchemaInputShape>(
     )
   }
 
-  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition).catch((error: unknown) => {
-    if (error instanceof HoloRequestBodyTooLargeError) return error
-    throw error
-  })
+  const submitted = usesSecurityOptions
+    ? await bufferSubmittedRequest(normalizedRequestInput as Request).catch(captureBodyTooLarge)
+    : validationInput
+  if (submitted instanceof HoloRequestBodyTooLargeError) {
+    return createFailedSubmission(schemaDefinition, {} as Partial<InferSchemaData<TShape>>, {
+      _root: [submitted.message],
+    }, submitted.status)
+  }
+
+  const parsedInput = usesSecurityOptions ? (submitted as Request).clone() : submitted
+  const result = await safeParseInput(parsedInput as FormLikeValidationInput, schemaDefinition).catch(captureBodyTooLarge)
   if (result instanceof HoloRequestBodyTooLargeError) {
     return createFailedSubmission(schemaDefinition, {} as Partial<InferSchemaData<TShape>>, {
       _root: [result.message],
@@ -705,7 +723,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
   }
 
   if (usesSecurityOptions) {
-    const request = normalizedRequestInput as Request
+    const request = submitted as Request
 
     try {
       const { loadSecurityModule } = await import('./security')

@@ -624,6 +624,48 @@ describe('@holo-js/forms contracts', () => {
     await expect(validate(oversized(), login)).rejects.toMatchObject({ status: 413 })
   })
 
+  it('gives a custom throttle key resolver a readable copy of the submitted request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-form-limiter-request-'))
+    connectThroughLocalProxy()
+    onTestFinished(async () => {
+      await rm(directory, { recursive: true, force: true })
+    })
+    const keyedEmails: string[] = []
+    configureSecurityRuntime({
+      config: {
+        trustedProxies: ['127.0.0.1'],
+        rateLimit: {
+          driver: 'file',
+          limiters: {
+            login: limit.perMinute(5).by(async ({ request }) => {
+              const form = await request.clone().formData()
+              const email = String(form.get('email'))
+              keyedEmails.push(email)
+              return `${ip(request)}:${email}`
+            }),
+          },
+        },
+      },
+      rateLimitStore: createFileRateLimitStore(directory),
+    })
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.13',
+      },
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(true)
+    expect(keyedEmails).toEqual(['ava@example.com'])
+  })
+
   it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
     const login = schema({
       email: field.string().required().transform(value => value.trim().toLowerCase()),
