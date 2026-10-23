@@ -5,7 +5,11 @@ import { HoloRequestBodyTooLargeError, readBoundedCachedBody, readBoundedNodeReq
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
   const limit = requestBodyLimitFor(getRequestHeader(event, 'content-type'))
   try {
-    const cached = await readBoundedCachedBody((event.node.req as unknown as Record<symbol, unknown>)[Symbol.for('h3RawBody')] ?? event._requestBody, limit)
+    const node = event.node.req as unknown as Record<PropertyKey, unknown>
+    const cached = await readBoundedCachedBody(
+      event._requestBody || event.web?.request?.body || node[Symbol.for('h3RawBody')] || node.rawBody || node.body,
+      limit,
+    )
     if (cached) return cached
     const bytes = await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
     event._requestBody = bytes

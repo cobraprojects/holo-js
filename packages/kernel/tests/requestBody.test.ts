@@ -172,3 +172,28 @@ describe('cached request bodies', () => {
   })
 })
 
+describe('buffered body shapes', () => {
+  it('serializes a parsed object, URLSearchParams and a web stream the way H3 reads them', async () => {
+    await expect(readBoundedCachedBody({ name: 'parsed' }, 64)).resolves.toEqual(new TextEncoder().encode('{"name":"parsed"}'))
+    await expect(readBoundedCachedBody(new URLSearchParams({ a: '1' }), 64)).resolves.toEqual(new TextEncoder().encode('a=1'))
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('streamed'))
+        controller.close()
+      },
+    })
+    await expect(readBoundedCachedBody(stream, 64)).resolves.toEqual(new TextEncoder().encode('streamed'))
+  })
+
+  it('rejects a parsed object or web stream over the limit', async () => {
+    await expect(readBoundedCachedBody({ padding: 'x'.repeat(64) }, 16)).rejects.toMatchObject({ status: 413 })
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(64)))
+        controller.close()
+      },
+    })
+    await expect(readBoundedCachedBody(stream, 16)).rejects.toMatchObject({ status: 413 })
+  })
+})
+

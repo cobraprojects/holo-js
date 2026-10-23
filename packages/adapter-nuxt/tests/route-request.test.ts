@@ -109,4 +109,28 @@ describe('Nuxt route request', () => {
 
     expect(response.status).toBe(413)
   })
+
+  it('reads a body the serverless runtime already parsed onto the node request instead of the stream', async () => {
+    const app = createApp()
+    app.use(defineEventHandler(async (event) => {
+      Object.assign(event.node.req, { body: { name: 'parsed' } })
+      const request = await createWebRequest(event)
+      return { body: await request.text() }
+    }))
+    const response = await postRaw(await serve(app), { host: 'app.test', 'content-type': 'application/json' }, '{"name":"stream"}')
+
+    expect(response.body).toBe('{"name":"parsed"}')
+  })
+
+  it('answers 413 when a body parsed onto the node request is over the limit', async () => {
+    const app = createApp()
+    app.use(defineEventHandler(async (event) => {
+      Object.assign(event.node.req, { body: { padding: 'x'.repeat(1024 * 1024 + 1) } })
+      await createWebRequest(event)
+      return { ok: true }
+    }))
+    const response = await fetch(await serve(app), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+
+    expect(response.status).toBe(413)
+  })
 })

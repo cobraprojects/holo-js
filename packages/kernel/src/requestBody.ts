@@ -68,6 +68,36 @@ export async function readBoundedRequestBody(request: Request, maxBytes?: number
   return concatChunks(chunks, total)
 }
 
+function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
+  return typeof value === 'object' && value !== null && typeof (value as { getReader?: unknown }).getReader === 'function'
+}
+
+function isPlainBufferedObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && (value as { constructor?: unknown }).constructor === Object
+}
+
+async function readWebStreamBounded(stream: ReadableStream<Uint8Array>, limit: number): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) {
+        throw new HoloRequestBodyTooLargeError(limit)
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined)
+    throw error
+  }
+
+  return concatChunks(chunks, total)
+}
+
 export async function readBoundedCachedBody(cached: unknown, maxBytes?: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
   const value = await cached
   const limit = resolveLimit(maxBytes)
@@ -79,8 +109,42 @@ export async function readBoundedCachedBody(cached: unknown, maxBytes?: number):
     return new Uint8Array(value)
   }
 
-  if (typeof value === 'string') {
-    const bytes = new TextEncoder().encode(value)
+  if (value instanceof ArrayBuffer) {
+    if (value.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return new Uint8Array(value.slice(0))
+  }
+
+  if (typeof value === 'string' || value instanceof URLSearchParams) {
+    const bytes = new TextEncoder().encode(value.toString())
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return bytes
+  }
+
+  if (typeof FormData !== 'undefined' && value instanceof FormData) {
+    const bytes = new Uint8Array(await new Response(value).arrayBuffer())
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return bytes
+  }
+
+  if (isWebReadableStream(value)) {
+    return readWebStreamBounded(value, limit)
+  }
+
+  if (typeof value === 'object' && value !== null && Symbol.asyncIterator in value) {
+    return readBoundedNodeRequestBody(value as AsyncIterable<Uint8Array | string>, limit)
+  }
+
+  if (isPlainBufferedObject(value)) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value))
     if (bytes.byteLength > limit) {
       throw new HoloRequestBodyTooLargeError(limit)
     }

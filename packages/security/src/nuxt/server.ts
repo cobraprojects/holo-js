@@ -48,7 +48,11 @@ const h3RawBodySymbol = Symbol.for('h3RawBody')
 
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
   const limit = requestBodyLimitFor(getRequestHeader(event, 'content-type'))
-  const cached = await readBoundedCachedBody((event.node.req as unknown as Record<symbol, unknown>)[h3RawBodySymbol] ?? event._requestBody, limit)
+  const node = event.node.req as unknown as Record<PropertyKey, unknown>
+  const cached = await readBoundedCachedBody(
+    event._requestBody || event.web?.request?.body || node[h3RawBodySymbol] || node.rawBody || node.body,
+    limit,
+  )
   const bytes = cached ?? await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
   event._requestBody = bytes
   Object.assign(event.node.req, { [h3RawBodySymbol]: bytes })
