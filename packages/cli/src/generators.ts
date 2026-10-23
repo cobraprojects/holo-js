@@ -540,6 +540,11 @@ export async function runMakeChannel(
     throw new Error('Channel pattern must be dot-separated segments of letters, digits, "_" or "-", with optional {param} placeholders.')
   }
 
+  const placeholders = [...pattern.matchAll(/\{([^}]+)\}/g)].map(match => match[1] ?? '')
+  if (new Set(placeholders).size !== placeholders.length) {
+    throw new Error(`Channel pattern "${pattern}" repeats a placeholder. Each {param} name must be unique.`)
+  }
+
   if (registry.channels.some(entry => entry.pattern === pattern)) {
     throw new Error(`Channel with the same pattern already exists: ${pattern}.`)
   }
