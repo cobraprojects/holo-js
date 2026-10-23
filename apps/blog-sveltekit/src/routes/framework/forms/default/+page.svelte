@@ -1,8 +1,11 @@
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import type { PageData } from './$types'
+
+  export let data: PageData
   import { contactForm } from '$lib/schemas/framework-forms'
 
-  const contact = useForm(contactForm, { initialValues: { email: 'ava@example.com', password: '' } })
+  const contact = useForm(contactForm, { pageData: data, initialValues: { email: 'ava@example.com', password: '' } })
 </script>
 
 <h1>Server validation state</h1>

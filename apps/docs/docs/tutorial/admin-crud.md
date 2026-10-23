@@ -838,7 +838,7 @@ const form = useForm(categoryForm, {
 
   export let data: PageData
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>
@@ -870,7 +870,7 @@ const form = useForm(categoryForm, {
 
   export let data: PageData
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>
@@ -1067,7 +1067,7 @@ const form = useForm(tagForm, {
 
   export let data: PageData
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>
@@ -1098,7 +1098,7 @@ const form = useForm(tagForm, {
 
   export let data: PageData
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>

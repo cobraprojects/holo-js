@@ -12,7 +12,7 @@ describe('native validation exceptions', () => {
     const event = {
       request: new Request('https://app.test/api/avatar', { method: 'POST' }),
       url: new URL('https://app.test/api/avatar'),
-      cookies: { get: () => undefined, set() {} },
+      cookies: { get: () => undefined, set() {}, delete() {} },
     }
     const failure = await runWithSvelteKitRequestEvent(event, () => validate(
       { file, title: 'Profile' },

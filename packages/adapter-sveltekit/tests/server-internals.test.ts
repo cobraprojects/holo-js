@@ -34,6 +34,8 @@ function createEvent(path = '/posts', method = 'POST', accept = 'text/html') {
 }
 
 afterEach(() => {
+  (adapterSvelteKitInternals.getState() as { project?: unknown }).project = undefined
+
   vi.restoreAllMocks()
 })
 
@@ -45,10 +47,6 @@ describe('SvelteKit server adapter internals', () => {
     expect(adapterSvelteKitInternals.isApiEvent(createEvent('/posts') as never)).toBe(false)
     expect(adapterSvelteKitInternals.isSvelteKitActionJsonRequest(createEvent('/posts', 'post', 'APPLICATION/JSON') as never)).toBe(true)
     expect(adapterSvelteKitInternals.isSvelteKitActionJsonRequest(createEvent('/posts', 'GET', 'application/json') as never)).toBe(false)
-    expect(adapterSvelteKitInternals.normalizeCookiePath(createEvent('/posts;a\nb') as never)).toBe('/postsab')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({} as never)).toBe('/')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({ url: { pathname: '' } } as never)).toBe('/')
-    expect(adapterSvelteKitInternals.normalizeCookiePath({ url: { pathname: ';' } } as never)).toBe('/')
     for (const key of ['_private', 'pass_word', 'auth-token', 'client secret', 'credential']) {
       expect(adapterSvelteKitInternals.isSensitiveFlashKey(key)).toBe(true)
     }
@@ -64,13 +62,17 @@ describe('SvelteKit server adapter internals', () => {
       nested: { safe: true },
       list: [1, { value: 'ok' }],
     })
-    const encoded = adapterSvelteKitInternals.encodeValidationFlashPayload(payload as never)
-    expect(JSON.parse(decodeURIComponent(encoded))).toMatchObject({
+    const state = adapterSvelteKitInternals.getState() as { project?: unknown }
+    state.project = { config: { app: { key: 'encode-test-app-key', debug: false } } }
+    const encoded = adapterSvelteKitInternals.encodeValidationFlashPayload(payload as never, '/posts')
+    expect(adapterSvelteKitInternals.readValidationFlashCookie(encoded)).toMatchObject({
       values: { title: 'Post', nested: { safe: true } },
     })
+    state.project = undefined
   })
 
   it('validates serialized payloads and creates action responses', async () => {
+    (adapterSvelteKitInternals.getState() as { project?: unknown }).project = { config: { app: { key: 'redirect-test-app-key', debug: false } } }
     expect(adapterSvelteKitInternals.isSerializedValidationException(payload)).toBe(true)
     expect(adapterSvelteKitInternals.isSerializedValidationException({ ...payload, errors: null })).toBe(false)
     const event = createEvent()
@@ -148,13 +150,19 @@ describe('SvelteKit server adapter internals', () => {
 })
 
 it('scopes the flash cookie to the same-origin path the redirect goes to', () => {
-  const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
-    url: new URL('https://app.test//evil.example/steal'),
-  } as never, {
-    ok: false, status: 422, valid: false, message: 'Invalid input.', bag: 'default', values: {}, errors: {},
-  } as never)
+  const state = adapterSvelteKitInternals.getState() as { project?: unknown }
+  state.project = { config: { app: { key: 'redirect-path-test-key', debug: false } } }
+  try {
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test//evil.example/steal'),
+    } as never, {
+      ok: false, status: 422, valid: false, message: 'Invalid input.', bag: 'default', values: {}, errors: {},
+    } as never)
 
-  expect(response.headers.get('location')).toBe('/')
-  expect(response.headers.get('set-cookie')).toContain('Path=/;')
-  expect(response.headers.get('set-cookie')).not.toContain('evil.example')
+    expect(response.headers.get('location')).toBe('/')
+    expect(response.headers.get('set-cookie')).toContain('Path=/;')
+    expect(response.headers.get('set-cookie')).not.toContain('evil.example')
+  } finally {
+    state.project = undefined
+  }
 })

@@ -8,7 +8,7 @@ function createEvent(value: string) {
   return {
     url: new URL('https://app.test/login'),
     request: new Request('https://app.test/login', { headers: { 'x-request-id': value } }),
-    cookies: { get: () => value, set() {} },
+    cookies: { get: () => value, set() {}, delete() {} },
   }
 }
 

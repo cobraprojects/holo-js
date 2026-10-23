@@ -12,7 +12,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
+import { cookieEncryptionInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -159,11 +159,27 @@ async function mapValidationActionResponse(
   return createValidationActionFailureResponse(actionResult.error, response, false)
 }
 
-function encodeValidationFlashPayload(payload: SerializedValidationException): string {
-  return encodeURIComponent(JSON.stringify({
+function resolveValidationFlashAppKey(): string | undefined {
+  const appKey = svelteKitAdapter.internals.getState().project?.config.app.key
+  return appKey?.trim() ? appKey : undefined
+}
+
+function encodeValidationFlashPayload(payload: SerializedValidationException, pathname: string): string | undefined {
+  const appKey = resolveValidationFlashAppKey()
+  if (!appKey) {
+    if (isDebugEnabled()) {
+      console.warn('[@holo-js/adapter-sveltekit] Validation flash is skipped because the app key is empty. Set APP_KEY.')
+    }
+    return undefined
+  }
+
+  const { pagePath, cookiePath } = validationFlashPaths(pathname)
+  return cookieEncryptionInternals.encryptCookieValue(validationFlashCookie, JSON.stringify({
     ...payload,
     values: filterFlashValues(payload.values),
-  }))
+    path: pagePath,
+    cookiePath,
+  }), appKey)
 }
 
 function isSensitiveFlashKey(key: string): boolean {
@@ -210,28 +226,201 @@ function filterFlashValues<TData extends Record<string, unknown>>(values: TData)
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
-  if (!event.url) {
+  const value = event.url ? fitValidationFlash(payload, event.url.pathname) : undefined
+  if (!value) {
     return
   }
 
-  event.cookies.set(validationFlashCookie, encodeValidationFlashPayload(payload), {
-    path: normalizeCookiePath(event),
+  event.cookies.set(validationFlashCookie, value, {
+    path: validationFlashPaths(event.url?.pathname).cookiePath,
     maxAge: 60,
     sameSite: 'lax',
+    httpOnly: true,
   })
 }
 
-function normalizeCookiePath(event: SvelteKitRequestEvent): string {
-  return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
+type ValidationFlashPaths = {
+  // The exact same-origin page path. The flash only applies on this path.
+  readonly pagePath: string
+  // The cookie Path attribute. It may be broader than pagePath so the browser sends the cookie back.
+  readonly cookiePath: string
 }
 
-function createValidationFlashCookie(path: string, payload: SerializedValidationException): string {
+function validationFlashPaths(pathname: string | undefined): ValidationFlashPaths {
+  const pagePath = sameOriginRedirectPath(pathname)
+  return { pagePath, cookiePath: cookiePathFor(pagePath) }
+}
+
+// A cookie Path cannot contain ';' or control characters (RFC 6265 §5.4). When the page path has one,
+// use the nearest ancestor directory that is valid. It still path-matches the page (RFC 6265 §5.1.4).
+function cookiePathFor(pagePath: string): string {
+  if (isValidCookiePath(pagePath)) {
+    return pagePath
+  }
+
+  let end = pagePath.lastIndexOf('/')
+  while (end > 0 && !isValidCookiePath(pagePath.slice(0, end + 1))) {
+    end = pagePath.lastIndexOf('/', end - 1)
+  }
+
+  return end > 0 ? pagePath.slice(0, end + 1) : '/'
+}
+
+function isValidCookiePath(path: string): boolean {
+  return !path.includes(';') && ![...path].some((char) => {
+    const code = char.charCodeAt(0)
+    return code < 0x20 || code === 0x7f
+  })
+}
+
+// Browsers drop a Set-Cookie over about 4096 bytes, so the whole header has to stay under this budget.
+const VALIDATION_FLASH_COOKIE_BUDGET = 4000
+
+function validationFlashCookieHeader(value: string, cookiePath: string): string {
   return [
-    `${validationFlashCookie}=${encodeValidationFlashPayload(payload)}`,
+    `${validationFlashCookie}=${value}`,
     'Max-Age=60',
-    `Path=${path.replace(/[;\r\n]/g, '') || '/'}`,
+    `Path=${cookiePath}`,
     'SameSite=Lax',
+    'HttpOnly',
   ].join('; ')
+}
+
+// Old input is sized from at most this many fields, so a form with thousands of fields costs bounded work.
+const VALIDATION_FLASH_FIELD_LIMIT = 200
+// AES-GCM adds a 12-byte IV and a 16-byte tag. base64url then encodes the bytes without padding.
+const FLASH_CIPHER_OVERHEAD_BYTES = 12 + 16
+
+function encryptedFlashLength(plaintextBytes: number): number {
+  return Math.ceil(((FLASH_CIPHER_OVERHEAD_BYTES + plaintextBytes) * 4) / 3)
+}
+
+// Degrades in order so the errors survive: drop the largest input values until the flash fits, then keep
+// only the first message for each field, then fall back to a generic failure with no input. Sizes come from
+// the plaintext arithmetically, so nothing is encrypted until the one value that is written. If the estimate
+// is ever off, the generic flash is written directly.
+function fitValidationFlash(payload: SerializedValidationException, pathname: string | undefined): string | undefined {
+  const { pagePath, cookiePath } = validationFlashPaths(pathname)
+  const headerOverhead = validationFlashCookieHeader('', cookiePath).length
+  // The encoder writes "values":{} and "errors":{}; those four bytes are replaced by the real sizes below.
+  const plaintextFrame = Buffer.byteLength(JSON.stringify({ ...payload, values: {}, errors: {}, path: pagePath, cookiePath })) - 4
+  const fitsBudget = (plaintextBytes: number): boolean =>
+    headerOverhead + encryptedFlashLength(plaintextBytes) <= VALIDATION_FLASH_COOKIE_BUDGET
+
+  const fields = Object.entries(filterFlashValues(payload.values))
+  const considered = new Map(fields.slice(0, VALIDATION_FLASH_FIELD_LIMIT))
+  const capped = fields.slice(VALIDATION_FLASH_FIELD_LIMIT).map(([key]) => `values.${key}`)
+  const sized = [...considered].map(([key, value]) => ({
+    key,
+    bytes: Buffer.byteLength(`${JSON.stringify(key)}:${JSON.stringify(value)}`),
+  })).sort((a, b) => b.bytes - a.bytes)
+
+  // The smallest number of largest fields to drop so the plaintext fits, or undefined when even none fit.
+  const largestFirstDropCount = (errors: SerializedValidationException['errors']): number | undefined => {
+    const errorsBytes = Buffer.byteLength(JSON.stringify(errors))
+    let remainingBytes = sized.reduce((sum, field) => sum + field.bytes, 0)
+    let remainingCount = sized.length
+    for (let dropped = 0; ; dropped += 1) {
+      if (fitsBudget(plaintextFrame + 2 + remainingBytes + Math.max(0, remainingCount - 1) + errorsBytes)) {
+        return dropped
+      }
+
+      const next = sized[dropped]
+      if (!next) {
+        return undefined
+      }
+
+      remainingBytes -= next.bytes
+      remainingCount -= 1
+    }
+  }
+  const keptValues = (dropped: number) => Object.fromEntries(
+    sized.slice(dropped).map(({ key }) => [key, considered.get(key)]),
+  )
+  const droppedNames = (dropped: number) => sized.slice(0, dropped).map(({ key }) => `values.${key}`)
+
+  const encodeOnce = (candidate: SerializedValidationException): string | undefined => {
+    const value = encodeValidationFlashPayload(candidate, pagePath)
+    return value && validationFlashCookieHeader(value, cookiePath).length <= VALIDATION_FLASH_COOKIE_BUDGET
+      ? value
+      : undefined
+  }
+  const generic = (): string | undefined => {
+    warnDroppedFlashFields([
+      ...fields.map(([key]) => `values.${key}`),
+      ...Object.keys(payload.errors).map(field => `errors.${field}`),
+    ])
+    return encodeOnce({ ...payload, message: 'Validation failed.', values: {}, errors: { _root: ['Validation failed.'] } })
+  }
+
+  const dropped = largestFirstDropCount(payload.errors)
+  if (dropped !== undefined) {
+    warnDroppedFlashFields([...capped, ...droppedNames(dropped)])
+    return encodeOnce({ ...payload, values: keptValues(dropped) }) ?? generic()
+  }
+
+  const firstErrors = Object.fromEntries(
+    Object.entries(payload.errors).map(([field, messages]) => [field, messages.slice(0, 1)]),
+  )
+  const droppedWithFirstErrors = largestFirstDropCount(firstErrors)
+  if (droppedWithFirstErrors !== undefined) {
+    const trimmed = Object.entries(payload.errors)
+      .filter(([, messages]) => messages.length > 1)
+      .map(([field]) => `errors.${field}`)
+    warnDroppedFlashFields([...capped, ...droppedNames(droppedWithFirstErrors), ...trimmed])
+    return encodeOnce({ ...payload, values: keptValues(droppedWithFirstErrors), errors: firstErrors }) ?? generic()
+  }
+
+  return generic()
+}
+
+function warnDroppedFlashFields(fields: readonly string[]): void {
+  if (fields.length > 0 && isDebugEnabled()) {
+    console.warn(`[@holo-js/adapter-sveltekit] Validation flash dropped ${fields.join(', ')} to fit the ${VALIDATION_FLASH_COOKIE_BUDGET}-byte cookie budget.`)
+  }
+}
+
+function createValidationFlashCookie(pathname: string | undefined, payload: SerializedValidationException): string | undefined {
+  const value = fitValidationFlash(payload, pathname)
+  if (!value) {
+    return undefined
+  }
+
+  return validationFlashCookieHeader(value, validationFlashPaths(pathname).cookiePath)
+}
+
+type ValidationFlashRecord = SerializedValidationException & { readonly path?: string, readonly cookiePath?: string }
+
+function readValidationFlashCookie(value: string | undefined): ValidationFlashRecord | undefined {
+  const appKey = resolveValidationFlashAppKey()
+  const json = value && appKey
+    ? cookieEncryptionInternals.decryptCookieValue(validationFlashCookie, value, appKey)
+    : undefined
+  if (!json) {
+    return undefined
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return isSerializedValidationException(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function readValidationFlash(url?: { readonly pathname: string }): ValidationFlashRecord | undefined {
+  const event = getCurrentSvelteKitRequestEvent()
+  const value = event?.cookies.get(validationFlashCookie)
+  if (!event || !value) {
+    return undefined
+  }
+
+  const payload = readValidationFlashCookie(value)
+  event.cookies.delete(validationFlashCookie, {
+    path: payload?.cookiePath ?? validationFlashPaths(event.url?.pathname).cookiePath,
+  })
+  const pagePath = validationFlashPaths(url?.pathname ?? event.url?.pathname).pagePath
+  return payload && payload.path === pagePath ? payload : undefined
 }
 
 function createValidationActionFailureResponse(
@@ -261,15 +450,16 @@ function createValidationActionRedirectResponse(
   event: SvelteKitRequestEvent,
   payload: SerializedValidationException,
 ): Response {
-  const location = sameOriginRedirectPath(event.url?.pathname)
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location,
-      'cache-control': 'no-store',
-      'set-cookie': createValidationFlashCookie(location, payload),
-    },
-  })
+  const headers: Record<string, string> = {
+    location: sameOriginRedirectPath(event.url?.pathname),
+    'cache-control': 'no-store',
+  }
+  const flashCookie = createValidationFlashCookie(event.url?.pathname, payload)
+  if (flashCookie) {
+    headers['set-cookie'] = flashCookie
+  }
+
+  return new Response(null, { status: 303, headers })
 }
 
 function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedValidationException | undefined {
@@ -508,6 +698,7 @@ export const adapterSvelteKitInternals = {
   createValidationActionRedirectResponse,
   createValidationFlashCookie,
   encodeValidationFlashPayload,
+  readValidationFlashCookie,
   filterFlashValue,
   filterFlashValues,
   flashValidationPayload,
@@ -516,7 +707,6 @@ export const adapterSvelteKitInternals = {
   isSerializedValidationException,
   isSvelteKitActionJsonRequest,
   mapValidationActionResponse,
-  normalizeCookiePath,
   registerValidationExceptionThrower,
   resolveSvelteKitOptions,
   rememberValidationActionFailure,

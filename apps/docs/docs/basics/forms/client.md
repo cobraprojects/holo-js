@@ -93,7 +93,12 @@ const form = useForm(registerForm, {
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { registerForm } from '$lib/schemas/register'
 
+  import type { PageData } from './$types'
+
+  export let data: PageData
+
   const form = useForm(registerForm, {
+    pageData: data,
     action: '/api/register',
     validateOn: 'blur',
     initialValues: { email: '', password: '', passwordConfirmation: '' },

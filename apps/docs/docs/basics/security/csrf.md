@@ -43,6 +43,8 @@ The middleware checks the token before your action runs. If it's missing or does
 
 The `XSRF-TOKEN` cookie is not enough on its own. A token copied from another browser, or a cookie planted by a subdomain, doesn't match the visitor's session and is rejected. So is a value that was changed or encrypted with a different app key.
 
+Anonymous `GET` requests create a session when CSRF protection is on. A first visit gets a session cookie and a token, as Laravel's `StartSession` middleware does, and Holo keeps that behavior. Each new visitor therefore adds session storage. Throttle anonymous traffic at the edge or by IP, for example at your CDN or reverse proxy, rather than relying on the app's rate limiter for it.
+
 CSRF protection needs `@holo-js/session`. `holo install security` adds it. Without a `config/session.ts`, Holo uses the default file session store.
 
 `GET`, `HEAD`, and `OPTIONS` requests are never checked.

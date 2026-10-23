@@ -5,6 +5,7 @@ export type SvelteKitRequestEvent = {
   readonly cookies: {
     get(name: string): string | undefined
     set(name: string, value: string, options: SvelteKitCookieOptions): void
+    delete(name: string, options: { readonly path: string }): void
   }
   readonly request: {
     readonly method?: string

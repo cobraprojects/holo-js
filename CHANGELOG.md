@@ -78,6 +78,7 @@
 
 ### Security
 
+- Encrypt the SvelteKit validation flash cookie with `APP_KEY` and mark it `HttpOnly`, so scripts cannot read the submitted values. The flash now reaches pages through page data, and the browser no longer reads `document.cookie`. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#sveltekit-validation-flash).
 - Clerk and WorkOS sync copy the provider's email to the local user only when the provider reports it verified. Before, an unverified address replaced the stored email while its `email_verified_at` stayed, so a verification from the old address carried over to the new one. Any change to a stored email now clears `email_verified_at`, including changes made through the auth runtime. See [Clerk](apps/docs/docs/auth/clerk.md) and [WorkOS](apps/docs/docs/auth/workos.md).
 - Clerk sessions are accepted only from the authorized parties in `authorizedParties` and the origin of `redirectUri`. Before, the request's `Host` origin was also accepted, so a session token issued for another app on the same Clerk instance worked when a request arrived with that app's host. With neither set, Clerk sessions are rejected. See [Clerk](apps/docs/docs/auth/clerk.md#configuration).
 - Sign in with Apple takes the user's email only from the signed `id_token`. Before, the unsigned form `user` field supplied it when the token had none. The form field still supplies the name. See [Apple](apps/docs/docs/auth/social-login.md#apple).

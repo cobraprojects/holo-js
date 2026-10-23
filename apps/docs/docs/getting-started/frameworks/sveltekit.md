@@ -184,7 +184,7 @@ The Holo hooks answer a few routes directly, depending on which packages you ins
 
 ## Client helpers
 
-Client-side helpers come from `@holo-js/adapter-sveltekit/client`, such as `useForm()` for forms with typed validation errors. See [Client-Side Forms](/basics/forms/client) and [Current User on the Client](/auth/current-user).
+Client-side helpers come from `@holo-js/adapter-sveltekit/client`, such as `useForm()` for forms with typed validation errors. Pass `pageData: data` from the page's `data` prop, which comes from the root layout load that returns `readValidationFlash()`, so flashed errors and input are restored. See [Client-Side Forms](/basics/forms/client), [Framework Recipes](/basics/forms/frameworks#sveltekit-form-actions), and [Current User on the Client](/auth/current-user).
 
 ## Scripts
 

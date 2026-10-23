@@ -3,7 +3,7 @@
 
   export let data
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 {#if data}

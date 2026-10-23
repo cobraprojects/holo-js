@@ -4,7 +4,7 @@
   export let data
 
   const selectedTagIds = new Set(data.post.tags.map(tag => tag.id))
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section class="stack">
