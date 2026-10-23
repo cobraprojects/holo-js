@@ -1,16 +1,19 @@
-import type { spawn } from 'node:child_process'
-import { EventEmitter, getEventListeners } from 'node:events'
+import { spawn } from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { installProjectDependencies, resolvePackageManagerSpawn } from '../src/package-manager'
 
-function createClosingProcess(): ReturnType<typeof spawn> {
+function createClosingProcess(onKill: () => void = () => {}): ReturnType<typeof spawn> {
   const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter, stderr: EventEmitter, kill(): boolean }
   child.stdout = new EventEmitter()
   child.stderr = new EventEmitter()
-  child.kill = () => true
+  child.kill = () => {
+    onKill()
+    return true
+  }
   process.nextTick(() => child.emit('close', 0))
   return child as unknown as ReturnType<typeof spawn>
 }
@@ -26,22 +29,27 @@ function createIo(cwd: string) {
   return { cwd, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }
 }
 
-it('launches package-manager shims through the shell on Windows and directly elsewhere', () => {
-  expect(resolvePackageManagerSpawn({ command: 'npm', args: ['exec', '--', 'nuxt', 'prepare'] }, 'win32')).toEqual({
-    command: 'npm exec -- nuxt prepare',
-    args: [],
-    shell: true,
-  })
-  expect(resolvePackageManagerSpawn({ command: 'node', args: ['-e', 'require("node:fs").appendFileSync("a b.txt", "x")'] }, 'win32')).toEqual({
-    command: 'node -e "require(\\"node:fs\\").appendFileSync(\\"a b.txt\\", \\"x\\")"',
-    args: [],
-    shell: true,
-  })
-  expect(resolvePackageManagerSpawn({ command: 'pnpm', args: ['install'] }, 'linux')).toEqual({
-    command: 'pnpm',
-    args: ['install'],
-    shell: false,
-  })
+async function runInShell(invocation: ReturnType<typeof resolvePackageManagerSpawn>): Promise<string> {
+  const child = spawn(invocation.command, [...invocation.args], { shell: invocation.shell, stdio: ['ignore', 'pipe', 'inherit'] })
+  let stdout = ''
+  child.stdout?.on('data', chunk => stdout += String(chunk))
+  await once(child, 'close')
+  return stdout
+}
+
+it('delivers package-manager arguments unchanged whether they are quoted for the Windows shell or spawned directly', async () => {
+  const args = ['-p', 'JSON.stringify(process.argv.slice(1))', 'install app', 'say "hi"']
+
+  const windowsInvocation = resolvePackageManagerSpawn({ command: 'node', args }, 'win32')
+  const directInvocation = resolvePackageManagerSpawn({ command: 'node', args }, 'linux')
+  const windowsOutput = await runInShell(windowsInvocation)
+  const directOutput = await runInShell(directInvocation)
+
+  expect(windowsInvocation.shell).toBe(true)
+  expect(directInvocation.shell).toBe(false)
+
+  expect(JSON.parse(windowsOutput)).toEqual(['install app', 'say "hi"'])
+  expect(JSON.parse(directOutput)).toEqual(['install app', 'say "hi"'])
 })
 
 it('does not spawn the package manager when the install is cancelled during the lookup', async () => {
@@ -64,12 +72,19 @@ it('does not spawn the package manager when the install is cancelled during the 
   expect(spawned).toEqual([])
 })
 
-it('removes its abort listener once each install child closes', async () => {
+it('does not signal an install child that already closed when the shared signal aborts later', async () => {
   const projectRoot = await createInstallProject()
   const controller = new AbortController()
+  let signalled = 0
 
-  for (let cycle = 0; cycle < 3; cycle += 1) {
-    await installProjectDependencies(createIo(projectRoot), projectRoot, (() => createClosingProcess()) as unknown as typeof spawn, controller.signal)
-    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
-  }
+  await installProjectDependencies(
+    createIo(projectRoot),
+    projectRoot,
+    (() => createClosingProcess(() => { signalled += 1 })) as unknown as typeof spawn,
+    controller.signal,
+  )
+  controller.abort()
+  await new Promise(resolve => setImmediate(resolve))
+
+  expect(signalled).toBe(0)
 })

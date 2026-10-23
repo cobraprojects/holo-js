@@ -10,6 +10,7 @@ type LoadEnvironmentOptions = {
   cwd: string
   envName?: string
   processEnv?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
 }
 
 type EnvRuntimeState = {
@@ -56,6 +57,54 @@ function parseEnvFile(contents: string): Record<string, string> {
   }
 
   return values
+}
+
+function findProcessEnvValue(processEnv: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(processEnv).find(candidate => candidate.toUpperCase() === name.toUpperCase())
+  return key === undefined ? undefined : processEnv[key]
+}
+
+export function expandWindowsPercentReferences(value: string, processEnv: NodeJS.ProcessEnv): string {
+  let expanded = ''
+  let index = 0
+
+  while (index < value.length) {
+    const start = value.indexOf('%', index)
+    if (start === -1) {
+      return expanded + value.slice(index)
+    }
+
+    expanded += value.slice(index, start)
+    if (value[start + 1] === '%') {
+      expanded += '%'
+      index = start + 2
+      continue
+    }
+
+    const end = value.indexOf('%', start + 1)
+    if (end === -1) {
+      return expanded + value.slice(start)
+    }
+
+    const name = value.slice(start + 1, end)
+    const resolved = findProcessEnvValue(processEnv, name)
+    expanded += typeof resolved === 'string' ? resolved : value.slice(start, end + 1)
+    index = end + 1
+  }
+
+  return expanded
+}
+
+function expandFileValues(
+  values: Record<string, string> | undefined,
+  platform: NodeJS.Platform,
+  processEnv: NodeJS.ProcessEnv,
+): Record<string, string> | undefined {
+  if (!values || platform !== 'win32') {
+    return values
+  }
+
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, expandWindowsPercentReferences(value, processEnv)]))
 }
 
 function isMissingFileError(error: unknown): boolean {
@@ -113,9 +162,14 @@ export function resolveProjectAppEnvironmentSync(options: {
   cwd: string
   envName?: string
   processEnv?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
 }): HoloAppEnv {
   const processEnv = options.processEnv ?? process.env
-  const baseValues = readEnvFileSync(join(resolve(options.cwd), '.env'))
+  const baseValues = expandFileValues(
+    readEnvFileSync(join(resolve(options.cwd), '.env')),
+    options.platform ?? process.platform,
+    processEnv,
+  )
   return resolveAppEnvironment({
     APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
   })
@@ -138,7 +192,8 @@ export async function loadEnvironment(
 ): Promise<LoadedEnvironment> {
   const cwd = resolve(options.cwd)
   const processEnv = options.processEnv ?? process.env
-  const baseValues = await readEnvFile(join(cwd, '.env'))
+  const platform = options.platform ?? process.platform
+  const baseValues = expandFileValues(await readEnvFile(join(cwd, '.env')), platform, processEnv)
   const envName = resolveAppEnvironment({
     APP_ENV: selectAppEnvironmentValue(options.envName, processEnv, baseValues),
   })
@@ -149,7 +204,7 @@ export async function loadEnvironment(
 
   for (const relativeName of resolveEnvironmentFileOrder(envName)) {
     const filePath = join(cwd, relativeName)
-    const fileValues = relativeName === '.env' ? baseValues : await readEnvFile(filePath)
+    const fileValues = relativeName === '.env' ? baseValues : expandFileValues(await readEnvFile(filePath), platform, processEnv)
     if (!fileValues) {
       continue
     }

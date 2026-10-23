@@ -36,10 +36,7 @@ import {
   createRateLimitStoreFromConfig,
   securityStoreInternals,
 } from './store'
-import {
-  createFileRateLimitStore,
-  fileRateLimitDriverInternals,
-} from './drivers/file'
+import { createFileRateLimitStore } from './drivers/file'
 import {
   createMemoryRateLimitStore,
   memoryRateLimitDriverInternals,
@@ -112,7 +109,6 @@ export {
   protect,
   rateLimit,
   clearRateLimit,
-  fileRateLimitDriverInternals,
   securityStoreInternals,
   securityInternals,
   memoryRateLimitDriverInternals,

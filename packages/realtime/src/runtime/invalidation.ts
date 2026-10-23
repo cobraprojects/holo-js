@@ -294,12 +294,6 @@ export function forgetRemoteRefreshSchedule(refreshKey: string): void {
   queuedRemoteRefreshKeys.delete(refreshKey)
 }
 
-export function hasRemoteRefreshSchedule(refreshKey: string): boolean {
-  return remoteRefreshTimers.has(refreshKey)
-    || remoteRefreshLastRunAt.has(refreshKey)
-    || queuedRemoteRefreshKeys.has(refreshKey)
-}
-
 export function resetRemoteRefreshSchedule(): void {
   tableInvalidationGenerations.clear()
   initialRefreshRequests.clear()
@@ -339,7 +333,7 @@ function releaseRemoteRefreshSlot(generation: number): void {
   activeRemoteRefreshes -= 1
 }
 
-export async function refreshRemoteEntry(refreshKey: string): Promise<void> {
+async function refreshRemoteEntry(refreshKey: string): Promise<void> {
   const running = getRuntimeState().refreshes.get(refreshKey)
   if (running?.running) {
     running.pending = true
@@ -349,7 +343,7 @@ export async function refreshRemoteEntry(refreshKey: string): Promise<void> {
 
   const generation = remoteRefreshGeneration
   const acquired = await acquireRemoteRefreshSlot()
-  if (!acquired || generation !== remoteRefreshGeneration) {
+  if (!acquired) {
     return
   }
 

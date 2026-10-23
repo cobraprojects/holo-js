@@ -149,6 +149,10 @@ A job whose name isn't registered now fails into the failed jobs table and the w
 
 If you run `queue:listen` under a process manager, check that it stops when the manager sends `SIGTERM`. Your code doesn't change. See [Develop with queue:listen](/queue/workers#develop-with-queue-listen).
 
+### Windows `.env` percent references
+
+On Windows, `.env` values expand `%NAME%` from the real environment variables, as `cmd.exe` does, and `%%` becomes `%`. A value such as `DATA_DIR=%USERPROFILE%\data` now resolves to your profile folder, and a value that contains `%%` now contains a single `%`. Check Windows `.env` values that contain a percent sign. Values on macOS and Linux are unchanged. See [Values and types](/reference/environment#values-and-types).
+
 ### Sensitive input in validation failures
 
 Passwords and fields marked [`sensitive()`](/basics/validation/rules#sensitive) are now left out of every validation failure, including inside nested objects and arrays. This covers the 422 response in Next.js, Nuxt, and SvelteKit, `ValidationException` `values` and `toJSON()`, and `submission.fail()` and `submission.serialize()`. If your code reads a password back from a caught `ValidationException`, read it from the request instead.

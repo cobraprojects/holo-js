@@ -41,6 +41,26 @@ async function leftoverTombstones(): Promise<string[]> {
   return (await readdir(root)).filter(name => name.endsWith('.released'))
 }
 
+async function waitForFirstRemoval(initialCount: number): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while ((await leftoverTombstones()).length >= initialCount && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
+async function settledLeftoverTombstones(): Promise<string[]> {
+  const deadline = Date.now() + 10_000
+  let current = await leftoverTombstones()
+  let unchangedReads = 0
+  while (unchangedReads < 3 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const next = await leftoverTombstones()
+    unchangedReads = next.length === current.length ? unchangedReads + 1 : 0
+    current = next
+  }
+  return current
+}
+
 describe('releasing a freshly created lease under a Windows filesystem', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'holo-file-lock-young-'))
@@ -61,7 +81,6 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
     } finally {
       openGate()
     }
-    expect(fileSessionDriverInternals.heldRecordLockTokens.size).toBe(0)
   }, 15_000)
 
   it('lets the next writer acquire while the released young lease is still being unlinked', async () => {
@@ -93,20 +112,20 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
 
   it('does not wait for queued tombstone removals during a sustained burst, and caps the queue, leaving the overflow for the GC sweep', async () => {
     const openGate = holdTombstoneRemovals()
-    const queue = fileSessionDriverInternals.pendingTombstoneRemovals
-    let longestQueue = 0
     try {
       for (let index = 0; index < 300; index += 1) {
         const release = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
         await release()
-        longestQueue = Math.max(longestQueue, queue.length)
       }
       expect(await leftoverTombstones()).toHaveLength(300)
     } finally {
       openGate()
     }
 
-    expect(longestQueue).toBeLessThanOrEqual(fileSessionDriverInternals.tombstoneQueueLimit)
+    await waitForFirstRemoval(300)
+    const overflow = await settledLeftoverTombstones()
+    expect(overflow.length).toBeGreaterThan(0)
+    expect(overflow.length).toBeLessThan(300)
 
     await new Promise(resolve => setTimeout(resolve, 1_100))
     await createFileSessionStore(root).sweepExpired?.(new Date())

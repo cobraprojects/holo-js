@@ -121,7 +121,7 @@ Calling `DB.afterCommit()` or `DB.afterRollback()` outside a transaction throws 
 
 If an `afterCommit` callback throws, the data stays committed, `DB.transaction()` rejects with that same error, and the remaining `afterCommit` callbacks are skipped. Handle errors inside the callback if the caller shouldn't see them.
 
-A failed commit is different. If the database rejects the commit, the callbacks registered with `afterRollback()` don't run, because the outcome is unknown and the data may already be saved.
+A failed commit is different. If the database rejects the commit, the callbacks registered with `afterRollback()` don't run, because the outcome is unknown and the data may already be saved. Models saved in that transaction return to their persisted state from before the transaction's first save. Attribute values you set, including edits made after the last save, are kept, so a retry save writes them. If the rows were in fact saved, check for them before retrying a `create()`.
 
 The same applies when the rollback itself fails. The `afterRollback()` callbacks don't run, and `DB.transaction()` rejects with the rollback error.
 :::
