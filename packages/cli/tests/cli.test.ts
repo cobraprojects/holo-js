@@ -8186,6 +8186,11 @@ export default defineMigration({
     }))()).rejects.toThrow('Channel pattern')
     await expect(readdir(join(channelProjectRoot, 'server/channels'))).resolves.toHaveLength(3)
     await expect((async () => runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.{id}.{id}'],
+      flags: {},
+    }))()).rejects.toThrow('repeats a placeholder')
+    await expect(readdir(join(channelProjectRoot, 'server/channels'))).resolves.toHaveLength(3)
+    await expect((async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.{orderId}'],
       flags: {},
     }))()).rejects.toThrow('Channel with the same pattern already exists: orders.{orderId}.')
