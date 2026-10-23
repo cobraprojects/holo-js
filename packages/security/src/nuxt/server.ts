@@ -44,9 +44,12 @@ function createRequestBody(body: Uint8Array | undefined): RequestInit['body'] {
   return copy.buffer
 }
 
+const h3RawBodySymbol = Symbol.for('h3RawBody')
+
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
   const bytes = await readBoundedNodeRequestBody(event.node.req, undefined, getRequestHeader(event, 'content-length'))
   event._requestBody = bytes
+  Object.assign(event.node.req, { [h3RawBodySymbol]: bytes })
   return bytes
 }
 

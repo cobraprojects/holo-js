@@ -77,4 +77,39 @@ describe('security request body limit', () => {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     }
   })
+
+  it('shares the buffered Nuxt body through the H3 raw-body symbol that form validation reads', async () => {
+    configure(1024)
+    let shared: unknown
+    const app = createApp()
+    app.use(nuxtCsrfProtection())
+    app.use(defineEventHandler((event) => {
+      shared = (event.node.req as unknown as Record<symbol, unknown>)[Symbol.for('h3RawBody')]
+      return { ok: true }
+    }))
+    const server = createServer(toNodeListener(app))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('Missing test server address')
+      const source = new Request('http://localhost/page', { headers: { cookie: 'browser=browser-a' } })
+      const token = await csrf.token(source)
+      const xsrfCookie = (await csrf.cookie(source, token)).split(';', 1)[0]
+      const response = await fetch(`http://127.0.0.1:${address.port}/submit`, {
+        method: 'POST',
+        headers: {
+          cookie: `browser=browser-a; ${xsrfCookie}`,
+          'content-type': 'application/json',
+          'x-csrf-token': token,
+        },
+        body: JSON.stringify({ email: 'ava@example.com' }),
+      })
+
+      expect(response.status).toBe(200)
+      expect(Buffer.from(shared as Uint8Array).toString('utf8')).toBe(JSON.stringify({ email: 'ava@example.com' }))
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  })
 })
