@@ -382,9 +382,28 @@ const unresolvedImportCodes = new Set([
   'MODULE_NOT_FOUND',
 ])
 
-function isUnresolvedImportError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error
-    && typeof error.code === 'string' && unresolvedImportCodes.has(error.code)
+const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
+
+function isStaticAliasImport(dependency: {
+  readonly path: string
+  readonly kind: string
+  readonly external?: boolean
+  readonly original?: string
+}): boolean {
+  return (dependency.kind === 'import-statement' || dependency.kind === 'require-call')
+    && !dependency.external && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
+}
+
+function packageRootOf(specifier: string): string {
+  const [first = '', second] = specifier.split('/')
+  return first.startsWith('@') && second ? `${first}/${second}` : first
+}
+
+function isUnresolvedStaticAliasError(error: unknown, aliasNames: ReadonlySet<string>): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error) || !('message' in error)) return false
+  if (typeof error.code !== 'string' || !unresolvedImportCodes.has(error.code) || typeof error.message !== 'string') return false
+
+  return [...error.message.matchAll(/['"]([^'"\n]+)['"]/g)].some(([, name = '']) => aliasNames.has(name))
 }
 
 function isCommonJsSource(sourcePath: string): boolean {
@@ -403,7 +422,7 @@ function commonJsAliasUnresolved(
   importerPath: string,
 ): boolean {
   const original = dependency.original ?? dependency.path
-  if (/^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i.test(original)) return false
+  if (nonAliasSpecifier.test(original)) return false
 
   try {
     nodeModule.createRequire(importerPath).resolve(original)
@@ -460,12 +479,19 @@ export async function loadProjectDefinitionRuntimeModules(
     const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
+    const staticAliasNames = new Set<string>()
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
+      for (const dependency of input.imports) {
+        if (!isStaticAliasImport(dependency)) continue
+        const original = dependency.original ?? dependency.path
+        staticAliasNames.add(original)
+        staticAliasNames.add(packageRootOf(original))
+      }
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) {
         if (!isBunRuntime() && isCommonJsSource(sourcePath) && input.imports.some(dependency => commonJsAliasUnresolved(dependency, sourcePath))) nativeGraph = false
@@ -492,7 +518,7 @@ export async function loadProjectDefinitionRuntimeModules(
         try {
           definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
         } catch (error) {
-          if (!nativeSourceLoader || !isUnresolvedImportError(error)) throw error
+          if (!nativeSourceLoader || !isUnresolvedStaticAliasError(error, staticAliasNames)) throw error
           unresolved.push(sourcePath)
         }
       }

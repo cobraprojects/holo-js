@@ -64,7 +64,32 @@ console.log(JSON.stringify({ title: loaded.job.title, shared: direct !== undefin
 }
 
 async function readSideEffectLog(projectRoot: string): Promise<string[]> {
-  return (await readFile(join(projectRoot, 'side-effects.log'), 'utf8')).trim().split('\n')
+  const contents = (await readFile(join(projectRoot, 'side-effects.log'), 'utf8').catch(() => '')).trim()
+  return contents ? contents.split('\n') : []
+}
+
+async function loadDefinitionChildOutcome(
+  projectRoot: string,
+  definitionPath: string,
+  runtime: { readonly command: string, readonly args: readonly string[], readonly env: Record<string, string> },
+): Promise<{ loaded: boolean, code?: string, message?: string }> {
+  const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+  const childPath = join(projectRoot, 'child.mjs')
+  await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+try {
+  const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+  await importDefinition(${JSON.stringify(definitionPath)})
+  console.log(JSON.stringify({ loaded: true }))
+} catch (error) {
+  console.log(JSON.stringify({ loaded: false, code: error.code ?? null, message: String(error.message) }))
+}
+`)
+  const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' }
+  delete env.TSX_TSCONFIG_PATH
+  const { stdout } = await promisify(execFile)(runtime.command, [...runtime.args, childPath], { cwd: projectRoot, env: { ...env, HOLO_SIDE_EFFECT_LOG: join(projectRoot, 'side-effects.log'), ...runtime.env } })
+  const outcome = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { loaded: boolean, code?: string, message?: string }
+  return { ...outcome, code: outcome.code ?? undefined }
 }
 
 const sideEffectDefinition = "import { appendFileSync } from 'node:fs'\nimport { Post } from '@/models/Post'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'ran\\n')\nexport const job = { title: Post.title }\n"
@@ -333,6 +358,34 @@ console.log(JSON.stringify({ firstShared: first.first === direct.first, later: l
 
       expect(result).toEqual({ firstShared: true, later: 'post' })
       expect((await readSideEffectLog(projectRoot)).sort()).toEqual(['first ran', 'later ran'])
+    }, 30_000)
+  })
+
+  describe('rejects a missing module that is not a static alias import without running the definition twice', () => {
+    const missingPackageRows = [
+      { label: 'a static import of a missing package', definition: "import 'missing-pkg'\nimport { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'ran\\n')\nexport const job = {}\n", runs: [] as string[] },
+      { label: 'a dynamic import of a missing package after a side effect', definition: "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'ran\\n')\nawait import('missing-pkg')\nexport const job = {}\n", runs: ['ran'] },
+    ]
+
+    it.each(missingPackageRows)('under tsx in a module project: $label', async ({ definition, runs }) => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition })
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const outcome = await loadDefinitionChildOutcome(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
+      expect(outcome.message).toContain('missing-pkg')
+      expect(await readSideEffectLog(projectRoot)).toEqual(runs)
+    }, 30_000)
+
+    it.skipIf(!bunAvailable).each(missingPackageRows)('under Bun: $label', async ({ definition, runs }) => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition })
+
+      const outcome = await loadDefinitionChildOutcome(projectRoot, definitionPath, { command: 'bun', args: [], env: {} })
+
+      expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
+      expect(outcome.message).toContain('missing-pkg')
+      expect(await readSideEffectLog(projectRoot)).toEqual(runs)
     }, 30_000)
   })
 
