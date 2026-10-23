@@ -1,8 +1,8 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
-import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
 import * as holoConfigModule from '@holo-js/config'
@@ -362,13 +362,135 @@ function holoPackageSharesRuntime(packageName: string, importerPath: string): bo
   return runtimeEntry !== undefined && runtimeEntry === packageEntryFromBase(importerPath, packageName)
 }
 
-function importRequiresBundle(
-  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+function holoImportRequiresBundle(
+  dependency: { readonly path: string, readonly original?: string },
   importerPath: string,
 ): boolean {
+  const holoPackage = /^@holo-js\/[^/]+/.exec(dependency.original ?? dependency.path)?.[0]
+  return holoPackage !== undefined && !holoPackageSharesRuntime(holoPackage, importerPath)
+}
+
+function isBunRuntime(): boolean {
+  return typeof globalThis === 'object' && 'Bun' in globalThis
+}
+
+const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
+
+type MetafileImport = {
+  readonly path: string
+  readonly kind: string
+  readonly external?: boolean
+  readonly original?: string
+}
+
+function isStaticProjectImport(dependency: MetafileImport, importerPath: string): boolean {
+  const specifier = dependency.original ?? dependency.path
+  return (dependency.kind === 'import-statement' || dependency.kind === 'require-call')
+    && !nonAliasSpecifier.test(specifier) && !packageImportsDeclares(specifier, importerPath)
+}
+
+function isDynamicAliasImport(dependency: MetafileImport, importerPath: string): boolean {
+  const specifier = dependency.original ?? dependency.path
+  return dependency.kind === 'dynamic-import' && dependency.external !== true
+    && !nonAliasSpecifier.test(specifier) && !packageImportsDeclares(specifier, importerPath)
+}
+
+function isCommonJsSource(sourcePath: string): boolean {
+  if (/\.m[jt]s$/.test(sourcePath)) return false
+  if (/\.c[jt]s$/.test(sourcePath)) return true
+
+  for (let directory = dirname(sourcePath); ; directory = dirname(directory)) {
+    const manifest = join(directory, 'package.json')
+    if (existsSync(manifest)) return JSON.parse(readFileSync(manifest, 'utf8')).type !== 'module'
+    if (dirname(directory) === directory) return true
+  }
+}
+
+type BunResolver = { resolveSync(specifier: string, parent: string): string }
+
+function resolveWithActiveLoader(specifier: string, importerPath: string): string | undefined {
+  try {
+    if (isBunRuntime()) return (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
+    if (isCommonJsSource(importerPath)) return nodeModule.createRequire(importerPath).resolve(specifier)
+    const url = import.meta.resolve(specifier)
+    return url.startsWith('file:') ? fileURLToPath(url) : url
+  } catch {
+    return undefined
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    return false
+  }
+}
+
+function packageNameOf(specifier: string): string {
+  const [scopeOrName = '', name] = specifier.split('/')
+  return scopeOrName.startsWith('@') && name ? `${scopeOrName}/${name}` : scopeOrName
+}
+
+function nearestPackageManifest(importerPath: string): Record<string, unknown> | undefined {
+  for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
+    const manifest = join(directory, 'package.json')
+    if (existsSync(manifest)) {
+      try {
+        return JSON.parse(readFileSync(manifest, 'utf8'))
+      } catch {
+        return undefined
+      }
+    }
+    if (dirname(directory) === directory) return undefined
+  }
+}
+
+function nearestPackageName(importerPath: string): string | undefined {
+  const name = nearestPackageManifest(importerPath)?.name
+  return typeof name === 'string' ? name : undefined
+}
+
+function packageImportsDeclares(specifier: string, importerPath: string): boolean {
+  if (!specifier.startsWith('#')) return false
+
+  const imports = nearestPackageManifest(importerPath)?.imports
+  if (typeof imports !== 'object' || imports === null) return false
+
+  return Object.keys(imports).some(key => {
+    const star = key.indexOf('*')
+    if (star < 0) return key === specifier
+    return specifier.startsWith(key.slice(0, star)) && specifier.endsWith(key.slice(star + 1))
+  })
+}
+
+function packageVisibleFrom(importerPath: string, specifier: string): boolean {
+  if (nodeModule.isBuiltin(specifier)) return true
+
+  const name = packageNameOf(specifier)
+  if (nearestPackageName(importerPath) === name) return true
+
+  for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
+    if (existsSync(join(directory, 'node_modules', name))) return true
+    if (dirname(directory) === directory) return false
+  }
+}
+
+function staticImportMatchesBundle(dependency: MetafileImport, importerPath: string, projectRoot: string): boolean {
+  const specifier = dependency.original ?? dependency.path
+  if (dependency.external === true && packageVisibleFrom(importerPath, specifier)) return true
+
+  const resolved = resolveWithActiveLoader(specifier, importerPath)
+  if (resolved === undefined) return false
+
+  return dependency.external === true || samePath(resolved, resolve(projectRoot, dependency.path))
+}
+
+function importNeedsNodeResolutionBundle(
+  dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
+): boolean {
   const original = dependency.original ?? dependency.path
-  const holoPackage = /^@holo-js\/[^/]+/.exec(original)?.[0]
-  if (holoPackage) return !holoPackageSharesRuntime(holoPackage, importerPath)
+  if (/^@holo-js\//.test(original)) return false
 
   return /^[@~]\//.test(original)
     || !dependency.external && (
@@ -391,17 +513,22 @@ export async function loadProjectDefinitionRuntimeModules(
     await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
     bundled = await bundleRuntimeModule(projectRoot, entryPath, true)
     const sources = new Map<string, string>()
-    const nativeSourceLoader = typeof globalThis === 'object' && 'Bun' in globalThis
-      || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
+    const nativeSourceLoader = isBunRuntime()
+      || [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)].some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
+    const projectImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
       if (sourcePath === entryPath) continue
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
-      if (input.imports.some(dependency => importRequiresBundle(dependency, sourcePath))) nativeGraph = false
+      for (const dependency of input.imports) {
+        if (isStaticProjectImport(dependency, sourcePath) || isDynamicAliasImport(dependency, sourcePath)) projectImports.push({ dependency, importerPath: sourcePath })
+      }
+      if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
+      if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
         try {
@@ -412,12 +539,17 @@ export async function loadProjectDefinitionRuntimeModules(
         }
       }
     }
+    if (nativeSourceLoader && projectImports.some(({ dependency, importerPath }) => !staticImportMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
-    if (nativeGraph) await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(pathToFileURL(sourcePath).href)}`).join('\n'), 'utf8')
-    const modules = await importModule<Record<string, unknown>>(pathToFileURL(nativeGraph ? entryPath : bundled.path).href)
-    const definitions = new Map(entryPaths.map((sourcePath, index) => [sourcePath, modules[`definition${index}`]]))
+    const definitions = new Map<string, unknown>()
+    if (nativeGraph) {
+      for (const sourcePath of entryPaths) definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
+    } else {
+      const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundled.path).href)
+      entryPaths.forEach((sourcePath, index) => definitions.set(sourcePath, modules[`definition${index}`]))
+    }
     return async sourcePath => {
       if (!definitions.has(sourcePath)) throw new Error(`No discovered definition exists at "${sourcePath}".`)
       return definitions.get(sourcePath)
