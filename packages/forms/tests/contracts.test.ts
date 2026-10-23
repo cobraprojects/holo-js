@@ -602,6 +602,28 @@ describe('@holo-js/forms contracts', () => {
     }
   })
 
+  it('answers an oversized form body with a 413 failure, with or without throttling', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const oversized = () => new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ email: 'ava@example.com', padding: 'x'.repeat(2 * 1024 * 1024) }),
+    })
+
+    const result = await safeParse(oversized(), login)
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected the oversized body to fail.')
+    }
+    expect(result.fail()).toMatchObject({ status: 413 })
+    await expect(validate(oversized(), login)).rejects.toMatchObject({ status: 413 })
+  })
+
   it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
     const login = schema({
       email: field.string().required().transform(value => value.trim().toLowerCase()),
