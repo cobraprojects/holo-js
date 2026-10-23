@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { readBoundedRequestFormData, readBoundedRequestJson } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData, readBoundedRequestJson } from '@holo-js/kernel'
 import { parse } from '@holo-js/validation'
 import { requireBroadcastCredentials } from './config'
 import {
@@ -513,6 +513,14 @@ export async function renderBroadcastAuthResponse(
   try {
     payload = await parseBroadcastAuthEndpointPayload(request)
   } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) {
+      return jsonResponse({
+        ok: false,
+        error: 'invalid-request',
+        message: error.message,
+      }, 413)
+    }
+
     const message = error instanceof Error ? error.message : 'Invalid broadcast auth request.'
     if (message === 'method-not-allowed') {
       return jsonResponse({

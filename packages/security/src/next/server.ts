@@ -1,4 +1,4 @@
-import { readBoundedRequestFormData } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData } from '@holo-js/kernel'
 import { protect } from '../index'
 import { cors } from '../cors'
 import { getSecurityRuntime } from '../runtime'
@@ -96,7 +96,8 @@ async function actionRequest(request: Request): Promise<Request> {
       headers.set(header, token)
       return new Request(request.clone(), { headers })
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) throw error
     return request
   }
   return request

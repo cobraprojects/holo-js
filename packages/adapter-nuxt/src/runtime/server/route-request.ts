@@ -3,6 +3,7 @@ import { createError, getHeaders, getRequestHeader, getRequestURL } from '#impor
 import { HoloRequestBodyTooLargeError, readBoundedNodeRequestBody } from '@holo-js/kernel'
 
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
+  if (event._requestBody instanceof Uint8Array) return event._requestBody
   try {
     return await readBoundedNodeRequestBody(event.node.req, undefined, getRequestHeader(event, 'content-length'))
   } catch (error) {

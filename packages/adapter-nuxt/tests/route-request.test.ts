@@ -84,4 +84,17 @@ describe('Nuxt route request', () => {
 
     expect(status).toBe(413)
   })
+
+  it('reuses a request body that the CSRF handler already buffered on the event', async () => {
+    const app = createApp()
+    app.use(defineEventHandler(async (event) => {
+      event._requestBody = new TextEncoder().encode('{"name":"buffered"}')
+      const request = await createWebRequest(event)
+      return { body: await request.text() }
+    }))
+    const base = await serve(app)
+    const response = await postRaw(base, { host: 'app.test', 'content-type': 'application/json' }, '{"name":"stream"}')
+
+    expect(response.body).toBe('{"name":"buffered"}')
+  })
 })
