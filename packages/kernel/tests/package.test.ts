@@ -19,7 +19,7 @@ function run(command: string, args: readonly string[], cwd: string): string {
     throw new Error([
       failure.stdout?.toString(),
       failure.stderr?.toString(),
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   }
 }
 

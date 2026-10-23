@@ -47,7 +47,7 @@ void [syncClerkIdentity, syncWorkosIdentity, authenticateSocial]
       })
     } catch (error) {
       const failure = error as Error & { readonly stdout?: string, readonly stderr?: string }
-      throw new Error([failure.message, failure.stdout, failure.stderr].filter(Boolean).join('\n'))
+      throw new Error([failure.message, failure.stdout, failure.stderr].filter(Boolean).join('\n'), { cause: error })
     }
   } finally {
     await rm(root, { recursive: true, force: true })

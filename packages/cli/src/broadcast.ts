@@ -231,7 +231,7 @@ export async function loadBroadcastCliModule(projectRoot: string): Promise<Broad
     /* v8 ignore next -- defensive String(error) fallback for non-Error throws */
     const details = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `Unable to load @holo-js/broadcast from ${projectRoot}. Install it with "holo install broadcast". ${details}`,
+      `Unable to load @holo-js/broadcast from ${projectRoot}. Install it with "holo install broadcast". ${details}`, { cause: error },
     )
   }
 }

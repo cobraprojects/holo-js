@@ -297,10 +297,10 @@ async function retireRecordLease(lockPath: string, owner: RecordLockOwner): Prom
   return 'retired'
 }
 
-async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner, failure: unknown): Promise<void> {
+async function retryRecordLockRelease(recordPath: string, lockPath: string, owner: RecordLockOwner): Promise<void> {
   const deadline = Date.now() + BUSY_FILE_RETRY_MS
   let delayMs = RECORD_LOCK_RELEASE_RETRY_FIRST_MS
-  let lastError = failure
+  let lastError: unknown
   for (;;) {
     await delay(delayMs, undefined, { ref: false })
     if ((await retireRecordLease(lockPath, owner)) !== 'busy') return
@@ -316,8 +316,8 @@ async function retryRecordLockRelease(recordPath: string, lockPath: string, owne
   )
 }
 
-function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner, failure: unknown): void {
-  const retry: Promise<void> = retryRecordLockRelease(recordPath, lockPath, owner, failure)
+function scheduleRecordLockReleaseRetry(recordPath: string, lockPath: string, owner: RecordLockOwner): void {
+  const retry: Promise<void> = retryRecordLockRelease(recordPath, lockPath, owner)
     .catch(error => reportError(error, { capability: 'session', operation: 'file.releaseLock' }))
     .finally(() => { pendingRecordLockReleaseRetries.delete(retry) })
   pendingRecordLockReleaseRetries.add(retry)
@@ -332,7 +332,7 @@ async function releaseRecordLock(recordPath: string, lockPath: string, owner: Re
       retirementFailure = { error }
     }
     const publish = await markRecordLockReleased(lockPath, owner)
-    if (!publish.published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner, publish.error)
+    if (!publish.published) scheduleRecordLockReleaseRetry(recordPath, lockPath, owner)
     if (retirementFailure) throw retirementFailure.error
     if (publish.published) {
       reportError(

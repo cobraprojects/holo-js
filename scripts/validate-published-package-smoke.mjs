@@ -126,7 +126,7 @@ async function assertProductionApp(appRoot, app, env) {
     throw new Error([
       error instanceof Error ? error.message : String(error),
       output.join(''),
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), { cause: error })
   } finally {
     await stopServer(server)
   }

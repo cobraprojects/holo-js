@@ -141,7 +141,6 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
       strict: true,
       noEmit: true,
       skipLibCheck: true,
-      baseUrl: '.',
       jsx: 'preserve',
       paths: {
         '~/*': ['./*'],

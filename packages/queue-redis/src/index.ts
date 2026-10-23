@@ -116,7 +116,7 @@ function parseClusterNodeUrl(url: string, label: string): RedisClusterStartupNod
       ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
     }
   } catch (error) {
-    throw new Error(`[Holo Queue] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`[Holo Queue] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
 }
 

@@ -114,7 +114,7 @@ function normalizeUrl(value: string | undefined, label: string): string | undefi
       throw error
     }
 
-    throw new Error(`[Holo Redis] ${label} must be a valid redis:// or rediss:// URL.`)
+    throw new Error(`[Holo Redis] ${label} must be a valid redis:// or rediss:// URL.`, { cause: error })
   }
 
   return normalized

@@ -806,7 +806,7 @@ function parseRedisClusterNodeUrl(url: string, label: string): { readonly host: 
       ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
     }
   } catch (error) {
-    throw new Error(`[@holo-js/broadcast] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`[@holo-js/broadcast] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
 }
 
@@ -851,7 +851,7 @@ async function loadRedisScalingModule(
     const message = error instanceof Error ? error.message : String(error)
     if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND' || /Cannot find module|Failed to resolve module/i.test(message)) {
       throw new Error(
-        '[@holo-js/broadcast] Redis scaling requires the "ioredis" package. Install it in your project dependencies to enable worker scaling.',
+        '[@holo-js/broadcast] Redis scaling requires the "ioredis" package. Install it in your project dependencies to enable worker scaling.', { cause: error },
       )
     }
 
@@ -2754,7 +2754,7 @@ export async function startBroadcastWorker(
     } catch (error) {
       await runtime.close()
       const details = error instanceof Error ? error.message : String(error)
-      throw new Error(`[@holo-js/broadcast] Node runtime requires the "ws" package for broadcast:work. ${details}`)
+      throw new Error(`[@holo-js/broadcast] Node runtime requires the "ws" package for broadcast:work. ${details}`, { cause: error })
     }
     const WebSocketServer = (nodeWsModule as NodeWebSocketModuleLike).WebSocketServer
     if (typeof WebSocketServer !== 'function') {

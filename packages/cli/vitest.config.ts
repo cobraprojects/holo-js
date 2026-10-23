@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { workspaceTestConfig } from '../../vitest.shared'
+import { workspaceTestConfig } from '../../vitest.shared.ts'
 
 const includeCliIntegration = process.env.HOLO_CLI_INCLUDE_INTEGRATION === '1'
 

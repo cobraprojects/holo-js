@@ -279,7 +279,7 @@ async function acquireBucketLock(
       }
 
       if (Date.now() >= deadline) {
-        throw new Error(`[@holo-js/security] Timed out waiting for file rate-limit lock "${lockPath}".`)
+        throw new Error(`[@holo-js/security] Timed out waiting for file rate-limit lock "${lockPath}".`, { cause: error })
       }
 
       await sleep(options.retryDelayMs)

@@ -464,9 +464,11 @@ export function defineNotification<
   TNotifiable,
   const TBuild extends NotificationBuildFactories<TNotifiable>,
 >(
-  definition: NotificationDefinitionInput<TNotifiable, TBuild>,
+  definition: NotificationDefinitionInput<TNotifiable, TBuild> & {
+    build: TBuild & NotificationBuildFactories<TNotifiable>
+  },
 ): NotificationDefinition<TNotifiable, TBuild> {
-  return normalizeNotificationDefinition(definition)
+  return normalizeNotificationDefinition<TNotifiable, TBuild>(definition)
 }
 
 export function createAnonymousNotificationTarget<

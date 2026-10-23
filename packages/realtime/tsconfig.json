@@ -9,8 +9,7 @@
       "@holo-js/broadcast/client-config": [
         "../broadcast/src/client-config.ts"
       ]
-    },
-    "baseUrl": "."
+    }
   },
   "include": [
     "src/**/*"

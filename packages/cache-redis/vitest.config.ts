@@ -1,5 +1,5 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { workspaceTestConfig } from '../../vitest.shared'
+import { workspaceTestConfig } from '../../vitest.shared.ts'
 
 const runRedisIntegration = process.env.HOLO_REDIS_INTEGRATION === '1'
 

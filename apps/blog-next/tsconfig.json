@@ -6,7 +6,6 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
     "jsx": "react-jsx",
     "paths": {
       "~/*": [

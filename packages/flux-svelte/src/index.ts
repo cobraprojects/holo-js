@@ -64,7 +64,7 @@ function registerCleanup<TManifest extends GeneratedBroadcastManifest = Generate
   const runCleanup = () => {
     cleanup()
   }
-  let registered = false
+  let registered: boolean
 
   try {
     onDestroy(runCleanup)

@@ -12,13 +12,10 @@ async function main() {
   const groups = await collectGeneratedLintGroups()
 
   for (const group of groups) {
-    let retriedAfterCacheReset = false
-
     try {
       await run(group)
     } catch (error) {
-      if (!retriedAfterCacheReset && shouldResetCache(error)) {
-        retriedAfterCacheReset = true
+      if (shouldResetCache(error)) {
         await clearCache(cacheLocation)
         await run(group)
         continue

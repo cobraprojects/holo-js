@@ -65,7 +65,7 @@ export async function cacheProjectConfig(
   try {
     return await cacheWriter(projectRoot, { processEnv: process.env })
   } catch (error) {
-    throw new Error(error instanceof Error && error.message ? error.message : 'Failed to cache config.')
+    throw new Error(error instanceof Error && error.message ? error.message : 'Failed to cache config.', { cause: error })
   }
 }
 

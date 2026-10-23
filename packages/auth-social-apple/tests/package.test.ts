@@ -605,7 +605,6 @@ describe('@holo-js/auth-social-apple', () => {
 
   it('keeps the last good Apple JWKS when a refresh fails within the grace period', async () => {
     let idToken = ''
-    let rotatedToken = ''
     let jwksHealthy = true
     let jwksRequests = 0
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -635,7 +634,7 @@ describe('@holo-js/auth-social-apple', () => {
 
       jwksHealthy = false
       vi.setSystemTime(new Date('2030-01-01T00:05:00Z'))
-      rotatedToken = createToken({ sub: 'rotated-user' }, { kid: 'apple-rotated-key', privateKey: invalidKeyPair.privateKey })
+      const rotatedToken = createToken({ sub: 'rotated-user' }, { kid: 'apple-rotated-key', privateKey: invalidKeyPair.privateKey })
       idToken = rotatedToken
       await expect(exchangeCode({ clientId: 'client' })).rejects.toThrow()
       expect(jwksRequests).toBe(2)

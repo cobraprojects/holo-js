@@ -682,7 +682,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   schemaDefinition: ValidationSchema<TShape>,
   error: Error & { readonly status: number },
 ): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
-  let values = {} as Partial<InferSchemaData<TShape>>
+  let values: Partial<InferSchemaData<TShape>>
   let flattenedErrors: Record<string, readonly string[]> = {}
 
   try {
