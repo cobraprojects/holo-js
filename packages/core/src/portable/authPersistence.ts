@@ -148,6 +148,7 @@ export function serializeMultiFactorCredentialRecord(record: MultiFactorCredenti
 
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+const PASSWORD_RESET_PRECONDITION_SUPPORT = Symbol.for('holo.auth.passwordResetPreconditionSupport')
 type RehashPasswordIfUnchanged = (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
 type CoreAuthProviderBinding = ReturnType<typeof AuthFeature.authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
@@ -327,6 +328,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
     }),
     passwordResetTokens: Object.freeze({
+      [PASSWORD_RESET_PRECONDITION_SUPPORT]: true,
       async redeem<TResult>(
         record: PasswordResetTokenRecord,
         operation: () => Promise<TResult>,

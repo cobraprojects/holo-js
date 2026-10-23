@@ -2860,6 +2860,8 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   await rotateGuardSession(bindings, retainedGuard)
 }
 
+const PASSWORD_RESET_PRECONDITION_SUPPORT = Symbol.for('holo.auth.passwordResetPreconditionSupport')
+
 async function assertPasswordResetCanStart(bindings: RuntimeBindings, record: PasswordResetTokenRecord): Promise<void> {
   if (!bindings.sessionRevocations) {
     throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
@@ -2884,7 +2886,8 @@ async function assertResetUserCanComplete(
     requireRememberTokenUpdates(adapter, providerName)
   }
 
-  if (!await findSessionGuardOwnedBy(bindings, providerName, userId)) {
+  const retainedGuard = await findSessionGuardOwnedBy(bindings, providerName, userId)
+  if (!retainedGuard) {
     return
   }
 
@@ -2892,9 +2895,7 @@ async function assertResetUserCanComplete(
     throw new Error('[@holo-js/auth] Existing auth sessions require state-preserving session rotation.')
   }
   await assertResponseCookiesWritable(bindings)
-  for (const guardName of sessionGuardNames(bindings)) {
-    await checkRememberWriteScope(bindings, guardName)
-  }
+  await checkRememberWriteScope(bindings, retainedGuard)
 }
 
 async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
@@ -2924,6 +2925,10 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       if (!user) return
       await assertResetUserCanComplete(getRuntimeBindings(), record.provider, adapter, user, requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.'))
     }
+    const supportsPreconditions = Reflect.get(store, PASSWORD_RESET_PRECONDITION_SUPPORT) === true
+    if (!supportsPreconditions) {
+      await checkUserPreconditions()
+    }
     const updated = await store.redeem(record, async () => {
       await store.deleteByEmail(record.provider, record.email, { table: record.table })
       const { adapter } = getProviderAdapter(record.provider)
@@ -2940,7 +2945,7 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       await rotateRememberToken(record.provider, userId)
       await signOutOtherSessionsAfterPasswordReset(record.provider, userId)
       return resetUser
-    }, checkUserPreconditions)
+    }, supportsPreconditions ? checkUserPreconditions : undefined)
     if (!updated) {
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
