@@ -30,7 +30,7 @@
     "test": "vitest --run"
   },
   "engines": {
-    "node": "^22.14.0 || ^24.0.0 || ^26.0.0"
+    "node": "^22.18.0 || ^24.0.0 || ^26.0.0"
   },
   "peerDependencies": {
     "@holo-js/db": "catalog:"
