@@ -188,6 +188,65 @@ console.log(JSON.stringify({ shared: loaded.job === direct.job }))
     expect(result.shared).toBe(true)
   }, 30_000)
 
+  it('bundles app definitions that import a path alias when the project has no root tsconfig', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    await mkdir(join(projectRoot, 'models'), { recursive: true })
+    await mkdir(join(projectRoot, 'jobs'), { recursive: true })
+    await writeFile(join(projectRoot, 'models/Post.ts'), "export const Post = { title: 'post' }\n")
+    const definitionPath = join(projectRoot, 'jobs/report.ts')
+    await writeFile(definitionPath, "import { Post } from '@/models/Post'\nexport const job = { title: Post.title }\n")
+    vi.stubGlobal('Bun', {})
+
+    try {
+      const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
+      const definition = await importDefinition(definitionPath) as { job: { title: string } }
+
+      expect(definition.job.title).toBe('post')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([
+    { label: 'the root tsconfig defines the alias', tsconfig: true, override: false, bundled: false },
+    { label: 'the project has no root tsconfig', tsconfig: false, override: false, bundled: true },
+    { label: 'TSX_TSCONFIG_PATH points tsx at another tsconfig', tsconfig: true, override: true, bundled: true },
+  ])('loads a definition that imports a path alias under tsx when $label', async ({ tsconfig, override, bundled }) => {
+    const projectRoot = await realpath(await createTempProject())
+    await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
+    await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
+    await mkdir(join(projectRoot, 'models'), { recursive: true })
+    await mkdir(join(projectRoot, 'jobs'), { recursive: true })
+    await writeFile(join(projectRoot, 'models/Post.ts'), "export const Post = { title: 'post' }\n")
+    const definitionPath = join(projectRoot, 'jobs/report.ts')
+    await writeFile(definitionPath, "import { Post } from '@/models/Post'\nexport const job = { title: Post.title }\n")
+    if (tsconfig) {
+      await writeFile(join(projectRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['./*'] } } }))
+    }
+    await writeFile(join(projectRoot, 'tsconfig.tsx.json'), JSON.stringify({ compilerOptions: {} }))
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+const loaded = await importDefinition(${JSON.stringify(definitionPath)})
+let direct
+try {
+  direct = await import(${JSON.stringify(pathToFileURL(definitionPath).href)})
+} catch {}
+console.log(JSON.stringify({ title: loaded.job.title, shared: direct !== undefined && loaded.job === direct.job }))
+`)
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' }
+    delete env.TSX_TSCONFIG_PATH
+    if (override) env.TSX_TSCONFIG_PATH = join(projectRoot, 'tsconfig.tsx.json')
+    const { stdout } = await promisify(execFile)(process.execPath, ['--import', tsxLoaderUrl, childPath], { cwd: projectRoot, env })
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { title: string, shared: boolean }
+
+    expect(result.title).toBe('post')
+    expect(result.shared).toBe(!bundled)
+  }, 30_000)
+
   it.each([
     { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },
     { label: '--preserve-symlinks', args: ['--preserve-symlinks'], env: {}, bundled: true },

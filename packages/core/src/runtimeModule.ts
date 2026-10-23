@@ -370,6 +370,22 @@ function holoImportRequiresBundle(
   return holoPackage !== undefined && !holoPackageSharesRuntime(holoPackage, importerPath)
 }
 
+function isBunRuntime(): boolean {
+  return typeof globalThis === 'object' && 'Bun' in globalThis
+}
+
+function nativeLoaderResolvesProjectAliases(projectRoot: string): boolean {
+  if (!existsSync(join(projectRoot, 'tsconfig.json'))) return false
+
+  return isBunRuntime() || !process.env.TSX_TSCONFIG_PATH
+}
+
+function importsProjectAlias(
+  dependency: { readonly path: string, readonly original?: string },
+): boolean {
+  return /^[@~]\//.test(dependency.original ?? dependency.path)
+}
+
 function importNeedsNodeResolutionBundle(
   dependency: { readonly path: string, readonly external?: boolean, readonly original?: string },
 ): boolean {
@@ -397,8 +413,9 @@ export async function loadProjectDefinitionRuntimeModules(
     await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
     bundled = await bundleRuntimeModule(projectRoot, entryPath, true)
     const sources = new Map<string, string>()
-    const nativeSourceLoader = typeof globalThis === 'object' && 'Bun' in globalThis
+    const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
+    const nativeAliases = nativeSourceLoader && nativeLoaderResolvesProjectAliases(projectRoot)
     let nativeGraph = true
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
@@ -407,7 +424,10 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
-      if (nativeSourceLoader) continue
+      if (nativeSourceLoader) {
+        if (!nativeAliases && input.imports.some(dependency => importsProjectAlias(dependency))) nativeGraph = false
+        continue
+      }
       if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
