@@ -70,7 +70,7 @@ async function readSideEffectLog(projectRoot: string): Promise<string[]> {
 
 async function loadDefinitionChildOutcome(
   projectRoot: string,
-  definitionPath: string,
+  definitionPaths: readonly string[],
   runtime: { readonly command: string, readonly args: readonly string[], readonly env: Record<string, string> },
 ): Promise<{ loaded: boolean, code?: string, message?: string }> {
   const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
@@ -78,8 +78,9 @@ async function loadDefinitionChildOutcome(
   await writeFile(childPath, `
 const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
 try {
-  const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
-  await importDefinition(${JSON.stringify(definitionPath)})
+  const paths = ${JSON.stringify(definitionPaths)}
+  const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, paths)
+  for (const path of paths) await importDefinition(path)
   console.log(JSON.stringify({ loaded: true }))
 } catch (error) {
   console.log(JSON.stringify({ loaded: false, code: error.code ?? null, message: String(error.message) }))
@@ -372,7 +373,7 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
       const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition })
       const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
 
-      const outcome = await loadDefinitionChildOutcome(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+      const outcome = await loadDefinitionChildOutcome(projectRoot, [definitionPath], { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
 
       expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
       expect(outcome.message).toContain('missing-pkg')
@@ -382,11 +383,80 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     it.skipIf(!bunAvailable).each(missingPackageRows)('under Bun: $label', async ({ definition, runs }) => {
       const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition })
 
-      const outcome = await loadDefinitionChildOutcome(projectRoot, definitionPath, { command: 'bun', args: [], env: {} })
+      const outcome = await loadDefinitionChildOutcome(projectRoot, [definitionPath], { command: 'bun', args: [], env: {} })
 
       expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
       expect(outcome.message).toContain('missing-pkg')
       expect(await readSideEffectLog(projectRoot)).toEqual(runs)
+    }, 30_000)
+  })
+
+  describe('loads every definition as one native set or bundles them together', () => {
+    const firstSource = "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'first ran\\n')\nexport const first = { name: 'first' }\n"
+    const missingPackageSource = "import 'missing-pkg'\nexport const second = { name: 'second' }\n"
+
+    it('does not run an earlier definition when a later one statically imports a missing package, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: firstSource })
+      const secondPath = join(projectRoot, 'jobs/second.ts')
+      await writeFile(secondPath, missingPackageSource)
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const outcome = await loadDefinitionChildOutcome(projectRoot, [definitionPath, secondPath], { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
+      expect(outcome.message).toContain('missing-pkg')
+      expect(await readSideEffectLog(projectRoot)).toEqual([])
+    }, 30_000)
+
+    it.skipIf(!bunAvailable)('does not run an earlier definition when a later one statically imports a missing package, under Bun', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: firstSource })
+      const secondPath = join(projectRoot, 'jobs/second.ts')
+      await writeFile(secondPath, missingPackageSource)
+
+      const outcome = await loadDefinitionChildOutcome(projectRoot, [definitionPath, secondPath], { command: 'bun', args: [], env: {} })
+
+      expect(outcome).toMatchObject({ loaded: false, code: 'ERR_MODULE_NOT_FOUND' })
+      expect(outcome.message).toContain('missing-pkg')
+      expect(await readSideEffectLog(projectRoot)).toEqual([])
+    }, 30_000)
+
+    it('bundles when the bundler and the active tsx loader resolve an alias to different files', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        specifier: '@/x',
+        files: {
+          'a/x.ts': "export const Post = { title: 'a' }\n",
+          'b/x.ts': "export const Post = { title: 'b' }\n",
+          'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/x': ['./a/x.ts'] } } }),
+          'tsconfig.tsx.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/x': ['./b/x.ts'] } } }),
+        },
+      })
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, {
+        command: process.execPath,
+        args: ['--import', tsxLoaderUrl],
+        env: { TSX_TSCONFIG_PATH: join(projectRoot, 'tsconfig.tsx.json') },
+      })
+
+      expect(result.title).toBe('a')
+      expect(result.shared).toBe(false)
+    }, 30_000)
+
+    it.skipIf(!bunAvailable)('bundles when the bundler and Bun resolve an alias to different files', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        specifier: '@/x',
+        files: {
+          'a/x.ts': "export const Post = { title: 'a' }\n",
+          'b/x.ts': "export const Post = { title: 'b' }\n",
+          'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/x': ['./a/x.ts'] } } }),
+          'tsconfig.b.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/x': ['./b/x.ts'] } } }),
+        },
+      })
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: 'bun', args: ['--tsconfig-override', 'tsconfig.b.json'], env: {} })
+
+      expect(result.title).toBe('a')
+      expect(result.shared).toBe(false)
     }, 30_000)
   })
 

@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -376,14 +376,16 @@ function isBunRuntime(): boolean {
 
 const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
 
-function isStaticAliasImport(dependency: {
+type MetafileImport = {
   readonly path: string
   readonly kind: string
   readonly external?: boolean
   readonly original?: string
-}): boolean {
+}
+
+function isStaticProjectImport(dependency: MetafileImport): boolean {
   return (dependency.kind === 'import-statement' || dependency.kind === 'require-call')
-    && !dependency.external && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
+    && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
 }
 
 function isCommonJsSource(sourcePath: string): boolean {
@@ -399,19 +401,30 @@ function isCommonJsSource(sourcePath: string): boolean {
 
 type BunResolver = { resolveSync(specifier: string, parent: string): string }
 
-function activeLoaderResolvesAlias(specifier: string, importerPath: string): boolean {
+function resolveWithActiveLoader(specifier: string, importerPath: string): string | undefined {
   try {
-    if (isBunRuntime()) {
-      (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
-    } else if (isCommonJsSource(importerPath)) {
-      nodeModule.createRequire(importerPath).resolve(specifier)
-    } else {
-      import.meta.resolve(specifier)
-    }
-    return true
+    if (isBunRuntime()) return (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
+    if (isCommonJsSource(importerPath)) return nodeModule.createRequire(importerPath).resolve(specifier)
+    const url = import.meta.resolve(specifier)
+    return url.startsWith('file:') ? fileURLToPath(url) : url
+  } catch {
+    return undefined
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right)
   } catch {
     return false
   }
+}
+
+function activeLoaderMatchesBundle(dependency: MetafileImport, importerPath: string, projectRoot: string): boolean {
+  const resolved = resolveWithActiveLoader(dependency.original ?? dependency.path, importerPath)
+  if (resolved === undefined) return false
+
+  return dependency.external === true || samePath(resolved, resolve(projectRoot, dependency.path))
 }
 
 function importNeedsNodeResolutionBundle(
@@ -444,7 +457,7 @@ export async function loadProjectDefinitionRuntimeModules(
     const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
-    const staticAliases: Array<{ readonly specifier: string, readonly importerPath: string }> = []
+    const staticImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
@@ -452,7 +465,7 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       for (const dependency of input.imports) {
-        if (isStaticAliasImport(dependency)) staticAliases.push({ specifier: dependency.original ?? dependency.path, importerPath: sourcePath })
+        if (isStaticProjectImport(dependency)) staticImports.push({ dependency, importerPath: sourcePath })
       }
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
@@ -467,7 +480,7 @@ export async function loadProjectDefinitionRuntimeModules(
         }
       }
     }
-    if (nativeSourceLoader && staticAliases.some(({ specifier, importerPath }) => !activeLoaderResolvesAlias(specifier, importerPath))) nativeGraph = false
+    if (nativeSourceLoader && staticImports.some(({ dependency, importerPath }) => !activeLoaderMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
