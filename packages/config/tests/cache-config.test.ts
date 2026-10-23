@@ -94,7 +94,7 @@ describe('@holo-js/config cache normalization', () => {
         memory: {
           name: 'memory',
           driver: 'memory',
-          maxEntries: undefined,
+          maxEntries: 10_000,
           prefix: '',
         },
       },

@@ -8,6 +8,7 @@ import {
   createDatabase,
   createDialect,
   resetDB,
+  SecurityError,
   type DatabaseContext,
 } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
@@ -272,5 +273,36 @@ describe('model mass assignment', () => {
     removed.set('code', 'c')
     await removed.forceDelete()
     await expect(db.table('members').get()).resolves.toMatchObject([{ code: 'z', name: 'Ada Lovelace' }])
+  })
+
+  it('reads only own attributes and rejects prototype keys as attribute names', async () => {
+    const db = await openDatabase()
+    await createTestTable(db, accounts)
+    await db.table('accounts').insert({ code: 'a', name: 'Ada' })
+
+    const Account = defineModelFromTable(accounts, { fillable: ['name'], timestamps: false })
+    const account = await Account.findOrFail('a')
+    const prototypeKeys = ['__proto__', 'prototype', 'constructor']
+
+    for (const key of prototypeKeys) {
+      expect(account.get(key as never)).toBeUndefined()
+      expect(() => account.set(key as never, 'x' as never)).toThrow(SecurityError)
+      expect(() => account.fill({ [key]: 'x' } as never)).toThrow(SecurityError)
+      expect(() => account.forceFill({ [key]: 'x' } as never)).toThrow(SecurityError)
+    }
+    expect(() => account.forceFill(JSON.parse('{ "__proto__": { "role": "admin" } }') as never)).toThrow(SecurityError)
+    expect(account.get('role')).toBe('member')
+    expect(Object.getPrototypeOf(account.toAttributes())).toBe(Object.prototype)
+
+    await Account.unguarded(async () => {
+      for (const key of prototypeKeys) {
+        expect(() => account.fill({ [key]: 'x' } as never)).toThrow(SecurityError)
+        expect(() => account.set(key as never, 'x' as never)).toThrow(SecurityError)
+        await expect(Account.create({ [key]: 'x' } as never)).rejects.toThrow(SecurityError)
+        await expect(account.update({ [key]: 'x' } as never)).rejects.toThrow(SecurityError)
+        await expect(Account.where('code', 'a').update(JSON.parse(`{ "${key}": "x" }`) as never)).rejects.toThrow(SecurityError)
+      }
+    })
+    await expect(db.table('accounts').get()).resolves.toEqual([{ code: 'a', name: 'Ada', role: 'member', created_at: null, updated_at: null }])
   })
 })

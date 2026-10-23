@@ -1,6 +1,6 @@
 import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
-import { initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
@@ -176,9 +176,10 @@ class EntityBase<
       throw new HydrationError(`Attribute "${String(key)}" is missing from model "${repo.definition.name}".`)
     }
 
+    const stored = hasAttribute ? this.#attributes[key] : undefined
     const value = typeof repo.resolveAttribute === 'function'
-      ? repo.resolveAttribute(key, this, this.#attributes[key])
-      : this.#attributes[key]
+      ? repo.resolveAttribute(key, this, stored)
+      : stored
     return value as ModelRecord<TTable>[TKey]
   }
 
@@ -200,6 +201,9 @@ class EntityBase<
   }
 
   forceFill(values: Partial<ModelRecord<TTable>>): this {
+    for (const key of Object.keys(values)) {
+      assertAttributeNameAllowed(key)
+    }
     Object.assign(this.#attributes, values)
     return this
   }

@@ -2,6 +2,7 @@ import type { NormalizedHoloDatabaseConfig } from '@holo-js/db'
 import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
 import type {} from '@holo-js/config'
 import { registerConfigNormalizer } from '@holo-js/config/registry'
+import { DEFAULT_CACHE_MEMORY_MAX_ENTRIES } from './memory'
 
 export type CacheDriver = 'memory' | 'file' | 'redis' | 'database' | (string & {})
 
@@ -60,7 +61,7 @@ export interface NormalizedCacheMemoryDriverConfig {
   readonly name: string
   readonly driver: 'memory'
   readonly prefix: string
-  readonly maxEntries?: number
+  readonly maxEntries: number
 }
 
 export interface NormalizedCacheFileDriverConfig {
@@ -132,7 +133,7 @@ export const holoCacheDefaults: Readonly<NormalizedHoloCacheConfig> = Object.fre
     memory: Object.freeze({
       name: 'memory',
       driver: 'memory' as const,
-      maxEntries: undefined,
+      maxEntries: DEFAULT_CACHE_MEMORY_MAX_ENTRIES,
       prefix: DEFAULT_CACHE_PREFIX,
     }),
   }),
@@ -185,7 +186,7 @@ function normalizeDriverConfig(
         name,
         driver: 'memory',
         prefix: resolvePrefix(globalPrefix, memoryConfig.prefix),
-        maxEntries: parseOptionalInteger(memoryConfig.maxEntries, `cache driver "${name}" maxEntries`),
+        maxEntries: parseOptionalInteger(memoryConfig.maxEntries, `cache driver "${name}" maxEntries`) ?? DEFAULT_CACHE_MEMORY_MAX_ENTRIES,
       })
     }
     case 'file': {
