@@ -10,6 +10,7 @@ export {
   HoloRequestUrlError,
   resolveRequestUrl,
   requestUrlInternals,
+  sameOriginRedirectPath,
   type HoloConnectionAddressProvider,
   type HoloForwardedRequest,
   type HoloForwardedRequestResolver,

@@ -89,8 +89,11 @@ export function getFormValueAtPath(root: unknown, path: string): unknown {
   return cursor
 }
 
+const UNSAFE_FORM_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
+
 export function setFormValueAtPath(root: Record<string, unknown>, path: string, value: unknown): void {
   const parts = splitFormPath(path)
+  if (parts.some(part => UNSAFE_FORM_PATH_SEGMENTS.has(part))) return
   let cursor: Record<string, unknown> | unknown[] = root
 
   for (const [index, part] of parts.entries()) {

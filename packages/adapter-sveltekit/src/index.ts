@@ -12,7 +12,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { createCookieWriteUnavailableError, requestUrlInternals } from '@holo-js/kernel'
+import { createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -264,7 +264,7 @@ function createValidationActionRedirectResponse(
   return new Response(null, {
     status: 303,
     headers: {
-      location: event.url?.pathname || '/',
+      location: sameOriginRedirectPath(event.url?.pathname),
       'cache-control': 'no-store',
       'set-cookie': createValidationFlashCookie(event, payload),
     },
