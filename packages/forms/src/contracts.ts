@@ -1,4 +1,4 @@
-import { requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
@@ -694,7 +694,15 @@ export async function safeParse<TShape extends SchemaInputShape>(
     )
   }
 
-  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
+  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition).catch((error: unknown) => {
+    if (error instanceof HoloRequestBodyTooLargeError) return error
+    throw error
+  })
+  if (result instanceof HoloRequestBodyTooLargeError) {
+    return createFailedSubmission(schemaDefinition, {} as Partial<InferSchemaData<TShape>>, {
+      _root: [result.message],
+    }, result.status)
+  }
 
   if (usesSecurityOptions) {
     const request = normalizedRequestInput as Request
