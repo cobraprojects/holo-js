@@ -112,3 +112,57 @@ test('rejects an exception whose expiry is not a real calendar date', async () =
   assert.notEqual(result.code, 0)
   assert.match(result.stderr, /Invalid audit exceptions/)
 })
+
+test('--all blocks moderate advisories in tooling that the published runtime does not reach', async () => {
+  const checkout = await mkdtemp(join(tmpdir(), 'holo-audit-all-'))
+  try {
+    await mkdir(join(checkout, 'packages', 'library'), { recursive: true })
+    await writeFile(join(checkout, 'packages', 'library', 'package.json'), JSON.stringify({
+      name: '@holo-js/library', devDependencies: { tool: '*' },
+    }))
+    await writeFile(join(checkout, 'bun.lock'), JSON.stringify({
+      lockfileVersion: 1,
+      packages: {
+        tool: ['tool@1.0.0', '', { dependencies: { parser: '*' } }],
+        parser: ['parser@1.0.0', '', {}],
+      },
+    }))
+    await writeFile(join(checkout, 'audit.json'), JSON.stringify({
+      parser: [{ severity: 'moderate', vulnerable_versions: '<=1.0.0', title: 'Parser vulnerability', url: 'https://example.test/advisory' }],
+    }))
+    const reported = await execFileAsync(process.execPath, [script, '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+    assert.equal(reported.code, 0, `${reported.stdout}\n${reported.stderr}`)
+    const blocked = await execFileAsync(process.execPath, [script, '--all', '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+    assert.equal(blocked.code, 1, `${blocked.stdout}\n${blocked.stderr}`)
+    assert.match(blocked.stdout, /BLOCK parser@1\.0\.0 \(moderate\)/)
+  } finally {
+    await rm(checkout, { recursive: true, force: true })
+  }
+})
+
+test('an exception for tooling-only code is enforced only by --all', async () => {
+  const checkout = await mkdtemp(join(tmpdir(), 'holo-audit-tooling-'))
+  try {
+    await mkdir(join(checkout, 'packages', 'library'), { recursive: true })
+    await writeFile(join(checkout, 'packages', 'library', 'package.json'), JSON.stringify({
+      name: '@holo-js/library', devDependencies: { parser: '*' },
+    }))
+    await writeFile(join(checkout, 'bun.lock'), JSON.stringify({
+      lockfileVersion: 1,
+      packages: { parser: ['parser@1.0.0', '', {}] },
+    }))
+    await writeFile(join(checkout, 'audit.json'), JSON.stringify({}))
+    await writeFile(join(checkout, 'audit-exceptions.json'), JSON.stringify([{ ...parserException, expires: '2999-01-01' }]))
+    const reported = await execFileAsync(process.execPath, [script, '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+    assert.equal(reported.code, 0, `${reported.stdout}\n${reported.stderr}`)
+    const enforced = await execFileAsync(process.execPath, [script, '--all', '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+    assert.equal(enforced.code, 1, `${enforced.stdout}\n${enforced.stderr}`)
+    assert.match(enforced.stdout, /Unused exception for parser@1\.0\.0/)
+  } finally {
+    await rm(checkout, { recursive: true, force: true })
+  }
+})
