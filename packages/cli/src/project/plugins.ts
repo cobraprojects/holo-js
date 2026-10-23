@@ -292,7 +292,6 @@ function normalizeFrameworkContribution(value: unknown): FrameworkDescriptor | u
 function pluginFrameworkCapabilities(managedBroadcastAuthRoute: boolean): FrameworkDescriptor['capabilities'] {
   return Object.freeze({
     managedBroadcastAuthRoute,
-    exposesConnectionAddress: true,
   })
 }
 

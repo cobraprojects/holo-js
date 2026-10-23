@@ -50,6 +50,32 @@ describe('cli regressions', () => {
     await expect(readFile(ignorePath, 'utf8')).resolves.toBe('*\n!.gitignore\n')
   })
 
+  it.each([
+    ['next', '*'],
+    ['nuxt', ''],
+  ])('writes TRUSTED_PROXIES for an existing %s app to .env, and an empty value to .env.example', async (dependency, localValue) => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies: { [dependency]: '*' } }, null, 2), 'utf8')
+    await writeFile(join(root, '.env'), 'APP_NAME=Fixture\n', 'utf8')
+    await writeFile(join(root, '.env.example'), 'APP_NAME=\n', 'utf8')
+
+    await installSecurityIntoProject(root)
+
+    expect((await readFile(join(root, '.env'), 'utf8')).split('\n')).toContain(`TRUSTED_PROXIES=${localValue}`)
+    expect((await readFile(join(root, '.env.example'), 'utf8')).split('\n')).toContain('TRUSTED_PROXIES=')
+  })
+
+  it('keeps an existing TRUSTED_PROXIES value when security is installed', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies: { next: '*' } }, null, 2), 'utf8')
+    await writeFile(join(root, '.env'), 'TRUSTED_PROXIES=192.0.2.10\n', 'utf8')
+
+    await installSecurityIntoProject(root)
+
+    const lines = (await readFile(join(root, '.env'), 'utf8')).split('\n')
+    expect(lines.filter(line => line.startsWith('TRUSTED_PROXIES='))).toEqual(['TRUSTED_PROXIES=192.0.2.10'])
+  })
+
   it('installs the session package that stores CSRF tokens alongside security', async () => {
     const root = await createProject()
 

@@ -431,7 +431,7 @@ export default defineSecurityConfig({
 | `rateLimit.redis.connection` | `'default'` | Redis connection name. |
 | `rateLimit.redis.prefix` | `'holo:rate-limit:'` | Key prefix. |
 | `rateLimit.limiters` | `{}` | Named [rate limiters](/basics/security/rate-limiting). |
-| `trustedProxies` | `[]` | IP addresses or CIDR ranges of proxies whose `X-Forwarded-*` headers Holo trusts, or `'*'` to trust the proxy that connects. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies). |
+| `trustedProxies` | `[]` | IP addresses or CIDR ranges of proxies whose `X-Forwarded-*` headers Holo trusts, or `'*'` to trust the proxy that connects. Projects created with `holo new` read it from `TRUSTED_PROXIES`. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies). |
 
 ## cors.ts
 

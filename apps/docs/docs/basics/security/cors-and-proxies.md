@@ -99,6 +99,8 @@ export default defineSecurityConfig({
 
 This is the setup for nginx on the same server. List IP addresses or CIDR ranges, such as `'10.0.0.0/8'`. The default is `[]`, which trusts no proxy.
 
+Projects created with `holo new` read this list from the `TRUSTED_PROXIES` environment variable, so each deployment can name its own proxies. Use a comma-separated list, such as `TRUSTED_PROXIES=127.0.0.1,::1`, or `TRUSTED_PROXIES=*`. When it's unset, the app trusts no proxy.
+
 When a Nuxt app receives a request over a Unix socket, as it does behind `nuxt dev`, Holo treats the connection as coming from `127.0.0.1`. If you serve Nuxt behind a proxy over a Unix socket, add `'127.0.0.1'` to `trustedProxies`. Otherwise Holo ignores the proxy's headers, and every visitor shares the address `127.0.0.1`, including for rate limiting.
 
 ### How Holo finds the visitor
@@ -154,9 +156,28 @@ export default defineSecurityConfig({
 
 ### Next.js
 
-Next.js doesn't tell Holo the address of the connection, so Holo can't check it against a list of proxies. In a Next.js app, Holo reads forwarded headers only with `trustedProxies: '*'`. With a list, or without `trustedProxies`, Holo ignores forwarded headers, and rate limiting by IP throws an error that tells you to set `'*'`.
+Next.js doesn't tell Holo the address of the connection, so Holo can't check it against a list of proxies. In a Next.js app, Holo reads forwarded headers only with `trustedProxies: '*'`. With a list, or without `trustedProxies`, Holo ignores forwarded headers.
 
-New Next.js projects start with `trustedProxies: '*'`. Deploy them behind a proxy or a platform such as Vercel that sets `X-Forwarded-For`.
+Holo never guesses a visitor's address. When the address is unknown, `ip(request)` and every [rate limiter](/basics/security/rate-limiting) keyed by IP throw this error, and the request fails:
+
+```text
+[@holo-js/security] The client address is unavailable because this framework does not expose the connection address, so an address or CIDR list in trustedProxies can never match. Only '*' works here, and only behind a proxy that overwrites X-Forwarded-For, such as Vercel's edge, or a reverse proxy with the Next.js server bound to localhost or a private network. Set trustedProxies in config/security.ts to '*' (scaffolded apps read it from TRUSTED_PROXIES). If the app doesn't need IP identity, pass an explicit rate-limit key instead. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies
+```
+
+A failed request doesn't share a rate-limit bucket with other visitors, and it doesn't skip the limit.
+
+Next.js doesn't expose the connection address, so an address or CIDR list can never match and `*` is the only value that works. Set `TRUSTED_PROXIES=*` before you deploy, and only in one of these setups:
+
+- **Vercel**: set `TRUSTED_PROXIES=*` in the project's environment variables. Vercel's edge overwrites `X-Forwarded-For`, so `*` is safe there.
+- **Self-hosted**: put a reverse proxy that overwrites `X-Forwarded-For` in front of the app, and bind the Next.js server to `localhost` or a private network so clients can reach it only through that proxy.
+
+Nuxt and SvelteKit expose the connection address, so list your proxy's addresses or CIDR ranges there instead of `*`.
+
+New Next.js projects write `TRUSTED_PROXIES=*` to their local `.env` and leave `.env.example` empty. The local value works with `next dev` and `holo dev`: when a request has no `X-Forwarded-For`, Next fills it in from the connection address, which is `127.0.0.1` or `::1` for a local visitor. A deployment that never sets the variable fails on its first IP-keyed rate-limit check.
+
+::: warning
+Don't use `*` on a `next start` server that clients reach directly. Next fills in `X-Forwarded-For` only when the request doesn't have one. A client that sends its own header keeps it, and with `*` Holo trusts that value, so the client can pick its IP. Use `*` only behind a proxy that overwrites the header, such as Vercel's edge, or with the Next.js server bound to localhost or a private network behind your own such proxy.
+:::
 
 Next.js itself applies `X-Forwarded-Proto` to the request URL before Holo sees it, whatever `trustedProxies` says.
 

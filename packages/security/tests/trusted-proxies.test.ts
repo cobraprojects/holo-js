@@ -13,6 +13,7 @@ import {
 } from '../src'
 
 const cloudflareRange = '173.245.48.0/20'
+const unavailableMessage = '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address, so an address or CIDR list in trustedProxies can never match. Only \'*\' works here, and only behind a proxy that overwrites X-Forwarded-For, such as Vercel\'s edge, or a reverse proxy with the Next.js server bound to localhost or a private network. Set trustedProxies in config/security.ts to \'*\' (scaffolded apps read it from TRUSTED_PROXIES). If the app doesn\'t need IP identity, pass an explicit rate-limit key instead. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies'
 
 function trustProxies(trustedProxies: HoloSecurityConfig['trustedProxies'], connectionAddress?: string): void {
   requestUrlInternals.provideConnectionAddress(connectionAddress === undefined ? undefined : () => connectionAddress)
@@ -42,8 +43,25 @@ describe('trusted proxies', () => {
   it('reports how to configure trusted proxies when the framework does not expose the connection address', () => {
     trustProxies(undefined)
     expect(() => ip(request({ 'x-forwarded-for': '203.0.113.66' }))).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
+      unavailableMessage,
     )
+  })
+
+  it('says the connection address is unavailable, names the only working value, and offers an explicit key instead', () => {
+    trustProxies(['10.0.0.1'])
+    let message = ''
+    try {
+      ip(request({}))
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toContain('does not expose the connection address, so an address or CIDR list in trustedProxies can never match.')
+    expect(message).toContain('Only \'*\' works here, and only behind a proxy that overwrites X-Forwarded-For')
+    expect(message).toContain('a reverse proxy with the Next.js server bound to localhost or a private network')
+    expect(message).toContain('Set trustedProxies in config/security.ts to \'*\' (scaffolded apps read it from TRUSTED_PROXIES).')
+    expect(message).toContain('pass an explicit rate-limit key instead')
+    expect(message).not.toMatch(/list your proxy/)
+    expect(message).not.toMatch(/set TRUSTED_PROXIES to your proxy/)
   })
 
   it('takes the address appended by a trusted proxy, not the one the client supplied', () => {
@@ -75,6 +93,12 @@ describe('trusted proxies', () => {
     expect(ip(request({}))).toBe('10.0.0.8')
   })
 
+  it('resolves a direct Next.js visitor to loopback under "*", because Next fills in X-Forwarded-For from the socket', () => {
+    trustProxies('*')
+    expect(ip(request({ 'x-forwarded-for': '::ffff:127.0.0.1' }))).toBe('127.0.0.1')
+    expect(ip(request({ 'x-forwarded-for': '::1' }))).toBe('::1')
+  })
+
   it('trusts the proxy in front of a framework that does not expose the connection address', () => {
     trustProxies('*')
     expect(ip(request({ 'x-forwarded-for': '203.0.113.66, 192.0.2.10' }))).toBe('192.0.2.10')
@@ -92,7 +116,7 @@ describe('trusted proxies', () => {
     trustProxies(['127.0.0.1'])
     const spoofed = request({ 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' })
     expect(() => ip(spoofed)).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
+      unavailableMessage,
     )
     expect(resolveRequestUrl(spoofed).href).toBe('http://internal.test/login')
   })
@@ -163,6 +187,15 @@ describe('trusted proxies', () => {
     expect(second.snapshot.key).toBe('ip:192.0.2.11')
     await expect(rateLimit('login', { request: request({ 'x-forwarded-for': '198.51.100.1, 192.0.2.10' }) }))
       .rejects.toMatchObject({ status: 429 })
+  })
+
+  it('fails closed with the configuration error when a default IP key has no known client address', async () => {
+    trustProxies(undefined)
+    const spoofed = request({ 'x-forwarded-for': '203.0.113.66' })
+    await expect(rateLimit('login', { request: spoofed })).rejects.toThrow(
+      unavailableMessage,
+    )
+    await expect(rateLimit('login', { request: spoofed })).rejects.not.toMatchObject({ status: 429 })
   })
 
   it('rate limits by the full IPv6 address, not its network prefix', async () => {

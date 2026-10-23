@@ -23,7 +23,24 @@ Holo now reads forwarded headers exactly as Laravel's `TrustProxies` middleware 
 - `X-Forwarded-For` entries that aren't IP addresses are skipped instead of becoming the client IP.
 - WorkOS sign-in sends WorkOS the client IP that Holo resolves through `trustedProxies`, instead of the first `X-Forwarded-For` entry or `X-Real-IP`.
 - Nuxt requests that arrive over a Unix socket, including in `nuxt dev`, come from `127.0.0.1`. List `'127.0.0.1'` in `trustedProxies` to read forwarded headers from that proxy.
-- When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, and `ip(request)` throws. Use `'*'` and make sure the app is reachable only through your proxy. See [Next.js](/basics/security/cors-and-proxies#next-js).
+- When the framework doesn't expose the connection address, as in Next.js, forwarded headers are trusted only with `trustedProxies: '*'`. A Next.js app with a list of proxies now ignores them, so `ip(request)` and IP-keyed rate limits fail with a configuration error. Set `TRUSTED_PROXIES` in production, as described below. See [Next.js](/basics/security/cors-and-proxies#next-js).
+
+### New projects trust no proxy until `TRUSTED_PROXIES` is set
+
+Projects created with `holo new` used to scaffold `trustedProxies: '*'` in Next.js, which trusts forwarded headers from any client. The scaffold now reads the list from the `TRUSTED_PROXIES` environment variable, and trusts no proxy when it's unset. Apps scaffolded earlier keep their `'*'`, so they still trust any connection. To make the setting come from the environment, replace that line in `config/security.ts` and keep the rest of the file:
+
+```ts [config/security.ts]
+import { env } from '@holo-js/config'
+import { defineSecurityConfig } from '@holo-js/security'
+
+const proxies = env('TRUSTED_PROXIES').trim()
+
+export default defineSecurityConfig({
+  trustedProxies: proxies === '*' ? '*' : proxies.split(',').map(entry => entry.trim()).filter(Boolean),
+})
+```
+
+Then set `TRUSTED_PROXIES` in each production deployment: `*` on Vercel, or `*` when you self-host behind a proxy that overwrites `X-Forwarded-For` and the Next.js server listens only on localhost or a private network. A list of addresses doesn't work in Next.js. A Next.js deployment without it doesn't fall back to a shared rate-limit bucket. Its first IP-keyed rate-limit check fails with a configuration error. Make sure your proxy is in place before you deploy. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
 
 ### Temporary URLs behind a proxy
 

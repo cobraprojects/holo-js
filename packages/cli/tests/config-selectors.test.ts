@@ -8,7 +8,6 @@ import { loadConfigDirectory, writeConfigCache } from '@holo-js/config'
 import { normalizeModuleOptions } from '@holo-js/storage'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderBroadcastConfig } from '../src/project/scaffold/config-renderers'
-import { getFrameworkDescriptor } from '../src/project/frameworks'
 import { renderScaffoldPackageJson } from '../src/project/scaffold/framework'
 import {
   renderAuthConfig,
@@ -233,15 +232,15 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
     }
   })
 
-  it.each([
-    ['next', '*'],
-    ['nuxt', []],
-    ['sveltekit', []],
-  ] as const)('scaffolds %s to trust its proxy only when the framework hides the connection address', async (framework, trustedProxies) => {
+  it('scaffolds every framework to trust no proxy until TRUSTED_PROXIES names one', async () => {
     const root = await createProject()
-    await writeConfig(root, 'security', renderSecurityConfig(getFrameworkDescriptor(framework)))
-    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
-    expect(loaded.security.trustedProxies).toEqual(trustedProxies)
+    await writeConfig(root, 'security', renderSecurityConfig())
+    const unset = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(unset.security.trustedProxies).toEqual([])
+    const listed = await loadConfigDirectory(root, { processEnv: { TRUSTED_PROXIES: '10.0.0.0/8, 127.0.0.1' }, preferCache: false })
+    expect(listed.security.trustedProxies).toEqual(['10.0.0.0/8', '127.0.0.1'])
+    const everyone = await loadConfigDirectory(root, { processEnv: { TRUSTED_PROXIES: ' * ' }, preferCache: false })
+    expect(everyone.security.trustedProxies).toBe('*')
   })
 
   it('scaffolds the six-per-minute verification resend limiter that the email verification route applies', async () => {

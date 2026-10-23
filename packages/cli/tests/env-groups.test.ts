@@ -22,6 +22,7 @@ describe('env file groups', () => {
         ['STORAGE_DEFAULT_DISK', 'STORAGE_ROUTE_PREFIX', 'STORAGE_DISKS_PUBLIC_ROOT', 'STORAGE_DISKS_S3_ACCESS_KEY_ID', 'STORAGE_DISKS_S3_SECRET_ACCESS_KEY', 'STORAGE_DISKS_S3_REGION', 'STORAGE_DISKS_S3_BUCKET', 'STORAGE_DISKS_S3_URL', 'STORAGE_DISKS_S3_ENDPOINT', 'STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT'],
         ['AUTH_GUARD', 'AUTH_PASSWORD_BROKER', 'AUTH_EMAIL_VERIFICATION_ROUTE', 'AUTH_PASSWORD_RESET_ROUTE'],
         ['RATE_LIMIT_DRIVER'],
+        ['TRUSTED_PROXIES'],
         ['FRONTEND_URL', 'FRONTEND_DOMAIN'],
         ['SESSION_DRIVER', 'SESSION_CONNECTION', 'SESSION_COOKIE', 'SESSION_PATH', 'SESSION_DOMAIN', 'SESSION_SECURE', 'SESSION_SAME_SITE', 'SESSION_IDLE_TIMEOUT', 'SESSION_LIFETIME', 'SESSION_REMEMBER_ME_LIFETIME'],
         ['QUEUE_CONNECTION'],
@@ -50,6 +51,28 @@ describe('env file groups', () => {
       }
       expect(result.contents).not.toContain('\n=\n')
     }
+  })
+
+  it.each([
+    ['security'],
+    ['auth', 'security'],
+  ] as const)('scaffolds TRUSTED_PROXIES once in .env and .env.example for optional packages %s', (...optionalPackages) => {
+    const files = renderScaffoldEnvFiles({ projectName: 'Fixture', databaseDriver: 'sqlite', storageDefaultDisk: 'local', optionalPackages })
+    for (const contents of [files.env, files.example]) {
+      expect(contents.split('\n').filter(line => line.startsWith('TRUSTED_PROXIES'))).toEqual(['TRUSTED_PROXIES='])
+    }
+  })
+
+  it.each([
+    ['next', '*'],
+    ['nuxt', ''],
+    ['sveltekit', ''],
+  ] as const)('sets TRUSTED_PROXIES for the local .env of a %s app and leaves .env.example empty', (framework, localValue) => {
+    const files = renderScaffoldEnvFiles({
+      projectName: 'Fixture', databaseDriver: 'sqlite', storageDefaultDisk: 'local', framework, optionalPackages: ['security'],
+    })
+    expect(files.env.split('\n')).toContain(`TRUSTED_PROXIES=${localValue}`)
+    expect(files.example.split('\n')).toContain('TRUSTED_PROXIES=')
   })
 
   it('skips existing groups without losing separators between missing groups', () => {

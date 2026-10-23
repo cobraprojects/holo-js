@@ -44,7 +44,6 @@ export type FrameworkDescriptor = {
   }
   readonly capabilities: {
     readonly managedBroadcastAuthRoute: boolean
-    readonly exposesConnectionAddress: boolean
   }
 }
 
@@ -94,7 +93,6 @@ export const FRAMEWORK_DESCRIPTORS = {
     },
     capabilities: {
       managedBroadcastAuthRoute: false,
-      exposesConnectionAddress: true,
     },
   },
   next: {
@@ -131,7 +129,6 @@ export const FRAMEWORK_DESCRIPTORS = {
     },
     capabilities: {
       managedBroadcastAuthRoute: true,
-      exposesConnectionAddress: false,
     },
   },
   sveltekit: {
@@ -178,7 +175,6 @@ export const FRAMEWORK_DESCRIPTORS = {
     },
     capabilities: {
       managedBroadcastAuthRoute: false,
-      exposesConnectionAddress: true,
     },
   },
 } as const satisfies Record<string, FrameworkDescriptor>

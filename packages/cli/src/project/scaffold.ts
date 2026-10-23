@@ -59,7 +59,6 @@ import {
   renderMailConfig,
   renderMediaConfig,
   renderNotificationsConfig,
-  renderProjectSecurityConfig,
   renderQueueConfig,
   renderRedisConfig,
   renderSecurityConfig,
@@ -119,6 +118,7 @@ import {
   normalizeScaffoldEnvSegments,
   renderAuthEnvFiles,
   renderAuthEmailVerificationNotification,
+  trustedProxiesDefault,
   renderAuthMigration,
   renderAuthPasswordResetNotification,
   renderAuthUserModel,
@@ -335,11 +335,17 @@ async function syncAuthRouteFiles(projectRoot: string): Promise<void> {
   }
 }
 
+async function resolveTrustedProxiesDefault(projectRoot: string): Promise<string> {
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  return trustedProxiesDefault((await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies))?.id)
+}
+
 export async function installAuthIntoProject(
   projectRoot: string,
   features: AuthInstallFeatures = {},
 ): Promise<AuthInstallResult> {
   const project = await loadProjectConfig(projectRoot)
+  const trustedProxies = await resolveTrustedProxiesDefault(projectRoot)
   const modelsRoot = resolve(projectRoot, project.config.paths.models)
   const migrationsRoot = resolve(projectRoot, project.config.paths.migrations)
   const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
@@ -364,7 +370,7 @@ export async function installAuthIntoProject(
     const nextAuthFeatures = mergeInstalledAuthFeatures(currentAuthFeatures, features)
     const authConfigModuleFormat = resolveConfigModuleFormat(authConfigPath, currentAuthConfig)
     const nextAuthConfig = renderAuthConfig(nextAuthFeatures, authConfigModuleFormat)
-    const authEnvFiles = renderAuthEnvFiles(nextAuthFeatures, defaultDatabaseConnection)
+    const authEnvFiles = renderAuthEnvFiles(nextAuthFeatures, defaultDatabaseConnection, trustedProxies)
     const nextEnv = upsertEnvContents(await readTextFile(envPath), authEnvFiles.env)
     const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), authEnvFiles.example)
     const authConfigChanged = authFeaturesRequireConfigUpdate(features) && currentAuthConfig !== nextAuthConfig
@@ -389,7 +395,7 @@ export async function installAuthIntoProject(
 
     let createdSecurityConfig = false
     if (!securityConfigPath) {
-      await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+      await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
       createdSecurityConfig = true
     }
     const createdCorsConfig = await ensureCorsConfigFile(projectRoot)
@@ -429,7 +435,7 @@ export async function installAuthIntoProject(
   const userModelTargetPath = resolve(modelsRoot, 'User.ts')
   const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, project.config)
   const migrationFiles = createAuthMigrationFiles()
-  const authEnvFiles = renderAuthEnvFiles(features, defaultDatabaseConnection)
+  const authEnvFiles = renderAuthEnvFiles(features, defaultDatabaseConnection, trustedProxies)
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await mkdir(modelsRoot, { recursive: true })
@@ -441,7 +447,7 @@ export async function installAuthIntoProject(
   }
   let createdSecurityConfig = false
   if (!securityConfigPath) {
-    await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
     createdSecurityConfig = true
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
@@ -765,6 +771,7 @@ export async function installSecurityIntoProject(
   projectRoot: string,
 ): Promise<SecurityInstallResult> {
   await loadProjectConfig(projectRoot, { required: true })
+  const trustedProxies = await resolveTrustedProxiesDefault(projectRoot)
   const securityConfigPath = await resolveFirstExistingPath(projectRoot, SECURITY_CONFIG_FILE_NAMES)
   const corsConfigPath = await resolveFirstExistingPath(projectRoot, CORS_CONFIG_FILE_NAMES)
 
@@ -773,13 +780,17 @@ export async function installSecurityIntoProject(
   await ensureRedisConfigFile(projectRoot)
 
   if (!securityConfigPath) {
-    await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
 
-  for (const fileName of ['.env', '.env.example']) {
+  const securityEnvFiles = {
+    '.env': ['RATE_LIMIT_DRIVER=file', `TRUSTED_PROXIES=${trustedProxies}`],
+    '.env.example': ['RATE_LIMIT_DRIVER=file', 'TRUSTED_PROXIES='],
+  }
+  for (const [fileName, additions] of Object.entries(securityEnvFiles)) {
     const envPath = resolve(projectRoot, fileName)
-    const nextEnv = upsertEnvContents(await readTextFile(envPath), ['RATE_LIMIT_DRIVER=file'])
+    const nextEnv = upsertEnvContents(await readTextFile(envPath), additions)
     if (nextEnv.changed && typeof nextEnv.contents === 'string') {
       await writeTextFile(envPath, nextEnv.contents)
     }

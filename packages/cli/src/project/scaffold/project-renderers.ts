@@ -19,9 +19,14 @@ import {
 import { getFrameworkDescriptor } from '../frameworks'
 import { generateAppKey } from '../../app-key'
 
+export function trustedProxiesDefault(framework: string | undefined): string {
+  return framework === 'next' ? '*' : ''
+}
+
 export function renderAuthEnvFiles(
   features: AuthInstallFeatures = {},
   defaultDatabaseConnection = 'default',
+  trustedProxies = '',
 ): { env: readonly string[], example: readonly string[] } {
   const socialEnabled = features.social === true || (features.socialProviders?.length ?? 0) > 0
   const socialProviders = features.socialProviders && features.socialProviders.length > 0
@@ -36,6 +41,8 @@ export function renderAuthEnvFiles(
     'AUTH_PASSWORD_RESET_ROUTE=/reset-password',
     '',
     'RATE_LIMIT_DRIVER=file',
+    '',
+    `TRUSTED_PROXIES=${trustedProxies}`,
     '',
     'FRONTEND_URL=',
     'FRONTEND_DOMAIN=',
@@ -599,14 +606,15 @@ export function renderScaffoldEnvFiles(
         'STORAGE_DISKS_S3_FORCE_PATH_STYLE_ENDPOINT=false',
       ]
     : []
+  const trustedProxies = trustedProxiesDefault(options.framework)
   const authLines = optionalPackageNames.includes('auth')
-    ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
+    ? [...renderAuthEnvFiles({}, defaultDatabaseConnection, trustedProxies).env]
     : []
   const queueLines = optionalPackageNames.includes('queue')
     ? [...renderQueueEnvFiles('sync').env]
     : []
   const securityLines = optionalPackageNames.includes('security') && !optionalPackageNames.includes('auth')
-    ? ['RATE_LIMIT_DRIVER=file']
+    ? ['RATE_LIMIT_DRIVER=file', `TRUSTED_PROXIES=${trustedProxies}`]
     : []
   const cacheLines = optionalPackageNames.includes('cache')
     ? [...renderCacheEnvFiles('file').env]
