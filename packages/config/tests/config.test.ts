@@ -1233,6 +1233,8 @@ describe('@holo-js/config', () => {
         },
       },
       trustedProxies: [],
+      maxBodyBytes: 1048576,
+      maxUploadBodyBytes: 8388608,
     })
     expect(loaded.all.security.rateLimit.driver).toBe('redis')
   })

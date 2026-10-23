@@ -186,7 +186,7 @@ Errors thrown inside `custom()` and `customAsync()` are no longer turned into a 
 
 ### Request body limit
 
-Holo now reads at most 1 MiB of any request body before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to a larger whole number of bytes if your forms accept file uploads or large JSON payloads. See [Request body limit](/basics/security/#request-body-limit).
+Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
 
 Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
 

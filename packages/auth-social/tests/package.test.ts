@@ -1317,4 +1317,16 @@ describe('@holo-js/auth-social', () => {
       emailVerified: true,
     }, { accessToken: 'token' })).rejects.toThrow('Auth provider runtime "users" is not configured')
   })
+
+  it('answers 413 for an oversized OAuth form-post callback instead of a generic failure', async () => {
+    const body = new URLSearchParams({ state: 'state-1', code: 'code-1', padding: 'x'.repeat(1024 * 1024) }).toString()
+
+    const result = await callback('google', new Request('https://app.test/auth/google/callback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    }))
+
+    expect(result).toMatchObject({ ok: false, status: 413 })
+  })
 })

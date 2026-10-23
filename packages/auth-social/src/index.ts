@@ -137,7 +137,7 @@ export interface SocialCallbackSuccess {
 
 export interface SocialCallbackFailure {
   readonly ok: false
-  readonly status: 400
+  readonly status: 400 | 413
   readonly message: string
 }
 
@@ -760,6 +760,18 @@ async function readCallbackParameters(request: Request): Promise<{
 }
 
 export async function callback(provider: string, input: SocialRequestInput): Promise<SocialCallbackResult> {
+  try {
+    return await resolveCallback(provider, input)
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) {
+      return { ok: false, status: 413, message: error.message }
+    }
+
+    throw error
+  }
+}
+
+async function resolveCallback(provider: string, input: SocialRequestInput): Promise<SocialCallbackResult> {
   const request = normalizeSocialRequest(input)
   const { state, code } = await readCallbackParameters(request)
   if (!state || !code) {

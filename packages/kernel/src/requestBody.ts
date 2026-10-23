@@ -1,6 +1,16 @@
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 1024 * 1024
+export const DEFAULT_MAX_UPLOAD_BODY_BYTES = 8 * 1024 * 1024
 
 let maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES
+let maxUploadBodyBytes = DEFAULT_MAX_UPLOAD_BODY_BYTES
+
+function isMultipartContentType(contentType: string | null | undefined): boolean {
+  return contentType?.split(';', 1)[0]?.trim().toLowerCase() === 'multipart/form-data'
+}
+
+export function requestBodyLimitFor(contentType: string | null | undefined): number {
+  return isMultipartContentType(contentType) ? maxUploadBodyBytes : maxRequestBodyBytes
+}
 
 export class HoloRequestBodyTooLargeError extends Error {
   readonly status = 413
@@ -27,7 +37,7 @@ function concatChunks(chunks: readonly Uint8Array[], total: number): Uint8Array<
 }
 
 export async function readBoundedRequestBody(request: Request, maxBytes?: number): Promise<Uint8Array<ArrayBuffer>> {
-  const limit = resolveLimit(maxBytes)
+  const limit = maxBytes ?? requestBodyLimitFor(request.headers.get('content-type'))
   const declared = request.headers.get('content-length')
   if (declared !== null && Number(declared) > limit) {
     throw new HoloRequestBodyTooLargeError(limit)
@@ -56,6 +66,23 @@ export async function readBoundedRequestBody(request: Request, maxBytes?: number
   }
 
   return concatChunks(chunks, total)
+}
+
+export async function readBoundedCachedBody(cached: unknown, maxBytes?: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
+  const value = await cached
+  const bytes = typeof value === 'string'
+    ? new TextEncoder().encode(value)
+    : value instanceof Uint8Array ? new Uint8Array(value) : undefined
+  if (!bytes) {
+    return undefined
+  }
+
+  const limit = resolveLimit(maxBytes)
+  if (bytes.byteLength > limit) {
+    throw new HoloRequestBodyTooLargeError(limit)
+  }
+
+  return bytes
 }
 
 export async function readBoundedRequestText(request: Request, maxBytes?: number): Promise<string> {
@@ -98,6 +125,9 @@ export async function readBoundedNodeRequestBody(
 export const requestBodyInternals = Object.freeze({
   configureMaxRequestBodyBytes(bytes: number | undefined): void {
     maxRequestBodyBytes = bytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+  },
+  configureMaxUploadBodyBytes(bytes: number | undefined): void {
+    maxUploadBodyBytes = bytes ?? DEFAULT_MAX_UPLOAD_BODY_BYTES
   },
   getMaxRequestBodyBytes(): number {
     return maxRequestBodyBytes

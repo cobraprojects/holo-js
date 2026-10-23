@@ -26,6 +26,7 @@ export function configureSecurityRuntime(bindings?: SecurityRuntimeBindings): vo
   const config = bindings ? normalizeSecurityConfig(bindings.config) : undefined
   requestUrlInternals.configureForwardedRequestResolver(config ? createForwardedRequestResolver(config.trustedProxies) : undefined)
   requestBodyInternals.configureMaxRequestBodyBytes(config?.maxBodyBytes)
+  requestBodyInternals.configureMaxUploadBodyBytes(config?.maxUploadBodyBytes)
   getSecurityRuntimeState().bindings = bindings && config
     ? Object.freeze({
         config,
@@ -53,6 +54,8 @@ export function getSecurityRuntimeBindings(): SecurityRuntimeFacade | undefined 
 
 export function resetSecurityRuntime(): void {
   requestUrlInternals.configureForwardedRequestResolver(undefined)
+  requestBodyInternals.configureMaxRequestBodyBytes(undefined)
+  requestBodyInternals.configureMaxUploadBodyBytes(undefined)
   getSecurityRuntimeState().bindings = undefined
 }
 

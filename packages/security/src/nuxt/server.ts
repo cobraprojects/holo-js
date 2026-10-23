@@ -1,4 +1,4 @@
-import { readBoundedNodeRequestBody } from '@holo-js/kernel'
+import { readBoundedCachedBody, readBoundedNodeRequestBody, requestBodyLimitFor } from '@holo-js/kernel'
 import {
   createError,
   defineEventHandler,
@@ -47,7 +47,9 @@ function createRequestBody(body: Uint8Array | undefined): RequestInit['body'] {
 const h3RawBodySymbol = Symbol.for('h3RawBody')
 
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
-  const bytes = await readBoundedNodeRequestBody(event.node.req, undefined, getRequestHeader(event, 'content-length'))
+  const limit = requestBodyLimitFor(getRequestHeader(event, 'content-type'))
+  const cached = await readBoundedCachedBody((event.node.req as unknown as Record<symbol, unknown>)[h3RawBodySymbol] ?? event._requestBody, limit)
+  const bytes = cached ?? await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
   event._requestBody = bytes
   Object.assign(event.node.req, { [h3RawBodySymbol]: bytes })
   return bytes

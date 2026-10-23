@@ -104,7 +104,13 @@ export default defineSecurityConfig({
 })
 ```
 
-Raise the limit for forms that accept file uploads. Uploads are part of the request body, so a file larger than the limit needs a larger `maxBodyBytes`.
+Multipart form bodies, which carry file uploads, use a separate limit, `maxUploadBodyBytes`. Its default is 8 MiB (`8388608`), the same size as PHP's `post_max_size` default. Upload size rules that belong to a field, such as a media image limit, still apply on top of it and return `422`.
+
+```ts [config/security.ts]
+export default defineSecurityConfig({
+  maxUploadBodyBytes: 16 * 1024 * 1024,
+})
+```
 
 ::: warning
 The CSRF cookie is encrypted, and signed tokens are signed, with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
