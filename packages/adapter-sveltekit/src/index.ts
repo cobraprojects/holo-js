@@ -12,7 +12,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { createCookieWriteUnavailableError, requestUrlInternals } from '@holo-js/kernel'
+import { createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -225,11 +225,11 @@ function normalizeCookiePath(event: SvelteKitRequestEvent): string {
   return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
 }
 
-function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string {
+function createValidationFlashCookie(path: string, payload: SerializedValidationException): string {
   return [
     `${validationFlashCookie}=${encodeValidationFlashPayload(payload)}`,
     'Max-Age=60',
-    `Path=${normalizeCookiePath(event)}`,
+    `Path=${path.replace(/[;\r\n]/g, '') || '/'}`,
     'SameSite=Lax',
   ].join('; ')
 }
@@ -261,12 +261,13 @@ function createValidationActionRedirectResponse(
   event: SvelteKitRequestEvent,
   payload: SerializedValidationException,
 ): Response {
+  const location = sameOriginRedirectPath(event.url?.pathname)
   return new Response(null, {
     status: 303,
     headers: {
-      location: event.url?.pathname || '/',
+      location,
       'cache-control': 'no-store',
-      'set-cookie': createValidationFlashCookie(event, payload),
+      'set-cookie': createValidationFlashCookie(location, payload),
     },
   })
 }

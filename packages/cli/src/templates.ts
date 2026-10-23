@@ -182,7 +182,7 @@ export function renderChannelTemplate(pattern: string): string {
   return [
     'import { defineChannel } from \'@holo-js/broadcast\'',
     '',
-    `export default defineChannel('${pattern}', {`,
+    `export default defineChannel(${JSON.stringify(pattern)}, {`,
     '  type: \'private\',',
     '  authorize() {',
     '    return false',

@@ -190,3 +190,20 @@ export const requestUrlInternals = Object.freeze({
   resolveClientAddress,
   resolveRoutedRequestUrl,
 })
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return true
+  }
+
+  return false
+}
+
+export function sameOriginRedirectPath(path: string | undefined): string {
+  if (!path || !path.startsWith('/') || path.startsWith('//') || path.includes('\\') || hasControlCharacter(path)) {
+    return '/'
+  }
+
+  return path
+}

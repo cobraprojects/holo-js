@@ -602,6 +602,248 @@ describe('@holo-js/forms contracts', () => {
     }
   })
 
+  it('answers an oversized form body with a 413 failure, with or without throttling', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const oversized = () => new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ email: 'ava@example.com', padding: 'x'.repeat(2 * 1024 * 1024) }),
+    })
+
+    const result = await safeParse(oversized(), login)
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected the oversized body to fail.')
+    }
+    expect(result.fail()).toMatchObject({ status: 413 })
+    await expect(validate(oversized(), login)).rejects.toMatchObject({ status: 413 })
+  })
+
+  it('gives a custom throttle key resolver a readable copy of the submitted request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-form-limiter-request-'))
+    connectThroughLocalProxy()
+    onTestFinished(async () => {
+      await rm(directory, { recursive: true, force: true })
+    })
+    const keyedEmails: string[] = []
+    configureSecurityRuntime({
+      config: {
+        trustedProxies: ['127.0.0.1'],
+        rateLimit: {
+          driver: 'file',
+          limiters: {
+            login: limit.perMinute(5).by(async ({ request }) => {
+              const form = await request.clone().formData()
+              const email = String(form.get('email'))
+              keyedEmails.push(email)
+              return `${ip(request)}:${email}`
+            }),
+          },
+        },
+      },
+      rateLimitStore: createFileRateLimitStore(directory),
+    })
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.13',
+      },
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(true)
+    expect(keyedEmails).toEqual(['ava@example.com'])
+  })
+
+  it('aborts the rebuilt submitted request when the original request is aborted', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-form-abort-'))
+    connectThroughLocalProxy()
+    onTestFinished(async () => {
+      await rm(directory, { recursive: true, force: true })
+    })
+    const seenSignals: AbortSignal[] = []
+    configureSecurityRuntime({
+      config: {
+        trustedProxies: ['127.0.0.1'],
+        rateLimit: {
+          driver: 'file',
+          limiters: {
+            login: limit.perMinute(5).by(({ request }) => {
+              seenSignals.push(request.signal)
+              return ip(request)
+            }),
+          },
+        },
+      },
+      rateLimitStore: createFileRateLimitStore(directory),
+    })
+    const login = schema({ email: field.string().required().email() })
+    const controller = new AbortController()
+
+    await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.14' },
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+      signal: controller.signal,
+    }), login, { throttle: 'login' })
+    controller.abort()
+
+    expect(seenSignals).toHaveLength(1)
+    expect(seenSignals[0]?.aborted).toBe(true)
+  })
+
+  it('accepts a Request-like object from another implementation without passing it to the Request constructor', async () => {
+    const payload = new TextEncoder().encode('email=ava%40example.com')
+    const url = 'https://app.test/login'
+    const headers = new Headers({ 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': '203.0.113.15' })
+    const fields = {
+      url,
+      method: 'POST',
+      headers,
+      signal: new AbortController().signal,
+      credentials: 'same-origin',
+      mode: 'cors',
+      redirect: 'follow',
+      referrer: 'about:client',
+      referrerPolicy: '',
+      integrity: '',
+      keepalive: false,
+      cache: 'default',
+      clone: () => new Request(url, { method: 'POST', headers, body: payload }),
+    }
+    const foreign = Object.create(Request.prototype, Object.fromEntries(
+      Object.entries(fields).map(([name, value]) => [name, { value, enumerable: true }]),
+    )) as Request
+    await configureNativeSecurity()
+    const login = schema({ email: field.string().required().email() })
+
+    const result = await safeParse(foreign, login, { throttle: 'login' })
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
+    const login = schema({
+      email: field.string().required().transform(value => value.trim().toLowerCase()),
+    })
+
+    await configureNativeSecurity()
+
+    const attempt = (email: string) => safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.11',
+      },
+      body: new URLSearchParams({ email }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect((await attempt('Victim@Example.com ')).valid).toBe(true)
+
+    const variant = await attempt('victim@example.com')
+
+    expect(variant.valid).toBe(false)
+    expect(variant.fail()).toMatchObject({ status: 429 })
+  })
+
+  it('counts an invalid submission toward the throttle, so the next attempt is answered 429', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+      password: field.string().required(),
+    })
+
+    await configureNativeSecurity()
+
+    const attempt = () => safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.12',
+      },
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    const first = await attempt()
+    expect(first.valid).toBe(false)
+    expect(first.errors.first('password')).toBeDefined()
+
+    const second = await attempt()
+    expect(second.valid).toBe(false)
+    expect(second.fail()).toMatchObject({ status: 429 })
+  })
+
+  it('validates a throttled submission whose body is a stream, reading the body once', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    await configureNativeSecurity()
+
+    const pulls: number[] = []
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls.push(pulls.length)
+        controller.enqueue(new TextEncoder().encode('email=ava%40example.com'))
+        controller.close()
+      },
+    }, { highWaterMark: 0 })
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      body,
+      duplex: 'half',
+    } as RequestInit), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(true)
+    if (!result.valid) {
+      throw new Error('Expected the stream submission to validate.')
+    }
+    expect(result.data).toEqual({ email: 'ava@example.com' })
+    expect(pulls.length).toBe(1)
+  })
+
+  it('returns the controlled malformed-input failure for throttled submissions instead of throwing', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    await configureNativeSecurity()
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.9',
+      },
+      body: new URLSearchParams([
+        ['profile[__proto__][x]', 'owned'],
+        ['email', 'ava@example.com'],
+      ]),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+  })
+
   it('requires Request inputs for throttle-aware validation', async () => {
     const login = schema({
       email: field.string().required().email(),
@@ -1192,7 +1434,7 @@ describe('@holo-js/forms contracts', () => {
     expect(validateCalls).toBe(1)
   })
 
-  it('merges field errors with throttled security failures without revalidating', async () => {
+  it('answers throttled submissions with the root failure and the field errors from validation', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
@@ -1235,6 +1477,7 @@ describe('@holo-js/forms contracts', () => {
     }
 
     expect(throttled.errors.first('email')).toBeDefined()
+    expect(throttled.values).toEqual({ email: 'bad' })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
     expect(throttled.fail().status).toBe(429)
   })

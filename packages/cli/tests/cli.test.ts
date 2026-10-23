@@ -8208,10 +8208,20 @@ export default defineMigration({
     await expect(Promise.all(generatedChannelFiles.map(async (fileName) => {
       return await readFile(join(channelProjectRoot, 'server/channels', fileName), 'utf8')
     }))).resolves.toEqual(expect.arrayContaining([
-      expect.stringContaining("defineChannel('orders.{orderId}'"),
-      expect.stringContaining("defineChannel('orders.{id}'"),
-      expect.stringContaining("defineChannel('orders.id'"),
+      expect.stringContaining('defineChannel("orders.{orderId}"'),
+      expect.stringContaining('defineChannel("orders.{id}"'),
+      expect.stringContaining('defineChannel("orders.id"'),
     ]))
+    await expect((async () => runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders\');process.exit(1);//'],
+      flags: {},
+    }))()).rejects.toThrow('Channel pattern')
+    await expect(readdir(join(channelProjectRoot, 'server/channels'))).resolves.toHaveLength(3)
+    await expect((async () => runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.{id}.{id}'],
+      flags: {},
+    }))()).rejects.toThrow('repeats a placeholder')
+    await expect(readdir(join(channelProjectRoot, 'server/channels'))).resolves.toHaveLength(3)
     await expect((async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.{orderId}'],
       flags: {},

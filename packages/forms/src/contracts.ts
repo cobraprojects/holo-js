@@ -1,4 +1,4 @@
-import { requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestBody, requestUrlInternals, type HoloRequestHeaders } from '@holo-js/kernel'
 import {
   type FormLikeValidationInput,
   type InferSchemaData,
@@ -677,41 +677,33 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
   }
 }
 
-async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
-  input: Request,
-  schemaDefinition: ValidationSchema<TShape>,
-  error: Error & { readonly status: number },
-): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
-  let values = {} as Partial<InferSchemaData<TShape>>
-  let flattenedErrors: Record<string, readonly string[]> = {}
+function captureBodyTooLarge(error: unknown): HoloRequestBodyTooLargeError {
+  if (error instanceof HoloRequestBodyTooLargeError) return error
+  throw error
+}
 
-  try {
-    const inspection = await safeParseInput(input.clone(), schemaDefinition)
+function submittedRequestInit(request: Request, body: Uint8Array<ArrayBuffer>): RequestInit {
+  return {
+    method: request.method,
+    headers: new Headers(request.headers),
+    body,
+    duplex: 'half',
+    signal: request.signal,
+    credentials: request.credentials,
+    redirect: request.redirect,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    cache: request.cache === 'only-if-cached' ? undefined : request.cache,
+    mode: request.mode === 'navigate' ? undefined : request.mode,
+  } as RequestInit
+}
 
-    if (inspection.valid) {
-      values = inspection.data
-    } else {
-      values = inspection.values
-      flattenedErrors = inspection.errors.flatten()
-    }
-  } catch {
-    values = {} as Partial<InferSchemaData<TShape>>
-    flattenedErrors = {}
-  }
-
-  return createFailedSubmission(
-    schemaDefinition,
-    values,
-    {
-      ...flattenedErrors,
-      _root: [
-        ...(flattenedErrors._root ?? []),
-        error.message,
-      ],
-    },
-    error.status,
-    createSecurityFailureMetadata(error),
-  )
+async function bufferSubmittedRequest(request: Request): Promise<Request> {
+  if (request.method === 'GET' || request.method === 'HEAD') return request
+  const body = await readBoundedRequestBody(request.clone())
+  return new Request(request.url, submittedRequestInit(request, body))
 }
 
 export async function safeParse<TShape extends SchemaInputShape>(
@@ -719,9 +711,6 @@ export async function safeParse<TShape extends SchemaInputShape>(
   schemaDefinition: ValidationSchema<TShape>,
   options: FormSecurityOptions = {},
 ): Promise<FormSubmissionResult<InferSchemaData<TShape>>> {
-  let validatedSubmission:
-    | FormSubmissionResult<InferSchemaData<TShape>>
-    | undefined
   const throttle = typeof options.throttle === 'string' ? options.throttle : undefined
   const usesSecurityOptions = typeof throttle === 'string'
   const normalizedRequestInput = await normalizeRequestLikeInputForValidation(input)
@@ -734,58 +723,55 @@ export async function safeParse<TShape extends SchemaInputShape>(
     )
   }
 
+  const submitted = usesSecurityOptions
+    ? await bufferSubmittedRequest(normalizedRequestInput as Request).catch(captureBodyTooLarge)
+    : validationInput
+  if (submitted instanceof HoloRequestBodyTooLargeError) {
+    return createFailedSubmission(schemaDefinition, {} as Partial<InferSchemaData<TShape>>, {
+      _root: [submitted.message],
+    }, submitted.status)
+  }
+
+  const parsedInput = usesSecurityOptions ? (submitted as Request).clone() : submitted
+  const result = await safeParseInput(parsedInput as FormLikeValidationInput, schemaDefinition).catch(captureBodyTooLarge)
+  if (result instanceof HoloRequestBodyTooLargeError) {
+    return createFailedSubmission(schemaDefinition, {} as Partial<InferSchemaData<TShape>>, {
+      _root: [result.message],
+    }, result.status)
+  }
+
   if (usesSecurityOptions) {
-    const request = normalizedRequestInput as Request
+    const request = submitted as Request
 
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      const inspection = await safeParseInput(request.clone(), schemaDefinition)
-      const throttleValues = inspection.valid ? inspection.data : inspection.values
-      validatedSubmission = inspection.valid
-        ? createSuccessfulSubmission(schemaDefinition, inspection.data)
-        : createFailedSubmission(schemaDefinition, inspection.values, inspection.errors.flatten())
       await security.rateLimit(throttle, {
         request,
-        values: throttleValues,
+        values: result.valid ? result.data : undefined,
       })
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')
       if (formsSecurityInternals.isRootSecurityError(error)) {
-        if (validatedSubmission) {
-          return createFailedSubmission(
-            schemaDefinition,
-            validatedSubmission.valid
-              ? validatedSubmission.data
-              : validatedSubmission.values,
-            {
-              ...(validatedSubmission.valid
-                ? {}
-                : validatedSubmission.errors.flatten()),
-              _root: [
-                ...(!validatedSubmission.valid
-                  ? (validatedSubmission.errors.flatten()._root ?? [])
-                  : []),
-                error.message,
-              ],
-            },
-            error.status,
-            createSecurityFailureMetadata(error),
-          )
-        }
-
-        return await createSecurityFailureSubmission(request, schemaDefinition, error)
+        const fieldErrors = result.valid ? {} : result.errors.flatten()
+        return createFailedSubmission(
+          schemaDefinition,
+          result.valid ? result.data : result.values,
+          {
+            ...fieldErrors,
+            _root: [
+              ...(fieldErrors._root ?? []),
+              error.message,
+            ],
+          },
+          error.status,
+          createSecurityFailureMetadata(error),
+        )
       }
 
       throw error
     }
   }
-
-  if (validatedSubmission) {
-    return validatedSubmission
-  }
-
-  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
