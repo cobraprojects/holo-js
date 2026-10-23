@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, resetDB } from '../src'
+import { DB, SchemaError, SecurityError, holoRuntimeInternals, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -140,7 +140,17 @@ describe('native database security boundaries', () => {
     await expect(User.unsafeWhere(`name = '${injected}'`, []).delete()).rejects.toThrow(policyError)
     await expect(db.table(table).unsafeWhere(`name = '${injected}'`, []).delete()).rejects.toThrow(policyError)
     await expect(db.table(table).unsafeWhere(`name = '${injected}'`, []).update({ name: 'Changed' })).rejects.toThrow(policyError)
+    await User.unguarded(async () => {
+      await expect(User.unsafeWhere(`name = '${injected}'`, []).update({ name: 'Changed' })).rejects.toThrow(policyError)
+    })
     expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects a non-identifier column in the database-clock expiry predicate on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert({ id: 1, name: 'Safe' })
+    expect(() => holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table), 'expires_at" OR 1=1 --')).toThrow(SecurityError)
+    expect(await db.table(table).count()).toBe(1)
   })
 
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {

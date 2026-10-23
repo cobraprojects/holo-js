@@ -20,7 +20,7 @@ import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
-import { assertAttributeNameAllowed, snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
@@ -107,8 +107,15 @@ function serializedFlag(serialized: boolean): { readonly serialized?: true } {
 const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
 const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
 
-function findOwnColumn(table: TableDefinition, name: string): TableDefinition['columns'][string] | undefined {
-  return Object.prototype.hasOwnProperty.call(table.columns, name) ? table.columns[name] : undefined
+function findWriteColumn(definition: AnyModelDefinition, key: string) {
+  const columnName = key.includes('->') ? key.split('->')[0]! : key
+  assertAttributeNameAllowed(columnName)
+  const column = ownEntry(definition.table.columns, columnName)
+  if (!column) {
+    throw new SecurityError(`Column "${columnName}" is not defined on model "${definition.name}".`)
+  }
+
+  return { columnName, column }
 }
 
 function hasDefinition<TTable extends TableDefinition>(
@@ -1781,12 +1788,7 @@ export class ModelRepository<
     }
 
     const sanitized = Object.fromEntries(entries.map(([key, value]) => {
-      const columnName = key.includes('->') ? key.split('->')[0]! : key
-      assertAttributeNameAllowed(columnName)
-      const column = findOwnColumn(this.definition.table, columnName)
-      if (!column) {
-        throw new SecurityError(`Column "${columnName}" is not defined on model "${this.definition.name}".`)
-      }
+      const { columnName, column } = findWriteColumn(this.definition, key)
 
       if (typeof value === 'undefined') {
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
@@ -3677,12 +3679,7 @@ export class ModelRepository<
 
   assertMassAssignable<TValues extends Partial<ModelRecord<TTable>> | Record<string, unknown>>(values: TValues): TValues {
     for (const key of Object.keys(values)) {
-      const columnName = key.includes('->') ? key.split('->')[0]! : key
-      assertAttributeNameAllowed(columnName)
-      const column = findOwnColumn(this.definition.table, columnName)
-      if (!column) {
-        throw new SecurityError(`Column "${columnName}" is not defined on model "${this.definition.name}".`)
-      }
+      const { columnName, column } = findWriteColumn(this.definition, key)
 
       if (column.generated) {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
@@ -3927,7 +3924,7 @@ export class ModelRepository<
     const attributes = entity.toAttributes() as Record<string, unknown>
     const mutated = Object.fromEntries(
       keys
-        .filter(key => this.definition.mutators[key] !== undefined)
+        .filter(key => ownEntry(this.definition.mutators, key) !== undefined)
         .map(key => [key, this.valueTransformer.applyMutator(key, attributes[key])]),
     )
     entity.forceFill(mutated as never)

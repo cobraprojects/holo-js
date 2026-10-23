@@ -226,13 +226,12 @@
 - Cache stores that shared a Redis database, database tables or a folder with other data lose it on `cache.flush()` or `holo cache:clear`. Move the cache to its own database, tables or folder first; see [Cache flushes clear the whole store](apps/docs/docs/getting-started/upgrading.md#cache-flushes-clear-the-whole-store).
 - Database `afterRollback` callbacks now run in reverse registration order and continue after callback failures; `afterCommit` callbacks retain registration order. Transaction and rollback-compensation failures are preserved together.
 - **`holo dev` exits 1 when another `holo dev` for this project is already running.** Before, it exited 0. CI scripts that relied on that must handle the failure. See [Dev server exits non-zero on a port conflict](apps/docs/docs/getting-started/upgrading.md#dev-server-exits-non-zero-on-a-port-conflict).
-
-These changes were merged in [#96](https://github.com/cobraprojects/holo-js/pull/96).
 - `unsafeWhere()` and `orUnsafeWhere()` conditions on `update()` and `delete()` need `security: { allowUnsafeRawSql: true }`, as they already did on reads. Before, the default policy let a raw condition built from user input delete or update every row. Without the setting these calls throw a `SecurityError`. Password reset and email verification links keep working with the default policy. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#raw-sql-conditions-on-update-and-delete).
 - Model attribute names `__proto__`, `constructor`, and `prototype` are rejected with a `SecurityError` on writes and `forceFill()`, and reading an attribute returns only the record's own attributes. Before, `get('constructor')` returned `Object`. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#attribute-names-__proto__-constructor-and-prototype).
-- Postgres JSON paths quote every segment, so a segment with a comma, quote, backslash, brace, or the word `NULL` matches the key it names. Before, `whereJson('settings->a,b', ...)` on Postgres read the path `a` then `b`.
+- Postgres JSON paths quote every segment, so a segment with a comma, quote, backslash, brace, or the word `NULL` matches the key it names. Before, `whereJson('settings->a,b', ...)` on Postgres read the path `a` then `b`. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#postgres-json-path-segments).
 - The `memory` cache keeps at most 10,000 entries when `maxEntries` isn't set and removes the oldest first. Before, the store had no limit. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#memory-cache-limit).
 
+These changes were merged in [#96](https://github.com/cobraprojects/holo-js/pull/96).
 
 ## 0.4.0
 

@@ -101,6 +101,10 @@ security: { allowUnsafeRawSql: true }
 
 Model writes and `forceFill()` reject `__proto__`, `constructor`, and `prototype` as attribute names with a `SecurityError`, even when the model is unguarded. Reading an attribute with one of those names returns `undefined` unless the model has such a column. Rename any column with one of these names.
 
+### Postgres JSON path segments
+
+A JSON path segment on Postgres is now matched as one key, however it is written. Before, a comma split a segment into two keys, and a quote, backslash, or brace changed which key the path named, so `whereJson('settings->a,b', ...)` read `settings` at `a` then `b`. Queries whose segments contain these characters now match the key they name. Check any stored query or saved path that relied on the old split.
+
 ### Memory cache limit
 
 The `memory` cache driver keeps at most 10,000 entries when `maxEntries` isn't set, and removes the oldest entries first. Before, it had no limit, so a long-running process could grow without bound. Set `maxEntries` to choose a different limit. See [Memory](/cache/drivers#memory).

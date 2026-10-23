@@ -15,7 +15,7 @@ export { SQLQueryCompiler } from './SQLQueryCompiler'
 export { SQLiteQueryCompiler } from './SQLiteQueryCompiler.impl'
 export { PostgresQueryCompiler } from './PostgresQueryCompiler'
 export { MySQLQueryCompiler } from './MySQLQueryCompiler'
-export { TableQueryBuilder, trustedFrameworkWhere } from './TableQueryBuilder'
+export { TableQueryBuilder, whereColumnNotExpiredByDatabaseClock } from './TableQueryBuilder'
 export {
   createCursorPaginator,
   createPaginator,

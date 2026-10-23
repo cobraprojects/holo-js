@@ -299,6 +299,8 @@ describe('model mass assignment', () => {
         expect(() => account.fill({ [key]: 'x' } as never)).toThrow(SecurityError)
         expect(() => account.set(key as never, 'x' as never)).toThrow(SecurityError)
         await expect(Account.create({ [key]: 'x' } as never)).rejects.toThrow(SecurityError)
+        await expect(account.update({ [key]: 'x' } as never)).rejects.toThrow(SecurityError)
+        await expect(Account.where('code', 'a').update(JSON.parse(`{ "${key}": "x" }`) as never)).rejects.toThrow(SecurityError)
       }
     })
     await expect(db.table('accounts').get()).resolves.toEqual([{ code: 'a', name: 'Ada', role: 'member', created_at: null, updated_at: null }])

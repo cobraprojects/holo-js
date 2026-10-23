@@ -3,7 +3,7 @@ import { PooledTransactionClients } from './drivers/PooledTransactionClients'
 import { getApplicationTimezone } from './applicationTimezone'
 import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
-import { trustedFrameworkWhere } from './query'
+import { whereColumnNotExpiredByDatabaseClock } from './query'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
@@ -403,7 +403,7 @@ export type {
 
 export const holoRuntimeInternals = Object.freeze({
   PooledTransactionClients,
-  trustedFrameworkWhere,
+  whereColumnNotExpiredByDatabaseClock,
   reportError,
   getApplicationTimezone,
   formatWallClock,

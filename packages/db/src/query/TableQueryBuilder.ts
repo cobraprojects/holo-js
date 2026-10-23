@@ -1,6 +1,7 @@
 import { CompilerError, ConfigurationError, SecurityError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
+import { getApplicationTimezone } from '../applicationTimezone'
 import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
@@ -2866,7 +2867,7 @@ export class TableQueryBuilder<
   }
 }
 
-export function trustedFrameworkWhere<
+function trustedRawWhere<
   TTableOrName extends TableReference,
   TSelectedRow extends Record<string, unknown>,
   TAvailableColumns extends Record<string, unknown>,
@@ -2886,4 +2887,29 @@ export function trustedFrameworkWhere<
       trusted: true,
     }),
   )
+}
+
+export function whereColumnNotExpiredByDatabaseClock<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  column: string,
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  if (!/^[A-Za-z_]\w*$/.test(column)) {
+    throw new SecurityError(`Database-clock predicates need a plain column name, received "${column}".`)
+  }
+
+  const dialect = query.getConnection().getDialect()
+  const quoted = dialect.quoteIdentifier(column)
+  if (dialect.name === 'sqlite') {
+    return trustedRawWhere(query, `${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
+  }
+
+  if (dialect.name === 'postgres') {
+    return trustedRawWhere(query, `${quoted} > (clock_timestamp() AT TIME ZONE ?)`, [getApplicationTimezone()])
+  }
+
+  return trustedRawWhere(query, `${quoted} > CURRENT_TIMESTAMP(3)`, [])
 }

@@ -202,13 +202,6 @@ function createAuthRedemptionContext() {
   }
 }
 
-function authTokenExpiryPredicate(connection: DatabaseContext): { sql: string, bindings: readonly unknown[] } {
-  const dialect = connection.getDialect().name
-  if (dialect === 'sqlite') return { sql: "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", bindings: [] }
-  if (dialect === 'postgres') return { sql: 'expires_at > (clock_timestamp() AT TIME ZONE ?)', bindings: [holoRuntimeInternals.getApplicationTimezone()] }
-  return { sql: 'expires_at > CURRENT_TIMESTAMP(3)', bindings: [] }
-}
-
 function getEntityAttributes(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') {
     const candidate = value as {
@@ -286,7 +279,6 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     emailVerificationTokens: Object.freeze({
       async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
         return redemption.redeem(record.provider, async (connection) => {
-          const expiry = authTokenExpiryPredicate(connection)
           const query = new TableQueryBuilder('email_verification_tokens', connection)
             .where('id', record.id)
             .where('provider', record.provider)
@@ -296,7 +288,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-          const claimed = await holoRuntimeInternals.trustedFrameworkWhere(query, expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
@@ -328,7 +320,6 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
         const table = record.table ?? 'password_reset_tokens'
         if (!Object.values(loadedConfig.auth.passwords).some(broker => broker.provider === record.provider && broker.table === table)) return null
         return redemption.redeem(record.provider, async (connection) => {
-          const expiry = authTokenExpiryPredicate(connection)
           const query = new TableQueryBuilder(table, connection)
             .where('id', record.id)
             .where('provider', record.provider)
@@ -337,7 +328,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-          const claimed = await holoRuntimeInternals.trustedFrameworkWhere(query, expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1

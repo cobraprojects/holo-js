@@ -11,6 +11,10 @@ export function assertAttributeNameAllowed(name: string): void {
   }
 }
 
+export function ownEntry<TValue>(record: Readonly<Record<string, TValue>>, key: string): TValue | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined
+}
+
 export type EntityConstructor = {
   new<
     TTable extends TableDefinition = TableDefinition,
