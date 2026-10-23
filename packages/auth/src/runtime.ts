@@ -2860,14 +2860,41 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   await rotateGuardSession(bindings, retainedGuard)
 }
 
-async function assertResetCanRetainSession(bindings: RuntimeBindings, providerName: string, email: string): Promise<void> {
-  const { adapter } = getProviderAdapter(providerName)
-  const user = await adapter.findByCredentials({ email })
-  if (!user) return
+async function assertPasswordResetCanComplete(bindings: RuntimeBindings, record: PasswordResetTokenRecord): Promise<void> {
+  if (!bindings.sessionRevocations) {
+    throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
+  }
+
+  const { adapter } = getProviderAdapter(record.provider)
+  if (!adapter.update) {
+    throwAuthError('provider_update_unsupported', `Auth provider "${record.provider}" must implement update() to persist user changes.`, {
+      provider: record.provider,
+    })
+  }
+
+  const user = await adapter.findByCredentials({ email: record.email })
+  if (!user) {
+    throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
+      provider: record.provider,
+      email: record.email,
+    })
+  }
 
   const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
-  if (await findSessionGuardOwnedBy(bindings, providerName, userId)) {
-    await assertResponseCookiesWritable(bindings)
+  if (getRememberToken(adapter, user)) {
+    requireRememberTokenUpdates(adapter, record.provider)
+  }
+
+  if (!await findSessionGuardOwnedBy(bindings, record.provider, userId)) {
+    return
+  }
+
+  if (!bindings.session.rotate) {
+    throw new Error('[@holo-js/auth] Existing auth sessions require state-preserving session rotation.')
+  }
+  await assertResponseCookiesWritable(bindings)
+  for (const guardName of sessionGuardNames(bindings)) {
+    await checkRememberWriteScope(bindings, guardName)
   }
 }
 
@@ -2890,11 +2917,7 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
 
-    if (!getRuntimeBindings().sessionRevocations) {
-      throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
-    }
-
-    await assertResetCanRetainSession(getRuntimeBindings(), record.provider, record.email)
+    await assertPasswordResetCanComplete(getRuntimeBindings(), record)
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
     const updated = await store.redeem(record, async () => {
       await store.deleteByEmail(record.provider, record.email, { table: record.table })

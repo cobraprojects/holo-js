@@ -109,6 +109,7 @@ function applyVerifiedEmailRuleToCreate(
   return {
     ...Object.fromEntries(Object.entries(attributes).filter(([key]) => key !== 'email' && key !== 'email_verified_at')),
     email: input.placeholderEmail,
+    email_verified_at: null,
   }
 }
 

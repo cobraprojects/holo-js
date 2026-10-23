@@ -2156,6 +2156,39 @@ describe('@holo-js/auth-clerk', () => {
     expect(await runtime.usersProvider.findByCredentials({ email: 'first-plain@app.test' })).toBeNull()
   })
 
+  it('keeps a first-time Clerk placeholder unverified when the adapter defaults a missing verification timestamp', async () => {
+    const runtime = await configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const base = runtime.usersProvider
+    authRuntimeInternals.configureRuntime({
+      ...bindings,
+      providers: {
+        ...bindings.providers,
+        users: {
+          ...base,
+          async create(input: Record<string, unknown>) {
+            return base.create({ ...input, email_verified_at: input.email_verified_at === undefined ? new Date() : input.email_verified_at })
+          },
+        },
+      },
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'placeholder-default-timestamp',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-default',
+        name: 'Default',
+        email: 'default@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+
+    expect(await runtime.usersProvider.findById(result.user.id as number)).toMatchObject({
+      email: 'hosted-default@clerk.hosted.local',
+      email_verified_at: null,
+    })
+  })
+
   it('does not touch or link an existing local account that shares an unverified Clerk email at first sign-in', async () => {
     const runtime = await configureRuntime()
     const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
