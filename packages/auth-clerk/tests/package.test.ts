@@ -2124,6 +2124,62 @@ describe('@holo-js/auth-clerk', () => {
     })
   })
 
+  it('creates a first-time Clerk user with the hosted placeholder when the provider email is unverified, with and without a custom mapper', async () => {
+    const runtime = await configureRuntime()
+
+    const plain = await syncIdentity({
+      sessionId: 'first-unverified-plain',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-first-plain',
+        name: 'First',
+        email: 'first-plain@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+    expect(plain.user).toMatchObject({ email: 'hosted-first-plain@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(plain.user.id as number)).toMatchObject({ email_verified_at: null })
+
+    const mapped = await syncIdentity({
+      sessionId: 'first-unverified-mapped',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-first-mapped',
+        name: 'Mapped',
+        email: 'first-mapped@app.test',
+        emailVerified: false,
+      }),
+    }, 'app', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+    expect(mapped.user).toMatchObject({ email: 'hosted-first-mapped@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(mapped.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-mapped@app.test' })).toBeNull()
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-plain@app.test' })).toBeNull()
+  })
+
+  it('does not touch or link an existing local account that shares an unverified Clerk email at first sign-in', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const existing = await runtime.usersProvider.create({ email: 'shared@app.test', name: 'Existing', password: null, email_verified_at: verifiedAt })
+
+    const result = await syncIdentity({
+      sessionId: 'first-unverified-shared',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-shared',
+        name: 'Newcomer',
+        email: 'shared@app.test',
+        emailVerified: false,
+      }),
+    }, 'app', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+
+    expect(result.user.id).not.toBe(existing.id)
+    expect(result.user).toMatchObject({ email: 'hosted-shared@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(result.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findById(existing.id as number)).toMatchObject({ email: 'shared@app.test', name: 'Existing', email_verified_at: verifiedAt })
+    expect(String((await runtime.identityStore.findByProviderUserId('app', 'hosted-shared'))?.userId)).toBe(String(result.user.id))
+  })
+
   it('relinks an orphaned Clerk identity without an email match', async () => {
     const runtime = await configureRuntime()
     await runtime.identityStore.save({

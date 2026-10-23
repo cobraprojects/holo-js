@@ -14,6 +14,7 @@ type HostedIdentitySyncInput = {
   readonly ownership: 'serialized-claim' | 'save'
   readonly verifiedEmail?: string
   readonly email?: string
+  readonly placeholderEmail: string
   readonly errorPrefix: string
   readonly identityLabel: string
   readonly createUserInput: () => Readonly<Record<string, unknown>>
@@ -95,6 +96,22 @@ function applyVerifiedEmailRule(
   return resetVerificationOnEmailChange(user, next)
 }
 
+function applyVerifiedEmailRuleToCreate(
+  attributes: Readonly<Record<string, unknown>>,
+  input: HostedIdentitySyncInput,
+): Readonly<Record<string, unknown>> {
+  const verified = input.verifiedEmail?.trim() || undefined
+  const email = typeof attributes.email === 'string' ? attributes.email.trim() : undefined
+  if (email && email === verified) {
+    return { ...attributes, email }
+  }
+
+  return {
+    ...Object.fromEntries(Object.entries(attributes).filter(([key]) => key !== 'email' && key !== 'email_verified_at')),
+    email: input.placeholderEmail,
+  }
+}
+
 async function updateLocalUser(user: LocalUser, input: HostedIdentitySyncInput): Promise<{ user: LocalUser, changed: boolean }> {
   const attributes = applyVerifiedEmailRule(user, input.updateUserInput(), input.verifiedEmail)
   const changed = Object.entries(attributes).some(([key, value]) => key === 'email_verified_at'
@@ -132,7 +149,7 @@ async function synchronize(input: HostedIdentitySyncInput): Promise<HostedIdenti
     if (input.verifiedEmail && await findUserByEmail(input.verifiedEmail, input)) {
       throw input.conflict(input.verifiedEmail, false)
     }
-    user = requireUserRecord(await adapter.create(input.createUserInput()), input, 'Auth provider create() must return an object user.')
+    user = requireUserRecord(await adapter.create(applyVerifiedEmailRuleToCreate(input.createUserInput(), input)), input, 'Auth provider create() must return an object user.')
     if (previous) {
       user = (await updateLocalUser(user, input)).user
     }

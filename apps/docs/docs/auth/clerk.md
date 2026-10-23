@@ -226,7 +226,7 @@ If a local user with the same verified email already exists and isn't linked to 
 
 Holo copies Clerk's primary email to the local user only when Clerk reports it verified. An unverified address never replaces the stored email, and changing the stored email clears its `email_verified_at`.
 
-When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without an email get a placeholder like `<clerk-id>@clerk.hosted.local` when verification isn't required.
+When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without a verified email get a placeholder like `<clerk-id>@clerk.hosted.local`, and their provider email isn't stored. A first sign-in with an unverified email never links to an existing local account with that address, so the existing account stays as it is. When verification isn't required, the user is still created.
 
 ## Store links in your own table
 

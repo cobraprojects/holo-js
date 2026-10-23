@@ -216,7 +216,7 @@ The first time a WorkOS user signs in, Holo creates a local user and links the W
 If a local user with the same verified email already exists and isn't linked to WorkOS, Holo doesn't merge the accounts. The callback fails with `workos_identity_conflict`. This stops someone from taking over a password account through a hosted provider.
 :::
 
-When [email verification](/auth/email-verification) is required, WorkOS users must have a verified email, or sign-in fails.
+When [email verification](/auth/email-verification) is required, WorkOS users must have a verified email, or sign-in fails. Without a verified email, a first sign-in creates the user with a placeholder like `<workos-id>@workos.hosted.local`, and the provider email isn't stored. It never links to an existing local account with that address.
 
 Holo copies WorkOS's email to the local user only when WorkOS reports it verified. An unverified address never replaces the stored email, and changing the stored email clears its `email_verified_at`.
 

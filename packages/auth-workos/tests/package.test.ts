@@ -1933,6 +1933,68 @@ describe('@holo-js/auth-workos', () => {
     })
   })
 
+  it('creates a first-time WorkOS user with the hosted placeholder when the provider email is unverified, with and without a custom mapper', async () => {
+    const runtime = await configureRuntime()
+
+    const plain = await syncIdentity({
+      sessionId: 'first-unverified-plain',
+      identity: {
+        id: 'workos_first_plain',
+        email: 'first-plain@app.test',
+        emailVerified: false,
+        name: 'First',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard')
+    expect(plain.user).toMatchObject({ email: 'workos_first_plain@workos.hosted.local' })
+    expect(await runtime.usersProvider.findById(plain.user.id as number)).toMatchObject({ email_verified_at: null })
+
+    const mapped = await syncIdentity({
+      sessionId: 'first-unverified-mapped',
+      identity: {
+        id: 'workos_first_mapped',
+        email: 'first-mapped@app.test',
+        emailVerified: false,
+        name: 'Mapped',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+    expect(mapped.user).toMatchObject({ email: 'workos_first_mapped@workos.hosted.local' })
+    expect(await runtime.usersProvider.findById(mapped.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-mapped@app.test' })).toBeNull()
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-plain@app.test' })).toBeNull()
+  })
+
+  it('does not touch or link an existing local account that shares an unverified WorkOS email at first sign-in', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const existing = await runtime.usersProvider.create({ email: 'shared@app.test', name: 'Existing', password: null, email_verified_at: verifiedAt })
+
+    const result = await syncIdentity({
+      sessionId: 'first-unverified-shared',
+      identity: {
+        id: 'workos_shared',
+        email: 'shared@app.test',
+        emailVerified: false,
+        name: 'Newcomer',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+
+    expect(result.user.id).not.toBe(existing.id)
+    expect(result.user).toMatchObject({ email: 'workos_shared@workos.hosted.local' })
+    expect(await runtime.usersProvider.findById(result.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findById(existing.id as number)).toMatchObject({ email: 'shared@app.test', name: 'Existing', email_verified_at: verifiedAt })
+    expect(String((await runtime.identityStore.findByProviderUserId('dashboard', 'workos_shared'))?.userId)).toBe(String(result.user.id))
+  })
+
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {
     const runtime = await configureRuntime()
     const linkedUser = await runtime.usersProvider.create({

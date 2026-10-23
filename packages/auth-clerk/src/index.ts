@@ -615,13 +615,17 @@ function resolveDisplayName(profile: ClerkUserProfile): string {
   return fullName || profile.email || profile.id
 }
 
+function resolveHostedPlaceholderEmail(profile: ClerkUserProfile): string {
+  return `${profile.id}@clerk.hosted.local`
+}
+
 function resolveEmailForCreation(profile: ClerkUserProfile): string {
-  const primary = resolvePrimaryEmail(profile).email
-  if (primary) {
-    return primary
+  const primary = resolvePrimaryEmail(profile)
+  if (primary.email && primary.emailVerified) {
+    return primary.email
   }
 
-  return `${profile.id}@clerk.hosted.local`
+  return resolveHostedPlaceholderEmail(profile)
 }
 
 function toAdapterInput(input: ClerkUserAttributes): Readonly<Record<string, unknown>> {
@@ -1014,6 +1018,7 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
     ownership: 'serialized-claim',
     verifiedEmail,
     email: resolvedEmail.email,
+    placeholderEmail: resolveHostedPlaceholderEmail(profile),
     errorPrefix: '[@holo-js/auth-clerk]',
     identityLabel: 'Clerk',
     createUserInput: () => resolveCreateUserInput(profile, options.user),
