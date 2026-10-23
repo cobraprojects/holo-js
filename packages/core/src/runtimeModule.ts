@@ -374,7 +374,7 @@ function isBunRuntime(): boolean {
   return typeof globalThis === 'object' && 'Bun' in globalThis
 }
 
-const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
+const nonAliasSpecifier = /^(?:\.|\/|#|[a-z][a-z\d+.-]*:|@holo-js\/)/i
 
 type MetafileImport = {
   readonly path: string
@@ -420,8 +420,26 @@ function samePath(left: string, right: string): boolean {
   }
 }
 
-function activeLoaderMatchesBundle(dependency: MetafileImport, importerPath: string, projectRoot: string): boolean {
-  const resolved = resolveWithActiveLoader(dependency.original ?? dependency.path, importerPath)
+function packageNameOf(specifier: string): string {
+  const [scopeOrName = '', name] = specifier.split('/')
+  return scopeOrName.startsWith('@') && name ? `${scopeOrName}/${name}` : scopeOrName
+}
+
+function packageVisibleFrom(importerPath: string, specifier: string): boolean {
+  if (nodeModule.isBuiltin(specifier)) return true
+
+  const name = packageNameOf(specifier)
+  for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
+    if (existsSync(join(directory, 'node_modules', name))) return true
+    if (dirname(directory) === directory) return false
+  }
+}
+
+function staticImportMatchesBundle(dependency: MetafileImport, importerPath: string, projectRoot: string): boolean {
+  const specifier = dependency.original ?? dependency.path
+  if (dependency.external === true && packageVisibleFrom(importerPath, specifier)) return true
+
+  const resolved = resolveWithActiveLoader(specifier, importerPath)
   if (resolved === undefined) return false
 
   return dependency.external === true || samePath(resolved, resolve(projectRoot, dependency.path))
@@ -480,7 +498,7 @@ export async function loadProjectDefinitionRuntimeModules(
         }
       }
     }
-    if (nativeSourceLoader && staticImports.some(({ dependency, importerPath }) => !activeLoaderMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
+    if (nativeSourceLoader && staticImports.some(({ dependency, importerPath }) => !staticImportMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })

@@ -460,6 +460,44 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     }, 30_000)
   })
 
+  describe('keeps package-scoped imports native', () => {
+    const packageImportsManifest = { type: 'module', imports: { '#internal': './internal.ts' } }
+
+    it('keeps an ESM definition that imports a # subpath native, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: "import { label } from '#internal'\nexport const job = { title: label }\n" })
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify(packageImportsManifest))
+      await writeFile(join(projectRoot, 'internal.ts'), "export const label = 'internal'\n")
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(result).toEqual({ title: 'internal', shared: true })
+    }, 30_000)
+
+    it.skipIf(!bunAvailable)('keeps an ESM definition that imports a # subpath native, under Bun', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: "import { label } from '#internal'\nexport const job = { title: label }\n" })
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify(packageImportsManifest))
+      await writeFile(join(projectRoot, 'internal.ts'), "export const label = 'internal'\n")
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: 'bun', args: [], env: {} })
+
+      expect(result).toEqual({ title: 'internal', shared: true })
+    }, 30_000)
+
+    it('keeps an ESM definition native when its package is installed only in a node_modules next to it, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: "import { value } from 'nested-dep'\nexport const job = { title: value }\n" })
+      const dependencyRoot = join(projectRoot, 'jobs/node_modules/nested-dep')
+      await mkdir(dependencyRoot, { recursive: true })
+      await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: 'nested-dep', type: 'module', main: './index.mjs' }))
+      await writeFile(join(dependencyRoot, 'index.mjs'), "export const value = 'nested'\n")
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(result).toEqual({ title: 'nested', shared: true })
+    }, 30_000)
+  })
+
   it.each([
     { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },
     { label: '--preserve-symlinks', args: ['--preserve-symlinks'], env: {}, bundled: true },
