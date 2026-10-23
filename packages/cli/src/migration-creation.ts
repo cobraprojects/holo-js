@@ -28,7 +28,7 @@ async function withMigrationCreationLock<TResult>(projectRoot: string, callback:
       break
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
-      if (Date.now() - started >= 30_000) throw new Error(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`)
+      if (Date.now() - started >= 30_000) throw new Error(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`, { cause: error })
       await wait(10)
     }
   }

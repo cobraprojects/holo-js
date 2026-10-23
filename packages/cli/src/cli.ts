@@ -999,11 +999,11 @@ export function createInternalCommands(
         const holoDirectorySnapshot = await readDirectorySnapshot(context.projectRoot, '.holo-js')
         let dependencyInstallSucceeded = false
         let updatedDependencies = false
-        let updatedPackageJson = false
+        let updatedPackageJson: boolean
         let loadedPlugin: ProjectPluginsModule.LoadedHoloPlugin
-        let contributedDependencies: readonly string[] = []
+        let contributedDependencies: readonly string[]
         let updatedContributedDependencies = false
-        let activated = false
+        let activated: boolean
         let createdSecurityConfig = false
         let securityScaffoldSnapshots: DirectorySnapshot[] = []
 

@@ -705,7 +705,7 @@ export function renderGeneratedAuthorizationTypes(
     return [
       `    ${JSON.stringify(entry.name)}: {`,
       '      actor: HoloAuthUser',
-      `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationPolicyDefinition<infer _TName, infer TTarget, infer _TClassActions, infer _TRecordActions, infer _TActor> ? TTarget : object`,
+      `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationPolicyDefinition<string, infer TTarget, string, string, never> ? TTarget : object`,
       '      classActions: {',
       ...classActionEntries,
       '      }',
@@ -726,7 +726,7 @@ export function renderGeneratedAuthorizationTypes(
     return [
       `    ${JSON.stringify(entry.name)}: {`,
       '      actor: HoloAuthUser',
-      `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationAbilityDefinition<infer _TName, infer TInput, infer _TActor> ? TInput : object`,
+      `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationAbilityDefinition<string, infer TInput, never> ? TInput : object`,
       '    }',
     ].join('\n')
   })

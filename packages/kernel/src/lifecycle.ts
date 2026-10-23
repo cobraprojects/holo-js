@@ -66,7 +66,7 @@ export class RuntimeLifecycle<TContext extends RuntimeLifecycleContext = Runtime
       try {
         await this.dispose(context)
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], '[Holo Runtime] Initialization and rollback both failed.')
+        throw new AggregateError([error, cleanupError], '[Holo Runtime] Initialization and rollback both failed.', { cause: cleanupError })
       }
       throw error
     }

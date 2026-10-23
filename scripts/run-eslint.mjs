@@ -2,7 +2,7 @@ import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 
-const rootTargets = ['scripts', 'eslint.config.mjs', 'vitest.shared.ts', 'vitest.workspace.ts']
+const rootTargets = ['scripts', 'eslint.config.mjs', 'vitest.shared.ts', 'vitest.config.ts']
 const passThroughArgs = process.argv.slice(2)
 const cacheLocation = '.eslintcache-main'
 const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', cacheLocation]
@@ -34,13 +34,10 @@ async function main() {
   ]
 
   for (const targets of groups) {
-    let retriedAfterCacheReset = false
-
     try {
       await run(targets)
     } catch (error) {
-      if (!retriedAfterCacheReset && shouldResetCache(error)) {
-        retriedAfterCacheReset = true
+      if (shouldResetCache(error)) {
         await clearCache(cacheLocation)
         await run(targets)
         continue

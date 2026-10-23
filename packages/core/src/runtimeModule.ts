@@ -241,7 +241,7 @@ function resolveHoloPackageFromRuntime(specifier: string): string {
     return import.meta.resolve(specifier)
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`)
+      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`, { cause: error })
     }
 
     throw error
@@ -326,14 +326,14 @@ async function bundleRuntimeModule(
         })
         .join('\n')
 
-      throw new Error(message)
+      throw new Error(message, { cause: error })
     }
 
     if (error instanceof Error && error.message) {
       throw error
     }
 
-    throw new Error(`Failed to load ${entryPath}.`)
+    throw new Error(`Failed to load ${entryPath}.`, { cause: error })
   }
 }
 

@@ -174,7 +174,7 @@ function injectSvelteRealtimeVitePlugin(viteConfigContents: string): SvelteRealt
   const adapterImportPattern = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/
   const svelteKitImportPattern = /(import\s*\{[^}]*\bsveltekit\b[^}]*\}\s*from\s*(['"])@sveltejs\/kit\/vite\2)/
   const existingAdapterImport = adapterImportPattern.exec(viteConfigContents)
-  let withImport = viteConfigContents
+  let withImport: string
 
   if (existingAdapterImport) {
     const imports = existingAdapterImport[1]

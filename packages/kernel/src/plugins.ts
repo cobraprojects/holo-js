@@ -210,7 +210,7 @@ export async function loadHoloPluginDefinitions(
     try {
       manifest = JSON.parse(await readFile(packageJsonPath, 'utf8')) as PluginManifest
     } catch (error) {
-      if (isRecord(error) && error.code === 'ENOENT') throw new Error(`Cannot find module '${packageName}/package.json'`)
+      if (isRecord(error) && error.code === 'ENOENT') throw new Error(`Cannot find module '${packageName}/package.json'`, { cause: error })
       throw error
     }
     if (!isRecord(manifest.holo) || !normalizeString(manifest.holo.plugin)) {

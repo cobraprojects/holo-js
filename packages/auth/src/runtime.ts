@@ -1429,7 +1429,7 @@ async function establishLoginSessionForUser(
     try {
       await invalidateMultiFactorChallenge(options.guard, established.sessionId, bindings)
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Failed to invalidate a multi-factor challenge after establishment failed.')
+      throw new AggregateError([error, cleanupError], 'Failed to invalidate a multi-factor challenge after establishment failed.', { cause: cleanupError })
     }
     throw error
   }
@@ -1923,7 +1923,7 @@ async function completeMultiFactorChallenge(
     try {
       formerSession = await bindings.session.read(state.sessionId)
     } catch (readError) {
-      throw new AggregateError([error, readError], 'Failed to inspect a multi-factor challenge after session establishment failed.')
+      throw new AggregateError([error, readError], 'Failed to inspect a multi-factor challenge after session establishment failed.', { cause: readError })
     }
     if (!formerSession) throw error
     try {
@@ -1935,10 +1935,10 @@ async function completeMultiFactorChallenge(
       } catch (invalidationError) {
         throw new AggregateError(
           [error, restoreError, invalidationError],
-          'Failed to recover a multi-factor challenge after session establishment failed.',
+          'Failed to recover a multi-factor challenge after session establishment failed.', { cause: invalidationError },
         )
       }
-      throw new AggregateError([error, restoreError], 'Failed to recover a multi-factor challenge after session establishment failed.')
+      throw new AggregateError([error, restoreError], 'Failed to recover a multi-factor challenge after session establishment failed.', { cause: restoreError })
     }
     throw error
   }
@@ -2038,7 +2038,7 @@ function createMultiFactorFacade(guardName: string): AuthMultiFactorFacade {
           const saved = await store.find(state.payload.provider, state.payload.userId)
           if (saved?.encryptedSecret === credential.encryptedSecret) await store.delete(state.payload.provider, state.payload.userId)
         } catch (rollbackError) {
-          throw new AggregateError([error, rollbackError], 'Failed to roll back a multi-factor enrollment after the remember token refresh failed.')
+          throw new AggregateError([error, rollbackError], 'Failed to roll back a multi-factor enrollment after the remember token refresh failed.', { cause: rollbackError })
         }
         throw error
       }
@@ -2343,7 +2343,7 @@ async function rollbackRegisteredUser(
         } catch (adapterDeleteError) {
           throw new AggregateError(
             [deleteError, adapterDeleteError],
-            'Failed to rollback the registered user.',
+            'Failed to rollback the registered user.', { cause: adapterDeleteError },
           )
         }
       }
@@ -2510,7 +2510,7 @@ async function establishSessionForUser(
     try {
       await invalidateSessionAuthentication(bindings, session.id, [...sharedGuardNames, options.guard], session.store)
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'Failed to clean up an authenticated session transition.')
+      throw new AggregateError([error, cleanupError], 'Failed to clean up an authenticated session transition.', { cause: cleanupError })
     }
     throw error
   }

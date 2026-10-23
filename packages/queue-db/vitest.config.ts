@@ -1,5 +1,5 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { workspaceTestConfig } from '../../vitest.shared'
+import { workspaceTestConfig } from '../../vitest.shared.ts'
 
 export default mergeConfig(workspaceTestConfig, defineConfig({
   test: {

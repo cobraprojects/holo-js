@@ -160,6 +160,10 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(types).toContain('AuthorizationPolicyRegistry')
     expect(types).toContain('AuthorizationAbilityRegistry')
     expect(types).toContain('AuthorizationGuardRegistry')
+    expect(types).not.toContain('eslint-disable')
+    expect(types).not.toContain(': any')
+    expect(types).toContain('HoloAuthorizationPolicyDefinition<string, infer TTarget, string, string, never>')
+    expect(types).toContain('HoloAuthorizationAbilityDefinition<string, infer TInput, never>')
     const policyEntry = /"posts": \{[\s\S]*?recordActions:/.exec(types)?.[0]
     const abilityEntry = /"reports\.export": \{[\s\S]*?input:/.exec(types)?.[0]
     expect(policyEntry).toContain('actor: HoloAuthUser')

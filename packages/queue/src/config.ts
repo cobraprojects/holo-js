@@ -190,7 +190,7 @@ function parseRedisDatabaseFromUrl(url: string | undefined, label: string): numb
   try {
     parsed = new URL(url)
   } catch (error) {
-    throw new Error(`[Holo Queue] ${label} is invalid: ${String(error)}`)
+    throw new Error(`[Holo Queue] ${label} is invalid: ${String(error)}`, { cause: error })
   }
 
   if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {

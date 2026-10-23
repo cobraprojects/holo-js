@@ -324,6 +324,11 @@ describe('@holo-js/adapter-nuxt module setup', () => {
       expect(() => execFileSync(
         resolve(repoRoot, 'node_modules/.bin/tsc'),
         [
+          '--ignoreConfig',
+          '--strict',
+          'false',
+          '--types',
+          'node',
           '--module',
           'nodenext',
           '--moduleResolution',
@@ -376,6 +381,9 @@ describe('@holo-js/adapter-nuxt module setup', () => {
       expect(() => execFileSync(
         resolve(repoRoot, 'node_modules/.bin/tsc'),
         [
+          '--ignoreConfig',
+          '--strict',
+          'false',
           '--module',
           'nodenext',
           '--moduleResolution',

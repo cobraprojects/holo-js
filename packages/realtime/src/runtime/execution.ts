@@ -127,7 +127,7 @@ async function resolveAuthForAccess<TArgs>(
   bindings: RealtimeRuntimeBindings | undefined,
   access: RealtimeAccessObject<TArgs>,
 ): Promise<RealtimeAuthState | null> {
-  let authModule: RealtimeAuthModule | null = null
+  let authModule: RealtimeAuthModule | null
   try {
     authModule = await loadAuthModule(bindings)
   } catch (error) {

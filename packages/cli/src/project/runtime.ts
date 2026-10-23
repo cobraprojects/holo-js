@@ -226,14 +226,14 @@ export async function bundleProjectModule(
         })
         .join('\n')
 
-      throw new Error(message)
+      throw new Error(message, { cause: error })
     }
 
     if (error instanceof Error && error.message) {
       throw error
     }
 
-    throw new Error(`Failed to load ${entryPath}.`)
+    throw new Error(`Failed to load ${entryPath}.`, { cause: error })
   }
 }
 

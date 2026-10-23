@@ -417,7 +417,7 @@ async function rethrowAfterCleanup(error: unknown, cleanup: () => Promise<void>,
   try {
     await cleanup()
   } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], message)
+    throw new AggregateError([error, cleanupError], message, { cause: cleanupError })
   }
   throw error
 }
@@ -946,7 +946,7 @@ function createCoreBroadcastPublisher(
       })
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`[@holo-js/core] Broadcast publish request timed out after ${BROADCAST_PUBLISH_TIMEOUT_MS}ms.`)
+        throw new Error(`[@holo-js/core] Broadcast publish request timed out after ${BROADCAST_PUBLISH_TIMEOUT_MS}ms.`, { cause: error })
       }
       throw new Error(`[@holo-js/core] Broadcast publish request could not reach the broadcast worker at ${url.origin}.`, { cause: error })
     } finally {

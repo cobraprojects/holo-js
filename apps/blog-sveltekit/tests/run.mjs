@@ -310,7 +310,7 @@ async function fetchJson(url, options = {}) {
       json: JSON.parse(text),
     }
   } catch (error) {
-    throw new Error(`Expected JSON from ${url}: ${error instanceof Error ? error.message : String(error)}\n${text}`)
+    throw new Error(`Expected JSON from ${url}: ${error instanceof Error ? error.message : String(error)}\n${text}`, { cause: error })
   }
 }
 

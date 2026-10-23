@@ -76,6 +76,9 @@ describe('@holo-js/storage runtime packaging', () => {
       expect(() => execFileSync(
         resolve(repoRoot, 'node_modules/.bin/tsc'),
         [
+          '--ignoreConfig',
+          '--strict',
+          'false',
           '--module',
           'nodenext',
           '--moduleResolution',

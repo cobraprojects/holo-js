@@ -134,7 +134,7 @@ function parseClusterNodeUrl(
     }
   } catch (error) {
     /* v8 ignore next -- URL construction and validation above only throw Error instances. */
-    throw new Error(`[@holo-js/security] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`[@holo-js/security] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
 }
 
