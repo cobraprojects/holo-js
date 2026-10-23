@@ -78,7 +78,7 @@ export default defineAuthConfig({
 | `redirectUri` | | Callback URL. Must be a full URL |
 | `apiUrl` | Clerk's API | Custom Backend API base URL |
 | `sessionCookie` | `'__session'` | Clerk session cookie name |
-| `authorizedParties` | `[]` | Extra origins allowed to have issued the Clerk session token. Your app's own origin is always allowed |
+| `authorizedParties` | `[]` | Origins allowed to have issued the Clerk session tokens that this app accepts. The origin of `redirectUri` is always allowed. Holo never takes an origin from the request's `Host` header, so a session token issued for another app on the same Clerk instance is rejected. With neither set, Clerk sessions are rejected, so set `redirectUri` or list your origin here |
 | `guard` | default guard | Sign users in on this guard. Must be a `session` guard |
 | `mapToProvider` | the guard's provider | Save users with this user provider |
 
@@ -222,6 +222,8 @@ The first time a Clerk user signs in, Holo creates a local user and links the Cl
 ::: warning
 If a local user with the same verified email already exists and isn't linked to Clerk, Holo doesn't merge the accounts. The callback fails with `clerk_identity_conflict`. This stops someone from taking over a password account through a hosted provider.
 :::
+
+Holo copies Clerk's primary email to the local user only when Clerk reports it verified. An unverified address never replaces the stored email, and changing the stored email clears its `email_verified_at`.
 
 When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without an email get a placeholder like `<clerk-id>@clerk.hosted.local` when verification isn't required.
 

@@ -256,6 +256,45 @@ describe('@holo-js/auth-social-apple', () => {
     })
   })
 
+  it('takes the email only from the verified id_token, never from the unsigned form user payload', async () => {
+    mockAppleFetch({
+      access_token: 'access',
+      refresh_token: 'refresh',
+      id_token: createToken({
+        sub: 'apple-user',
+        given_name: 'Token',
+        family_name: 'Name',
+      }),
+    })
+
+    const exchanged = await exchangeCode({
+      clientId: 'client',
+      request: new Request('https://app.test/auth/apple/callback', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          code: 'test-code',
+          user: JSON.stringify({
+            email: 'victim@example.com',
+            name: {
+              firstName: 'Form',
+              lastName: 'Name',
+            },
+          }),
+        }),
+      }),
+    })
+
+    expect(exchanged.profile).toEqual({
+      id: 'apple-user',
+      email: undefined,
+      emailVerified: false,
+      name: 'Token Name',
+    })
+  })
+
   it('ignores POST callbacks without a usable Apple user payload', async () => {
     mockAppleFetch({
       access_token: 'access',
@@ -842,7 +881,7 @@ describe('@holo-js/auth-social-apple', () => {
 
     expect(exchanged.profile).toEqual({
       id: 'apple-user',
-      email: 'form@example.com',
+      email: undefined,
       emailVerified: true,
       name: undefined,
     })

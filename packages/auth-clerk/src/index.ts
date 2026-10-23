@@ -179,11 +179,15 @@ async function verifyClerkSessionToken(
   const allowedAuthorizedParties = authorizedParties
     .map(value => value.trim())
     .filter(Boolean)
-  if (allowedAuthorizedParties.length > 0 && !azp) {
+  if (allowedAuthorizedParties.length === 0) {
+    throw new Error('[@holo-js/auth-clerk] Clerk token authorized party cannot be verified because no authorized party is configured.')
+  }
+
+  if (!azp) {
     throw new Error('[@holo-js/auth-clerk] Clerk token did not include an authorized party.')
   }
 
-  if (azp && allowedAuthorizedParties.length > 0 && !allowedAuthorizedParties.includes(azp)) {
+  if (!allowedAuthorizedParties.includes(azp)) {
     throw new Error(`[@holo-js/auth-clerk] Clerk token authorized party "${azp}" is not allowed.`)
   }
 
@@ -299,6 +303,7 @@ function createDefaultProviderRuntime(providerName: string, config: NormalizedAu
     config.apiUrl ?? '',
     config.frontendApi ?? '',
     config.secretKey ?? '',
+    config.redirectUri ?? '',
     [...config.authorizedParties].sort(),
   ])
   const existing = clerkDefaultProviderRuntimeCache.get(cacheKey)
@@ -308,7 +313,7 @@ function createDefaultProviderRuntime(providerName: string, config: NormalizedAu
 
   const runtime = Object.freeze({
     async verifySession({ token }: ClerkVerifySessionContext): Promise<ClerkVerifiedSession | null> {
-      const claims = await verifyClerkSessionToken(token, config, config.authorizedParties)
+      const claims = await verifyClerkSessionToken(token, config, resolveAuthorizedParties(config))
       const profile = await fetchClerkUserProfile(claims.sub, config)
 
       return Object.freeze({
@@ -649,12 +654,14 @@ function resolveUpdateUserInput<TUserAttributes extends ClerkUserAttributes>(
   profile: ClerkUserProfile,
   mapper?: (clerkUser: ClerkUserProfile) => TUserAttributes,
 ): Readonly<Record<string, unknown>> {
-  return toAdapterInput(withRequiredUserFields({
-    email: profile.email.trim() || undefined,
+  const verifiedEmail = profile.emailVerified ? profile.email.trim() || undefined : undefined
+  return toAdapterInput({
+    name: resolveDisplayName(profile),
+    email: verifiedEmail,
     avatar: profile.imageUrl,
-    email_verified_at: profile.emailVerified ? new Date() : undefined,
+    email_verified_at: verifiedEmail ? new Date() : undefined,
     ...(mapper?.(profile) ?? {}),
-  }, profile))
+  })
 }
 
 function normalizeHostedProfile(profile: ClerkUserProfile): Readonly<Record<string, unknown>> {
@@ -853,14 +860,15 @@ export async function verifySession(token: string, provider?: string): Promise<C
   })
 }
 
-function resolveRequestAuthorizedParties(
-  config: NormalizedAuthClerkProviderConfig,
-  request: Request,
-): readonly string[] {
+function resolveAuthorizedParties(config: {
+  readonly authorizedParties: readonly string[]
+  readonly redirectUri?: string
+}): readonly string[] {
+  const redirectOrigin = config.redirectUri?.trim() ? new URL(config.redirectUri.trim()).origin : undefined
   return Object.freeze([
     ...new Set([
       ...config.authorizedParties,
-      new URL(request.url).origin,
+      ...(redirectOrigin ? [redirectOrigin] : []),
     ]),
   ])
 }
@@ -900,7 +908,7 @@ async function verifyRequestWithClerkBackendSdk(
   })
   const authenticateOptions = {
     apiUrl: providerConfig.apiUrl,
-    authorizedParties: [...resolveRequestAuthorizedParties(providerConfig, request)],
+    authorizedParties: [...resolveAuthorizedParties(providerConfig)],
     publishableKey,
     secretKey,
   }
@@ -926,7 +934,7 @@ async function verifyRequestWithClerkBackendSdk(
   return verifyDefaultSessionToken(
     requestState.token,
     providerConfig,
-    resolveRequestAuthorizedParties(providerConfig, request),
+    resolveAuthorizedParties(providerConfig),
   )
 }
 
@@ -968,7 +976,7 @@ export async function verifyRequest(input: ClerkRequestInput, provider?: string)
     })
   }
 
-  return verifyDefaultSessionToken(token, providerConfig, resolveRequestAuthorizedParties(providerConfig, request))
+  return verifyDefaultSessionToken(token, providerConfig, resolveAuthorizedParties(providerConfig))
 }
 
 export async function syncIdentity<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(

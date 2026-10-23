@@ -1,5 +1,6 @@
 import type { AuthHostedIdentityRecord, AuthHostedIdentityStore } from '../config'
 import type { authRuntimeInternals } from '../runtime'
+import { resetVerificationOnEmailChange } from './emailChange'
 
 type LocalUser = Record<string, unknown>
 type SyncStatus = 'created' | 'linked' | 'updated' | 'relinked'
@@ -73,7 +74,7 @@ async function findUserByEmail(email: string, input: HostedIdentitySyncInput): P
 }
 
 async function updateLocalUser(user: LocalUser, input: HostedIdentitySyncInput): Promise<{ user: LocalUser, changed: boolean }> {
-  const attributes = input.updateUserInput()
+  const attributes = resetVerificationOnEmailChange(user, input.updateUserInput())
   const changed = Object.entries(attributes).some(([key, value]) => key === 'email_verified_at'
     ? value instanceof Date && !user.email_verified_at
     : !Object.is(value, user[key]))

@@ -218,6 +218,8 @@ If a local user with the same verified email already exists and isn't linked to 
 
 When [email verification](/auth/email-verification) is required, WorkOS users must have a verified email, or sign-in fails.
 
+Holo copies WorkOS's email to the local user only when WorkOS reports it verified. An unverified address never replaces the stored email, and changing the stored email clears its `email_verified_at`.
+
 ## Store links in your own table
 
 Holo keeps WorkOS links in `auth_identities`. To use another table, pass an object with `findByProviderUserId`, `findByUserId`, and `save` as `identityStore`:

@@ -1863,6 +1863,40 @@ describe('@holo-js/auth-workos', () => {
     expect((await runtime.usersProvider.findByCredentials({ email: 'unique@app.test' }))?.id).toBe(1)
   })
 
+  it('keeps the stored email and its verification when WorkOS reports the new email unverified', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({ email: 'owner@app.test', name: 'Owner', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'dashboard',
+      providerUserId: 'workos_owner',
+      guard: 'web',
+      authProvider: 'users',
+      userId: user.id,
+      email: 'owner@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    await expect(syncIdentity({
+      sessionId: 'unverified-email-change',
+      identity: {
+        id: 'workos_owner',
+        email: 'victim@app.test',
+        emailVerified: false,
+        name: 'Owner',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard')).resolves.toMatchObject({ status: 'linked' })
+    expect(await runtime.usersProvider.findById(user.id)).toMatchObject({
+      email: 'owner@app.test',
+      email_verified_at: verifiedAt,
+    })
+  })
+
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {
     const runtime = await configureRuntime()
     const linkedUser = await runtime.usersProvider.create({

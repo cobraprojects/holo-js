@@ -144,7 +144,9 @@ export async function POST({ request }: { request: Request }) {
 
 A link works once. After a successful reset, every other reset link for that email stops working too.
 
-The reset also cycles the user's remember token, the way Laravel does on password reset. A browser that was signed in with "remember me" can no longer restore its session from the old remember cookie. Browsers that are still signed in keep their sessions until those sessions expire or sign out.
+The reset also cycles the user's remember token, the way Laravel does on password reset. A browser that was signed in with "remember me" can no longer restore its session from the old remember cookie.
+
+The reset signs the user out everywhere else. Every other browser's session stops working on its next request, including sessions that were already signed in. The browser that submits the reset keeps its place: if it was signed in as this user, its session ID is rotated and it stays signed in. A browser that wasn't signed in gets no session.
 
 ## Configure the broker
 

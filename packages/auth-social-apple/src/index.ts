@@ -17,7 +17,6 @@ const APPLE_JWKS_CACHE: AuthRuntimeJwksCache = new Map()
 let appleJwksCacheFetch: typeof fetch | undefined
 
 async function readAppleUserPayload(request: Request): Promise<{
-  readonly email?: string
   readonly firstName?: string
   readonly lastName?: string
 } | undefined> {
@@ -33,7 +32,6 @@ async function readAppleUserPayload(request: Request): Promise<{
 
   try {
     const parsed = JSON.parse(userValue) as {
-      readonly email?: unknown
       readonly name?: {
         readonly firstName?: unknown
         readonly lastName?: unknown
@@ -41,7 +39,6 @@ async function readAppleUserPayload(request: Request): Promise<{
     }
 
     return {
-      email: typeof parsed.email === 'string' ? parsed.email : undefined,
       firstName: typeof parsed.name?.firstName === 'string' ? parsed.name.firstName : undefined,
       lastName: typeof parsed.name?.lastName === 'string' ? parsed.name.lastName : undefined,
     }
@@ -166,7 +163,6 @@ async function exchangeToken(context: SocialCallbackContext): Promise<Record<str
 function normalizeProfile(
   payload: Readonly<Record<string, unknown>>,
   userPayload?: {
-    readonly email?: string
     readonly firstName?: string
     readonly lastName?: string
   },
@@ -186,7 +182,7 @@ function normalizeProfile(
 
   return {
     id,
-    email: typeof payload.email === 'string' ? payload.email : userPayload?.email,
+    email: typeof payload.email === 'string' ? payload.email : undefined,
     emailVerified: payload.email_verified === true || payload.email_verified === 'true',
     name: fullName || undefined,
   }

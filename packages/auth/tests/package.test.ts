@@ -375,6 +375,7 @@ async function configureRuntime(options: {
     tokens: tokenStore,
     emailVerificationTokens: emailVerificationTokenStore,
     passwordResetTokens: passwordResetTokenStore,
+    sessionRevocations: persistence.sessionRevocations,
     multiFactor: multiFactorStore,
     multiFactorEncryptionKey: 'test-multi-factor-encryption-key',
     delivery,
@@ -1466,6 +1467,24 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(await check()).toBe(false)
     expect(await user()).toBeNull()
+  })
+
+  it('clears the stored verification whenever the stored email changes through the runtime', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: verifiedAt,
+    })
+
+    await authRuntimeInternals.updateUserRecord('users', user.id as number, { email: 'ava+new@example.com' })
+
+    expect(await runtime.usersProvider.findById(user.id as number)).toMatchObject({
+      email: 'ava+new@example.com',
+      email_verified_at: null,
+    })
   })
 
   it('does not auto-start email verification during registration', async () => {
@@ -3009,13 +3028,15 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries).toHaveLength(1)
   })
 
-  it('cycles the remember token on password reset and leaves other browser sessions signed in', async () => {
+  it('cycles the remember token and signs out other browsers on password reset', async () => {
     const runtime = await configurePasswordResetRuntime()
     const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(created).toBeTruthy()
     const otherBrowser = unwrapAuthResult(await loginUsing(created!))
     await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
 
+    const resetBrowser = authRuntimeInternals.createMemoryAuthContext()
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
     await requestPasswordReset({ email: 'ava@example.com' })
     await resetPassword({
       token: runtime.deliveries[0]!.tokenValue,
@@ -3030,7 +3051,38 @@ describe('@holo-js/auth package runtime', () => {
     const otherBrowserContext = authRuntimeInternals.createMemoryAuthContext()
     otherBrowserContext.setSessionId('web', otherBrowser.sessionId)
     configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
+    await expect(check()).resolves.toBe(false)
+  })
+
+  it('keeps the browser that resets the password signed in on a rotated session', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const resetBrowser = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    const otherBrowserContext = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
+    const resetSession = unwrapAuthResult(await loginUsing(created!))
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
+    const otherSession = unwrapAuthResult(await loginUsing(created!))
+
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await resetPassword({
+      token: runtime.deliveries[0]!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })
+
+    const rotatedSessionId = resetBrowser.getSessionId('web')
+    expect(rotatedSessionId).toEqual(expect.any(String))
+    expect(rotatedSessionId).not.toBe(resetSession.sessionId)
     await expect(check()).resolves.toBe(true)
+
+    const otherBrowserNextRequest = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    otherBrowserNextRequest.setSessionId('web', otherSession.sessionId)
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserNextRequest })
+    await expect(check()).resolves.toBe(false)
   })
 
   it('rotates the remember token on password reset even when no remember-me lifetime is configured', async () => {
@@ -5751,6 +5803,7 @@ describe('@holo-js/auth package runtime', () => {
       authenticatedAt: expect.any(String),
       guard: 'admin',
       provider: 'admins',
+      revocation: { id: expect.any(String), generation: 0 },
       userId: admin.id,
     })
   })

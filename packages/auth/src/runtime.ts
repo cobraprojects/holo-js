@@ -1,6 +1,7 @@
 import { COOKIE_WRITE_UNAVAILABLE } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { syncHostedIdentity } from './runtime/hostedIdentitySync'
+import { resetVerificationOnEmailChange } from './runtime/emailChange'
 import { clearSessionRevocationReads, loginRevocationMetadata, validSessionPayloads } from './runtime/sessionRevocations'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { normalizeAuthConfig } from './config'
@@ -2574,7 +2575,7 @@ async function updateLoadedUserRecord(
 
   let updated: unknown = user
   if (adapter.update) {
-    updated = await adapter.update(user, input)
+    updated = await adapter.update(user, resetVerificationOnEmailChange(serializeUser(adapter, user, providerName), input))
   } else if (
     typeof input.name !== 'undefined'
     || typeof input.email !== 'undefined'
@@ -2794,6 +2795,71 @@ async function requestPasswordResetUsingRuntime<TInput extends AuthPasswordReset
   }, EXPECTED_PASSWORD_RESET_REQUEST_ERRORS, error => createPasswordResetRequestFailure(error, input))
 }
 
+async function findSessionGuardOwnedBy(
+  bindings: RuntimeBindings,
+  providerName: string,
+  userId: string | number,
+): Promise<string | undefined> {
+  for (const guardName of sessionGuardNames(bindings)) {
+    if (getGuardConfig(guardName).provider !== providerName) continue
+    await hydrateGuardContextFromRequest(guardName)
+    const state = await readGuardSessionState(guardName)
+    if (
+      state?.payload.revocation
+      && !state.payload.impersonation
+      && !state.payload.multiFactorChallengeExpiresAt
+      && String(state.payload.userId) === String(userId)
+    ) {
+      return guardName
+    }
+  }
+  return undefined
+}
+
+async function revokeAllSessionsForIdentity(
+  store: NonNullable<RuntimeBindings['sessionRevocations']>,
+  identity: { readonly provider: string, readonly userId: string | number },
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [state] = await store.readMany([identity])
+    if (state && await store.revokeOthers(identity, { id: randomBytes(16).toString('hex'), generation: state.generation })) {
+      return
+    }
+  }
+  throw new Error('[@holo-js/auth] Password reset could not sign out the other sessions for this user. Try the reset again.')
+}
+
+async function rotateGuardSession(bindings: RuntimeBindings, guardName: string): Promise<void> {
+  const state = await readGuardSessionState(guardName)
+  if (!state) {
+    throwAuthError('auth_user_missing', 'The authenticated user no longer exists.')
+  }
+
+  const rotated = await rotateSessionWithData(bindings, state.record, state.record.data)
+  for (const name of sessionGuardNames(bindings)) {
+    if (bindings.context.getSessionId(name) === state.sessionId) {
+      bindings.context.setSessionId(name, rotated.id)
+    }
+  }
+  await appendResponseCookies(bindings, [bindings.session.sessionCookie(rotated.id)])
+}
+
+async function signOutOtherSessionsAfterPasswordReset(providerName: string, userId: string | number): Promise<void> {
+  const bindings = getRuntimeBindings()
+  if (!bindings.sessionRevocations) {
+    throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
+  }
+
+  const retainedGuard = await findSessionGuardOwnedBy(bindings, providerName, userId)
+  if (!retainedGuard) {
+    await revokeAllSessionsForIdentity(bindings.sessionRevocations, { provider: providerName, userId })
+    return
+  }
+
+  await logoutOtherDevicesForGuard(retainedGuard)
+  await rotateGuardSession(bindings, retainedGuard)
+}
+
 async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
   input: TInput,
 ): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
@@ -2813,6 +2879,10 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
     }
 
+    if (!getRuntimeBindings().sessionRevocations) {
+      throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
+    }
+
     const password = await getRuntimeBindings().passwordHasher.hash(input.password)
     const updated = await store.redeem(record, async () => {
       await store.deleteByEmail(record.provider, record.email, { table: record.table })
@@ -2827,6 +2897,7 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
       const resetUser = await updateUserRecord(record.provider, userId, { password })
       await rotateRememberToken(record.provider, userId)
+      await signOutOtherSessionsAfterPasswordReset(record.provider, userId)
       return resetUser
     })
     if (!updated) {

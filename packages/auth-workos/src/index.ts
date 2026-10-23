@@ -747,11 +747,12 @@ function resolveUpdateUserInput<TUserAttributes extends WorkosUserAttributes>(
   profile: WorkosIdentityProfile,
   mapper?: (workosUser: WorkosIdentityProfile) => TUserAttributes,
 ): Readonly<Record<string, unknown>> {
+  const verifiedEmail = profile.emailVerified ? profile.email.trim() || undefined : undefined
   return toAdapterInput({
-    email: profile.email.trim() || undefined,
+    email: verifiedEmail,
     name: resolveDisplayNameForUpdate(profile),
     avatar: profile.profilePictureUrl,
-    email_verified_at: profile.emailVerified ? new Date() : undefined,
+    email_verified_at: verifiedEmail ? new Date() : undefined,
     ...(mapper?.(profile) ?? {}),
   })
 }
