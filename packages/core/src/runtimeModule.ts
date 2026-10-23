@@ -374,14 +374,6 @@ function isBunRuntime(): boolean {
   return typeof globalThis === 'object' && 'Bun' in globalThis
 }
 
-const unresolvedImportCodes = new Set([
-  'ERR_INVALID_MODULE_SPECIFIER',
-  'ERR_MODULE_NOT_FOUND',
-  'ERR_PACKAGE_PATH_NOT_EXPORTED',
-  'ERR_UNSUPPORTED_DIR_IMPORT',
-  'MODULE_NOT_FOUND',
-])
-
 const nonAliasSpecifier = /^(?:\.|\/|[a-z][a-z\d+.-]*:|@holo-js\/)/i
 
 function isStaticAliasImport(dependency: {
@@ -392,18 +384,6 @@ function isStaticAliasImport(dependency: {
 }): boolean {
   return (dependency.kind === 'import-statement' || dependency.kind === 'require-call')
     && !dependency.external && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
-}
-
-function packageRootOf(specifier: string): string {
-  const [first = '', second] = specifier.split('/')
-  return first.startsWith('@') && second ? `${first}/${second}` : first
-}
-
-function isUnresolvedStaticAliasError(error: unknown, aliasNames: ReadonlySet<string>): boolean {
-  if (typeof error !== 'object' || error === null || !('code' in error) || !('message' in error)) return false
-  if (typeof error.code !== 'string' || !unresolvedImportCodes.has(error.code) || typeof error.message !== 'string') return false
-
-  return [...error.message.matchAll(/['"]([^'"\n]+)['"]/g)].some(([, name = '']) => aliasNames.has(name))
 }
 
 function isCommonJsSource(sourcePath: string): boolean {
@@ -417,35 +397,20 @@ function isCommonJsSource(sourcePath: string): boolean {
   }
 }
 
-function commonJsAliasUnresolved(
-  dependency: { readonly path: string, readonly original?: string },
-  importerPath: string,
-): boolean {
-  const original = dependency.original ?? dependency.path
-  if (nonAliasSpecifier.test(original)) return false
+type BunResolver = { resolveSync(specifier: string, parent: string): string }
 
+function activeLoaderResolvesAlias(specifier: string, importerPath: string): boolean {
   try {
-    nodeModule.createRequire(importerPath).resolve(original)
-    return false
-  } catch {
+    if (isBunRuntime()) {
+      (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))
+    } else if (isCommonJsSource(importerPath)) {
+      nodeModule.createRequire(importerPath).resolve(specifier)
+    } else {
+      import.meta.resolve(specifier)
+    }
     return true
-  }
-}
-
-async function importBundledDefinitions(
-  projectRoot: string,
-  tempDir: string,
-  sourcePaths: readonly string[],
-): Promise<Map<string, unknown>> {
-  const entry = join(tempDir, `unresolved-${randomUUID()}.mjs`)
-  await writeFile(entry, sourcePaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
-  const bundle = await bundleRuntimeModule(projectRoot, entry)
-
-  try {
-    const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundle.path).href)
-    return new Map(sourcePaths.map((sourcePath, index) => [sourcePath, modules[`definition${index}`]]))
-  } finally {
-    await bundle.cleanup()
+  } catch {
+    return false
   }
 }
 
@@ -479,7 +444,7 @@ export async function loadProjectDefinitionRuntimeModules(
     const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
-    const staticAliasNames = new Set<string>()
+    const staticAliases: Array<{ readonly specifier: string, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
@@ -487,16 +452,10 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       for (const dependency of input.imports) {
-        if (!isStaticAliasImport(dependency)) continue
-        const original = dependency.original ?? dependency.path
-        staticAliasNames.add(original)
-        staticAliasNames.add(packageRootOf(original))
+        if (isStaticAliasImport(dependency)) staticAliases.push({ specifier: dependency.original ?? dependency.path, importerPath: sourcePath })
       }
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
-      if (nativeSourceLoader) {
-        if (!isBunRuntime() && isCommonJsSource(sourcePath) && input.imports.some(dependency => commonJsAliasUnresolved(dependency, sourcePath))) nativeGraph = false
-        continue
-      }
+      if (nativeSourceLoader) continue
       if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
@@ -508,23 +467,13 @@ export async function loadProjectDefinitionRuntimeModules(
         }
       }
     }
+    if (nativeSourceLoader && staticAliases.some(({ specifier, importerPath }) => !activeLoaderResolvesAlias(specifier, importerPath))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })
     const definitions = new Map<string, unknown>()
     if (nativeGraph) {
-      const unresolved: string[] = []
-      for (const sourcePath of entryPaths) {
-        try {
-          definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
-        } catch (error) {
-          if (!nativeSourceLoader || !isUnresolvedStaticAliasError(error, staticAliasNames)) throw error
-          unresolved.push(sourcePath)
-        }
-      }
-      if (unresolved.length) {
-        for (const [sourcePath, definition] of await importBundledDefinitions(projectRoot, tempDir, unresolved)) definitions.set(sourcePath, definition)
-      }
+      for (const sourcePath of entryPaths) definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
     } else {
       const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundled.path).href)
       entryPaths.forEach((sourcePath, index) => definitions.set(sourcePath, modules[`definition${index}`]))

@@ -335,29 +335,30 @@ console.log(JSON.stringify({ shared: loaded.job === direct.job }))
       expect(await readSideEffectLog(projectRoot)).toEqual(['ran'])
     }, 30_000)
 
-    it('keeps an earlier definition native and runs it once when a later one needs the bundle', async () => {
-      const firstSource = "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'first ran\\n')\nexport const first = { name: 'first' }\n"
-      const laterSource = "import { appendFileSync } from 'node:fs'\nimport { Post } from '@/models/Post'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'later ran\\n')\nexport const job = { title: Post.title }\n"
-      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: firstSource, files: { 'models/Post.ts': postModule } })
-      const laterPath = join(projectRoot, 'jobs/later.ts')
-      await writeFile(laterPath, laterSource)
+    it('bundles every definition together when a later one needs the fallback, so they share one module instance', async () => {
+      const sharedSource = "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'shared ran\\n')\nexport const shared = { name: 'shared' }\n"
+      const reportSource = "import { shared } from './shared'\nexport const job = { name: 'report', shared }\n"
+      const listenerSource = "import { job } from './report'\nimport { Post } from '@/models/Post'\nexport const listener = { job, title: Post.title }\n"
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: reportSource, files: { 'models/Post.ts': postModule } })
+      await writeFile(join(projectRoot, 'jobs/shared.ts'), sharedSource)
+      const listenerPath = join(projectRoot, 'jobs/listener.ts')
+      await writeFile(listenerPath, listenerSource)
       const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
       const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
       const childPath = join(projectRoot, 'child.mjs')
       await writeFile(childPath, `
 const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
-const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}, ${JSON.stringify(laterPath)}])
-const first = await importDefinition(${JSON.stringify(definitionPath)})
-const later = await importDefinition(${JSON.stringify(laterPath)})
-const direct = await import(${JSON.stringify(pathToFileURL(definitionPath).href)})
-console.log(JSON.stringify({ firstShared: first.first === direct.first, later: later.job.title }))
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}, ${JSON.stringify(listenerPath)}])
+const reportModule = await importDefinition(${JSON.stringify(definitionPath)})
+const listenerModule = await importDefinition(${JSON.stringify(listenerPath)})
+console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModule.job, name: listenerModule.listener.job.name, title: listenerModule.listener.title }))
 `)
-      const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '' }
-      const { stdout } = await promisify(execFile)(process.execPath, ['--import', tsxLoaderUrl, childPath], { cwd: projectRoot, env: { ...env, HOLO_SIDE_EFFECT_LOG: join(projectRoot, 'side-effects.log') } })
-      const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { firstShared: boolean, later: string }
+      const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', HOLO_SIDE_EFFECT_LOG: join(projectRoot, 'side-effects.log') }
+      const { stdout } = await promisify(execFile)(process.execPath, ['--import', tsxLoaderUrl, childPath], { cwd: projectRoot, env })
+      const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { sameJob: boolean, name: string, title: string }
 
-      expect(result).toEqual({ firstShared: true, later: 'post' })
-      expect((await readSideEffectLog(projectRoot)).sort()).toEqual(['first ran', 'later ran'])
+      expect(result).toEqual({ sameJob: true, name: 'report', title: 'post' })
+      expect(await readSideEffectLog(projectRoot)).toEqual(['shared ran'])
     }, 30_000)
   })
 
