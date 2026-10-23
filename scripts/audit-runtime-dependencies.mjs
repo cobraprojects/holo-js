@@ -46,6 +46,7 @@ async function readFloorAdvisories(floors, advisories) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(Object.fromEntries([...floors].map(([name, floor]) => [name, [floor.version]]))),
+    signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) throw new Error(`Advisory lookup failed: ${response.status}`)
   return response.json()
