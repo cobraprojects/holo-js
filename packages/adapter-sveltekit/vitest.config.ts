@@ -6,6 +6,7 @@ export default mergeConfig(workspaceTestConfig, defineConfig({
     name: '@holo-js/adapter-sveltekit',
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    globalSetup: ['tests/global-setup.ts'],
     maxWorkers: 2,
     coverage: {
       provider: 'v8',

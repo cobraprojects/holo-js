@@ -12,17 +12,6 @@ import {
 
 const packageDir = resolve(import.meta.dirname, '..')
 
-function buildPackage(packageRoot: string, outDir: string): void {
-  execFileSync(resolve(packageRoot, 'node_modules/.bin/tsup'), [], {
-    cwd: packageRoot,
-    env: {
-      ...process.env,
-      HOLO_BUILD_OUT_DIR: outDir,
-    },
-    stdio: 'pipe',
-  })
-}
-
 function expectCommandToPass(command: string, args: readonly string[], options: ExecFileSyncOptionsWithBufferEncoding): void {
   try {
     execFileSync(command, args, options)
@@ -157,7 +146,6 @@ describe('@holo-js/adapter-sveltekit typing', () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'holo-sveltekit-client-types-'))
     const tempNodeModules = join(tempDir, 'node_modules')
     const tempHoloNodeModules = join(tempNodeModules, '@holo-js')
-    const buildRoot = join(tempDir, 'build')
     const entryPath = join(tempDir, 'client-import.ts')
 
     try {
@@ -169,18 +157,12 @@ describe('@holo-js/adapter-sveltekit typing', () => {
         extraDependencyNames: ['@types/node'],
       })
 
-      buildPackage(resolve(packageDir, '../config'), join(buildRoot, 'config'))
-      buildPackage(resolve(packageDir, '../validation'), join(buildRoot, 'validation'))
-      buildPackage(resolve(packageDir, '../forms'), join(buildRoot, 'forms'))
-      buildPackage(resolve(packageDir, '../auth'), join(buildRoot, 'auth'))
-      buildPackage(packageDir, join(buildRoot, 'adapter-sveltekit'))
-
       for (const [sourceDir, targetDir, distDir] of [
-        [resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')],
-        [resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')],
-        [resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')],
-        [resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')],
-        [packageDir, join(tempHoloNodeModules, 'adapter-sveltekit'), join(buildRoot, 'adapter-sveltekit')],
+        [resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(resolve(packageDir, '../config'), 'dist')],
+        [resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(resolve(packageDir, '../validation'), 'dist')],
+        [resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(resolve(packageDir, '../forms'), 'dist')],
+        [resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(resolve(packageDir, '../auth'), 'dist')],
+        [packageDir, join(tempHoloNodeModules, 'adapter-sveltekit'), join(packageDir, 'dist')],
       ] as const) {
         await stagePublishedPackage(sourceDir, targetDir, distDir)
       }
