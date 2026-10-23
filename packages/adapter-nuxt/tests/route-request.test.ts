@@ -97,4 +97,16 @@ describe('Nuxt route request', () => {
 
     expect(response.body).toBe('{"name":"buffered"}')
   })
+
+  it('answers 413 when a body an earlier middleware buffered is over the limit', async () => {
+    const app = createApp()
+    app.use(defineEventHandler(async (event) => {
+      event._requestBody = new Uint8Array(1024 * 1024 + 1)
+      await createWebRequest(event)
+      return { ok: true }
+    }))
+    const response = await fetch(await serve(app), { method: 'POST' })
+
+    expect(response.status).toBe(413)
+  })
 })

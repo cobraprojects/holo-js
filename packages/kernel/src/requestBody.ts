@@ -70,19 +70,25 @@ export async function readBoundedRequestBody(request: Request, maxBytes?: number
 
 export async function readBoundedCachedBody(cached: unknown, maxBytes?: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
   const value = await cached
-  const bytes = typeof value === 'string'
-    ? new TextEncoder().encode(value)
-    : value instanceof Uint8Array ? new Uint8Array(value) : undefined
-  if (!bytes) {
-    return undefined
-  }
-
   const limit = resolveLimit(maxBytes)
-  if (bytes.byteLength > limit) {
-    throw new HoloRequestBodyTooLargeError(limit)
+  if (value instanceof Uint8Array) {
+    if (value.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return new Uint8Array(value)
   }
 
-  return bytes
+  if (typeof value === 'string') {
+    const bytes = new TextEncoder().encode(value)
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return bytes
+  }
+
+  return undefined
 }
 
 export async function readBoundedRequestText(request: Request, maxBytes?: number): Promise<string> {

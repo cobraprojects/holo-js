@@ -4,10 +4,13 @@ import { HoloRequestBodyTooLargeError, readBoundedCachedBody, readBoundedNodeReq
 
 async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
   const limit = requestBodyLimitFor(getRequestHeader(event, 'content-type'))
-  const cached = await readBoundedCachedBody((event.node.req as unknown as Record<symbol, unknown>)[Symbol.for('h3RawBody')] ?? event._requestBody, limit)
-  if (cached) return cached
   try {
-    return await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
+    const cached = await readBoundedCachedBody((event.node.req as unknown as Record<symbol, unknown>)[Symbol.for('h3RawBody')] ?? event._requestBody, limit)
+    if (cached) return cached
+    const bytes = await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
+    event._requestBody = bytes
+    Object.assign(event.node.req, { [Symbol.for('h3RawBody')]: bytes })
+    return bytes
   } catch (error) {
     if (error instanceof HoloRequestBodyTooLargeError) {
       throw createError({ statusCode: error.status, statusMessage: 'Payload Too Large', cause: error })

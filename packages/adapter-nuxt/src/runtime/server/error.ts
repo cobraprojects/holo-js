@@ -1,7 +1,7 @@
 import type { H3Error, H3Event } from 'h3'
 import { send, setHeader, setResponseStatus } from '#imports'
 import { serializeValidationException } from '@holo-js/validation'
-import { serializeRateLimitError } from '@holo-js/adapter-shared/server-errors'
+import { serializeRateLimitError, serializeRequestBodyTooLargeError } from '@holo-js/adapter-shared/server-errors'
 import {
   applyFormFailureRedirect,
   shouldRedirectFormFailure,
@@ -9,12 +9,13 @@ import {
 } from './form-failure'
 
 export default async function handleValidationError(error: H3Error, event: H3Event): Promise<void> {
-  const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
+  const bodyTooLarge = serializeRequestBodyTooLargeError(error)
+  const payload = bodyTooLarge ?? serializeValidationException(error) ?? serializeRateLimitError(error)
   if (!payload) {
     return
   }
 
-  if (shouldRedirectFormFailure(event)) {
+  if (!bodyTooLarge && shouldRedirectFormFailure(event)) {
     const failure = { ...payload }
     const response: NitroResponse = {}
     applyFormFailureRedirect(event, response, failure)

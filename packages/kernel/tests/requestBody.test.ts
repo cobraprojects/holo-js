@@ -6,6 +6,7 @@ import {
   requestBodyLimitFor,
   HoloRequestBodyTooLargeError,
   readBoundedNodeRequestBody,
+  readBoundedCachedBody,
   readBoundedRequestBody,
   readBoundedRequestFormData,
   readBoundedRequestJson,
@@ -145,3 +146,29 @@ describe('upload body limit', () => {
     await expect(readBoundedRequestBody(request)).rejects.toMatchObject({ status: 413 })
   })
 })
+
+describe('cached request bodies', () => {
+  it('rejects an oversized cached body without copying any of its bytes', async () => {
+    const target = new Uint8Array(17)
+    let indexReads = 0
+    const cached = new Proxy(target, {
+      get(source, property) {
+        if (typeof property === 'string' && /^\d+$/.test(property)) indexReads += 1
+        return Reflect.get(source, property, source)
+      },
+    })
+
+    await expect(readBoundedCachedBody(cached, 16)).rejects.toMatchObject({ status: 413 })
+    expect(indexReads).toBe(0)
+  })
+
+  it('returns a copy of a cached body within the limit', async () => {
+    const cached = new Uint8Array([1, 2, 3])
+
+    const bytes = await readBoundedCachedBody(cached, 16)
+
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]))
+    expect(bytes?.buffer).not.toBe(cached.buffer)
+  })
+})
+

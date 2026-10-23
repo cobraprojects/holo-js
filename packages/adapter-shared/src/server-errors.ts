@@ -1,4 +1,4 @@
-import { normalizeHoloHttpError } from '@holo-js/kernel/http-errors'
+import { HoloRequestBodyTooLargeError, normalizeHoloHttpError } from '@holo-js/kernel'
 
 type RateLimitFailure = {
   readonly ok: false
@@ -9,6 +9,30 @@ type RateLimitFailure = {
   readonly errors: { readonly _root: readonly string[] }
   readonly values: Readonly<Record<string, never>>
   readonly retryAfterSeconds?: number
+}
+
+type RequestBodyTooLargeFailure = {
+  readonly ok: false
+  readonly valid: false
+  readonly status: 413
+  readonly bag: 'default'
+  readonly message: string
+  readonly errors: { readonly _root: readonly string[] }
+  readonly values: Readonly<Record<string, never>>
+  readonly retryAfterSeconds?: undefined
+}
+
+export function serializeRequestBodyTooLargeError(error: unknown): RequestBodyTooLargeFailure | undefined {
+  if (!(error instanceof HoloRequestBodyTooLargeError)
+    && !(error instanceof Error && error.name === 'HoloRequestBodyTooLargeError')) {
+    const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : undefined
+    return cause === undefined ? undefined : serializeRequestBodyTooLargeError(cause)
+  }
+
+  return {
+    ok: false, valid: false, status: 413, bag: 'default', message: error.message,
+    errors: { _root: [error.message] }, values: {},
+  }
 }
 
 export function serializeRateLimitError(error: unknown): RateLimitFailure | undefined {
