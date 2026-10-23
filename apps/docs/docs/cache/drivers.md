@@ -69,7 +69,7 @@ memory: {
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `maxEntries` | `10000` | When the store grows past this, the least recently written entries are removed first. A write that refreshes an existing key counts as recent. |
+| `maxEntries` | `10000` | When the store grows past this, expired entries are removed first, then the least recently written entries. A write that refreshes an existing key counts as recent. |
 | `prefix` | top-level `prefix` | Key prefix for this store. |
 
 ## Redis
