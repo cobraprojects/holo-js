@@ -684,8 +684,8 @@ function captureBodyTooLarge(error: unknown): HoloRequestBodyTooLargeError {
 
 async function bufferSubmittedRequest(request: Request): Promise<Request> {
   if (request.method === 'GET' || request.method === 'HEAD') return request
-  const body = await readBoundedRequestBody(request)
-  return new Request(request.url, { method: request.method, headers: request.headers, body })
+  const body = await readBoundedRequestBody(request.clone())
+  return new Request(request, { body })
 }
 
 export async function safeParse<TShape extends SchemaInputShape>(
