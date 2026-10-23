@@ -388,6 +388,11 @@ function isStaticProjectImport(dependency: MetafileImport): boolean {
     && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
 }
 
+function isDynamicAliasImport(dependency: MetafileImport): boolean {
+  return dependency.kind === 'dynamic-import' && dependency.external !== true
+    && !nonAliasSpecifier.test(dependency.original ?? dependency.path)
+}
+
 function isCommonJsSource(sourcePath: string): boolean {
   if (/\.m[jt]s$/.test(sourcePath)) return false
   if (/\.c[jt]s$/.test(sourcePath)) return true
@@ -492,7 +497,7 @@ export async function loadProjectDefinitionRuntimeModules(
     const nativeSourceLoader = isBunRuntime()
       || process.execArgv.some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
-    const staticImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
+    const projectImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
       const sourcePath = resolve(projectRoot, inputPath)
@@ -500,7 +505,7 @@ export async function loadProjectDefinitionRuntimeModules(
       const source = await readFile(sourcePath, 'utf8')
       sources.set(sourcePath, source)
       for (const dependency of input.imports) {
-        if (isStaticProjectImport(dependency)) staticImports.push({ dependency, importerPath: sourcePath })
+        if (isStaticProjectImport(dependency) || isDynamicAliasImport(dependency)) projectImports.push({ dependency, importerPath: sourcePath })
       }
       if (input.imports.some(dependency => holoImportRequiresBundle(dependency, sourcePath))) nativeGraph = false
       if (nativeSourceLoader) continue
@@ -515,7 +520,7 @@ export async function loadProjectDefinitionRuntimeModules(
         }
       }
     }
-    if (nativeSourceLoader && staticImports.some(({ dependency, importerPath }) => !staticImportMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
+    if (nativeSourceLoader && projectImports.some(({ dependency, importerPath }) => !staticImportMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false
     definitionGraphSources.set(projectRoot, { sources, native: nativeGraph })

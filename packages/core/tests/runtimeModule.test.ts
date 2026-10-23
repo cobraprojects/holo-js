@@ -460,6 +460,20 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     }, 30_000)
   })
 
+  describe('preflights literal dynamic aliases', () => {
+    it('bundles a definition whose literal dynamic alias import the active tsx loader cannot resolve, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        definition: "const { Post } = await import('@/models/Post')\nexport const job = { title: Post.title }\n",
+        files: { 'models/Post.ts': postModule },
+      })
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(result).toEqual({ title: 'post', shared: false })
+    }, 30_000)
+  })
+
   describe('keeps package-scoped imports native', () => {
     const packageImportsManifest = { type: 'module', imports: { '#internal': './internal.ts' } }
 
