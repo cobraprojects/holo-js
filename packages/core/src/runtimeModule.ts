@@ -425,10 +425,27 @@ function packageNameOf(specifier: string): string {
   return scopeOrName.startsWith('@') && name ? `${scopeOrName}/${name}` : scopeOrName
 }
 
+function nearestPackageName(importerPath: string): string | undefined {
+  for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
+    const manifest = join(directory, 'package.json')
+    if (existsSync(manifest)) {
+      try {
+        const name = JSON.parse(readFileSync(manifest, 'utf8')).name
+        return typeof name === 'string' ? name : undefined
+      } catch {
+        return undefined
+      }
+    }
+    if (dirname(directory) === directory) return undefined
+  }
+}
+
 function packageVisibleFrom(importerPath: string, specifier: string): boolean {
   if (nodeModule.isBuiltin(specifier)) return true
 
   const name = packageNameOf(specifier)
+  if (nearestPackageName(importerPath) === name) return true
+
   for (let directory = dirname(importerPath); ; directory = dirname(directory)) {
     if (existsSync(join(directory, 'node_modules', name))) return true
     if (dirname(directory) === directory) return false

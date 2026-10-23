@@ -496,6 +496,17 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
 
       expect(result).toEqual({ title: 'nested', shared: true })
     }, 30_000)
+
+    it('keeps an ESM definition native when it imports its own package by name through exports, under tsx', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: "import { value } from 'self-app/jobs/x'\nexport const job = { title: value }\n" })
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ name: 'self-app', type: 'module', exports: { './jobs/*': './jobs/*.ts' } }))
+      await writeFile(join(projectRoot, 'jobs/x.ts'), "export const value = 'self'\n")
+      const tsxLoaderUrl = pathToFileURL(resolve(import.meta.dirname, '../../../node_modules/tsx/dist/loader.mjs')).href
+
+      const result = await runAliasDefinitionChild(projectRoot, definitionPath, { command: process.execPath, args: ['--import', tsxLoaderUrl], env: {} })
+
+      expect(result).toEqual({ title: 'self', shared: true })
+    }, 30_000)
   })
 
   it.each([
