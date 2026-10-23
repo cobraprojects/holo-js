@@ -18,6 +18,7 @@ Recorded departures:
 - Social sign-in links an existing local user only when that user's email is verified, because Laravel core defines no social account-linking behavior.
 - Local disk file names ending in `$` are reserved, because Holo keeps low-level metadata in `<name>$` sidecar files on local disks, while Flysystem has no metadata sidecars.
 - With `trustedProxies: '*'`, forwarded headers are trusted when the framework does not expose the connection address, and with a list of proxies they are ignored, because Next.js gives Holo no equivalent of PHP's always-present `REMOTE_ADDR`.
+- When the client address is unknown, IP-keyed rate limits use one shared `ip:unknown` bucket instead of throwing or using a per-request key, because a per-request key would disable throttling. Until `trustedProxies` is set in Next.js, all such visitors share that bucket, so one client can lock out the others.
 - A malformed trusted `X-Forwarded-Port` or `X-Forwarded-Prefix` is answered with `400 Bad Request`, as a malformed forwarded host is in Laravel, because a URL object cannot hold the non-numeric port PHP casts to an integer, and Holo places the prefix in the public request path, where a prefix such as `//host` would read as another origin.
 
 - Remember recallers carry an authenticated expiry and the server rejects them after the configured lifetime, even if a client replays the cookie. This user-approved hardening bounds stolen-cookie replay independently of browser `Max-Age`, unlike Laravel.

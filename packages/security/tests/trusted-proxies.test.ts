@@ -42,7 +42,7 @@ describe('trusted proxies', () => {
   it('reports how to configure trusted proxies when the framework does not expose the connection address', () => {
     trustProxies(undefined)
     expect(() => ip(request({ 'x-forwarded-for': '203.0.113.66' }))).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
+      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES=* or trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
     )
   })
 
@@ -92,7 +92,7 @@ describe('trusted proxies', () => {
     trustProxies(['127.0.0.1'])
     const spoofed = request({ 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' })
     expect(() => ip(spoofed)).toThrow(
-      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
+      '[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set TRUSTED_PROXIES=* or trustedProxies: \'*\' in config/security.ts when the app is reachable only through your proxy.',
     )
     expect(resolveRequestUrl(spoofed).href).toBe('http://internal.test/login')
   })
@@ -162,6 +162,14 @@ describe('trusted proxies', () => {
     const second = await rateLimit('login', { request: request({ 'x-forwarded-for': '203.0.113.99, 192.0.2.11' }) })
     expect(second.snapshot.key).toBe('ip:192.0.2.11')
     await expect(rateLimit('login', { request: request({ 'x-forwarded-for': '198.51.100.1, 192.0.2.10' }) }))
+      .rejects.toMatchObject({ status: 429 })
+  })
+
+  it('rate limits visitors with no known address in one shared bucket, ignoring their forwarded headers', async () => {
+    trustProxies(undefined)
+    const first = await rateLimit('login', { request: request({ 'x-forwarded-for': '203.0.113.66' }) })
+    expect(first.snapshot.key).toBe('ip:unknown')
+    await expect(rateLimit('login', { request: request({ 'x-forwarded-for': '203.0.113.67' }) }))
       .rejects.toMatchObject({ status: 429 })
   })
 

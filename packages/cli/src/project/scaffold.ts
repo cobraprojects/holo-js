@@ -59,7 +59,6 @@ import {
   renderMailConfig,
   renderMediaConfig,
   renderNotificationsConfig,
-  renderProjectSecurityConfig,
   renderQueueConfig,
   renderRedisConfig,
   renderSecurityConfig,
@@ -389,7 +388,7 @@ export async function installAuthIntoProject(
 
     let createdSecurityConfig = false
     if (!securityConfigPath) {
-      await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+      await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
       createdSecurityConfig = true
     }
     const createdCorsConfig = await ensureCorsConfigFile(projectRoot)
@@ -441,7 +440,7 @@ export async function installAuthIntoProject(
   }
   let createdSecurityConfig = false
   if (!securityConfigPath) {
-    await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
     createdSecurityConfig = true
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
@@ -773,7 +772,7 @@ export async function installSecurityIntoProject(
   await ensureRedisConfigFile(projectRoot)
 
   if (!securityConfigPath) {
-    await writeTextFile(resolve(projectRoot, 'config/security.ts'), await renderProjectSecurityConfig(projectRoot))
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
 

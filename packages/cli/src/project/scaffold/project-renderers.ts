@@ -37,6 +37,8 @@ export function renderAuthEnvFiles(
     '',
     'RATE_LIMIT_DRIVER=file',
     '',
+    'TRUSTED_PROXIES=',
+    '',
     'FRONTEND_URL=',
     'FRONTEND_DOMAIN=',
     '',

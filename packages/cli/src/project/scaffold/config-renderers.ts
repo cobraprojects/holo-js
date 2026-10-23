@@ -18,7 +18,6 @@ import {
 import {
   frameworkDescriptorSupportsManagedBroadcastAuthRoute,
   isSupportedFrameworkId,
-  type FrameworkDescriptor,
 } from '../frameworks'
 import type {
   AuthInstallFeatures,
@@ -315,13 +314,15 @@ export function renderMailConfig(): string {
   ].join('\n')
 }
 
-export function renderSecurityConfig(framework?: FrameworkDescriptor): string {
+export function renderSecurityConfig(): string {
   return [
     `import { defineSecurityConfig, limit } from '@holo-js/security'`,
     "import { env } from '@holo-js/config'",
     '',
+    "const proxies = env('TRUSTED_PROXIES').trim()",
+    '',
     'export default defineSecurityConfig({',
-    ...(framework?.capabilities.exposesConnectionAddress === false ? ["  trustedProxies: '*',"] : []),
+    "  trustedProxies: proxies === '*' ? '*' : proxies.split(',').map(entry => entry.trim()).filter(Boolean),",
     '  csrf: {',
     '    enabled: true,',
     '    field: \'_token\',',
@@ -346,11 +347,6 @@ export function renderSecurityConfig(framework?: FrameworkDescriptor): string {
     '})',
     '',
   ].join('\n')
-}
-
-export async function renderProjectSecurityConfig(projectRoot: string): Promise<string> {
-  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  return renderSecurityConfig(await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies))
 }
 
 export function renderCorsConfig(): string {
