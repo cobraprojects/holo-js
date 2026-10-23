@@ -1,4 +1,4 @@
-import { cookieEncryptionInternals, resolveRequestUrl } from '@holo-js/kernel'
+import { cookieEncryptionInternals, HoloRequestBodyTooLargeError, readBoundedRequestBody, resolveRequestUrl } from '@holo-js/kernel'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import {
   SecurityCsrfError,
@@ -121,17 +121,29 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
 }
 
-async function readBodyToken(request: Request, field: string): Promise<string | undefined> {
+async function readBodyBytes(request: Request): Promise<Uint8Array<ArrayBuffer> | undefined> {
   try {
-    const contentType = request.headers.get('content-type') ?? ''
+    return await readBoundedRequestBody(request.clone())
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) throw error
+    return undefined
+  }
+}
+
+async function readBodyToken(request: Request, field: string): Promise<string | undefined> {
+  const contentType = request.headers.get('content-type') ?? ''
+  const bytes = await readBodyBytes(request)
+  if (!bytes) return undefined
+
+  try {
     if (/[/+]json\b/i.test(contentType)) {
-      const body: unknown = await request.clone().json()
+      const body: unknown = JSON.parse(new TextDecoder().decode(bytes))
       return body && typeof body === 'object' && !Array.isArray(body) && Object.hasOwn(body, field)
         ? nonEmptyString((body as Readonly<Record<string, unknown>>)[field])
         : undefined
     }
 
-    return nonEmptyString((await request.clone().formData()).get(field))
+    return nonEmptyString((await new Response(bytes, { headers: { 'content-type': contentType } }).formData()).get(field))
   } catch {
     return undefined
   }

@@ -1,10 +1,12 @@
-import { HoloRequestUrlError } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, HoloRequestUrlError } from '@holo-js/kernel'
 import { SecurityCsrfError } from './contracts'
 
-export type SecurityRejection = SecurityCsrfError | HoloRequestUrlError
+export type SecurityRejection = SecurityCsrfError | HoloRequestUrlError | HoloRequestBodyTooLargeError
 
 export function isSecurityRejection(error: unknown): error is SecurityRejection {
-  return error instanceof SecurityCsrfError || error instanceof HoloRequestUrlError
+  return error instanceof SecurityCsrfError
+    || error instanceof HoloRequestUrlError
+    || error instanceof HoloRequestBodyTooLargeError
 }
 
 export function createSecurityRejectionResponse(error: SecurityRejection): Response {

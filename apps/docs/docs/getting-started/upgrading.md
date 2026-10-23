@@ -184,6 +184,12 @@ A JSON or form body that can't be parsed is now validated as `{}` instead of thr
 
 Errors thrown inside `custom()` and `customAsync()` are no longer turned into a validation message on `_root`. They reach your framework's error handling and respond with a 500. If a custom rule calls code that can throw for invalid input, catch the error in the rule and return a message string instead.
 
+### Request body limit
+
+Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
+
+Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
+
 ### S3 file names with special characters
 
 S3 disks now store files under their exact names. Before 0.4.0, a name with characters other than letters, digits, and `-_.!~*'()` was stored under its URL-encoded form: `reports/Q1 café.pdf` became the object `reports/Q1%20caf%C3%A9.pdf`, and its `url()` returned access denied or not found. After upgrading, Holo looks for `reports/Q1 café.pdf`, so rename those objects before you deploy. With the AWS CLI:

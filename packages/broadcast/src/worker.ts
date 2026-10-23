@@ -180,6 +180,7 @@ type BroadcastWorkerBunGlobal = {
     readonly port?: number
     readonly fetch: (request: Request, server: { upgrade(request: Request, options?: { data?: unknown }): boolean }) => Promise<Response> | Response
     readonly websocket: {
+      readonly maxPayloadLength: number
       open: (socket: BunWebSocketLike) => void
       message: (socket: BunWebSocketLike, message: string | Uint8Array) => void
       close: (socket: BunWebSocketLike) => void
@@ -2676,6 +2677,7 @@ export async function startBroadcastWorker(
           return await runtime.fetch(request)
         },
         websocket: {
+          maxPayloadLength: config.worker.maxMessageBytes,
           open(socket) {
             try {
               runtime.connectWebSocket({

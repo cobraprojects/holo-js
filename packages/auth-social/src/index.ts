@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthSocialProviderConfig } from '@holo-js/auth'
-import { resolveRequestUrl } from '@holo-js/kernel'
+import { HoloRequestBodyTooLargeError, readBoundedRequestFormData, resolveRequestUrl } from '@holo-js/kernel'
 
 export interface SocialProviderProfile {
   readonly id: string
@@ -137,7 +137,7 @@ export interface SocialCallbackSuccess {
 
 export interface SocialCallbackFailure {
   readonly ok: false
-  readonly status: 400
+  readonly status: 400 | 413
   readonly message: string
 }
 
@@ -740,7 +740,10 @@ async function readCallbackParameters(request: Request): Promise<{
     }
   }
 
-  const formData = await request.clone().formData().catch(() => undefined)
+  const formData = await readBoundedRequestFormData(request.clone()).catch((error: unknown) => {
+    if (error instanceof HoloRequestBodyTooLargeError) throw error
+    return undefined
+  })
   const stateValue = formData?.get('state')
   const codeValue = formData?.get('code')
   const formState = typeof stateValue === 'string'
@@ -757,6 +760,18 @@ async function readCallbackParameters(request: Request): Promise<{
 }
 
 export async function callback(provider: string, input: SocialRequestInput): Promise<SocialCallbackResult> {
+  try {
+    return await resolveCallback(provider, input)
+  } catch (error) {
+    if (error instanceof HoloRequestBodyTooLargeError) {
+      return { ok: false, status: 413, message: error.message }
+    }
+
+    throw error
+  }
+}
+
+async function resolveCallback(provider: string, input: SocialRequestInput): Promise<SocialCallbackResult> {
   const request = normalizeSocialRequest(input)
   const { state, code } = await readCallbackParameters(request)
   if (!state || !code) {
