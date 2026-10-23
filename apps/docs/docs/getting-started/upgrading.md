@@ -191,7 +191,7 @@ Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data
 Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
 ### Forms throttle before validation
 
-A form with `throttle` checks the rate limit before it validates the submitted fields. A throttled submission returns the rate-limit failure with the submitted values and no field errors. Custom rate-limit key resolvers receive the submitted values as sent, before trimming or case changes from the schema, so a key that compares normalized values should normalize them itself.
+A form with `throttle` validates the submission, then checks the rate limit for every attempt, valid or invalid, before your handler runs. A throttled submission returns `429` with the submitted values and the field errors from validation. The limiter's key resolver receives the values after the schema's transforms, so `Victim@Example.com ` and `victim@example.com` share one bucket when the schema lowercases and trims the email. An invalid submission has no transformed values, so it counts against the default key for the request.
 
 ### `make:channel` patterns
 

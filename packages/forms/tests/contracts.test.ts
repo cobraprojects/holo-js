@@ -602,7 +602,32 @@ describe('@holo-js/forms contracts', () => {
     }
   })
 
-  it('throttles before validating the submitted fields', async () => {
+  it('keys the throttle on the canonical value, so case and whitespace variants share one bucket', async () => {
+    const login = schema({
+      email: field.string().required().transform(value => value.trim().toLowerCase()),
+    })
+
+    await configureNativeSecurity()
+
+    const attempt = (email: string) => safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.11',
+      },
+      body: new URLSearchParams({ email }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect((await attempt('Victim@Example.com ')).valid).toBe(true)
+
+    const variant = await attempt('victim@example.com')
+
+    expect(variant.valid).toBe(false)
+    expect(variant.fail()).toMatchObject({ status: 429 })
+  })
+
+  it('counts an invalid submission toward the throttle, so the next attempt is answered 429', async () => {
     const login = schema({
       email: field.string().required().email(),
       password: field.string().required(),
@@ -610,31 +635,23 @@ describe('@holo-js/forms contracts', () => {
 
     await configureNativeSecurity()
 
-    const request = (fields: Record<string, string>) => new Request('https://app.test/login', {
+    const attempt = () => safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        'x-forwarded-for': '203.0.113.8',
+        'x-forwarded-for': '203.0.113.12',
       },
-      body: new URLSearchParams(fields),
-    })
-
-    expect((await safeParse(request({ email: 'ava@example.com', password: 'secret' }), login, {
-      throttle: 'login',
-    })).valid).toBe(true)
-
-    const throttled = await safeParse(request({ email: 'ava@example.com' }), login, {
+      body: new URLSearchParams({ email: 'ava@example.com' }),
+    }), login, {
       throttle: 'login',
     })
 
-    expect(throttled.valid).toBe(false)
-    if (throttled.valid) {
-      throw new Error('Expected throttle failure.')
-    }
-    expect(throttled.errors.flatten()).toEqual({
-      _root: ['Too many attempts. Please try again later.'],
-    })
-    expect(throttled.values).toEqual({ email: 'ava@example.com' })
-    expect(throttled.fail()).toMatchObject({ status: 429 })
+    const first = await attempt()
+    expect(first.valid).toBe(false)
+    expect(first.errors.first('password')).toBeDefined()
+
+    const second = await attempt()
+    expect(second.valid).toBe(false)
+    expect(second.fail()).toMatchObject({ status: 429 })
   })
 
   it('validates a throttled submission whose body is a stream, reading the body once', async () => {
@@ -1286,7 +1303,7 @@ describe('@holo-js/forms contracts', () => {
     expect(validateCalls).toBe(1)
   })
 
-  it('answers throttled submissions with the root failure and the submitted values without validating them', async () => {
+  it('answers throttled submissions with the root failure and the field errors from validation', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
@@ -1328,7 +1345,7 @@ describe('@holo-js/forms contracts', () => {
       throw new Error('Expected throttled validation failure.')
     }
 
-    expect(throttled.errors.first('email')).toBeUndefined()
+    expect(throttled.errors.first('email')).toBeDefined()
     expect(throttled.values).toEqual({ email: 'bad' })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
     expect(throttled.fail().status).toBe(429)

@@ -197,7 +197,7 @@
 
 ### Fixed
 
-- Throttle form submissions before their fields are validated. A throttled submission returns the rate-limit failure with the submitted values and no field errors, so repeated attempts no longer run validation. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#forms-throttle-before-validation).
+- Count every form submission toward its `throttle` limit, valid or invalid, and key the limit on the schema's transformed values, so case and whitespace variants of an identifier share one bucket. A throttled submission returns `429` with the submitted values and the field errors from validation. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#forms-throttle-before-validation).
 - Form value writes reject `__proto__`, `constructor`, and `prototype` path segments, as validation already does.
 - A failed refresh of Apple, Clerk, or WorkOS signing keys (JWKS) keeps verifying with the keys that loaded last, for at most ten minutes after that last successful fetch, so sign-in keeps working through a short provider outage. Failed refreshes never extend that window; after it, verification fails closed until a refresh succeeds. Failed refreshes are retried after a minute. Before, a failed refresh replaced the keys with the error, so every sign-in with that provider failed for a minute. See [Signing keys](apps/docs/docs/auth/social-login.md#signing-keys).
 - An env file that exists but can't be read, such as `.env` when it is a directory or unreadable by the process, stops Holo with the file-system error. Before, it was skipped, so `APP_ENV` fell back to `production`. A missing env file is still skipped. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#application-environment-from-app_env).

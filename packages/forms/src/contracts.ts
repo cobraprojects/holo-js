@@ -20,7 +20,6 @@ import {
   type FormFailureOptions,
 } from './failure'
 import { sanitizeFlashedInput } from './sensitiveInput'
-import { isPlainFormObject } from './internal/formValues'
 
 export { FormContractError } from './errors'
 export {
@@ -678,29 +677,6 @@ function createSecurityFailureMetadata(error: Error & { readonly status: number 
   }
 }
 
-async function submittedRequestValues(input: Request): Promise<Readonly<Record<string, unknown>> | undefined> {
-  const { value } = await validationInternals.normalizeRequestInput(input.clone()).catch(() => ({ value: undefined }))
-  return isPlainFormObject(value) ? value : undefined
-}
-
-async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
-  input: Request,
-  schemaDefinition: ValidationSchema<TShape>,
-  error: Error & { readonly status: number },
-): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
-  const values = await submittedRequestValues(input).catch(() => undefined)
-
-  return createFailedSubmission(
-    schemaDefinition,
-    (values ?? {}) as Partial<InferSchemaData<TShape>>,
-    {
-      _root: [error.message],
-    },
-    error.status,
-    createSecurityFailureMetadata(error),
-  )
-}
-
 export async function safeParse<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
   schemaDefinition: ValidationSchema<TShape>,
@@ -718,9 +694,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
     )
   }
 
-  const submittedValues = usesSecurityOptions
-    ? await submittedRequestValues(normalizedRequestInput as Request).catch(() => undefined)
-    : undefined
+  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
 
   if (usesSecurityOptions) {
     const request = normalizedRequestInput as Request
@@ -730,19 +704,30 @@ export async function safeParse<TShape extends SchemaInputShape>(
       const security = await loadSecurityModule()
       await security.rateLimit(throttle, {
         request,
-        values: submittedValues,
+        values: result.valid ? result.data : undefined,
       })
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')
       if (formsSecurityInternals.isRootSecurityError(error)) {
-        return await createSecurityFailureSubmission(request, schemaDefinition, error)
+        const fieldErrors = result.valid ? {} : result.errors.flatten()
+        return createFailedSubmission(
+          schemaDefinition,
+          result.valid ? result.data : result.values,
+          {
+            ...fieldErrors,
+            _root: [
+              ...(fieldErrors._root ?? []),
+              error.message,
+            ],
+          },
+          error.status,
+          createSecurityFailureMetadata(error),
+        )
       }
 
       throw error
     }
   }
-
-  const result = await safeParseInput((submittedValues ?? validationInput) as FormLikeValidationInput, schemaDefinition)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
