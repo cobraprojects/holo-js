@@ -245,7 +245,8 @@ function normalizeCookiePath(event: SvelteKitRequestEvent): string {
   return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
 }
 
-function createValidationFlashCookie(path: string, payload: SerializedValidationException): string | undefined {
+function createValidationFlashCookie(pathname: string | undefined, payload: SerializedValidationException): string | undefined {
+  const path = flashPathFor(pathname)
   const value = encodeValidationFlashPayload(payload, path)
   if (!value) {
     return undefined
@@ -254,7 +255,7 @@ function createValidationFlashCookie(path: string, payload: SerializedValidation
   return [
     `${validationFlashCookie}=${value}`,
     'Max-Age=60',
-    `Path=${path.replace(/[;\r\n]/g, '') || '/'}`,
+    `Path=${path}`,
     'SameSite=Lax',
     'HttpOnly',
   ].join('; ')
@@ -319,12 +320,11 @@ function createValidationActionRedirectResponse(
   event: SvelteKitRequestEvent,
   payload: SerializedValidationException,
 ): Response {
-  const location = flashPathFor(event.url?.pathname)
   const headers: Record<string, string> = {
-    location,
+    location: sameOriginRedirectPath(event.url?.pathname),
     'cache-control': 'no-store',
   }
-  const flashCookie = createValidationFlashCookie(location, payload)
+  const flashCookie = createValidationFlashCookie(event.url?.pathname, payload)
   if (flashCookie) {
     headers['set-cookie'] = flashCookie
   }

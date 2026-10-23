@@ -59,6 +59,28 @@ describe('validation flash cookie', () => {
     expect(cookie).toMatch(/; HttpOnly/)
   })
 
+  it('redirects to the exact same-origin path, keeping a semicolon the cookie path would strip', () => {
+    setAppKey(appKey)
+
+    expect(redirectFor('/a;b').headers.get('location')).toBe('/a;b')
+  })
+
+  it('reads back the flash on a path that contains a semicolon', () => {
+    setAppKey(appKey)
+    const value = flashValueFrom(redirectFor('/a;b'))
+    const event = {
+      url: new URL('https://app.test/a;b'),
+      cookies: {
+        get: (name: string) => (name === flashCookieName ? value : undefined),
+        delete: () => undefined,
+      },
+    }
+
+    const page = runWithSvelteKitRequestEvent(event as never, () => readValidationFlash(new URL('https://app.test/a;b')))
+
+    expect(page).toMatchObject({ status: 422, values: { email: 'ava@example.com' } })
+  })
+
   it('is encrypted, so the submitted values never appear in plaintext', () => {
     setAppKey(appKey)
 
