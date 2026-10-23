@@ -161,7 +161,7 @@ Next.js doesn't tell Holo the address of the connection, so Holo can't check it 
 Holo never guesses a visitor's address. When the address is unknown, `ip(request)` and every [rate limiter](/basics/security/rate-limiting) keyed by IP throw this error, and the request fails:
 
 ```text
-[@holo-js/security] The client address is unavailable because this framework does not expose the connection address. Set trustedProxies in config/security.ts (scaffolded apps read it from TRUSTED_PROXIES). In Next.js, set it to '*' only when the app is reachable exclusively through a proxy that overwrites X-Forwarded-For, such as Vercel's edge, or a reverse proxy with the Next.js server bound to localhost or a private network. In Nuxt and SvelteKit, list your proxy's addresses or CIDR ranges. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies
+[@holo-js/security] The client address is unavailable because this framework does not expose the connection address, so an address or CIDR list in trustedProxies can never match. Only '*' works here, and only behind a proxy that overwrites X-Forwarded-For, such as Vercel's edge, or a reverse proxy with the Next.js server bound to localhost or a private network. Set trustedProxies in config/security.ts to '*' (scaffolded apps read it from TRUSTED_PROXIES). If the app doesn't need IP identity, pass an explicit rate-limit key instead. See https://docs.holo-js.com/basics/security/cors-and-proxies#trusted-proxies
 ```
 
 A failed request doesn't share a rate-limit bucket with other visitors, and it doesn't skip the limit.
