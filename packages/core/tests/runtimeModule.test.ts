@@ -164,7 +164,7 @@ describe('@holo-js/core runtime module helpers', () => {
     { label: '--preserve-symlinks in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks' }, execArgv: [] as string[], bridged: true },
     { label: '--preserve-symlinks=true in NODE_OPTIONS', env: { NODE_OPTIONS: '--no-warnings --preserve-symlinks=true' }, execArgv: [] as string[], bridged: true },
     { label: '--preserve-symlinks-main=true in execArgv', env: {}, execArgv: ['--preserve-symlinks-main=true'], bridged: true },
-    { label: '--preserve-symlinks=false in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks=false' }, execArgv: [] as string[], bridged: false },
+    { label: '--preserve-symlinks=false in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks=false' }, execArgv: [] as string[], bridged: true },
   ])('treats symlink preservation as set for ', async ({ env, execArgv, bridged }) => {
     const projectRoot = await createTempProject()
     await mkdir(join(projectRoot, 'node_modules'), { recursive: true })

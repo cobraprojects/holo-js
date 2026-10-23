@@ -350,10 +350,8 @@ function packageRootFromBase(base: string, packageName: string): string | undefi
 }
 
 function isPreserveSymlinksOption(option: string): boolean {
-  const [name, value] = option.split('=', 2)
-  if (name !== '--preserve-symlinks' && name !== '--preserve-symlinks-main') return false
-
-  return value === undefined || value === 'true'
+  const [name] = option.split('=', 1)
+  return name === '--preserve-symlinks' || name === '--preserve-symlinks-main'
 }
 
 function symlinksPreserved(): boolean {
