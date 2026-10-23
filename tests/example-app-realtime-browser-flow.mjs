@@ -61,6 +61,13 @@ function cookieHeaderToBrowserCookies(baseUrl, cookieHeader) {
     })
 }
 
+async function waitForLinkHydration(page, linkName) {
+  await page.waitForFunction(name => [...globalThis.document.querySelectorAll('a')].some(link => (
+    link.textContent?.trim() === name
+    && Object.keys(link).some(key => key.startsWith('__reactProps$'))
+  )), linkName)
+}
+
 function observeWebSockets(page) {
   const urls = []
   const sentFrames = []
@@ -119,7 +126,7 @@ async function assertNextRealtimeQueryAfterLogout(baseUrl) {
     const page = await context.newPage()
     await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
     await page.getByRole('link', { name: /realtime demo/i }).waitFor()
-    await page.waitForLoadState('networkidle')
+    await waitForLinkHydration(page, 'Realtime demo')
     await page.route('**/holo/realtime/query', async route => {
       const logout = await context.request.post('/api/logout', { headers })
       assert.equal(logout.status(), 200, await logout.text())
@@ -277,6 +284,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     assert.ok(postId, 'Expected the realtime query to return posts without a broadcast worker.')
 
     await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
+    await waitForLinkHydration(page, 'Realtime demo')
     const navigationQueryResponsePromise = page.waitForResponse(response => (
       response.url().includes('/holo/realtime/query')
       && response.request().method() === 'POST'
