@@ -1,4 +1,4 @@
-import { readBoundedCachedBody, readBoundedNodeRequestBody, requestBodyLimitFor } from '@holo-js/kernel'
+import { readBoundedBufferedBody, readBoundedNodeRequestBody, requestBodyLimitFor, type BufferedRequestBody } from '@holo-js/kernel'
 import {
   createError,
   defineEventHandler,
@@ -46,17 +46,21 @@ function createRequestBody(body: Uint8Array | undefined): RequestInit['body'] {
 
 const h3RawBodySymbol = Symbol.for('h3RawBody')
 
-async function readBoundedEventBody(event: H3Event): Promise<Uint8Array> {
+async function readBoundedEventBody(event: H3Event): Promise<BufferedRequestBody> {
   const limit = requestBodyLimitFor(getRequestHeader(event, 'content-type'))
   const node = event.node.req as unknown as Record<PropertyKey, unknown>
-  const cached = await readBoundedCachedBody(
+  const buffered = await readBoundedBufferedBody(
     event._requestBody || event.web?.request?.body || node[h3RawBodySymbol] || node.rawBody || node.body,
     limit,
   )
-  const bytes = cached ?? await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
+  const bytes = buffered?.bytes ?? await readBoundedNodeRequestBody(event.node.req, limit, getRequestHeader(event, 'content-length'))
   event._requestBody = bytes
   Object.assign(event.node.req, { [h3RawBodySymbol]: bytes })
-  return bytes
+  if (buffered?.contentType) {
+    (event.node.req.headers as Record<string, string>)['content-type'] = buffered.contentType
+  }
+
+  return { bytes, contentType: buffered?.contentType }
 }
 
 async function createRequest(event: H3Event): Promise<Request> {
@@ -67,14 +71,17 @@ async function createRequest(event: H3Event): Promise<Request> {
   }
   const method = getMethod(event)
   const headers = createHeaders(event)
-  const body = isSafeMethod(method)
+  const buffered = isSafeMethod(method)
     ? undefined
     : await readBoundedEventBody(event)
+  if (buffered?.contentType) {
+    headers.set('content-type', buffered.contentType)
+  }
 
   return new Request(getRequestURL(event, { xForwardedProto: false }), {
     method,
     headers,
-    body: createRequestBody(body),
+    body: createRequestBody(buffered?.bytes),
   })
 }
 

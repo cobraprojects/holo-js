@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
+  readBoundedBufferedBody,
   DEFAULT_MAX_UPLOAD_BODY_BYTES,
   requestBodyLimitFor,
   HoloRequestBodyTooLargeError,
@@ -194,6 +195,17 @@ describe('buffered body shapes', () => {
       },
     })
     await expect(readBoundedCachedBody(stream, 16)).rejects.toMatchObject({ status: 413 })
+  })
+})
+
+describe('pre-parsed FormData bodies', () => {
+  it('reports the boundary its re-encoded bytes use', async () => {
+    const form = new FormData()
+    form.set('title', 'Guide')
+    const buffered = await readBoundedBufferedBody(form, 1024)
+
+    expect(buffered?.contentType).toMatch(/^multipart\/form-data; boundary=/)
+    expect(new TextDecoder().decode(buffered?.bytes)).toContain('Guide')
   })
 })
 

@@ -133,4 +133,24 @@ describe('Nuxt route request', () => {
 
     expect(response.status).toBe(413)
   })
+
+  it('re-encodes a pre-parsed multipart body under the boundary it sends, so it parses again', async () => {
+    const app = createApp()
+    app.use(defineEventHandler(async (event) => {
+      const parsed = new FormData()
+      parsed.set('title', 'Guide')
+      parsed.set('image', new File(['pixels'], 'cover.png', { type: 'image/png' }))
+      Object.assign(event.node.req, { body: parsed })
+      const request = await createWebRequest(event)
+      const form = await request.formData()
+      return { title: form.get('title'), file: (form.get('image') as File).name }
+    }))
+    const response = await fetch(await serve(app), {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=client-boundary' },
+      body: 'ignored',
+    })
+
+    expect(await response.json()).toEqual({ title: 'Guide', file: 'cover.png' })
+  })
 })

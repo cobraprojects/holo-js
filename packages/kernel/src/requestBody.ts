@@ -98,7 +98,16 @@ async function readWebStreamBounded(stream: ReadableStream<Uint8Array>, limit: n
   return concatChunks(chunks, total)
 }
 
+export type BufferedRequestBody = {
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly contentType?: string
+}
+
 export async function readBoundedCachedBody(cached: unknown, maxBytes?: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
+  return (await readBoundedBufferedBody(cached, maxBytes))?.bytes
+}
+
+export async function readBoundedBufferedBody(cached: unknown, maxBytes?: number): Promise<BufferedRequestBody | undefined> {
   const value = await cached
   const limit = resolveLimit(maxBytes)
   if (value instanceof Uint8Array) {
@@ -106,7 +115,7 @@ export async function readBoundedCachedBody(cached: unknown, maxBytes?: number):
       throw new HoloRequestBodyTooLargeError(limit)
     }
 
-    return new Uint8Array(value)
+    return { bytes: new Uint8Array(value) }
   }
 
   if (value instanceof ArrayBuffer) {
@@ -114,7 +123,7 @@ export async function readBoundedCachedBody(cached: unknown, maxBytes?: number):
       throw new HoloRequestBodyTooLargeError(limit)
     }
 
-    return new Uint8Array(value.slice(0))
+    return { bytes: new Uint8Array(value.slice(0)) }
   }
 
   if (typeof value === 'string' || value instanceof URLSearchParams) {
@@ -123,24 +132,25 @@ export async function readBoundedCachedBody(cached: unknown, maxBytes?: number):
       throw new HoloRequestBodyTooLargeError(limit)
     }
 
-    return bytes
+    return { bytes }
   }
 
   if (typeof FormData !== 'undefined' && value instanceof FormData) {
-    const bytes = new Uint8Array(await new Response(value).arrayBuffer())
+    const encoded = new Response(value)
+    const bytes = new Uint8Array(await encoded.arrayBuffer())
     if (bytes.byteLength > limit) {
       throw new HoloRequestBodyTooLargeError(limit)
     }
 
-    return bytes
+    return { bytes, contentType: encoded.headers.get('content-type') ?? undefined }
   }
 
   if (isWebReadableStream(value)) {
-    return readWebStreamBounded(value, limit)
+    return { bytes: await readWebStreamBounded(value, limit) }
   }
 
   if (typeof value === 'object' && value !== null && Symbol.asyncIterator in value) {
-    return readBoundedNodeRequestBody(value as AsyncIterable<Uint8Array | string>, limit)
+    return { bytes: await readBoundedNodeRequestBody(value as AsyncIterable<Uint8Array | string>, limit) }
   }
 
   if (isPlainBufferedObject(value)) {
@@ -149,7 +159,7 @@ export async function readBoundedCachedBody(cached: unknown, maxBytes?: number):
       throw new HoloRequestBodyTooLargeError(limit)
     }
 
-    return bytes
+    return { bytes }
   }
 
   return undefined
