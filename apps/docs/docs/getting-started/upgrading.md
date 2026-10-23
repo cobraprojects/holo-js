@@ -203,7 +203,7 @@ const login = useForm(loginForm, { pageData: data })
 const errors = useValidationErrors('default', { pageData: data })
 ```
 
-Without the layout load, a failed submission still shows its errors on the server-rendered page, but the browser doesn't restore the input after hydration. If `APP_KEY` is empty, Holo writes no flash cookie and logs a warning when debugging is on.
+Passing `pageData` is required for flash restoration. Without the layout load and `pageData`, a failed submission shows no field errors and doesn't restore the submitted input, on the server or in the browser. If `APP_KEY` is empty, Holo writes no flash cookie and logs a warning when debugging is on.
 
 ### S3 file names with special characters
 

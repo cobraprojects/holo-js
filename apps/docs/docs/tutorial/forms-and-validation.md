@@ -540,7 +540,7 @@ const form = useForm(postForm, {
 
   export let data
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>
@@ -579,7 +579,7 @@ const form = useForm(postForm, {
   export let data
 
   const selectedTagIds = new Set(data.post.tags.map(tag => tag.id))
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <section>

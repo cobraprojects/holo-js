@@ -268,11 +268,13 @@ With `useForm()`, keep a normal `<form method="post">`. The adapter takes over t
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { postForm } from '$lib/schemas/post'
+
   import type { PageData } from './$types'
 
   export let data: PageData
 
   const form = useForm(postForm, {
+    pageData: data,
     validateOn: 'blur',
     initialValues: { title: '', body: '', status: 'draft' },
   })
@@ -300,16 +302,27 @@ With `useForm()`, keep a normal `<form method="post">`. The adapter takes over t
 </form>
 ```
 
+Without JavaScript, read the flashed errors with `useValidationErrors()` instead. In SvelteKit the flash is `HttpOnly`, so the page reads it through its layout load. Add the load once, then pass the page data to every form and `useValidationErrors()` call. Without `pageData`, the page shows no flashed errors or input:
+
+```ts [src/routes/+layout.server.ts]
+import { readValidationFlash } from '@holo-js/adapter-sveltekit'
+
+export const load = () => ({
+  holoValidationFlash: readValidationFlash(),
+})
+```
+
 Without JavaScript, read the flashed errors with `useValidationErrors()` instead:
 
 ```svelte [src/routes/posts/new/+page.svelte]
 <script lang="ts">
   import { useValidationErrors } from '@holo-js/adapter-sveltekit/client'
+
   import type { PageData } from './$types'
 
   export let data: PageData
 
-  const errors = useValidationErrors()
+  const errors = useValidationErrors('default', { pageData: data })
 </script>
 
 <form method="post">

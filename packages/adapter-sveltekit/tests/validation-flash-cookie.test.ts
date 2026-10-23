@@ -101,6 +101,12 @@ describe('validation flash cookie', () => {
     expect(redirectFor().headers.get('set-cookie')).toBeNull()
   })
 
+  it('writes no flash when the app key is whitespace only', () => {
+    setAppKey('   ')
+
+    expect(redirectFor().headers.get('set-cookie')).toBeNull()
+  })
+
   it('does not read a flash from document.cookie in the browser', () => {
     const plaintext = encodeURIComponent(JSON.stringify({ ...failure, values: { email: 'ava@example.com' } }))
     const loginSchema = schema({ email: field.string().required() })

@@ -160,7 +160,7 @@ async function mapValidationActionResponse(
 }
 
 function resolveValidationFlashAppKey(): string | undefined {
-  return svelteKitAdapter.internals.getState().project?.config.app.key || undefined
+  return svelteKitAdapter.internals.getState().project?.config.app.key?.trim() || undefined
 }
 
 function encodeValidationFlashPayload(payload: SerializedValidationException): string | undefined {
