@@ -88,7 +88,9 @@ test('fails instead of treating a registry outage as an unpublished package', as
   )
 })
 
-test('fails when a package manifest cannot be checked instead of dropping the package from the release gate', async () => {
+const canRevokeTraversal = process.platform !== 'win32' && process.getuid?.() !== 0
+
+test('fails when a package manifest cannot be checked instead of dropping the package from the release gate', { skip: !canRevokeTraversal }, async () => {
   const root = await createTempRepo({
     core: { name: '@holo-js/core', version: '0.3.28' },
   })

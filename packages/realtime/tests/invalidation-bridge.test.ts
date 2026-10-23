@@ -3,6 +3,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { cacheQueryBridgeInternals, configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { query } from '../src'
+import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
 import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
@@ -432,3 +433,38 @@ it('still refreshes a live query and reports the error when a local write fails 
   await expect.poll(() => seen.at(-1), { timeout: 5_000 }).toBe(77)
   expect(reports.map(report => (report.error as Error).message)).toContain('dependency index unavailable')
 }, 30_000)
+
+it('does not run a remote refresh that a reset overtakes before the refresh resumes', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const { db } = await openRealtimeDatabase()
+    let runs = 0
+    const counted = query({
+      name: 'records.overtakenRefresh',
+      access: 'public',
+      handler: async () => {
+        runs += 1
+        return { records: await db.table('records').orderBy('id').get() }
+      },
+    })
+    await subscribeRealtimeQuery(counted)
+    const before = runs
+
+    const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+    void bridge.receive(remoteInvalidation(['db:main:records']))
+    for (let attempt = 0; attempt < 100 && vi.getTimerCount() === 0; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+
+    vi.advanceTimersByTime(10)
+    resetRemoteRefreshSchedule()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
+
+    expect(runs).toBe(before)
+  } finally {
+    vi.useRealTimers()
+  }
+})
