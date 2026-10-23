@@ -91,7 +91,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "svelte": "^5.56.8",
   "svelte-check": "^4.4.6",
   "tslib": "^2.8.1",
-  "tsup": "^8.3.5",
+  "tsup": "^9.0.0",
   "tsx": "^4.23.15",
   "typescript": "^5.7.2",
   "typescript-eslint": "^8.30.1",

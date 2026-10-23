@@ -12,5 +12,61 @@
     "version": "1.4.0",
     "expires": "2026-12-17",
     "reason": "No patched node-forge release exists. Reachable only through the application's Nuxt peer (nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge), where listhen generates a local development HTTPS certificate and does not verify RSA signatures."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-67mh-4wv8-2f99",
+    "package": "esbuild",
+    "version": "0.21.5",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vite@5.4.21 under vitepress@1.6.4. No esbuild 0.21 release is patched. Reachable only from apps/docs (never published). Remove with the vite 5 entries."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-v6wh-96g9-6wx3",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-4w7w-66w2-5vf9",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-fx2h-pf6j-xcff",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-rq7h-c2jc-7f22",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
+  },
+  {
+    "advisory": "https://github.com/advisories/GHSA-587h-7wmj-h5pm",
+    "package": "vite",
+    "version": "5.4.21",
+    "expires": "2026-12-17",
+    "reason": "Pinned by vitepress@1.6.4, which only supports vite 5, and no patched vite 5 release exists. Reachable only from apps/docs (never published); vite 5 advisories concern the dev server. Remove once vitepress moves to vite 6 or later."
   }
 ]
