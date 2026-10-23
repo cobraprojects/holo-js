@@ -637,6 +637,42 @@ describe('@holo-js/forms contracts', () => {
     expect(throttled.fail()).toMatchObject({ status: 429 })
   })
 
+  it('validates a throttled submission whose body is a stream, reading the body once', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    await configureNativeSecurity()
+
+    const pulls: number[] = []
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls.push(pulls.length)
+        controller.enqueue(new TextEncoder().encode('email=ava%40example.com'))
+        controller.close()
+      },
+    }, { highWaterMark: 0 })
+
+    const result = await safeParse(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-forwarded-for': '203.0.113.10',
+      },
+      body,
+      duplex: 'half',
+    } as RequestInit), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(true)
+    if (!result.valid) {
+      throw new Error('Expected the stream submission to validate.')
+    }
+    expect(result.data).toEqual({ email: 'ava@example.com' })
+    expect(pulls.length).toBe(1)
+  })
+
   it('returns the controlled malformed-input failure for throttled submissions instead of throwing', async () => {
     const login = schema({
       email: field.string().required().email(),

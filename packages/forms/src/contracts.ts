@@ -718,6 +718,10 @@ export async function safeParse<TShape extends SchemaInputShape>(
     )
   }
 
+  const submittedValues = usesSecurityOptions
+    ? await submittedRequestValues(normalizedRequestInput as Request).catch(() => undefined)
+    : undefined
+
   if (usesSecurityOptions) {
     const request = normalizedRequestInput as Request
 
@@ -726,7 +730,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
       const security = await loadSecurityModule()
       await security.rateLimit(throttle, {
         request,
-        values: await submittedRequestValues(request),
+        values: submittedValues,
       })
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')
@@ -738,7 +742,7 @@ export async function safeParse<TShape extends SchemaInputShape>(
     }
   }
 
-  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition)
+  const result = await safeParseInput((submittedValues ?? validationInput) as FormLikeValidationInput, schemaDefinition)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
