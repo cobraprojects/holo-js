@@ -194,6 +194,8 @@ npx holo queue:clear --connection redis --queue emails
 
 `clearQueueConnection(connectionName?, { queueNames? })` deletes waiting jobs, like `queue:clear`, and resolves to the number of jobs deleted. Omit the connection name to use the default connection.
 
+The count is the number of queued jobs before the delete minus the number after it, so jobs added while the command runs can change it; treat clearing as an admin operation, not something a busy app does while it dispatches.
+
 ```ts
 import { clearQueueConnection } from '@holo-js/queue'
 

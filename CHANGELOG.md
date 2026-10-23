@@ -136,6 +136,7 @@
 
 ### Changed
 
+- Redis clients use ioredis 6 and the queue driver uses BullMQ 6. `@holo-js/cache-redis`, `@holo-js/queue-redis`, `@holo-js/session`, `@holo-js/security`, and `@holo-js/broadcast` (Redis scaling) now declare `ioredis` `^6` as their peer, and `@holo-js/queue-redis` depends on `bullmq` `^6`. ioredis 6 uses RESP3 by default and needs Node.js 20 or later; on Redis servers older than 6 it falls back to RESP2 without configuration changes. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#redis-clients-use-ioredis-6).
 - Package builds use tsup 9 (from tsup 8), which requires Node.js 22.18 or newer and drops esbuild 0.27 from the build chain.
 - `@holo-js/kernel` no longer exports `encryptCookieValue` and `decryptCookieValue` from its root. They are available only as `cookieEncryptionInternals.encryptCookieValue` and `cookieEncryptionInternals.decryptCookieValue`, which Holo uses for its own session, remember-me, and CSRF cookies. Application code should not encrypt or decrypt Holo cookies directly; use the session and auth APIs.
 - `holo install queue` reads `config/queue.ts` to decide which queue packages to install. When Holo can read the config, the config is authoritative: `--driver` no longer adds `@holo-js/queue-redis` or `@holo-js/queue-db` for a driver the config doesn't use, and queue packages the config doesn't use are removed, as `prepare` already did. Before, the installer added the driver's package and the next prepare removed it, so reruns reported `updated package.json` and reinstalled dependencies. A config that uses a database connection, or a failed-job store that isn't `false`, installs `@holo-js/queue-db`, including a primitive export such as `export default "keep-me"`, which the runtime normalizes to a database failed-job store. When Holo can't read the config, `--driver` still decides the package to add, and installed queue packages are never removed. See [Installed packages](apps/docs/docs/queue/drivers.md#installed-packages).
@@ -203,6 +204,7 @@
 
 ### Compatibility and upgrade requirements
 
+- **Install ioredis 6 next to Holo's Redis packages.** Apps that install `ioredis` directly must use `^6` so it matches the peer range of the Holo Redis packages, and run Node.js 20 or later. See [Redis clients use ioredis 6](apps/docs/docs/getting-started/upgrading.md#redis-clients-use-ioredis-6).
 - **Node.js 22.18 or newer on the 22 line.** Holo requires `^22.18.0 || ^24.0.0 || ^26.0.0`, because the build tooling (tsup 9) needs 22.18. Installs on Node.js 22.14 through 22.17 are no longer supported.
 - **Pivot columns aren't loaded unless declared.** Code that reads `pivot` for a column that isn't in `withPivot()` or `withTimestamps()` gets `undefined`. Add the column to `withPivot()`. See [Pivot columns](apps/docs/docs/getting-started/upgrading.md#pivot-columns-and-one-of-many-relations).
 - **Sessions don't cross between 0.3 and 0.4.** A session written by 0.4 isn't readable by 0.3, so a mixed-version rolling deploy or a rollback signs users out. See [Sessions don't cross between 0.3 and 0.4](apps/docs/docs/getting-started/upgrading.md#sessions-dont-cross-between-03-and-04).
