@@ -105,6 +105,10 @@ Model writes and `forceFill()` reject `__proto__`, `constructor`, and `prototype
 
 A JSON path segment on Postgres is now matched as one key, however it is written. Before, a comma split a segment into two keys, and a quote, backslash, or brace changed which key the path named, so `whereJson('settings->a,b', ...)` read `settings` at `a` then `b`. Queries whose segments contain these characters now match the key they name. Check any stored query or saved path that relied on the old split.
 
+### SQLite JSON path segments
+
+On SQLite, a JSON path segment that isn't a plain identifier is now matched as one key. Plain identifiers such as `theme` are unchanged. Before, a key with a comma, space, quote, backslash, bracket, dot, or leading digit matched no rows in `whereJson()`, and `updateJson()` on it changed nothing without an error. Those paths now match and update the key they name, so check any `updateJson()` call that targets such a key.
+
 ### Memory cache limit
 
 The `memory` cache driver keeps at most 10,000 entries when `maxEntries` isn't set, and removes the oldest entries first. Before, it had no limit, so a long-running process could grow without bound. Set `maxEntries` to choose a different limit. See [Memory](/cache/drivers#memory).

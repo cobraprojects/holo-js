@@ -489,6 +489,8 @@ const euUsers = await DB.table('users')
   .get()
 ```
 
+Each segment between `->` is one key, so a key that contains a comma is matched whole. A key can't contain `->`, `->>`, `#>`, or `@>`, and surrounding spaces are trimmed from each segment.
+
 | Method | Use it to… |
 | --- | --- |
 | `whereJson(path, operator?, value)` / `orWhereJson(...)` | compare a scalar value (string, number, boolean, `null`) at a path |
