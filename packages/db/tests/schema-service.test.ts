@@ -551,7 +551,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       let restoreStarted!: () => void
       const restoring = new Promise<void>(resolve => { restoreStarted = resolve })
       let outcomesSettled: Promise<unknown> = Promise.resolve()
-      let queryTimersOnceSettled: number | undefined
+      let pendingTimersWhenSettled: number | undefined
       const { db, schema } = await openDatabase(driver, {
         security: { allowUnsafeRawSql: true },
         logger: {
@@ -559,7 +559,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
             if (entry.source === 'schema:enableForeignKeys') {
               restoreStarted()
               await outcomesSettled
-              queryTimersOnceSettled = vi.getTimerCount()
+              pendingTimersWhenSettled = vi.getTimerCount()
             } else if (entry.kind === 'query') {
               await restoring
             }
@@ -582,7 +582,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         vi.useRealTimers()
       }
 
-      expect(queryTimersOnceSettled).toBe(0)
+      expect(pendingTimersWhenSettled).toBe(0)
       expect((await db.unsafeQuery<{ value: number }>(unsafeSql('select 1 as value'), { timeoutMs: 2_000 })).rows).toEqual([{ value: 1 }])
       expect(getEventListeners(controller.signal, 'abort').length).toBe(listenersBefore)
     }, 5_000)
