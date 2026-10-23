@@ -1995,6 +1995,41 @@ describe('@holo-js/auth-workos', () => {
     expect(String((await runtime.identityStore.findByProviderUserId('dashboard', 'workos_shared'))?.userId)).toBe(String(result.user.id))
   })
 
+  it('keeps a linked WorkOS user signed in when its unverified email matches another local account, and leaves that account untouched', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const linked = await runtime.usersProvider.create({ email: 'linked@app.test', name: 'Linked', password: null, email_verified_at: verifiedAt })
+    const other = await runtime.usersProvider.create({ email: 'other@app.test', name: 'Other', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'dashboard',
+      providerUserId: 'workos_linked_collision',
+      guard: 'web',
+      authProvider: 'users',
+      userId: linked.id,
+      email: 'linked@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'linked-unverified-collision',
+      identity: {
+        id: 'workos_linked_collision',
+        email: 'other@app.test',
+        emailVerified: false,
+        name: 'Linked',
+        metadata: {},
+        raw: {},
+      },
+    }, 'dashboard')
+
+    expect(result.user.id).toBe(linked.id)
+    expect(await runtime.usersProvider.findById(linked.id as number)).toMatchObject({ email: 'linked@app.test', email_verified_at: verifiedAt })
+    expect(await runtime.usersProvider.findById(other.id as number)).toMatchObject({ email: 'other@app.test', name: 'Other', email_verified_at: verifiedAt })
+  })
+
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {
     const runtime = await configureRuntime()
     const linkedUser = await runtime.usersProvider.create({

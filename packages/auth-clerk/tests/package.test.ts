@@ -2180,6 +2180,39 @@ describe('@holo-js/auth-clerk', () => {
     expect(String((await runtime.identityStore.findByProviderUserId('app', 'hosted-shared'))?.userId)).toBe(String(result.user.id))
   })
 
+  it('keeps a linked Clerk user signed in when its unverified primary email matches another local account, and leaves that account untouched', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const linked = await runtime.usersProvider.create({ email: 'linked@app.test', name: 'Linked', password: null, email_verified_at: verifiedAt })
+    const other = await runtime.usersProvider.create({ email: 'other@app.test', name: 'Other', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'hosted-linked-collision',
+      guard: 'web',
+      authProvider: 'users',
+      userId: linked.id,
+      email: 'linked@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'linked-unverified-collision',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-linked-collision',
+        name: 'Linked',
+        email: 'other@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+
+    expect(result.user.id).toBe(linked.id)
+    expect(await runtime.usersProvider.findById(linked.id as number)).toMatchObject({ email: 'linked@app.test', email_verified_at: verifiedAt })
+    expect(await runtime.usersProvider.findById(other.id as number)).toMatchObject({ email: 'other@app.test', name: 'Other', email_verified_at: verifiedAt })
+  })
+
   it('relinks an orphaned Clerk identity without an email match', async () => {
     const runtime = await configureRuntime()
     await runtime.identityStore.save({

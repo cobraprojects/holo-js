@@ -138,9 +138,9 @@ async function synchronize(input: HostedIdentitySyncInput): Promise<HostedIdenti
 
   if (user) {
     const userId = requireUserId(user, input, 'Linked')
-    const matched = input.email ? await findUserByEmail(input.email, input) : null
+    const matched = input.verifiedEmail ? await findUserByEmail(input.verifiedEmail, input) : null
     if (matched && requireUserId(matched, input, 'Matched') !== userId) {
-      throw input.conflict(input.email!, true)
+      throw input.conflict(input.verifiedEmail!, true)
     }
     const updated = await updateLocalUser(user, input)
     user = updated.user
