@@ -152,9 +152,8 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 
-const genuineBuilders = new WeakSet<object>()
+const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
-const appendTrustedRawWhere: unique symbol = Symbol('appendTrustedRawWhere')
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
@@ -204,7 +203,12 @@ export class TableQueryBuilder<
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
     this.plan = ownPlan ? withSource(ownPlan, this.source) : createSelectQueryPlan(this.source)
-    genuineBuilders.add(this)
+    trustedRawWhereAppenders.set(this, (sql, bindings) => this.clone(withPredicate(this.plan, createTrustedRawPredicate({
+      kind: 'raw',
+      boolean: 'and',
+      sql,
+      bindings: Object.freeze([...bindings]),
+    }))))
   }
 
   getTableName(): string {
@@ -2360,14 +2364,6 @@ export class TableQueryBuilder<
     return new TableQueryBuilder<TTableOrName, TRow, TNextColumns>(table, this.connection, plan, this.queryCacheConfig, internalPlanHandoff)
   }
 
-  [appendTrustedRawWhere](sql: string, bindings: readonly unknown[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(withPredicate(this.plan, createTrustedRawPredicate({
-      kind: 'raw',
-      boolean: 'and',
-      sql,
-      bindings: Object.freeze([...bindings]),
-    })))
-  }
 
   private async captureUpdatedMutationRows(
     values: Readonly<Record<string, unknown>>,
@@ -2899,9 +2895,11 @@ export function whereColumnNotExpiredByDatabaseClock<
   query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
   column: string,
 ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-  if (!genuineBuilders.has(query)) {
+  const appendTrusted = trustedRawWhereAppenders.get(query)
+  if (!appendTrusted) {
     throw new SecurityError('whereColumnNotExpiredByDatabaseClock() needs a query builder that Holo created.')
   }
+  const append = (sql: string, bindings: readonly unknown[]) => appendTrusted(sql, bindings) as TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
 
   if (!/^[A-Za-z_]\w*$/.test(column)) {
     throw new SecurityError(`Database-clock predicates need a plain column name, received "${column}".`)
@@ -2915,12 +2913,12 @@ export function whereColumnNotExpiredByDatabaseClock<
   const dialectName = connection.getDialect().name
   const quoted = dialectName === 'mysql' ? `\`${column}\`` : `"${column}"`
   if (dialectName === 'sqlite') {
-    return query[appendTrustedRawWhere](`${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
+    return append(`${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
   }
 
   if (dialectName === 'postgres') {
-    return query[appendTrustedRawWhere](`${quoted} > (clock_timestamp() AT TIME ZONE ?)`, [getApplicationTimezone()])
+    return append(`${quoted} > (clock_timestamp() AT TIME ZONE ?)`, [getApplicationTimezone()])
   }
 
-  return query[appendTrustedRawWhere](`${quoted} > CURRENT_TIMESTAMP(3)`, [])
+  return append(`${quoted} > CURRENT_TIMESTAMP(3)`, [])
 }

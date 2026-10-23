@@ -194,6 +194,29 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(2)
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('does not let reflection reach a method that mints trusted raw SQL on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+    const prototype = TableQueryBuilder.prototype as unknown as Record<PropertyKey, unknown>
+    const methods = Object.getOwnPropertySymbols(TableQueryBuilder.prototype)
+      .map(symbol => prototype[symbol])
+      .filter((method): method is (...args: unknown[]) => unknown => typeof method === 'function')
+
+    for (const method of methods) {
+      let attempt: unknown
+      try {
+        attempt = method.call(db.table(table), `name = 'Safe' OR 1=1`, [])
+      } catch {
+        attempt = undefined
+      }
+      if (attempt && typeof (attempt as { delete?: unknown }).delete === 'function') {
+        await expect((attempt as { delete: () => Promise<unknown> }).delete()).rejects.toThrow(policyError)
+      }
+    }
+    expect(await db.table(table).count()).toBe(2)
+  })
+
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
     const { db, table } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
