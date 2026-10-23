@@ -49,4 +49,20 @@ describe('Nuxt form failure internals', () => {
     configureSecurityRuntime({ config: { trustedProxies: ['198.51.100.4'] } })
     expect(flash()).toMatch(/; Secure$/)
   })
+
+  it.each([
+    ['a protocol-relative request path', { path: '//evil.example/steal', headers: { host: 'app.test' } }, '/'],
+    ['a protocol-relative referer path', { path: '/login', headers: { host: 'app.test', referer: 'https://app.test//evil.example/steal' } }, '/'],
+    ['a backslash referer path', { path: '/login', headers: { host: 'app.test', referer: 'https://app.test/\\evil.example' } }, '/'],
+    ['a same-origin referer', { path: '/login', headers: { host: 'app.test', referer: 'https://app.test/checkout?step=2' } }, '/checkout?step=2'],
+  ])('redirects to a same-origin location for %s', (_label, request, location) => {
+    const response: NitroResponse = {}
+    applyFormFailureRedirect(
+      { path: request.path, node: { req: { method: 'POST', headers: request.headers } } },
+      response,
+      { ok: false, status: 422, valid: false, errors: { email: ['Invalid.'] }, values: {} },
+    )
+
+    expect((response.headers as Record<string, unknown>).location).toBe(location)
+  })
 })

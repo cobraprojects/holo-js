@@ -5,6 +5,14 @@ function createSqliteJsonExtractExpression(column: string, pathLiteral: string):
   return `json_extract(${column}, ${pathLiteral})`
 }
 
+function escapeSqliteJsonLabel(segment: string): string {
+  return segment
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('\u0000', '\\u0000')
+    .replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, unit => `\\u${unit.charCodeAt(0).toString(16)}`)
+}
+
 function sqliteJsonType(value: unknown): string {
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'number') return 'number'
@@ -38,6 +46,18 @@ const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
   protected override compileLockClause(_lockMode: QueryLockMode): string {
     return ''
+  }
+
+  protected override createJsonPathLiteral(path: readonly string[]): string {
+    const serializedPath = path.reduce((current, segment) => {
+      if (/^[A-Z_]\w*$/i.test(segment)) {
+        return `${current}.${segment}`
+      }
+
+      return `${current}."${escapeSqliteJsonLabel(segment)}"`
+    }, '$')
+
+    return this.createSqlStringLiteral(serializedPath)
   }
 
   protected override compileJsonPredicate(predicate: QueryJsonPredicate, bindings: unknown[]): string {

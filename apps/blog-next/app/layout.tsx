@@ -5,6 +5,7 @@ import { AuthProvider } from '@holo-js/auth/next/client'
 import { auth } from '@holo-js/auth/next/server'
 
 import { AuthNav } from './auth-nav'
+import { HydrationMarker } from './hydration-marker'
 
 export const metadata: Metadata = {
   title: 'blog-next',
@@ -17,6 +18,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html lang="en">
       <body style={{ margin: 0, fontFamily: 'Inter, Arial, sans-serif', background: '#0b1020', color: '#e5eef8' }}>
+        <HydrationMarker />
         <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
           <div style={{ minHeight: '100vh' }}>
             <header style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.2)', background: 'rgba(11, 16, 32, 0.92)' }}>

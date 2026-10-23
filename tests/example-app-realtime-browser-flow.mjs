@@ -61,6 +61,10 @@ function cookieHeaderToBrowserCookies(baseUrl, cookieHeader) {
     })
 }
 
+async function waitForAppHydration(page) {
+  await page.waitForSelector('html[data-hydrated="true"]', { state: 'attached' })
+}
+
 function observeWebSockets(page) {
   const urls = []
   const sentFrames = []
@@ -119,7 +123,7 @@ async function assertNextRealtimeQueryAfterLogout(baseUrl) {
     const page = await context.newPage()
     await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
     await page.getByRole('link', { name: /realtime demo/i }).waitFor()
-    await page.waitForLoadState('networkidle')
+    await waitForAppHydration(page)
     await page.route('**/holo/realtime/query', async route => {
       const logout = await context.request.post('/api/logout', { headers })
       assert.equal(logout.status(), 200, await logout.text())
@@ -277,6 +281,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     assert.ok(postId, 'Expected the realtime query to return posts without a broadcast worker.')
 
     await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
+    if (appName === 'blog-next') await waitForAppHydration(page)
     const navigationQueryResponsePromise = page.waitForResponse(response => (
       response.url().includes('/holo/realtime/query')
       && response.request().method() === 'POST'

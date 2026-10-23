@@ -93,6 +93,10 @@ describe('SvelteKit server adapter internals', () => {
     expect(redirect.headers.get('set-cookie')).toContain('HOLO-SVELTEKIT-VALIDATION=')
     expect(await failure.json()).toMatchObject({ type: 'failure', status: 422 })
     expect(adapterSvelteKitInternals.createValidationActionRedirectResponse({ ...event, url: undefined } as never, payload as never).headers.get('location')).toBe('/')
+    expect(adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      ...event,
+      url: new URL('https://app.test//evil.example/steal'),
+    } as never, payload as never).headers.get('location')).toBe('/')
     expect(adapterSvelteKitInternals.toSvelteKitValidationBody(payload as never)).toBe(payload)
   })
 
@@ -147,4 +151,22 @@ describe('SvelteKit server adapter internals', () => {
     const mapped = await adapterSvelteKitInternals.mapValidationActionResponse(createEvent('/posts', 'POST', 'application/json') as never, serialized)
     expect(mapped.status).toBe(200)
   })
+})
+
+it('scopes the flash cookie to the same-origin path the redirect goes to', () => {
+  const state = adapterSvelteKitInternals.getState() as { project?: unknown }
+  state.project = { config: { app: { key: 'redirect-path-test-key', debug: false } } }
+  try {
+    const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+      url: new URL('https://app.test//evil.example/steal'),
+    } as never, {
+      ok: false, status: 422, valid: false, message: 'Invalid input.', bag: 'default', values: {}, errors: {},
+    } as never)
+
+    expect(response.headers.get('location')).toBe('/')
+    expect(response.headers.get('set-cookie')).toContain('Path=/;')
+    expect(response.headers.get('set-cookie')).not.toContain('evil.example')
+  } finally {
+    state.project = undefined
+  }
 })

@@ -187,7 +187,7 @@ export async function POST(request: Request) {
 
 When the limit is hit, the submission fails with status 429. The message goes in the `_root` error, and the payload includes `retryAfterSeconds` and `retryAt` so you can tell the user when to try again. Route handlers also send a `Retry-After` header.
 
-`throttle` needs to know who is submitting, so pass a `Request`, a Nuxt `event`, or (in a Next.js server action) the `FormData`. A plain object throws an error. See [Rate Limiting](/basics/security/rate-limiting) for limiter options.
+`throttle` needs to know who is submitting, so pass a `Request`, a Nuxt `event`, or (in a Next.js server action) the `FormData`. A plain object throws an error. See [Rate Limiting](/basics/security/rate-limiting) for limiter options. Each submission is validated first, then counted, valid or not. A `.by()` key resolver that reads `values` gets the values after the schema's transforms, so trimmed or lowercased variants share one limit. For a submission that fails validation, `values` is `undefined`, so the resolver must return a non-empty string for every request. A limiter without a `.by()` resolver uses the default request key.
 
 ::: info
 CSRF checks are not a `validate()` option. Holo's security middleware verifies the token before your handler runs. See [CSRF Protection](/basics/security/csrf).

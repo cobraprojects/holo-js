@@ -105,6 +105,10 @@ Model writes and `forceFill()` reject `__proto__`, `constructor`, and `prototype
 
 A JSON path segment on Postgres is now matched as one key, however it is written. Before, a comma split a segment into two keys, and a quote, backslash, or brace changed which key the path named, so `whereJson('settings->a,b', ...)` read `settings` at `a` then `b`. Queries whose segments contain these characters now match the key they name. Check any stored query or saved path that relied on the old split.
 
+### SQLite JSON path segments
+
+On SQLite, a JSON path segment that isn't a plain identifier is now matched as one key. Plain identifiers such as `theme` are unchanged. Before, a key with a comma, space, quote, backslash, bracket, dot, or leading digit matched no rows in `whereJson()`, and `updateJson()` on it changed nothing without an error. Those paths now match and update the key they name, so check any `updateJson()` call that targets such a key.
+
 ### Memory cache limit
 
 The `memory` cache driver keeps at most 10,000 entries when `maxEntries` isn't set, and removes the oldest entries first. Before, it had no limit, so a long-running process could grow without bound. Set `maxEntries` to choose a different limit. See [Memory](/cache/drivers#memory).
@@ -230,6 +234,13 @@ Passing `pageData` is required for flash restoration. Without the layout load an
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
 
 Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
+### Forms throttle counts every submission
+
+A form with `throttle` validates the submission, then checks the rate limit for every attempt, valid or invalid, before your handler runs. A throttled submission returns `429` with the submitted values and the field errors from validation. The limiter's key resolver receives the values after the schema's transforms, so `Victim@Example.com ` and `victim@example.com` share one bucket when the schema lowercases and trims the email. For an invalid submission, `values` is `undefined`, so a `.by()` key resolver must return a non-empty string for every request. A limiter without a `.by()` resolver uses the default request key.
+
+### `make:channel` patterns
+
+`make:channel` accepts only dot-separated segments of letters, digits, `_`, and `-`, with optional `{param}` placeholders, such as `orders.{orderId}`. Other patterns stop the command before any file is written. The generated file quotes the pattern with double quotes.
 
 ### S3 file names with special characters
 
