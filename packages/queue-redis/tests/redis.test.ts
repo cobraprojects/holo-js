@@ -69,6 +69,22 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
     expect(await driver.reserve({})).toBeNull()
   })
 
+  it('counts and clears jobs left in the legacy paused list by BullMQ 5', async () => {
+    const { driver, service, queue, job } = await openQueue()
+    await driver.dispatch(job())
+    await driver.dispatch(job())
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected a Redis connection')
+    const waitKey = `bull:${queue}:wait`
+    const pausedKey = `bull:${queue}:paused`
+    await client.rename(waitKey, pausedKey)
+    await client.hset(`bull:${queue}:meta`, 'paused', 1)
+    expect(await client.llen(pausedKey)).toBe(2)
+    expect(await driver.clear()).toBe(2)
+    expect(await client.llen(pausedKey)).toBe(0)
+    expect(await driver.clear()).toBe(0)
+  })
+
   it('delays jobs, releases them for retry, and removes deleted jobs', async () => {
     const { driver, job } = await openQueue()
     const envelope = { ...job(), availableAt: Date.now() + 300 }

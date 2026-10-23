@@ -588,6 +588,18 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     this.reservations.delete(job.reservationId)
   }
 
+  private async countLegacyPausedJobs(queueName: string): Promise<number> {
+    const client = await this.getQueue(queueName).client
+    const pausedKey = `${this.getQueuePrefix(queueName)}:${queueName}:paused`
+    const count = await client.llen(pausedKey)
+    if (count === 0) {
+      return 0
+    }
+
+    const [last] = await client.lrange(pausedKey, -1, -1)
+    return last?.startsWith('0:') ? count - 1 : count
+  }
+
   async clear(input?: { readonly queueNames?: readonly string[] }): Promise<number> {
     try {
       const queueNames = this.normalizeQueueNames(input?.queueNames)
@@ -596,6 +608,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       for (const queueName of queueNames) {
         const queue = this.getQueue(queueName)
         cleared += await queue.getJobCountByTypes('wait', 'prioritized', 'delayed')
+        cleared += await this.countLegacyPausedJobs(queueName)
         await queue.drain(true)
       }
 
