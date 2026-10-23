@@ -223,6 +223,21 @@ List the file in `contributes.config.files` so `plugin:info` shows it.
 
 After changing a plugin, run `npx holo prepare` so the app's generated files match.
 
+## Ship models and jobs in a package
+
+A package that ships Holo models, jobs, or plugins must list `@holo-js/*` packages as `peerDependencies`, not `dependencies`. The app then installs one copy of each Holo package, and your package uses that copy.
+
+```json
+{
+  "peerDependencies": {
+    "@holo-js/db": "*",
+    "@holo-js/queue": "*"
+  }
+}
+```
+
+If an install nests a separate copy of a `@holo-js/*` package inside your package, models and jobs from it do not share the app's Holo copy. Declare the peers so the package manager resolves one copy.
+
 ## Next steps
 
 - [How Holo Works](/advanced/architecture)
