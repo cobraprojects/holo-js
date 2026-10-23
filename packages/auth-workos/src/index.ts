@@ -708,13 +708,17 @@ function resolveDisplayNameForUpdate(profile: WorkosIdentityProfile): string | u
   return fullName || undefined
 }
 
+function resolveHostedPlaceholderEmail(profile: WorkosIdentityProfile): string {
+  return `${profile.id}@workos.hosted.local`
+}
+
 function resolveEmailForCreation(profile: WorkosIdentityProfile): string {
   const normalized = profile.email.trim()
-  if (normalized) {
+  if (normalized && profile.emailVerified === true) {
     return normalized
   }
 
-  return `${profile.id}@workos.hosted.local`
+  return resolveHostedPlaceholderEmail(profile)
 }
 
 function toAdapterInput(input: WorkosUserAttributes): Readonly<Record<string, unknown>> {
@@ -747,11 +751,12 @@ function resolveUpdateUserInput<TUserAttributes extends WorkosUserAttributes>(
   profile: WorkosIdentityProfile,
   mapper?: (workosUser: WorkosIdentityProfile) => TUserAttributes,
 ): Readonly<Record<string, unknown>> {
+  const verifiedEmail = profile.emailVerified ? profile.email.trim() || undefined : undefined
   return toAdapterInput({
-    email: profile.email.trim() || undefined,
+    email: verifiedEmail,
     name: resolveDisplayNameForUpdate(profile),
     avatar: profile.profilePictureUrl,
-    email_verified_at: profile.emailVerified ? new Date() : undefined,
+    email_verified_at: verifiedEmail ? new Date() : undefined,
     ...(mapper?.(profile) ?? {}),
   })
 }
@@ -1007,6 +1012,7 @@ export async function syncIdentity<TUserAttributes extends WorkosUserAttributes 
     ownership: 'save',
     verifiedEmail,
     email: profileEmail,
+    placeholderEmail: resolveHostedPlaceholderEmail(profile),
     errorPrefix: '[@holo-js/auth-workos]',
     identityLabel: 'WorkOS',
     createUserInput: () => resolveCreateUserInput(profile, options.user),

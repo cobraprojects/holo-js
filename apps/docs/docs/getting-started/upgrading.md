@@ -536,13 +536,48 @@ Update the resend route and its page:
 - Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. New security configs include the limiter. If your `config/security.ts` already exists, add it to `rateLimit.limiters`. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
 - Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
 
-### Password reset cycles remember tokens
+### Password reset signs out other sessions
 
-A successful password reset now replaces the user's `remember_token`, as Laravel does. Remember-me cookies issued before the reset stop restoring. Browsers that are still signed in keep their sessions. The column already exists, so no migration is needed.
+A successful password reset now replaces the user's `remember_token`, as Laravel does, and signs the user out everywhere else. Remember-me cookies issued before the reset stop restoring. Every other browser's session stops working on its next request, including sessions that were already signed in. The browser that submits the reset keeps its place: if it was signed in as this user, its session ID is rotated and it stays signed in. The column already exists, so no migration is needed.
+
+Tell users who are signed in on another device that they must sign in again after a reset. A custom auth persistence must provide `sessionRevocations`; core persistence already does. See [Password reset](/auth/password-reset#reset-the-password).
+
+### Clerk sessions need an authorized party
+
+Holo accepts a Clerk session token only when its `azp` claim names an authorized party from your config: the origins in `authorizedParties`, plus the origin of `redirectUri`. Before, the origin of each request's `Host` header counted too, so a token issued for another app on the same Clerk instance was accepted for any request that named that app's host. Holo no longer reads origins from the request.
+
+New apps from `holo new` and `holo install auth --clerk` get `authorizedParties: [env('APP_URL', 'http://localhost:3000')]` in the Clerk provider, so they work out of the box.
+
+Existing apps add that one line to the `app` entry of `clerk` in `config/auth.ts`, unless `redirectUri` is already set (its origin is then allowed):
+
+```ts
+clerk: {
+  app: {
+    // ...existing options
+    authorizedParties: [env('APP_URL', 'http://localhost:3000')],
+  },
+},
+```
+
+A Clerk provider with neither `redirectUri` nor `authorizedParties` rejects every session token, so sign-in fails until you add one of them. Add any other origin that serves your app, or that is allowed to issue its tokens, to `authorizedParties`. WorkOS isn't affected, because it doesn't use `azp`.
+
+See [Clerk configuration](/auth/clerk#configuration).
+
+### Hosted sign-in copies only verified emails
+
+Clerk and WorkOS sign-in copy the provider's email to the local user only when the provider reports it verified. This also applies to an email that your `user` mapper sets: an unverified address in the final update is dropped. A first sign-in with an unverified email creates the user with the hosted placeholder address instead, and it never links to an existing local account with that address. Holo matches an existing local account to a hosted identity only by the verified email. A returning user whose unverified email matches another account signs in as before, and that account is left alone. An unverified address doesn't replace the stored email, and the user keeps the verification they had. A stored email that changes, through sign-in or the auth runtime, now clears `email_verified_at` so a verification never carries over to a different address.
+
+Users whose email changed before this upgrade keep the verified timestamp they had. If you need every stored verification to match its address, ask those users to verify again.
+
+### Apple email comes from the signed token
+
+Sign in with Apple takes the user's email only from the signed `id_token`. Before, Apple's form `user` field supplied it when the token had none. Apple's form field isn't signed, so Holo ignores its email now and still reads the user's name from it. A callback whose token has no email gets the placeholder address `<id>@apple.social.local` when [email verification](/auth/email-verification) is off, and fails with `requires a verified email address` when it's on. To keep the real address, capture it on the first authorization. See [Apple](/auth/social-login#apple).
 
 ### Failed logins and reset-link requests take at least 200 ms
 
 Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
+
+A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo auth:notifications:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
 
 ### User records load on every request
 

@@ -834,6 +834,7 @@ export function renderAuthConfig(
       `      apiUrl: ${envValue('CLERK_API_URL')},`,
       `      frontendApi: ${envValue('CLERK_FRONTEND_API')},`,
       `      redirectUri: ${envValue('CLERK_REDIRECT_URI')},`,
+      `      authorizedParties: [${envValue('APP_URL', 'http://localhost:3000')}],`,
       `      sessionCookie: ${envValue('CLERK_SESSION_COOKIE', '__session')},`,
       '    },',
       '  },',
@@ -894,9 +895,12 @@ export function canSafelyRewriteAuthConfig(
     '',
   )
 
-  return stripLegacyCurrentUserEndpoint(currentContents) === stripLegacyCurrentUserEndpoint(
-    renderAuthConfig(currentFeatures, moduleFormat),
-  )
+  const rendered = renderAuthConfig(currentFeatures, moduleFormat)
+  const current = stripLegacyCurrentUserEndpoint(currentContents)
+  if (current === stripLegacyCurrentUserEndpoint(rendered)) return true
+
+  const withoutClerkAuthorizedParties = rendered.replace(/\n {6}authorizedParties: \[[^\n]*\],(?=\n)/, '')
+  return current === stripLegacyCurrentUserEndpoint(withoutClerkAuthorizedParties)
 }
 
 export function resolveConfigModuleFormat(

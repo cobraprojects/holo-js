@@ -63,6 +63,7 @@ export default defineAuthConfig({
       apiUrl: env('CLERK_API_URL'),
       frontendApi: env('CLERK_FRONTEND_API'),
       redirectUri: env('CLERK_REDIRECT_URI'),
+      authorizedParties: [env('APP_URL', 'http://localhost:3000')],
       sessionCookie: env('CLERK_SESSION_COOKIE', '__session'),
     },
   },
@@ -78,7 +79,7 @@ export default defineAuthConfig({
 | `redirectUri` | | Callback URL. Must be a full URL |
 | `apiUrl` | Clerk's API | Custom Backend API base URL |
 | `sessionCookie` | `'__session'` | Clerk session cookie name |
-| `authorizedParties` | `[]` | Extra origins allowed to have issued the Clerk session token. Your app's own origin is always allowed |
+| `authorizedParties` | `[]` in the config; `holo new` and `holo install auth` set `[env('APP_URL', ...)]` | Origins allowed to have issued the Clerk session tokens that this app accepts. The origin of `redirectUri` is always allowed. Holo never takes an origin from the request's `Host` header, so a session token issued for another app on the same Clerk instance is rejected. With neither set, Clerk sessions are rejected, so set `redirectUri` or list your origin here |
 | `guard` | default guard | Sign users in on this guard. Must be a `session` guard |
 | `mapToProvider` | the guard's provider | Save users with this user provider |
 
@@ -223,7 +224,9 @@ The first time a Clerk user signs in, Holo creates a local user and links the Cl
 If a local user with the same verified email already exists and isn't linked to Clerk, Holo doesn't merge the accounts. The callback fails with `clerk_identity_conflict`. This stops someone from taking over a password account through a hosted provider.
 :::
 
-When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without an email get a placeholder like `<clerk-id>@clerk.hosted.local` when verification isn't required.
+Holo copies Clerk's primary email to the local user only when Clerk reports it verified. An unverified address never replaces the stored email, and changing the stored email clears its `email_verified_at`.
+
+When [email verification](/auth/email-verification) is required, Clerk users must have a verified email, so phone-only Clerk sign-ups fail. Users without a verified email get a placeholder like `<clerk-id>@clerk.hosted.local`, and their provider email isn't stored. A first sign-in with an unverified email never links to an existing local account with that address, so the existing account stays as it is. When verification isn't required, the user is still created.
 
 ## Store links in your own table
 

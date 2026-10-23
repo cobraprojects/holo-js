@@ -351,6 +351,7 @@ describe('@holo-js/auth-clerk', () => {
             publishableKey: 'pk_test',
             secretKey: 'sk_test',
             sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
           },
         },
       }),
@@ -456,6 +457,141 @@ describe('@holo-js/auth-clerk', () => {
         id: 'user_clerk_azp_match',
       },
     })
+  })
+
+  it('accepts only configured authorized parties, never the request Host origin', async () => {
+    const runtime = await configureRuntime({
+      configureClerkRuntime: false,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const siblingToken = createSignedJwt({
+      sub: 'user_clerk_sibling',
+      sid: 'sess_clerk_sibling',
+      azp: 'https://sibling.test',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
+      if (url === 'https://api.clerk.com/v1/users/user_clerk_sibling') {
+        return new Response(JSON.stringify({
+          id: 'user_clerk_sibling',
+          first_name: 'Sibling',
+          primary_email_address_id: 'email_primary',
+          email_addresses: [
+            {
+              id: 'email_primary',
+              email_address: 'sibling@app.test',
+              verification: {
+                status: 'verified',
+              },
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: defineAuthConfig({
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        clerk: {
+          app: {
+            publishableKey: 'pk_test',
+            secretKey: 'sk_test',
+            sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
+          },
+        },
+      }),
+    })
+
+    await expect(verifyRequest(new Request('https://sibling.test/me', {
+      headers: {
+        authorization: `Bearer ${siblingToken}`,
+      },
+    }))).rejects.toThrow('authorized party')
+    await expect(verifySession(siblingToken)).rejects.toThrow('authorized party')
+  })
+
+  it('matches configured authorized parties by origin, so a trailing slash in APP_URL still accepts the app', async () => {
+    const runtime = await configureRuntime({
+      configureClerkRuntime: false,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const appToken = createSignedJwt({
+      sub: 'user_clerk_slash',
+      sid: 'sess_clerk_slash',
+      azp: 'https://app.test',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
+      if (url === 'https://api.clerk.com/v1/users/user_clerk_slash') {
+        return new Response(JSON.stringify({
+          id: 'user_clerk_slash',
+          first_name: 'Slash',
+          primary_email_address_id: 'email_primary',
+          email_addresses: [
+            {
+              id: 'email_primary',
+              email_address: 'slash@app.test',
+              verification: {
+                status: 'verified',
+              },
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    authRuntimeInternals.configureRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: defineAuthConfig({
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        clerk: {
+          app: {
+            publishableKey: 'pk_test',
+            secretKey: 'sk_test',
+            sessionCookie: '__session',
+            authorizedParties: ['https://app.test/'],
+          },
+        },
+      }),
+    })
+
+    await expect(verifySession(appToken)).resolves.toMatchObject({ sessionId: 'sess_clerk_slash' })
   })
 
   it('rejects built-in Clerk JWTs without required bound claims', async () => {
@@ -633,6 +769,7 @@ describe('@holo-js/auth-clerk', () => {
             secretKey: 'sk_test',
             frontendApi: 'https://clerk.example.test',
             sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
           },
         },
       }),
@@ -699,6 +836,7 @@ describe('@holo-js/auth-clerk', () => {
             secretKey: 'sk_test',
             frontendApi: 'https://rotate.clerk.test',
             sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
           },
         },
       }),
@@ -988,6 +1126,7 @@ describe('@holo-js/auth-clerk', () => {
             secretKey: 'sk_test',
             frontendApi: 'https://first.clerk.test',
             sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
           },
         },
       }),
@@ -1014,6 +1153,7 @@ describe('@holo-js/auth-clerk', () => {
             secretKey: 'sk_test',
             frontendApi: 'https://second.clerk.test',
             sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
           },
         },
       }),
@@ -1916,6 +2056,194 @@ describe('@holo-js/auth-clerk', () => {
         authorization: 'Bearer relink-token',
       },
     }))).rejects.toBeInstanceOf(ClerkAuthConflictError)
+  })
+
+  it('keeps the stored email and its verification when the provider reports the new primary email unverified', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({ email: 'owner@app.test', name: 'Owner', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'hosted-owner',
+      guard: 'web',
+      authProvider: 'users',
+      userId: user.id,
+      email: 'owner@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    await expect(syncIdentity({
+      sessionId: 'unverified-primary-change',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-owner',
+        name: 'Owner',
+        email: 'victim@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')).resolves.toMatchObject({ status: 'linked' })
+    expect(await runtime.usersProvider.findById(user.id)).toMatchObject({
+      email: 'owner@app.test',
+      email_verified_at: verifiedAt,
+    })
+  })
+
+  it('applies the verified-email rule after a custom user mapper, so a mapped unverified email never replaces the stored one', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({ email: 'owner@app.test', name: 'Owner', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'mapped-owner',
+      guard: 'web',
+      authProvider: 'users',
+      userId: user.id,
+      email: 'owner@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    await expect(syncIdentity({
+      sessionId: 'mapped-unverified-primary',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'mapped-owner',
+        name: 'Owner',
+        email: 'victim@app.test',
+        emailVerified: false,
+      }),
+    }, 'app', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })).resolves.toBeDefined()
+    expect(await runtime.usersProvider.findById(user.id)).toMatchObject({
+      email: 'owner@app.test',
+      email_verified_at: verifiedAt,
+    })
+  })
+
+  it('creates a first-time Clerk user with the hosted placeholder when the provider email is unverified, with and without a custom mapper', async () => {
+    const runtime = await configureRuntime()
+
+    const plain = await syncIdentity({
+      sessionId: 'first-unverified-plain',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-first-plain',
+        name: 'First',
+        email: 'first-plain@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+    expect(plain.user).toMatchObject({ email: 'hosted-first-plain@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(plain.user.id as number)).toMatchObject({ email_verified_at: null })
+
+    const mapped = await syncIdentity({
+      sessionId: 'first-unverified-mapped',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-first-mapped',
+        name: 'Mapped',
+        email: 'first-mapped@app.test',
+        emailVerified: false,
+      }),
+    }, 'app', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+    expect(mapped.user).toMatchObject({ email: 'hosted-first-mapped@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(mapped.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-mapped@app.test' })).toBeNull()
+    expect(await runtime.usersProvider.findByCredentials({ email: 'first-plain@app.test' })).toBeNull()
+  })
+
+  it('keeps a first-time Clerk placeholder unverified when the adapter defaults a missing verification timestamp', async () => {
+    const runtime = await configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const base = runtime.usersProvider
+    authRuntimeInternals.configureRuntime({
+      ...bindings,
+      providers: {
+        ...bindings.providers,
+        users: {
+          ...base,
+          async create(input: Record<string, unknown>) {
+            return base.create({ ...input, email_verified_at: input.email_verified_at === undefined ? new Date() : input.email_verified_at })
+          },
+        },
+      },
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'placeholder-default-timestamp',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-default',
+        name: 'Default',
+        email: 'default@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+
+    expect(await runtime.usersProvider.findById(result.user.id as number)).toMatchObject({
+      email: 'hosted-default@clerk.hosted.local',
+      email_verified_at: null,
+    })
+  })
+
+  it('does not touch or link an existing local account that shares an unverified Clerk email at first sign-in', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const existing = await runtime.usersProvider.create({ email: 'shared@app.test', name: 'Existing', password: null, email_verified_at: verifiedAt })
+
+    const result = await syncIdentity({
+      sessionId: 'first-unverified-shared',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-shared',
+        name: 'Newcomer',
+        email: 'shared@app.test',
+        emailVerified: false,
+      }),
+    }, 'app', {
+      user: profile => ({ email: profile.email, name: profile.name }),
+    })
+
+    expect(result.user.id).not.toBe(existing.id)
+    expect(result.user).toMatchObject({ email: 'hosted-shared@clerk.hosted.local' })
+    expect(await runtime.usersProvider.findById(result.user.id as number)).toMatchObject({ email_verified_at: null })
+    expect(await runtime.usersProvider.findById(existing.id as number)).toMatchObject({ email: 'shared@app.test', name: 'Existing', email_verified_at: verifiedAt })
+    expect(String((await runtime.identityStore.findByProviderUserId('app', 'hosted-shared'))?.userId)).toBe(String(result.user.id))
+  })
+
+  it('keeps a linked Clerk user signed in when its unverified primary email matches another local account, and leaves that account untouched', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const linked = await runtime.usersProvider.create({ email: 'linked@app.test', name: 'Linked', password: null, email_verified_at: verifiedAt })
+    const other = await runtime.usersProvider.create({ email: 'other@app.test', name: 'Other', password: null, email_verified_at: verifiedAt })
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'hosted-linked-collision',
+      guard: 'web',
+      authProvider: 'users',
+      userId: linked.id,
+      email: 'linked@app.test',
+      emailVerified: true,
+      profile: {},
+      linkedAt: verifiedAt,
+      updatedAt: verifiedAt,
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'linked-unverified-collision',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'hosted-linked-collision',
+        name: 'Linked',
+        email: 'other@app.test',
+        emailVerified: false,
+      }),
+    }, 'app')
+
+    expect(result.user.id).toBe(linked.id)
+    expect(await runtime.usersProvider.findById(linked.id as number)).toMatchObject({ email: 'linked@app.test', email_verified_at: verifiedAt })
+    expect(await runtime.usersProvider.findById(other.id as number)).toMatchObject({ email: 'other@app.test', name: 'Other', email_verified_at: verifiedAt })
   })
 
   it('relinks an orphaned Clerk identity without an email match', async () => {

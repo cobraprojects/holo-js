@@ -82,7 +82,7 @@ export const resetPasswordForm = schema({
 })
 ```
 
-`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time. Every call also takes at least 200 ms, as Laravel does, whether or not an account exists, so timing doesn't reveal it either. Send reset emails through a queue (see [Customize the email](#customize-the-email)). Sending synchronously is the one way timing can still reveal an account: when the mail server takes longer than 200 ms, a real account's request takes longer than an unknown one.
+`requestPasswordReset()` succeeds even when no account has that email, and when a link was already sent recently. That way the response never reveals which emails are registered. Show the same message every time. Every call also takes at least 200 ms, as Laravel does, whether or not an account exists. That floor doesn't cover mail that is sent while the request waits. When delivery is synchronous and the mail server takes longer than 200 ms, a real account's request takes longer than an unknown one, so timing can still reveal the account. Queue the reset email to close that gap (see [Customize the email](#customize-the-email)): the request returns once the job is stored, and the mail I/O happens in a worker, as Laravel's `ShouldQueue` notifications do. With a queued email, both paths do the same work in the request.
 
 When a user is found, Holo deletes their older reset links, creates a new one, and emails it.
 
@@ -144,7 +144,9 @@ export async function POST({ request }: { request: Request }) {
 
 A link works once. After a successful reset, every other reset link for that email stops working too.
 
-The reset also cycles the user's remember token, the way Laravel does on password reset. A browser that was signed in with "remember me" can no longer restore its session from the old remember cookie. Browsers that are still signed in keep their sessions until those sessions expire or sign out.
+The reset also cycles the user's remember token, the way Laravel does on password reset. A browser that was signed in with "remember me" can no longer restore its session from the old remember cookie.
+
+The reset signs the user out everywhere else. Every other browser's session stops working on its next request, including sessions that were already signed in. The browser that submits the reset keeps its place: if it was signed in as this user, its session ID is rotated and it stays signed in. A browser that wasn't signed in gets no session.
 
 ## Configure the broker
 
@@ -200,6 +202,8 @@ await requestPasswordReset({ email }, { broker: 'admins' })
 ## Customize the email
 
 Reset emails are sent the same way as verification emails: through notifications, through mail, or only logged if neither is installed. Run `npx holo auth:notifications:publish` to get an editable `server/notifications/auth/password-reset.ts`. Its email builder receives `email`, `url`, and `expiresAt`. See [Customize the email](/auth/email-verification#customize-the-email).
+
+Queue the reset email in production. A queued email returns the request before mail I/O, which removes the timing difference described under [Request a reset link](#request-a-reset-link). Queueing needs a worker for the queue connection, as described in [Queueing notifications](/notifications/queueing).
 
 ## Errors
 

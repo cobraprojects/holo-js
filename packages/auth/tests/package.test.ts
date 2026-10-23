@@ -375,6 +375,7 @@ async function configureRuntime(options: {
     tokens: tokenStore,
     emailVerificationTokens: emailVerificationTokenStore,
     passwordResetTokens: passwordResetTokenStore,
+    sessionRevocations: persistence.sessionRevocations,
     multiFactor: multiFactorStore,
     multiFactorEncryptionKey: 'test-multi-factor-encryption-key',
     delivery,
@@ -1466,6 +1467,24 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(await check()).toBe(false)
     expect(await user()).toBeNull()
+  })
+
+  it('clears the stored verification whenever the stored email changes through the runtime', async () => {
+    const runtime = await configureRuntime()
+    const verifiedAt = new Date('2026-04-08T00:00:00.000Z')
+    const user = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: verifiedAt,
+    })
+
+    await authRuntimeInternals.updateUserRecord('users', user.id as number, { email: 'ava+new@example.com' })
+
+    expect(await runtime.usersProvider.findById(user.id as number)).toMatchObject({
+      email: 'ava+new@example.com',
+      email_verified_at: null,
+    })
   })
 
   it('does not auto-start email verification during registration', async () => {
@@ -3009,13 +3028,15 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries).toHaveLength(1)
   })
 
-  it('cycles the remember token on password reset and leaves other browser sessions signed in', async () => {
+  it('cycles the remember token and signs out other browsers on password reset', async () => {
     const runtime = await configurePasswordResetRuntime()
     const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(created).toBeTruthy()
     const otherBrowser = unwrapAuthResult(await loginUsing(created!))
     await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
 
+    const resetBrowser = authRuntimeInternals.createMemoryAuthContext()
+    configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
     await requestPasswordReset({ email: 'ava@example.com' })
     await resetPassword({
       token: runtime.deliveries[0]!.tokenValue,
@@ -3030,7 +3051,274 @@ describe('@holo-js/auth package runtime', () => {
     const otherBrowserContext = authRuntimeInternals.createMemoryAuthContext()
     otherBrowserContext.setSessionId('web', otherBrowser.sessionId)
     configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
+    await expect(check()).resolves.toBe(false)
+  })
+
+  it('refuses a reset before changing anything when the resetting browser cannot receive its rotated session cookie', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const tokenStore = runtime.passwordResetTokenStore
+    const nonTransactionalTokens = {
+      ...tokenStore,
+      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>, precondition?: () => Promise<void>): Promise<TResult | null> {
+        if (!await tokenStore.findById(record.id)) return null
+        await precondition?.()
+        await tokenStore.delete(record.id, { table: record.table })
+        return operation()
+      },
+    }
+    const writable = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: writable })
+    const session = unwrapAuthResult(await loginUsing(created!))
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const token = runtime.deliveries[0]!.tokenValue
+    const tokenId = runtime.deliveries[0]!.tokenId
+
+    const unwritable = authRuntimeInternals.createMemoryAuthContext()
+    unwritable.setSessionId('web', session.sessionId)
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: unwritable })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('Authentication cookies cannot be set')
+
+    const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
+    expect(await tokenStore.findById(tokenId)).not.toBeNull()
+
+    const retry = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    retry.setSessionId('web', session.sessionId)
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+  })
+
+  it('refuses a reset before changing anything when the resetting browser cannot write its remember cookie', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const tokenStore = runtime.passwordResetTokenStore
+    const nonTransactionalTokens = {
+      ...tokenStore,
+      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>, precondition?: () => Promise<void>): Promise<TResult | null> {
+        if (!await tokenStore.findById(record.id)) return null
+        await precondition?.()
+        await tokenStore.delete(record.id, { table: record.table })
+        return operation()
+      },
+    }
+    const writable = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: writable })
+    const session = unwrapAuthResult(await loginUsing(created!, { remember: true }))
+    const recaller = writable.getRememberToken('web')
+    expect(recaller).toEqual(expect.any(String))
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const token = runtime.deliveries[0]!.tokenValue
+    const tokenId = runtime.deliveries[0]!.tokenId
+
+    const unscoped = { ...authRuntimeInternals.createMemoryAuthContext(), appendResponseCookie: () => undefined }
+    unscoped.setSessionId('web', session.sessionId)
+    unscoped.setRememberToken?.('web', recaller)
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: unscoped })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('request-scoped auth context')
+
+    const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
+    expect(await tokenStore.findById(tokenId)).not.toBeNull()
+
+    const retry = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    retry.setSessionId('web', session.sessionId)
+    retry.setRememberToken?.('web', recaller)
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+  })
+
+  it('refuses a reset before changing anything when the session runtime cannot rotate a retained session', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const tokenStore = runtime.passwordResetTokenStore
+    const nonTransactionalTokens = {
+      ...tokenStore,
+      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>, precondition?: () => Promise<void>): Promise<TResult | null> {
+        if (!await tokenStore.findById(record.id)) return null
+        await precondition?.()
+        await tokenStore.delete(record.id, { table: record.table })
+        return operation()
+      },
+    }
+    const writable = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: writable })
+    const session = unwrapAuthResult(await loginUsing(created!))
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const token = runtime.deliveries[0]!.tokenValue
+    const tokenId = runtime.deliveries[0]!.tokenId
+
+    const withoutRotate = { ...bindings.session, rotate: undefined }
+    const resetBrowser = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    resetBrowser.setSessionId('web', session.sessionId)
+    configureAuthRuntime({ ...bindings, session: withoutRotate, providers, passwordResetTokens: nonTransactionalTokens, context: resetBrowser })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('state-preserving session rotation')
+
+    const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
+    expect(await tokenStore.findById(tokenId)).not.toBeNull()
+
+    const retry = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    retry.setSessionId('web', session.sessionId)
+    configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+  })
+
+  it('resets a password for a user without a remember token when the adapter has no remember-token setter', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const withoutSetter = { ...runtime.usersProvider, updateRememberToken: undefined }
+    configureAuthRuntime({ ...bindings, providers: { users: withoutSetter, admins: runtime.adminsProvider } })
+    await requestPasswordReset({ email: 'ava@example.com' })
+
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+    const reset = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('new-secret', reset?.password ?? '')).toBe(true)
+  })
+
+  it('refuses a reset before changing anything when the user has a remember token the adapter cannot rotate', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const withoutSetter = { ...runtime.usersProvider, updateRememberToken: undefined }
+    configureAuthRuntime({ ...bindings, providers: { users: withoutSetter, admins: runtime.adminsProvider } })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const token = runtime.deliveries[0]!.tokenValue
+    const tokenId = runtime.deliveries[0]!.tokenId
+
+    await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('cannot store remember tokens')
+    const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
+    expect(await runtime.passwordResetTokenStore.findById(tokenId)).not.toBeNull()
+  })
+
+  it('resets a password from a browser whose session belongs to another user, without needing that session to write cookies', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    await runtime.usersProvider.create({ name: 'Mina', email: 'mina@example.com', password: await hashPassword('mina-secret') })
+    const mina = await runtime.usersProvider.findByCredentials({ email: 'mina@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const writable = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    configureAuthRuntime({ ...bindings, providers, context: writable })
+    const minaSession = unwrapAuthResult(await loginUsing(mina!))
+    await requestPasswordReset({ email: 'ava@example.com' })
+
+    const unwritable = authRuntimeInternals.createMemoryAuthContext()
+    unwritable.setSessionId('web', minaSession.sessionId)
+    configureAuthRuntime({ ...bindings, providers, context: unwritable })
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+    const reset = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('new-secret', reset?.password ?? '')).toBe(true)
+  })
+
+  it('checks remember-cookie scope only for the guard that retains the reset browser session', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    await runtime.adminsProvider.create({ name: 'Root', email: 'root@example.com', password: await hashPassword('root-secret') })
+    const admin = await runtime.adminsProvider.findByCredentials({ email: 'root@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const writable = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    configureAuthRuntime({ ...bindings, providers, context: writable })
+    unwrapAuthResult(await loginUsing(created!))
+    unwrapAuthResult(await auth.guard('admin').loginUsing(admin!, { remember: true }))
+    const adminRecaller = writable.getRememberToken('admin')
+    const sharedSessionId = writable.getSessionId('web')
+    expect(adminRecaller).toEqual(expect.any(String))
+    expect(sharedSessionId).toEqual(expect.any(String))
+    await requestPasswordReset({ email: 'ava@example.com' })
+
+    const unscoped = { ...authRuntimeInternals.createMemoryAuthContext(), appendResponseCookie: () => undefined }
+    unscoped.setSessionId('web', sharedSessionId)
+    unscoped.setSessionId('admin', sharedSessionId)
+    unscoped.setRememberToken?.('admin', adminRecaller)
+    configureAuthRuntime({ ...bindings, providers, context: unscoped })
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+  })
+
+  it('refuses a reset before a legacy token store consumes the token when the user has a remember token the adapter cannot rotate', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    await runtime.usersProvider.updateRememberToken!(created!, 'remember-before-reset')
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const withoutSetter = { ...runtime.usersProvider, updateRememberToken: undefined }
+    const tokenStore = runtime.passwordResetTokenStore
+    const legacyTokens = {
+      ...Object.fromEntries(Object.entries(tokenStore)),
+      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+        if (!await tokenStore.findById(record.id)) return null
+        await tokenStore.delete(record.id, { table: record.table })
+        return operation()
+      },
+    } as typeof tokenStore
+    configureAuthRuntime({ ...bindings, providers: { users: withoutSetter, admins: runtime.adminsProvider }, passwordResetTokens: legacyTokens })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const tokenId = runtime.deliveries[0]!.tokenId
+
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).rejects.toThrow('cannot store remember tokens')
+    const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
+    expect(await tokenStore.findById(tokenId)).not.toBeNull()
+  })
+
+  it('rejects a session scanned earlier in the same request once a reset has revoked it', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providers = { users: runtime.usersProvider, admins: runtime.adminsProvider }
+    const request = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    configureAuthRuntime({ ...bindings, providers, context: request })
+    const session = unwrapAuthResult(await loginUsing(created!))
+    request.setSessionId('web', session.sessionId)
     await expect(check()).resolves.toBe(true)
+
+    request.sessionIds.delete('web')
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
+
+    request.setSessionId('web', session.sessionId)
+    await expect(check()).resolves.toBe(false)
+  })
+
+  it('keeps the browser that resets the password signed in on a rotated session', async () => {
+    const runtime = await configurePasswordResetRuntime()
+    const created = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const resetBrowser = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    const otherBrowserContext = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
+    const resetSession = unwrapAuthResult(await loginUsing(created!))
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
+    const otherSession = unwrapAuthResult(await loginUsing(created!))
+
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: resetBrowser })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    await resetPassword({
+      token: runtime.deliveries[0]!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })
+
+    const rotatedSessionId = resetBrowser.getSessionId('web')
+    expect(rotatedSessionId).toEqual(expect.any(String))
+    expect(rotatedSessionId).not.toBe(resetSession.sessionId)
+    await expect(check()).resolves.toBe(true)
+
+    const otherBrowserNextRequest = Object.assign(authRuntimeInternals.createMemoryAuthContext(), { appendResponseCookie: () => undefined })
+    otherBrowserNextRequest.setSessionId('web', otherSession.sessionId)
+    configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserNextRequest })
+    await expect(check()).resolves.toBe(false)
   })
 
   it('rotates the remember token on password reset even when no remember-me lifetime is configured', async () => {
@@ -5751,6 +6039,7 @@ describe('@holo-js/auth package runtime', () => {
       authenticatedAt: expect.any(String),
       guard: 'admin',
       provider: 'admins',
+      revocation: { id: expect.any(String), generation: 0 },
       userId: admin.id,
     })
   })

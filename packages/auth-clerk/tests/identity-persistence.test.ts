@@ -152,7 +152,7 @@ describe('hosted identity synchronization persistence', () => {
 
     await expect(synchronize()).rejects.toThrow('cleanup failed')
     expect(await identityStore.findByProviderUserId('hosted', 'remote-user')).toMatchObject({ userId: 99 })
-    await expect(synchronize()).rejects.toThrow('collides with a different local user')
+    await expect(synchronize()).resolves.toMatchObject({ status: 'linked', user: { id: 99 }, identity: { userId: 99 } })
     expect(database.prepare('SELECT id FROM users ORDER BY id').all()).toEqual([{ id: 99 }, { id: 100 }])
   })
 })
