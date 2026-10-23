@@ -225,11 +225,11 @@ function normalizeCookiePath(event: SvelteKitRequestEvent): string {
   return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
 }
 
-function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string {
+function createValidationFlashCookie(path: string, payload: SerializedValidationException): string {
   return [
     `${validationFlashCookie}=${encodeValidationFlashPayload(payload)}`,
     'Max-Age=60',
-    `Path=${normalizeCookiePath(event)}`,
+    `Path=${path.replace(/[;\r\n]/g, '') || '/'}`,
     'SameSite=Lax',
   ].join('; ')
 }
@@ -261,12 +261,13 @@ function createValidationActionRedirectResponse(
   event: SvelteKitRequestEvent,
   payload: SerializedValidationException,
 ): Response {
+  const location = sameOriginRedirectPath(event.url?.pathname)
   return new Response(null, {
     status: 303,
     headers: {
-      location: sameOriginRedirectPath(event.url?.pathname),
+      location,
       'cache-control': 'no-store',
-      'set-cookie': createValidationFlashCookie(event, payload),
+      'set-cookie': createValidationFlashCookie(location, payload),
     },
   })
 }

@@ -146,3 +146,15 @@ describe('SvelteKit server adapter internals', () => {
     expect(mapped.status).toBe(200)
   })
 })
+
+it('scopes the flash cookie to the same-origin path the redirect goes to', () => {
+  const response = adapterSvelteKitInternals.createValidationActionRedirectResponse({
+    url: new URL('https://app.test//evil.example/steal'),
+  } as never, {
+    ok: false, status: 422, valid: false, message: 'Invalid input.', bag: 'default', values: {}, errors: {},
+  } as never)
+
+  expect(response.headers.get('location')).toBe('/')
+  expect(response.headers.get('set-cookie')).toContain('Path=/;')
+  expect(response.headers.get('set-cookie')).not.toContain('evil.example')
+})

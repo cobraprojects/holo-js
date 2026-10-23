@@ -189,9 +189,9 @@ Errors thrown inside `custom()` and `customAsync()` are no longer turned into a 
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
 
 Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
-### Forms throttle before validation
+### Forms throttle counts every submission
 
-A form with `throttle` validates the submission, then checks the rate limit for every attempt, valid or invalid, before your handler runs. A throttled submission returns `429` with the submitted values and the field errors from validation. The limiter's key resolver receives the values after the schema's transforms, so `Victim@Example.com ` and `victim@example.com` share one bucket when the schema lowercases and trims the email. An invalid submission has no transformed values, so it counts against the default key for the request.
+A form with `throttle` validates the submission, then checks the rate limit for every attempt, valid or invalid, before your handler runs. A throttled submission returns `429` with the submitted values and the field errors from validation. The limiter's key resolver receives the values after the schema's transforms, so `Victim@Example.com ` and `victim@example.com` share one bucket when the schema lowercases and trims the email. For an invalid submission, `values` is `undefined`, so a `.by()` key resolver must return a non-empty string for every request. A limiter without a `.by()` resolver uses the default request key.
 
 ### `make:channel` patterns
 

@@ -529,8 +529,6 @@ export async function runMakeChannel(
   input: PreparedInput,
 ): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, project.config)
   const pattern = String(input.args[0] ?? '').trim()
   if (!pattern) {
     throw new Error('A channel pattern is required.')
@@ -544,6 +542,9 @@ export async function runMakeChannel(
   if (new Set(placeholders).size !== placeholders.length) {
     throw new Error(`Channel pattern "${pattern}" repeats a placeholder. Each {param} name must be unique.`)
   }
+
+  const registry = await loadGeneratedProjectRegistry(projectRoot)
+    ?? await prepareProjectDiscovery(projectRoot, project.config)
 
   if (registry.channels.some(entry => entry.pattern === pattern)) {
     throw new Error(`Channel with the same pattern already exists: ${pattern}.`)
