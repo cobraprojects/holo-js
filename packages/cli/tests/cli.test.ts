@@ -2316,6 +2316,38 @@ module.exports = {
     await expect(stat(join(projectRoot, 'config/session.ts'))).rejects.toThrow()
   }, 20_000)
 
+  it('lists the app origin from APP_URL as the authorized party of a new Clerk provider', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await projectInternals.installAuthIntoProject(projectRoot, { clerk: true })
+
+    const authConfig = await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')
+    expect(authConfig).toContain('authorizedParties: [env(\'APP_URL\', "http://localhost:3000")],')
+    expect(projectInternals.renderAuthConfig({ clerk: true }, 'cjs')).toContain('authorizedParties: [process.env.APP_URL || "http://localhost:3000"],')
+  })
+
+  it('upgrades a Clerk auth config written before authorizedParties existed, but keeps a customised one', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await projectInternals.installAuthIntoProject(projectRoot, { clerk: true })
+    const authConfigPath = join(projectRoot, 'config/auth.ts')
+    const current = await readFile(authConfigPath, 'utf8')
+    const previousRender = current.replace(/\n {6}authorizedParties: \[[^\n]*\],(?=\n)/, '')
+    expect(previousRender).not.toBe(current)
+    await writeFile(authConfigPath, previousRender, 'utf8')
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { clerk: true })).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+    expect(await readFile(authConfigPath, 'utf8')).toContain("authorizedParties: [env('APP_URL', \"http://localhost:3000\")],")
+
+    const customised = current.replace(/authorizedParties: \[[^\n]*\],/, "authorizedParties: ['https://admin.example.test'],")
+    await writeFile(authConfigPath, customised, 'utf8')
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { clerk: true, social: true })).rejects.toThrow('manual changes')
+  })
+
   it('uses configured project paths when scaffolding the auth User model', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

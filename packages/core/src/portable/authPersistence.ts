@@ -148,6 +148,7 @@ export function serializeMultiFactorCredentialRecord(record: MultiFactorCredenti
 
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
+const PASSWORD_RESET_PRECONDITION_SUPPORT = Symbol.for('holo.auth.passwordResetPreconditionSupport')
 type RehashPasswordIfUnchanged = (user: unknown, expectedDigest: string, newDigest: string) => Promise<boolean>
 type CoreAuthProviderBinding = ReturnType<typeof AuthFeature.authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
@@ -180,6 +181,7 @@ function createAuthRedemptionContext() {
       provider: string,
       claim: (connection: DatabaseContext) => Promise<boolean>,
       operation: () => Promise<TResult>,
+      precondition?: () => Promise<void>,
     ): Promise<TResult | null> {
       const connection = DB.connection()
       const repository = repositories.get(provider)?.()
@@ -187,26 +189,21 @@ function createAuthRedemptionContext() {
         return connection.writeTransaction(transaction => connectionAsyncContext.run({
           connectionName: transaction.getConnectionName(),
           connection: transaction,
-        }, async () => {
+        }, () => active.run({ provider, repository }, async () => {
+          if (precondition) await precondition()
           if (!await claim(transaction)) return null
-          return active.run({ provider, repository }, operation)
-        }))
+          return operation()
+        })))
       }
 
       if (connection.getScope().kind !== 'root') {
         throw new TransactionError('[Holo Auth] Token redemption for an external persistence context must run outside a database transaction.')
       }
+      if (precondition) await precondition()
       if (!await claim(connection)) return null
       return operation()
     },
   }
-}
-
-function authTokenExpiryPredicate(connection: DatabaseContext): { sql: string, bindings: readonly unknown[] } {
-  const dialect = connection.getDialect().name
-  if (dialect === 'sqlite') return { sql: "expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", bindings: [] }
-  if (dialect === 'postgres') return { sql: 'expires_at > (clock_timestamp() AT TIME ZONE ?)', bindings: [holoRuntimeInternals.getApplicationTimezone()] }
-  return { sql: 'expires_at > CURRENT_TIMESTAMP(3)', bindings: [] }
 }
 
 function getEntityAttributes(value: unknown): Record<string, unknown> {
@@ -286,8 +283,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
     emailVerificationTokens: Object.freeze({
       async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
         return redemption.redeem(record.provider, async (connection) => {
-          const expiry = authTokenExpiryPredicate(connection)
-          const claimed = await new TableQueryBuilder('email_verification_tokens', connection)
+          const query = new TableQueryBuilder('email_verification_tokens', connection)
             .where('id', record.id)
             .where('provider', record.provider)
             .where('user_id', String(record.userId))
@@ -296,7 +292,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-            .unsafeWhere(expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
@@ -324,12 +320,16 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       },
     }),
     passwordResetTokens: Object.freeze({
-      async redeem<TResult>(record: PasswordResetTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
+      [PASSWORD_RESET_PRECONDITION_SUPPORT]: true,
+      async redeem<TResult>(
+        record: PasswordResetTokenRecord,
+        operation: () => Promise<TResult>,
+        precondition?: () => Promise<void>,
+      ): Promise<TResult | null> {
         const table = record.table ?? 'password_reset_tokens'
         if (!Object.values(loadedConfig.auth.passwords).some(broker => broker.provider === record.provider && broker.table === table)) return null
         return redemption.redeem(record.provider, async (connection) => {
-          const expiry = authTokenExpiryPredicate(connection)
-          const claimed = await new TableQueryBuilder(table, connection)
+          const query = new TableQueryBuilder(table, connection)
             .where('id', record.id)
             .where('provider', record.provider)
             .where('email', record.email)
@@ -337,11 +337,11 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-            .unsafeWhere(expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
-        }, operation)
+        }, operation, precondition)
       },
       async create(record: PasswordResetTokenRecord) {
         await DB.table(record.table ?? 'password_reset_tokens').insert(serializePasswordResetTokenRecord(record, DB.connection().getDriver()))

@@ -3,6 +3,7 @@ import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError } from '../core/errors'
 import { isInlineIntegerValue } from './ast'
 import { validateQueryPlan } from './validator'
+import { isTrustedRawPredicate } from './trustedRawPredicate'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type {
   DeleteQueryPlan,
@@ -72,7 +73,7 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql,
       bindings,
-      unsafe: this.isUnsafeSelectPlan(plan) ? true : undefined,
+      unsafe: this.isUnsafeSelectPlan(plan, true) ? true : undefined,
       source: `query:select:${plan.source.tableName}`,
     }, this.createSelectMetadata(plan))
   }
@@ -221,8 +222,9 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
       bindings,
+      unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:update:${plan.source.tableName}`,
-    }, this.createWriteMetadata('update', plan.source.tableName, this.calculatePlanComplexity(plan)))
+    }, this.createWriteMetadata('update', plan.source.tableName, this.calculatePlanComplexity(plan), plan.predicates))
   }
 
   protected compileDelete(plan: DeleteQueryPlan): CompiledStatement {
@@ -233,8 +235,9 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}${returningClause}`,
       bindings,
+      unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:delete:${plan.source.tableName}`,
-    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
+    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan), plan.predicates))
   }
 
   protected withMetadata(
@@ -266,7 +269,7 @@ export class SQLQueryCompiler {
         hasSubqueries: plan.selections.some(selection => selection.kind === 'subquery'),
       },
       safety: {
-        unsafe: this.isUnsafeSelectPlan(plan),
+        unsafe: this.isUnsafeSelectPlan(plan, true),
         containsRawSql: this.planContainsRawSql(plan),
       },
       debug: {
@@ -288,6 +291,7 @@ export class SQLQueryCompiler {
     kind: 'insert' | 'update' | 'upsert' | 'delete',
     tableName: string,
     complexity: number,
+    predicates: readonly QueryPredicateNode[] = [],
   ): CompiledStatementMetadata {
     return {
       kind,
@@ -300,8 +304,8 @@ export class SQLQueryCompiler {
         hasSubqueries: false,
       },
       safety: {
-        unsafe: false,
-        containsRawSql: false,
+        unsafe: this.isUnsafeWritePredicates(predicates),
+        containsRawSql: predicates.some(predicate => this.predicateContainsRawSql(predicate)),
       },
       debug: {
         tableName,
@@ -755,7 +759,9 @@ export class SQLQueryCompiler {
   }
 
   protected createPostgresPathLiteral(path: readonly string[]): string {
-    const serializedPath = path.map(segment => segment.replaceAll('"', '\\"')).join(',')
+    const serializedPath = path
+      .map(segment => `"${segment.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
+      .join(',')
     return this.createSqlStringLiteral(`{${serializedPath}}`)
   }
 
@@ -763,16 +769,34 @@ export class SQLQueryCompiler {
     return typeof value === 'object' && value !== null && 'kind' in value && (value as { kind?: unknown }).kind === 'json-set'
   }
 
-  protected isUnsafeSelectPlan(plan: SelectQueryPlan): boolean {
+  protected isUnsafeSelectPlan(plan: SelectQueryPlan, root = false): boolean {
     const hasUnsafeSelection = plan.selections.some(selection => (
       selection.kind === 'raw'
       || (selection.kind === 'subquery' && this.isUnsafeSelectPlan(selection.query))
     ))
-    const hasUnsafePredicate = plan.predicates.some(predicate => this.isUnsafePredicate(predicate))
+    const hasUnsafePredicate = plan.predicates.some(predicate => (
+      root ? this.isUnsafeRootPredicate(predicate) : this.isUnsafePredicate(predicate)
+    ))
     const hasUnsafeOrder = plan.orderBy.some(orderBy => orderBy.kind === 'raw')
     const hasUnsafeUnion = plan.unions.some(union => this.isUnsafeSelectPlan(union.query))
     const hasUnsafeJoin = plan.joins.some(join => typeof join.subquery !== 'undefined' && this.isUnsafeSelectPlan(join.subquery))
     return hasUnsafeSelection || hasUnsafePredicate || hasUnsafeOrder || hasUnsafeUnion || hasUnsafeJoin
+  }
+
+  protected isUnsafeWritePlan(plan: UpdateQueryPlan | DeleteQueryPlan): boolean {
+    return this.isUnsafeWritePredicates(plan.predicates)
+  }
+
+  private isUnsafeWritePredicates(predicates: readonly QueryPredicateNode[]): boolean {
+    return predicates.some(predicate => this.isUnsafeRootPredicate(predicate))
+  }
+
+  private isUnsafeRootPredicate(predicate: QueryPredicateNode): boolean {
+    if (predicate.kind === 'raw') {
+      return !isTrustedRawPredicate(predicate)
+    }
+
+    return this.isUnsafePredicate(predicate)
   }
 
   protected isUnsafePredicate(predicate: QueryPredicateNode): boolean {

@@ -94,9 +94,31 @@ export default defineSecurityConfig({
 
 See [CSRF protection](/basics/security/csrf) for the `csrf` block, [rate limiting](/basics/security/rate-limiting) for `rateLimit`, and [CORS and proxies](/basics/security/cors-and-proxies) for `config/cors.ts`.
 
+### Request body limit
+
+`maxBodyBytes` caps every request body Holo reads before it runs your code: CSRF token checks, form validation, social sign-in callbacks, broadcast auth, and Realtime requests. The default is 1 MiB (`1048576`). A request larger than the limit gets a `413` response and is rejected before the body is buffered. The limit is a whole number of bytes:
+
+```ts [config/security.ts]
+export default defineSecurityConfig({
+  maxBodyBytes: 8 * 1024 * 1024,
+})
+```
+
+Multipart form bodies, which carry file uploads, use a separate limit, `maxUploadBodyBytes`. Its default is 8 MiB (`8388608`), the same size as PHP's `post_max_size` default. Upload size rules that belong to a field, such as a media image limit, still apply on top of it and return `422`.
+
+```ts [config/security.ts]
+export default defineSecurityConfig({
+  maxUploadBodyBytes: 16 * 1024 * 1024,
+})
+```
+
 ::: warning
 The CSRF cookie is encrypted, and signed tokens are signed, with your app key (`key` in `config/app.ts`, usually `APP_KEY` in `.env`). If the key is empty, every protected request fails. Changing the key invalidates all existing tokens.
 :::
+
+## Timing and account enumeration
+
+Auth endpoints that answer differently for known and unknown accounts can reveal which emails have accounts. Holo's login and reset-link requests take at least 200 ms for both cases. A reset-link request still waits on mail delivery when the email is sent synchronously, so queue the reset email to remove that difference. See [Request a reset link](/auth/password-reset#request-a-reset-link).
 
 ## Error statuses
 

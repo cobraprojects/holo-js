@@ -89,6 +89,26 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Raw SQL conditions on `update()` and `delete()`
+
+`unsafeWhere()` and `orUnsafeWhere()` conditions on `update()` and `delete()` now need `security: { allowUnsafeRawSql: true }` on the connection, as they already did on reads. Before, the default policy let them run on writes, so a condition built from user input could match every row. Without the setting, these calls throw a `SecurityError` and change nothing. Rewrite the condition with `where()` and its related methods, or turn the setting on for that connection if you need raw SQL. Password reset and email verification links keep working with the default policy.
+
+```ts [config/database.ts]
+security: { allowUnsafeRawSql: true }
+```
+
+### Attribute names `__proto__`, `constructor`, and `prototype`
+
+Model writes and `forceFill()` reject `__proto__`, `constructor`, and `prototype` as attribute names with a `SecurityError`, even when the model is unguarded. Reading an attribute with one of those names returns `undefined` unless the model has such a column. Rename any column with one of these names.
+
+### Postgres JSON path segments
+
+A JSON path segment on Postgres is now matched as one key, however it is written. Before, a comma split a segment into two keys, and a quote, backslash, or brace changed which key the path named, so `whereJson('settings->a,b', ...)` read `settings` at `a` then `b`. Queries whose segments contain these characters now match the key they name. Check any stored query or saved path that relied on the old split.
+
+### Memory cache limit
+
+The `memory` cache driver keeps at most 10,000 entries when `maxEntries` isn't set, and removes the oldest entries first. Before, it had no limit, so a long-running process could grow without bound. Set `maxEntries` to choose a different limit. See [Memory](/cache/drivers#memory).
+
 ### Lifecycle, factories, and seeders
 
 Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.
@@ -183,6 +203,12 @@ Form bodies and query strings are now limited to 1,000 non-file fields, with a s
 A JSON or form body that can't be parsed is now validated as `{}` instead of throwing.
 
 Errors thrown inside `custom()` and `customAsync()` are no longer turned into a validation message on `_root`. They reach your framework's error handling and respond with a 500. If a custom rule calls code that can throw for invalid input, catch the error in the rule and return a message string instead.
+
+### Request body limit
+
+Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
+
+Realtime query and mutation endpoints now accept only `application/json` requests and answer other content types with `415`. The built-in Realtime client already sends JSON. Clients that call the endpoints directly must send `Content-Type: application/json`.
 
 ### S3 file names with special characters
 
@@ -510,13 +536,48 @@ Update the resend route and its page:
 - Rate limit the route per user with the `emailVerificationResend` limiter, for example `limit.perMinute(6).define()`, passing the user's id as the key. New security configs include the limiter. If your `config/security.ts` already exists, add it to `rateLimit.limiters`. The example in [Resend the email](/auth/email-verification#resend-the-email) shows the full route.
 - Delete the old `emailVerificationResend` limiter keyed by email and the resend form schema, and stop posting `email` from the page.
 
-### Password reset cycles remember tokens
+### Password reset signs out other sessions
 
-A successful password reset now replaces the user's `remember_token`, as Laravel does. Remember-me cookies issued before the reset stop restoring. Browsers that are still signed in keep their sessions. The column already exists, so no migration is needed.
+A successful password reset now replaces the user's `remember_token`, as Laravel does, and signs the user out everywhere else. Remember-me cookies issued before the reset stop restoring. Every other browser's session stops working on its next request, including sessions that were already signed in. The browser that submits the reset keeps its place: if it was signed in as this user, its session ID is rotated and it stays signed in. The column already exists, so no migration is needed.
+
+Tell users who are signed in on another device that they must sign in again after a reset. A custom auth persistence must provide `sessionRevocations`; core persistence already does. See [Password reset](/auth/password-reset#reset-the-password).
+
+### Clerk sessions need an authorized party
+
+Holo accepts a Clerk session token only when its `azp` claim names an authorized party from your config: the origins in `authorizedParties`, plus the origin of `redirectUri`. Before, the origin of each request's `Host` header counted too, so a token issued for another app on the same Clerk instance was accepted for any request that named that app's host. Holo no longer reads origins from the request.
+
+New apps from `holo new` and `holo install auth --clerk` get `authorizedParties: [env('APP_URL', 'http://localhost:3000')]` in the Clerk provider, so they work out of the box.
+
+Existing apps add that one line to the `app` entry of `clerk` in `config/auth.ts`, unless `redirectUri` is already set (its origin is then allowed):
+
+```ts
+clerk: {
+  app: {
+    // ...existing options
+    authorizedParties: [env('APP_URL', 'http://localhost:3000')],
+  },
+},
+```
+
+A Clerk provider with neither `redirectUri` nor `authorizedParties` rejects every session token, so sign-in fails until you add one of them. Add any other origin that serves your app, or that is allowed to issue its tokens, to `authorizedParties`. WorkOS isn't affected, because it doesn't use `azp`.
+
+See [Clerk configuration](/auth/clerk#configuration).
+
+### Hosted sign-in copies only verified emails
+
+Clerk and WorkOS sign-in copy the provider's email to the local user only when the provider reports it verified. This also applies to an email that your `user` mapper sets: an unverified address in the final update is dropped. A first sign-in with an unverified email creates the user with the hosted placeholder address instead, and it never links to an existing local account with that address. Holo matches an existing local account to a hosted identity only by the verified email. A returning user whose unverified email matches another account signs in as before, and that account is left alone. An unverified address doesn't replace the stored email, and the user keeps the verification they had. A stored email that changes, through sign-in or the auth runtime, now clears `email_verified_at` so a verification never carries over to a different address.
+
+Users whose email changed before this upgrade keep the verified timestamp they had. If you need every stored verification to match its address, ask those users to verify again.
+
+### Apple email comes from the signed token
+
+Sign in with Apple takes the user's email only from the signed `id_token`. Before, Apple's form `user` field supplied it when the token had none. Apple's form field isn't signed, so Holo ignores its email now and still reads the user's name from it. A callback whose token has no email gets the placeholder address `<id>@apple.social.local` when [email verification](/auth/email-verification) is off, and fails with `requires a verified email address` when it's on. To keep the real address, capture it on the first authorization. See [Apple](/auth/social-login#apple).
 
 ### Failed logins and reset-link requests take at least 200 ms
 
 Failed logins and every reset-link request now take at least 200 ms, whether or not the account exists, so response time doesn't reveal which emails have accounts. Successful logins aren't delayed. Your code doesn't change, but failed attempts answer a little slower.
+
+A reset-link request that sends its email synchronously can still take longer than 200 ms when the mail server is slow, and that difference can reveal an account. Queue the reset email so the request returns before the mail is sent. Publish the notification with `npx holo auth:notifications:publish` and queue it, as described in [Customize the email](/auth/password-reset#customize-the-email).
 
 ### User records load on every request
 

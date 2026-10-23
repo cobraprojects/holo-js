@@ -1,5 +1,6 @@
 import type { AuthHostedIdentityRecord, AuthHostedIdentityStore } from '../config'
 import type { authRuntimeInternals } from '../runtime'
+import { resetVerificationOnEmailChange } from './emailChange'
 
 type LocalUser = Record<string, unknown>
 type SyncStatus = 'created' | 'linked' | 'updated' | 'relinked'
@@ -13,6 +14,7 @@ type HostedIdentitySyncInput = {
   readonly ownership: 'serialized-claim' | 'save'
   readonly verifiedEmail?: string
   readonly email?: string
+  readonly placeholderEmail: string
   readonly errorPrefix: string
   readonly identityLabel: string
   readonly createUserInput: () => Readonly<Record<string, unknown>>
@@ -72,8 +74,47 @@ async function findUserByEmail(email: string, input: HostedIdentitySyncInput): P
   return user ? requireUserRecord(user, input, 'Auth provider lookups must return object users.') : null
 }
 
+function applyVerifiedEmailRule(
+  user: LocalUser,
+  attributes: Readonly<Record<string, unknown>>,
+  verifiedEmail: string | undefined,
+): Readonly<Record<string, unknown>> {
+  const verified = verifiedEmail?.trim() || undefined
+  const candidate = typeof attributes.email === 'string' ? attributes.email.trim() : attributes.email
+  let next: Readonly<Record<string, unknown>> = attributes
+  if (typeof candidate !== 'undefined') {
+    const trusted = typeof candidate === 'string' && candidate !== '' && (candidate === user.email || candidate === verified)
+    next = trusted
+      ? { ...attributes, email: candidate }
+      : Object.fromEntries(Object.entries(attributes).filter(([key]) => key !== 'email' && key !== 'email_verified_at'))
+  }
+
+  const finalEmail = typeof next.email === 'string' ? next.email : user.email
+  if (next.email_verified_at instanceof Date && finalEmail !== verified) {
+    next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== 'email_verified_at'))
+  }
+  return resetVerificationOnEmailChange(user, next)
+}
+
+function applyVerifiedEmailRuleToCreate(
+  attributes: Readonly<Record<string, unknown>>,
+  input: HostedIdentitySyncInput,
+): Readonly<Record<string, unknown>> {
+  const verified = input.verifiedEmail?.trim() || undefined
+  const email = typeof attributes.email === 'string' ? attributes.email.trim() : undefined
+  if (email && email === verified) {
+    return { ...attributes, email }
+  }
+
+  return {
+    ...Object.fromEntries(Object.entries(attributes).filter(([key]) => key !== 'email' && key !== 'email_verified_at')),
+    email: input.placeholderEmail,
+    email_verified_at: null,
+  }
+}
+
 async function updateLocalUser(user: LocalUser, input: HostedIdentitySyncInput): Promise<{ user: LocalUser, changed: boolean }> {
-  const attributes = input.updateUserInput()
+  const attributes = applyVerifiedEmailRule(user, input.updateUserInput(), input.verifiedEmail)
   const changed = Object.entries(attributes).some(([key, value]) => key === 'email_verified_at'
     ? value instanceof Date && !user.email_verified_at
     : !Object.is(value, user[key]))
@@ -98,9 +139,9 @@ async function synchronize(input: HostedIdentitySyncInput): Promise<HostedIdenti
 
   if (user) {
     const userId = requireUserId(user, input, 'Linked')
-    const matched = input.email ? await findUserByEmail(input.email, input) : null
+    const matched = input.verifiedEmail ? await findUserByEmail(input.verifiedEmail, input) : null
     if (matched && requireUserId(matched, input, 'Matched') !== userId) {
-      throw input.conflict(input.email!, true)
+      throw input.conflict(input.verifiedEmail!, true)
     }
     const updated = await updateLocalUser(user, input)
     user = updated.user
@@ -109,7 +150,7 @@ async function synchronize(input: HostedIdentitySyncInput): Promise<HostedIdenti
     if (input.verifiedEmail && await findUserByEmail(input.verifiedEmail, input)) {
       throw input.conflict(input.verifiedEmail, false)
     }
-    user = requireUserRecord(await adapter.create(input.createUserInput()), input, 'Auth provider create() must return an object user.')
+    user = requireUserRecord(await adapter.create(applyVerifiedEmailRuleToCreate(input.createUserInput(), input)), input, 'Auth provider create() must return an object user.')
     if (previous) {
       user = (await updateLocalUser(user, input)).user
     }

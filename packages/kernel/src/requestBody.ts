@@ -1,0 +1,215 @@
+export const DEFAULT_MAX_REQUEST_BODY_BYTES = 1024 * 1024
+export const DEFAULT_MAX_UPLOAD_BODY_BYTES = 8 * 1024 * 1024
+
+let maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES
+let maxUploadBodyBytes = DEFAULT_MAX_UPLOAD_BODY_BYTES
+
+function isMultipartContentType(contentType: string | null | undefined): boolean {
+  return contentType?.split(';', 1)[0]?.trim().toLowerCase() === 'multipart/form-data'
+}
+
+export function requestBodyLimitFor(contentType: string | null | undefined): number {
+  return isMultipartContentType(contentType) ? maxUploadBodyBytes : maxRequestBodyBytes
+}
+
+export class HoloRequestBodyTooLargeError extends Error {
+  readonly status = 413
+
+  constructor(limit: number) {
+    super(`[@holo-js/kernel] Request body exceeds the ${limit}-byte limit.`)
+    this.name = 'HoloRequestBodyTooLargeError'
+  }
+}
+
+function resolveLimit(maxBytes: number | undefined): number {
+  return maxBytes ?? maxRequestBodyBytes
+}
+
+function concatChunks(chunks: readonly Uint8Array[], total: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  return bytes
+}
+
+export async function readBoundedRequestBody(request: Request, maxBytes?: number): Promise<Uint8Array<ArrayBuffer>> {
+  const limit = maxBytes ?? requestBodyLimitFor(request.headers.get('content-type'))
+  const declared = request.headers.get('content-length')
+  if (declared !== null && Number(declared) > limit) {
+    throw new HoloRequestBodyTooLargeError(limit)
+  }
+
+  if (!request.body) {
+    return new Uint8Array(0)
+  }
+
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) {
+        throw new HoloRequestBodyTooLargeError(limit)
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined)
+    throw error
+  }
+
+  return concatChunks(chunks, total)
+}
+
+function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
+  return typeof value === 'object' && value !== null && typeof (value as { getReader?: unknown }).getReader === 'function'
+}
+
+function isPlainBufferedObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && (value as { constructor?: unknown }).constructor === Object
+}
+
+async function readWebStreamBounded(stream: ReadableStream<Uint8Array>, limit: number): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) {
+        throw new HoloRequestBodyTooLargeError(limit)
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined)
+    throw error
+  }
+
+  return concatChunks(chunks, total)
+}
+
+export type BufferedRequestBody = {
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly contentType?: string
+}
+
+export async function readBoundedCachedBody(cached: unknown, maxBytes?: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
+  return (await readBoundedBufferedBody(cached, maxBytes))?.bytes
+}
+
+export async function readBoundedBufferedBody(cached: unknown, maxBytes?: number): Promise<BufferedRequestBody | undefined> {
+  const value = await cached
+  const limit = resolveLimit(maxBytes)
+  if (value instanceof Uint8Array) {
+    if (value.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return { bytes: new Uint8Array(value) }
+  }
+
+  if (value instanceof ArrayBuffer) {
+    if (value.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return { bytes: new Uint8Array(value.slice(0)) }
+  }
+
+  if (typeof value === 'string' || value instanceof URLSearchParams) {
+    const bytes = new TextEncoder().encode(value.toString())
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return { bytes }
+  }
+
+  if (typeof FormData !== 'undefined' && value instanceof FormData) {
+    const encoded = new Response(value)
+    const bytes = new Uint8Array(await encoded.arrayBuffer())
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return { bytes, contentType: encoded.headers.get('content-type') ?? undefined }
+  }
+
+  if (isWebReadableStream(value)) {
+    return { bytes: await readWebStreamBounded(value, limit) }
+  }
+
+  if (typeof value === 'object' && value !== null && Symbol.asyncIterator in value) {
+    return { bytes: await readBoundedNodeRequestBody(value as AsyncIterable<Uint8Array | string>, limit) }
+  }
+
+  if (isPlainBufferedObject(value)) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value))
+    if (bytes.byteLength > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+
+    return { bytes }
+  }
+
+  return undefined
+}
+
+export async function readBoundedRequestText(request: Request, maxBytes?: number): Promise<string> {
+  return new TextDecoder().decode(await readBoundedRequestBody(request, maxBytes))
+}
+
+export async function readBoundedRequestJson(request: Request, maxBytes?: number): Promise<unknown> {
+  return JSON.parse(await readBoundedRequestText(request, maxBytes)) as unknown
+}
+
+export async function readBoundedRequestFormData(request: Request, maxBytes?: number): Promise<FormData> {
+  const bytes = await readBoundedRequestBody(request, maxBytes)
+  return new Response(bytes, { headers: { 'content-type': request.headers.get('content-type') ?? '' } }).formData()
+}
+
+export async function readBoundedNodeRequestBody(
+  stream: AsyncIterable<Uint8Array | string>,
+  maxBytes?: number,
+  declaredLength?: string | null,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const limit = resolveLimit(maxBytes)
+  if (declaredLength != null && Number(declaredLength) > limit) {
+    throw new HoloRequestBodyTooLargeError(limit)
+  }
+
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of stream) {
+    const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk
+    total += bytes.byteLength
+    if (total > limit) {
+      throw new HoloRequestBodyTooLargeError(limit)
+    }
+    chunks.push(bytes)
+  }
+
+  return concatChunks(chunks, total)
+}
+
+export const requestBodyInternals = Object.freeze({
+  configureMaxRequestBodyBytes(bytes: number | undefined): void {
+    maxRequestBodyBytes = bytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+  },
+  configureMaxUploadBodyBytes(bytes: number | undefined): void {
+    maxUploadBodyBytes = bytes ?? DEFAULT_MAX_UPLOAD_BODY_BYTES
+  },
+  getMaxRequestBodyBytes(): number {
+    return maxRequestBodyBytes
+  },
+})

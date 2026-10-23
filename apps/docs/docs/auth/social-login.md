@@ -172,7 +172,12 @@ Keep the email scope for each provider. Without an email, Holo can't match the s
 
 ### Apple
 
-Apple sends users back with a `POST` form instead of a `GET`. Export your callback handler as `POST` (or use a `.post.ts` file in Nuxt), and exclude the callback path from [CSRF protection](/basics/security/csrf), since the request comes from Apple's site. On HTTPS, Holo sets the state cookie with `SameSite=None; Secure` so the browser sends it with Apple's cross-site `POST`; the state is still checked on every callback. Over plain HTTP the cookie stays `SameSite=Lax`, because browsers reject `SameSite=None` without `Secure`. Apple only includes the user's name the first time they sign in. Apple's client secret is a signed JWT that you generate from your Apple key; put it in `AUTH_APPLE_CLIENT_SECRET`. Holo sends it as-is and doesn't generate it for you.
+Apple sends users back with a `POST` form instead of a `GET`. Export your callback handler as `POST` (or use a `.post.ts` file in Nuxt), and exclude the callback path from [CSRF protection](/basics/security/csrf), since the request comes from Apple's site. On HTTPS, Holo sets the state cookie with `SameSite=None; Secure` so the browser sends it with Apple's cross-site `POST`; the state is still checked on every callback. Over plain HTTP the cookie stays `SameSite=Lax`, because browsers reject `SameSite=None` without `Secure`. Apple only includes the user's name the first time they sign in. Holo reads the user's email only from the signed `id_token`, never from the form's `user` field, which Apple doesn't sign. If the `id_token` has no email, the profile has none, and what happens depends on [email verification](/auth/email-verification):
+
+- When `emailVerification.required` is `false`, Holo creates the user with the placeholder address `<id>@apple.social.local` and no verified email.
+- When it's `true`, Holo refuses to create the user, and the callback throws `Social sign-in with "apple" requires a verified email address.`
+
+To keep the real address, capture it on the first authorization. Apple sends the name and email in the form's `user` field only then, and Holo doesn't trust that field. Read it from the request in your callback, sign the user in, then save the address as the user's email and call `sendEmailVerification()`. The address is only verified after the user follows the link. Queue the verification email in production, as described in [Customize the email](/auth/email-verification#customize-the-email). Apple's client secret is a signed JWT that you generate from your Apple key; put it in `AUTH_APPLE_CLIENT_SECRET`. Holo sends it as-is and doesn't generate it for you.
 
 ### Facebook
 

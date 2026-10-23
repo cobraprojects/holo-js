@@ -1,6 +1,19 @@
+import { SecurityError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type { ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
 import type { Entity } from './Entity'
+
+const reservedAttributeNames: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
+
+export function assertAttributeNameAllowed(name: string): void {
+  if (reservedAttributeNames.has(name)) {
+    throw new SecurityError(`Attribute "${name}" is reserved and cannot be assigned.`)
+  }
+}
+
+export function ownEntry<TValue>(record: Readonly<Record<string, TValue>>, key: string): TValue | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined
+}
 
 export type EntityConstructor = {
   new<

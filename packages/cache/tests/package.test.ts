@@ -1717,6 +1717,141 @@ export default new PluginCacheDriver()
     expect(await cache.get('third')).toBe(3)
   })
 
+  it('evicts exactly the least recently written entry when a write reaches capacity', async () => {
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+            maxEntries: 3,
+          },
+        },
+      },
+    })
+
+    await cache.put('a', 1, 60)
+    await cache.put('b', 2, 60)
+    await cache.put('c', 3, 60)
+    await cache.put('a', 10, 60)
+    await cache.put('d', 4, 60)
+
+    expect(await cache.get('b')).toBeNull()
+    expect(await cache.get('a')).toBe(10)
+    expect(await cache.get('c')).toBe(3)
+    expect(await cache.get('d')).toBe(4)
+  })
+
+  it('evicts an expired entry before a live entry when a write reaches capacity', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T00:00:00.000Z'))
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+            maxEntries: 2,
+          },
+        },
+      },
+    })
+
+    await cache.put('live', 'A', 3_600)
+    await cache.put('short', 'B', 1)
+    vi.advanceTimersByTime(1_001)
+    await cache.put('third', 'C', 3_600)
+
+    expect(await cache.get('short')).toBeNull()
+    expect(await cache.get('live')).toBe('A')
+    expect(await cache.get('third')).toBe('C')
+    vi.useRealTimers()
+  })
+
+  it('does not drop a key that was rewritten with a longer TTL when its old expiry passes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T00:00:00.000Z'))
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+            maxEntries: 2,
+          },
+        },
+      },
+    })
+
+    await cache.put('other', 'B', 3_600)
+    await cache.put('kept', 'old', 1)
+    await cache.put('kept', 'new', 3_600)
+    vi.advanceTimersByTime(1_001)
+    await cache.put('third', 'C', 3_600)
+
+    expect(await cache.get('kept')).toBe('new')
+    expect(await cache.get('other')).toBeNull()
+    expect(await cache.get('third')).toBe('C')
+    vi.useRealTimers()
+  })
+
+  it('keeps expiry eviction correct after many rewrites of a key with a TTL', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T00:00:00.000Z'))
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+            maxEntries: 3,
+          },
+        },
+      },
+    })
+
+    for (let index = 0; index < 200; index += 1) {
+      await cache.put('a', index, 3_600)
+    }
+    await cache.put('b', 'B', 1)
+    vi.advanceTimersByTime(1_001)
+    await cache.put('c', 'C', 3_600)
+    await cache.put('d', 'D', 3_600)
+
+    expect(await cache.get('a')).toBe(199)
+    expect(await cache.get('b')).toBeNull()
+    expect(await cache.get('c')).toBe('C')
+    expect(await cache.get('d')).toBe('D')
+    vi.useRealTimers()
+  })
+
+  it('bounds the memory store with a default maxEntries when none is configured', async () => {
+    expect(normalizeCacheConfig({
+      drivers: { memory: { driver: 'memory' } },
+    }).drivers.memory).toMatchObject({ maxEntries: 10_000 })
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+          },
+        },
+      },
+    })
+
+    for (let index = 0; index <= 10_000; index += 1) {
+      await cache.put(`key-${index}`, index, 60)
+    }
+
+    expect(await cache.get('key-0')).toBeNull()
+    expect(await cache.get('key-10000')).toBe(10_000)
+  })
+
   it('prunes expired entries before max-entry eviction', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-21T00:00:00.000Z'))

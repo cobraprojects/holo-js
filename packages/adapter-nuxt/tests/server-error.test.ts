@@ -112,3 +112,20 @@ it('marks the form failure cookie Secure when the request arrived over HTTPS', a
   expect(response.status).toBe(303)
   expect(readFormFailureCookie(response).cookie).toMatch(/;\s*Secure/i)
 })
+
+it('answers an oversized form body with 413 through a real HTTP response, without a validation redirect', async () => {
+  const app = createApp({ onError: handleValidationError })
+  app.use(defineEventHandler(() => validate(new Request('https://app.test/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: `email=ava%40example.com&padding=${'x'.repeat(2 * 1024 * 1024)}`,
+  }), schema({ email: field.string().required() }))))
+  const response = await fetch(await serve(app), {
+    method: 'POST',
+    headers: { accept: 'text/html' },
+    redirect: 'manual',
+  })
+  expect(response.status).toBe(413)
+  expect(response.headers.get('location')).toBeNull()
+  expect(await response.json()).toMatchObject({ status: 413 })
+})
