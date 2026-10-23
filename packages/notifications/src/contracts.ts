@@ -206,7 +206,7 @@ export type InferNotificationNotifiable<TNotification>
       : never
 
 export type InferNotificationChannels<TNotification>
-  = TNotification extends NotificationDefinition<unknown, infer TBuild>
+  = TNotification extends { readonly build: infer TBuild }
     ? Extract<keyof TBuild, string>
     : never
 

@@ -71,6 +71,21 @@ describe('@holo-js/notifications typing', () => {
       RegisteredNotifiable,
       { id: string, email: string }
     >>
+    type RegisteredChannels = InferNotificationChannels<typeof userRegistered>
+    type ChannelsAssertion = Expect<Equal<
+      RegisteredChannels,
+      'email' | 'slack'
+    >>
+    type EmailFactory = NonNullable<typeof userRegistered.build.email>
+    type EmailNotifiableAssertion = Expect<Equal<
+      Parameters<EmailFactory>[0],
+      { id: string, email: string }
+    >>
+    type SlackFactory = NonNullable<typeof userRegistered.build.slack>
+    type SlackPayloadAssertion = Expect<Equal<
+      ReturnType<SlackFactory>,
+      { text: string }
+    >>
 
     const pending = notify({
       id: 'user-1',
