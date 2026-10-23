@@ -151,7 +151,7 @@ If you run `queue:listen` under a process manager, check that it stops when the 
 
 ### Windows `.env` percent references
 
-On Windows, `.env` values expand `%NAME%` from the real environment variables, as `cmd.exe` does, and `%%` becomes `%`. A value such as `DATA_DIR=%USERPROFILE%\data` now resolves to your profile folder, and a value that contains `%%` now contains a single `%`. Check Windows `.env` values that contain a percent sign. Values on macOS and Linux are unchanged. See [Values and types](/reference/environment#values-and-types).
+On Windows, `.env` values expand `%NAME%` from the real environment variables, as `cmd.exe` does, and `%%` becomes `%`. A value such as `DATA_DIR=%USERPROFILE%\data` now resolves to your profile folder, and a value that contains `%%` now contains a single `%`. A `%NAME%` whose variable isn't set stays as written. A value that contains `%NAME%` is rewritten when `NAME` is set, including a secret, so write `%%` for a literal `%`. Check Windows `.env` values that contain a percent sign. Values on macOS and Linux are unchanged. See [Values and types](/reference/environment#values-and-types).
 
 ### Sensitive input in validation failures
 
@@ -549,6 +549,10 @@ Check three behaviors when you upgrade:
 - A callback that throws no longer stops the callbacks after it. When one fails, `DB.transaction()` rejects with an `AggregateError` that holds the original error and a `TransactionError`, so a `catch` that checked for the original error must read the `errors` array.
 - When the rollback itself fails, `afterRollback()` callbacks don't run, and `DB.transaction()` rejects with the rollback error. The query logger's `onTransactionRollback` hook receives that failure once.
 
+### Models after a rolled-back transaction
+
+If you roll back a transaction yourself after a model's `save()` in it succeeded, Holo doesn't restore the model. The row is gone, but the model still reports `exists()`, keeps the values its set mutators produced, and is clean, so a `save()` with no changes writes nothing. To write the record again, create a new model with `make()` and `save()`, or reload a model that was loaded from the database with `refresh()`. `refresh()` throws for a model that was never saved. A failed `save()`, or a failed COMMIT, still restores the model's state.
+
 ### Query logger hooks run outside the connection
 
 Check three behaviors when you upgrade:
@@ -629,6 +633,24 @@ No migration is needed. A digest made with the old settings still verifies. A su
 ### Dev server exits non-zero on a port conflict
 
 `holo dev` now exits with a non-zero status when another `holo dev` for the same project is already running. Before, it exited 0 and left the first server running. A port already in use by another process has always exited non-zero, and it still does, now with the port named. `holo dev` never stops a process for you. Update any CI script or wrapper that treated a second `holo dev` as success. To replace a running server, stop it first, using the PID in the message.
+
+### Stopping `holo dev`, `holo start`, and `queue:listen`
+
+A second `Ctrl+C` while `holo dev`, `holo start`, or `queue:listen` is shutting down now force-stops the server or worker and its child processes, and exits with status 130. Before, a second `Ctrl+C` did nothing, so a stuck shutdown needed `kill -9`. On macOS and Linux the server runs in its own process group, and the force stop ends the whole group. A closed terminal (`SIGHUP`) now stops the server through the same graceful path as the first `Ctrl+C`, so its child processes stop with it.
+
+The server runs in its own process group, so if you `kill -9` the CLI itself, the server can keep running. After a `SIGKILL`, check for a leftover server process and stop it. See the [CLI reference](/reference/cli).
+
+### `holo install queue` follows `config/queue.ts`
+
+When Holo can read `config/queue.ts`, the config decides which queue packages `holo install queue` installs. `--driver` no longer adds a package the config doesn't use, and queue packages the config doesn't use are removed, as `prepare` already did. Before, the installer added the driver's package and the next `prepare` removed it, so reruns reported `updated package.json` and reinstalled dependencies. Set the connection's driver in `config/queue.ts` first, then run `npx holo install queue`. If Holo can't read the config, `--driver` still picks the package to add, and installed queue packages are never removed. See [Installed packages](/queue/drivers#installed-packages).
+
+### Cookie helpers are no longer exported from `@holo-js/kernel`
+
+`@holo-js/kernel` no longer exports `encryptCookieValue` or `decryptCookieValue`. Holo uses them for its own session, remember-me, and CSRF cookies, and they remain only as `cookieEncryptionInternals` for Holo's packages. Remove those imports from your app or plugin. Don't encrypt or decrypt Holo cookies yourself. To keep your own data, store it in the session with the [session API](/basics/session#update-session-data), and read cookies through the session and auth APIs, which encrypt Holo's cookies for you. See [Use sessions for your own data](/auth/session-and-cookies#use-sessions-for-your-own-data).
+
+### Realtime authorization accessors drop response helpers
+
+`RealtimeAuthRequestAccessors` lists only `getCookie()` and `getHeader()`. Realtime authorization reads cookies and never writes cookies or redirects, so `appendResponseCookie()` and `redirectResponse()` are removed from the type. Remove them from the accessors you pass to `subscribeRealtimeQuery()`, because a typed object literal that still lists them fails to typecheck. Realtime authorization has no replacement for them.
 
 ## Earlier 0.3.x releases
 
