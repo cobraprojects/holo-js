@@ -551,7 +551,14 @@ Check three behaviors when you upgrade:
 
 ### Models after a rolled-back transaction
 
-If you roll back a transaction yourself after a model's `save()` in it succeeded, Holo doesn't restore the model. The row is gone, but the model still reports `exists()`, keeps the values its set mutators produced, and is clean, so a `save()` with no changes writes nothing. To write the record again, create a new model with `make()` and `save()`, or reload a model that was loaded from the database with `refresh()`. `refresh()` throws for a model that was never saved. A `save()` that fails restores the model's state, unless it ran inside a transaction you started and its SQL had already completed. A failed COMMIT restores the model to its persisted state from before the transaction's first save.
+If you roll back a transaction yourself after a model's `save()` in it succeeded, Holo doesn't restore the model. What the rollback undoes depends on the save:
+
+- An insert is undone. The row is gone, but the model still reports `exists()`.
+- An update is undone. The row keeps the values it had before the transaction, but the model keeps the new values.
+
+In both cases the model keeps the values its set mutators produced and is clean, so a `save()` with no changes writes nothing. To write the record again, create a new model with `make()` and `save()`, or reload a model that was loaded from the database with `refresh()`. `refresh()` throws for a model that was never saved.
+
+A `save()` that fails restores the model's state, unless it ran inside a transaction you started and its SQL had already completed. A failed COMMIT restores the model's persisted bookkeeping (whether it exists, its original values, and what it counts as changed) to what it was before the transaction's first save, and clears values the write generated, such as an `id`. Attributes you assigned, including later edits, keep their values and stay dirty, so a retry writes them.
 
 ### Query logger hooks run outside the connection
 
