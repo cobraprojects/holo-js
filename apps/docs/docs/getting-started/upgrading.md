@@ -302,9 +302,9 @@ Image conversions reject images over 40 million pixels or 1,000 frames, the same
 
 The `database` queue driver now needs MySQL 8.0.17 or later. Workers on MySQL and PostgreSQL skip jobs another worker is taking instead of waiting for them, so a MySQL worker no longer keeps retrying a job another worker already took. No config or code changes are required. See [Run several workers](/queue/drivers#run-several-workers).
 
-### Node.js 22.14 or newer
+### Node.js 22.18 or newer
 
-Holo now requires Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26. On Node.js 22.12 and 22.13 the SQLite driver crashes with a segmentation fault when it opens a database. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.14 or newer before installing 0.4.0.
+Holo now requires Node.js 22.18 or newer on the 22 line, or Node.js 24 or 26. The build tooling (tsup 9) needs 22.18, so Node.js 22.14 through 22.17 no longer install the framework. Check `node --version` in development, CI and production, and upgrade Node.js 22 installations to 22.18 or newer before installing 0.4.0.
 
 ### Queue job timeouts, dispatch, and retries
 
@@ -906,6 +906,16 @@ Run your test suite as well. Fix any import errors the type checker reports; the
 ### Give custom auth contexts a request scope
 
 If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
+
+### Redis clients use ioredis 6
+
+Holo's Redis packages (`@holo-js/cache-redis`, `@holo-js/queue-redis`, `@holo-js/session`, `@holo-js/security`, and Redis scaling in `@holo-js/broadcast`) now need `ioredis` 6. Install it in your app if you use `ioredis` directly:
+
+```bash
+npm install ioredis@^6
+```
+
+ioredis 6 needs Node.js 20 or later. It uses RESP3, the newer Redis protocol, by default. Against a Redis server older than 6, it falls back to RESP2 automatically, so no config change is needed. The Redis queue driver uses BullMQ 6, which Holo installs for you.
 
 ## Next steps
 

@@ -30,7 +30,7 @@ The finished apps include a few extras this tutorial skips, such as social login
 
 You need:
 
-- Node.js 22.14 or newer on the 22 line, or Node.js 24 or 26
+- Node.js 22.18 or newer on the 22 line, or Node.js 24 or 26
 - npm (or another package manager; see [Installation](/getting-started/installation)). On Node.js 22, Nuxt projects installed with npm need npm 11
 - basic knowledge of your framework: pages, server code, and forms
 - a terminal and a code editor
