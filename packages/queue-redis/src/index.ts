@@ -2,6 +2,7 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import {
   Queue as BullQueue,
+  UnrecoverableError,
   Worker as BullWorker,
   type ConnectionOptions,
   type Job,
@@ -573,8 +574,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
   async delete(job: QueueReservedJob): Promise<void> {
     await this.settleReservation(job, 'delete job', async (reservation) => {
-      reservation.job.discard()
-      await reservation.job.moveToFailed(new Error('[Holo Queue] Job deleted.'), reservation.token, false)
+      await reservation.job.moveToFailed(new UnrecoverableError('[Holo Queue] Job deleted.'), reservation.token, false)
     })
   }
 
@@ -588,15 +588,33 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     this.reservations.delete(job.reservationId)
   }
 
+  private async countLegacyPausedJobs(queueName: string): Promise<number> {
+    const client = await this.getQueue(queueName).getBackend().client
+    const pausedKey = `${this.getQueuePrefix(queueName)}:${queueName}:paused`
+    const count = await client.llen(pausedKey)
+    if (count === 0) {
+      return 0
+    }
+
+    const [last] = await client.lrange(pausedKey, -1, -1)
+    return last?.startsWith('0:') ? count - 1 : count
+  }
+
+  private async countQueuedJobs(queueName: string): Promise<number> {
+    const counted = await this.getQueue(queueName).getJobCountByTypes('wait', 'prioritized', 'delayed')
+    return counted + await this.countLegacyPausedJobs(queueName)
+  }
+
   async clear(input?: { readonly queueNames?: readonly string[] }): Promise<number> {
     try {
       const queueNames = this.normalizeQueueNames(input?.queueNames)
       let cleared = 0
 
       for (const queueName of queueNames) {
-        const queue = this.getQueue(queueName)
-        cleared += await queue.getJobCountByTypes('wait', 'paused', 'prioritized', 'delayed')
-        await queue.drain(true)
+        const before = await this.countQueuedJobs(queueName)
+        await this.getQueue(queueName).drain(true)
+        const after = await this.countQueuedJobs(queueName)
+        cleared += Math.max(0, before - after)
       }
 
       return cleared

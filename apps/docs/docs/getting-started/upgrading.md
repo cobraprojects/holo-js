@@ -922,6 +922,16 @@ Run your test suite as well. Fix any import errors the type checker reports; the
 
 If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
 
+### Redis clients use ioredis 6
+
+Holo's Redis packages (`@holo-js/cache-redis`, `@holo-js/queue-redis`, `@holo-js/session`, `@holo-js/security`, and Redis scaling in `@holo-js/broadcast`) now need `ioredis` 6. Install it in your app if you use `ioredis` directly:
+
+```bash
+npm install ioredis@^6
+```
+
+ioredis 6 needs Node.js 20 or later. It uses RESP3, the newer Redis protocol, by default. Against a Redis server older than 6, it falls back to RESP2 automatically, so no config change is needed. The Redis queue driver uses BullMQ 6, which Holo installs for you.
+
 ## Next steps
 
 - [Configuration](/getting-started/configuration)

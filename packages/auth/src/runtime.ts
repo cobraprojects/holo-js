@@ -2860,6 +2860,15 @@ async function signOutOtherSessionsAfterPasswordReset(providerName: string, user
   await rotateGuardSession(bindings, retainedGuard)
 }
 
+async function hasValidSessionForProvider(bindings: RuntimeBindings, providerName: string): Promise<boolean> {
+  for (const guardName of sessionGuardNames(bindings)) {
+    if (getGuardConfig(guardName).provider !== providerName) continue
+    await hydrateGuardContextFromRequest(guardName)
+    if (await readGuardSessionState(guardName)) return true
+  }
+  return false
+}
+
 async function assertPasswordResetCanComplete(bindings: RuntimeBindings, record: PasswordResetTokenRecord): Promise<void> {
   if (!bindings.sessionRevocations) {
     throwAuthError('runtime_unconfigured', 'Password reset requires a durable session revocation store.')
@@ -2871,21 +2880,11 @@ async function assertPasswordResetCanComplete(bindings: RuntimeBindings, record:
       provider: record.provider,
     })
   }
-
-  const user = await adapter.findByCredentials({ email: record.email })
-  if (!user) {
-    throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
-      provider: record.provider,
-      email: record.email,
-    })
+  if (adapter.getRememberToken && !adapter.updateRememberToken) {
+    throwAuthError('runtime_unconfigured', `Auth provider "${record.provider}" cannot store remember tokens.`)
   }
 
-  const userId = requireUserId(adapter, user, '[@holo-js/auth] Password reset token user is invalid.')
-  if (getRememberToken(adapter, user)) {
-    requireRememberTokenUpdates(adapter, record.provider)
-  }
-
-  if (!await findSessionGuardOwnedBy(bindings, record.provider, userId)) {
+  if (!await hasValidSessionForProvider(bindings, record.provider)) {
     return
   }
 
