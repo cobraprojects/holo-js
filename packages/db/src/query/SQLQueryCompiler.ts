@@ -221,8 +221,9 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
       bindings,
+      unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:update:${plan.source.tableName}`,
-    }, this.createWriteMetadata('update', plan.source.tableName, this.calculatePlanComplexity(plan)))
+    }, this.createWriteMetadata('update', plan.source.tableName, this.calculatePlanComplexity(plan), plan.predicates))
   }
 
   protected compileDelete(plan: DeleteQueryPlan): CompiledStatement {
@@ -233,8 +234,9 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}${returningClause}`,
       bindings,
+      unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:delete:${plan.source.tableName}`,
-    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
+    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan), plan.predicates))
   }
 
   protected withMetadata(
@@ -288,6 +290,7 @@ export class SQLQueryCompiler {
     kind: 'insert' | 'update' | 'upsert' | 'delete',
     tableName: string,
     complexity: number,
+    predicates: readonly QueryPredicateNode[] = [],
   ): CompiledStatementMetadata {
     return {
       kind,
@@ -300,8 +303,8 @@ export class SQLQueryCompiler {
         hasSubqueries: false,
       },
       safety: {
-        unsafe: false,
-        containsRawSql: false,
+        unsafe: predicates.some(predicate => this.isUnsafePredicate(predicate)),
+        containsRawSql: predicates.some(predicate => this.predicateContainsRawSql(predicate)),
       },
       debug: {
         tableName,
@@ -755,7 +758,9 @@ export class SQLQueryCompiler {
   }
 
   protected createPostgresPathLiteral(path: readonly string[]): string {
-    const serializedPath = path.map(segment => segment.replaceAll('"', '\\"')).join(',')
+    const serializedPath = path
+      .map(segment => `"${segment.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
+      .join(',')
     return this.createSqlStringLiteral(`{${serializedPath}}`)
   }
 
@@ -775,9 +780,13 @@ export class SQLQueryCompiler {
     return hasUnsafeSelection || hasUnsafePredicate || hasUnsafeOrder || hasUnsafeUnion || hasUnsafeJoin
   }
 
+  protected isUnsafeWritePlan(plan: UpdateQueryPlan | DeleteQueryPlan): boolean {
+    return plan.predicates.some(predicate => this.isUnsafePredicate(predicate))
+  }
+
   protected isUnsafePredicate(predicate: QueryPredicateNode): boolean {
     if (predicate.kind === 'raw') {
-      return true
+      return predicate.trusted !== true
     }
 
     if (predicate.kind === 'group') {

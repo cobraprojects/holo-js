@@ -315,7 +315,7 @@ const allNames = await DB.table('customers')
 When the builder has no method for an expression, use the `unsafe...` methods. Write placeholders (`?`) for every value and pass the values in the bindings array — the number of placeholders must match the bindings.
 
 ::: warning
-Raw SQL is off by default. `unsafeQuery()` and `unsafeExecute()` throw a `SecurityError` unless the connection sets `security: { allowUnsafeRawSql: true }` in `config/database.ts`. See [Raw SQL](/database/#raw-sql).
+Raw SQL is off by default. `unsafeQuery()` and `unsafeExecute()` throw a `SecurityError` unless the connection sets `security: { allowUnsafeRawSql: true }` in `config/database.ts`. The same applies to the `unsafe...` methods on reads, `update()`, and `delete()`. See [Raw SQL](/database/#raw-sql).
 :::
 
 ### unsafeSelect()

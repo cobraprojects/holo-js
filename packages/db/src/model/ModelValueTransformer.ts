@@ -15,7 +15,9 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   ) {}
 
   resolveAttribute(key: string, entity: Entity<TTable>, value: unknown): unknown {
-    const accessor = this.definition.accessors[key]
+    const accessor = Object.prototype.hasOwnProperty.call(this.definition.accessors, key)
+      ? this.definition.accessors[key]
+      : undefined
     return accessor ? accessor(value, entity) : value
   }
 

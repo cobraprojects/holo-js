@@ -69,7 +69,7 @@ memory: {
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `maxEntries` | no limit | When the store grows past this, the oldest entries are removed first. |
+| `maxEntries` | `10000` | When the store grows past this, the oldest entries are removed first. |
 | `prefix` | top-level `prefix` | Key prefix for this store. |
 
 ## Redis

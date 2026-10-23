@@ -1717,6 +1717,30 @@ export default new PluginCacheDriver()
     expect(await cache.get('third')).toBe(3)
   })
 
+  it('bounds the memory store with a default maxEntries when none is configured', async () => {
+    expect(normalizeCacheConfig({
+      drivers: { memory: { driver: 'memory' } },
+    }).drivers.memory).toMatchObject({ maxEntries: 10_000 })
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+          },
+        },
+      },
+    })
+
+    for (let index = 0; index <= 10_000; index += 1) {
+      await cache.put(`key-${index}`, index, 60)
+    }
+
+    expect(await cache.get('key-0')).toBeNull()
+    expect(await cache.get('key-10000')).toBe(10_000)
+  })
+
   it('prunes expired entries before max-entry eviction', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-21T00:00:00.000Z'))

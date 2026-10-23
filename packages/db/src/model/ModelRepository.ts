@@ -20,7 +20,7 @@ import { normalizeDialectReadValue } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
-import { snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
@@ -106,6 +106,10 @@ function serializedFlag(serialized: boolean): { readonly serialized?: true } {
 
 const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
 const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
+
+function findOwnColumn(table: TableDefinition, name: string): TableDefinition['columns'][string] | undefined {
+  return Object.prototype.hasOwnProperty.call(table.columns, name) ? table.columns[name] : undefined
+}
 
 function hasDefinition<TTable extends TableDefinition>(
   reference: ModelDefinitionLike | ModelDefinition<TTable> | ModelReference<TTable>,
@@ -1778,7 +1782,8 @@ export class ModelRepository<
 
     const sanitized = Object.fromEntries(entries.map(([key, value]) => {
       const columnName = key.includes('->') ? key.split('->')[0]! : key
-      const column = this.definition.table.columns[columnName]
+      assertAttributeNameAllowed(columnName)
+      const column = findOwnColumn(this.definition.table, columnName)
       if (!column) {
         throw new SecurityError(`Column "${columnName}" is not defined on model "${this.definition.name}".`)
       }
@@ -3673,7 +3678,8 @@ export class ModelRepository<
   assertMassAssignable<TValues extends Partial<ModelRecord<TTable>> | Record<string, unknown>>(values: TValues): TValues {
     for (const key of Object.keys(values)) {
       const columnName = key.includes('->') ? key.split('->')[0]! : key
-      const column = this.definition.table.columns[columnName]
+      assertAttributeNameAllowed(columnName)
+      const column = findOwnColumn(this.definition.table, columnName)
       if (!column) {
         throw new SecurityError(`Column "${columnName}" is not defined on model "${this.definition.name}".`)
       }

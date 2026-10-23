@@ -9,6 +9,8 @@ import {
   type CacheDriverPutInput,
 } from './contracts'
 
+export const DEFAULT_CACHE_MEMORY_MAX_ENTRIES = 10_000
+
 type MemoryCacheEntry = {
   payload: string
   expiresAt?: number
@@ -183,13 +185,9 @@ function setEntry(
 
 function enforceMaxEntries(
   state: MemoryCacheDriverState,
-  maxEntries: number | undefined,
+  maxEntries: number,
   timestamp: number,
 ): void {
-  if (typeof maxEntries === 'undefined') {
-    return
-  }
-
   pruneExpiredEntries(state, timestamp)
   while (state.entries.size > maxEntries) {
     const oldestKey = state.entries.keys().next().value
@@ -208,6 +206,7 @@ export function createMemoryCacheDriver(
   const state = createMemoryCacheDriverState()
   const now = options.now ?? Date.now
   const sleep = options.sleep ?? defaultSleep
+  const maxEntries = options.maxEntries ?? DEFAULT_CACHE_MEMORY_MAX_ENTRIES
 
   return {
     name: options.name,
@@ -224,7 +223,7 @@ export function createMemoryCacheDriver(
     },
     async put(input: CacheDriverPutInput): Promise<boolean> {
       setEntry(state, input)
-      enforceMaxEntries(state, options.maxEntries, now())
+      enforceMaxEntries(state, maxEntries, now())
       return true
     },
     async add(input: CacheDriverPutInput): Promise<boolean> {
@@ -232,7 +231,7 @@ export function createMemoryCacheDriver(
       if (pruneExpiredEntry(state, input.key, timestamp)) return false
 
       setEntry(state, input)
-      enforceMaxEntries(state, options.maxEntries, timestamp)
+      enforceMaxEntries(state, maxEntries, timestamp)
       return true
     },
     async forget(key: string): Promise<boolean> {
@@ -260,7 +259,7 @@ export function createMemoryCacheDriver(
         payload: serializeCacheValue(nextValue),
         expiresAt: entry?.expiresAt,
       })
-      enforceMaxEntries(state, options.maxEntries, now())
+      enforceMaxEntries(state, maxEntries, now())
       return nextValue
     },
     async decrement(key: string, amount: number): Promise<number> {

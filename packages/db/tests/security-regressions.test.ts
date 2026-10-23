@@ -109,4 +109,45 @@ describe('native database security boundaries', () => {
     expect(() => DB.table(table).whereJsonContains('name->profile', 'eu')).toThrow(SecurityError)
     await expect(User.whereJsonLength('settings->tags', 'like' as never, 2).get()).rejects.toThrow(SecurityError)
   })
+
+  it.each(['postgres', 'mysql'] as const)('matches JSON path segments containing commas on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    await db.table(table).insert([
+      { id: 1, name: 'comma', settings: JSON.stringify({ 'a,b': { c: 'matched' } }) },
+      { id: 2, name: 'nested', settings: JSON.stringify({ a: { b: { c: 'unrelated' } } }) },
+    ])
+    expect(await db.table(table).select('id').whereJson('settings->a,b->c', 'matched').get()).toEqual([{ id: 1 }])
+    expect(await db.table(table).select('id').whereJson('settings->a->b->c', 'unrelated').get()).toEqual([{ id: 2 }])
+  })
+
+  it('matches Postgres JSON path segments containing quotes, backslashes, braces, and NULL', async () => {
+    const { db, table } = await openDatabase('postgres')
+    const segments = ['q"uote', 'back\\slash', '{brace}', 'NULL']
+    await db.table(table).insert([
+      { id: 1, name: 'special', settings: JSON.stringify({ [segments[0]!]: { [segments[1]!]: { [segments[2]!]: { [segments[3]!]: 'matched' } } } }) },
+      { id: 2, name: 'plain', settings: JSON.stringify({ q: 'unrelated' }) },
+    ])
+    expect(await db.table(table).select('id').whereJson(`settings->${segments.join('->')}`, 'matched').get()).toEqual([{ id: 1 }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('gates unsafe raw predicates on update and delete when raw SQL is disabled on %s', async driver => {
+    const { db, table } = await openDatabase(driver)
+    const User = defineModelFromTable(table)
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    const injected = `Nobody' OR '1'='1`
+    const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
+
+    await expect(User.unsafeWhere(`name = '${injected}'`, []).delete()).rejects.toThrow(policyError)
+    await expect(db.table(table).unsafeWhere(`name = '${injected}'`, []).delete()).rejects.toThrow(policyError)
+    await expect(db.table(table).unsafeWhere(`name = '${injected}'`, []).update({ name: 'Changed' })).rejects.toThrow(policyError)
+    expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
+    const { db, table } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
+    await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
+    await db.table(table).unsafeWhere(`name = 'Other'`, []).update({ name: 'Changed' })
+    await db.table(table).unsafeWhere(`name = 'Safe'`, []).delete()
+    expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 2, name: 'Changed' }])
+  })
 })

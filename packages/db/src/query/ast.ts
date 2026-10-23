@@ -168,6 +168,7 @@ export interface QueryRawPredicate {
   readonly boolean?: 'and' | 'or'
   readonly sql: string
   readonly bindings: readonly unknown[]
+  readonly trusted?: true
 }
 
 export interface QueryIntegerInPredicate {

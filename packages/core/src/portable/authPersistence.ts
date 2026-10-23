@@ -287,7 +287,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
       async redeem<TResult>(record: EmailVerificationTokenRecord, operation: () => Promise<TResult>): Promise<TResult | null> {
         return redemption.redeem(record.provider, async (connection) => {
           const expiry = authTokenExpiryPredicate(connection)
-          const claimed = await new TableQueryBuilder('email_verification_tokens', connection)
+          const query = new TableQueryBuilder('email_verification_tokens', connection)
             .where('id', record.id)
             .where('provider', record.provider)
             .where('user_id', String(record.userId))
@@ -296,7 +296,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-            .unsafeWhere(expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.trustedFrameworkWhere(query, expiry.sql, expiry.bindings)
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1
@@ -329,7 +329,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
         if (!Object.values(loadedConfig.auth.passwords).some(broker => broker.provider === record.provider && broker.table === table)) return null
         return redemption.redeem(record.provider, async (connection) => {
           const expiry = authTokenExpiryPredicate(connection)
-          const claimed = await new TableQueryBuilder(table, connection)
+          const query = new TableQueryBuilder(table, connection)
             .where('id', record.id)
             .where('provider', record.provider)
             .where('email', record.email)
@@ -337,7 +337,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
             .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
-            .unsafeWhere(expiry.sql, expiry.bindings)
+          const claimed = await holoRuntimeInternals.trustedFrameworkWhere(query, expiry.sql, expiry.bindings)
             .whereNull('used_at')
             .delete()
           return claimed.affectedRows === 1

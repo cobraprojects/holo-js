@@ -89,6 +89,22 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+### Raw SQL conditions on `update()` and `delete()`
+
+`unsafeWhere()` and `orUnsafeWhere()` conditions on `update()` and `delete()` now need `security: { allowUnsafeRawSql: true }` on the connection, as they already did on reads. Before, the default policy let them run on writes, so a condition built from user input could match every row. Without the setting, these calls throw a `SecurityError` and change nothing. Rewrite the condition with `where()` and its related methods, or turn the setting on for that connection if you need raw SQL. Password reset and email verification links keep working with the default policy.
+
+```ts [config/database.ts]
+security: { allowUnsafeRawSql: true }
+```
+
+### Attribute names `__proto__`, `constructor`, and `prototype`
+
+Model writes and `forceFill()` reject `__proto__`, `constructor`, and `prototype` as attribute names with a `SecurityError`, even when the model is unguarded. Reading an attribute with one of those names returns `undefined` unless the model has such a column. Rename any column with one of these names.
+
+### Memory cache limit
+
+The `memory` cache driver keeps at most 10,000 entries when `maxEntries` isn't set, and removes the oldest entries first. Before, it had no limit, so a long-running process could grow without bound. Set `maxEntries` to choose a different limit. See [Memory](/cache/drivers#memory).
+
 ### Lifecycle, factories, and seeders
 
 Attribute changes made in `creating`, `updating`, and `saving` handlers are now written. Before, the insert or update was built before those handlers ran, so their changes were dropped. Mutators run once per write, so `make()` followed by `save()` and factory-made records no longer apply them twice. `make()` stores the values you pass without running mutators or casts; they run when the record is saved.

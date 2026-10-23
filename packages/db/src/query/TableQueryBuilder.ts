@@ -2865,3 +2865,25 @@ export class TableQueryBuilder<
     return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
   }
 }
+
+export function trustedFrameworkWhere<
+  TTableOrName extends TableReference,
+  TSelectedRow extends Record<string, unknown>,
+  TAvailableColumns extends Record<string, unknown>,
+>(
+  query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>,
+  sql: string,
+  bindings: readonly unknown[],
+): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
+    query.getTableName() as TTableOrName,
+    query.getConnection(),
+    withPredicate(query.getPlan(), {
+      kind: 'raw',
+      boolean: 'and',
+      sql,
+      bindings: Object.freeze([...bindings]),
+      trusted: true,
+    }),
+  )
+}
