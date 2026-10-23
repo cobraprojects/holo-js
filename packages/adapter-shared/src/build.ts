@@ -6,6 +6,7 @@ type RealtimeDefinition = {
   readonly exportedName: string
   readonly factory: RealtimeFactory
   readonly name?: string
+  readonly unsafeName?: true
   readonly sourceLine: number
 }
 
@@ -25,6 +26,7 @@ export type RealtimeDefinitionTransformResult = {
 
 export type RealtimeDefinitionTransformOptions = {
   readonly preserveServerHandlers?: boolean
+  readonly failClosed?: string
 }
 
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
@@ -72,8 +74,9 @@ function collectDefinitions(sourceFile: ts.SourceFile): readonly RealtimeDefinit
       const name = nameProperty && ts.isPropertyAssignment(nameProperty)
         ? nameProperty.initializer.getText(sourceFile)
         : undefined
+      const unsafeName = nameProperty !== undefined && !(ts.isPropertyAssignment(nameProperty) && ts.isStringLiteral(nameProperty.initializer))
       const sourceLine = sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line
-      definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}) })
+      definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}), ...(unsafeName ? { unsafeName: true as const } : {}) })
     }
   }
   return Object.freeze(definitions)
@@ -193,6 +196,15 @@ export function createRealtimeClientDefinitionTransform(
 
   const sourceFile = parseRealtimeSource(source)
   const definitions = collectDefinitions(sourceFile)
+  if (options.failClosed) {
+    if (definitions.length === 0) {
+      throw new Error(`${options.failClosed} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
+    }
+    const unsafe = definitions.find(definition => definition.unsafeName)
+    if (unsafe) {
+      throw new Error(`${options.failClosed} defines ${unsafe.exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
+    }
+  }
   if (definitions.length === 0) {
     const code = stripRealtimeServerHandlers(source)
     const sourceLineCount = source.split('\n').length

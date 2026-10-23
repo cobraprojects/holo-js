@@ -34,7 +34,7 @@ export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
       }
 
       browserDefinitionIds.add(id)
-      return createRealtimeClientDefinitionTransform(readFileSync(path, 'utf8')).code
+      return createRealtimeClientDefinitionTransform(readFileSync(path, 'utf8'), { failClosed: path }).code
     },
     transform(code, id, options) {
       if (!options?.ssr && !id.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(id)) {

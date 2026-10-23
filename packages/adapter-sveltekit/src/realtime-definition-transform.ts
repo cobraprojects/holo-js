@@ -11,6 +11,6 @@ export function createRealtimeClientDefinitionModule(source: string): string {
   return createSharedRealtimeClientDefinitionModule(source, '@holo-js/adapter-sveltekit/realtime')
 }
 
-export function createRealtimeClientDefinitionTransform(source: string): RealtimeDefinitionTransformResult {
-  return createSharedRealtimeClientDefinitionTransform(source, '@holo-js/adapter-sveltekit/realtime')
+export function createRealtimeClientDefinitionTransform(source: string, options: { readonly failClosed?: string } = {}): RealtimeDefinitionTransformResult {
+  return createSharedRealtimeClientDefinitionTransform(source, '@holo-js/adapter-sveltekit/realtime', options)
 }
