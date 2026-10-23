@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -160,12 +161,11 @@ describe('@holo-js/core runtime module helpers', () => {
   })
 
   it.each([
-    { label: 'NODE_PRESERVE_SYMLINKS=1', env: { NODE_PRESERVE_SYMLINKS: '1' }, execArgv: [] as string[], bridged: true },
-    { label: '--preserve-symlinks in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks' }, execArgv: [] as string[], bridged: true },
-    { label: '--preserve-symlinks=true in NODE_OPTIONS', env: { NODE_OPTIONS: '--no-warnings --preserve-symlinks=true' }, execArgv: [] as string[], bridged: true },
-    { label: '--preserve-symlinks-main=true in execArgv', env: {}, execArgv: ['--preserve-symlinks-main=true'], bridged: true },
-    { label: '--preserve-symlinks=false in NODE_OPTIONS', env: { NODE_OPTIONS: '--preserve-symlinks=false' }, execArgv: [] as string[], bridged: true },
-  ])('treats symlink preservation as set for $label', async ({ env, execArgv, bridged }) => {
+    { label: 'no preservation', args: [] as string[], env: {} as Record<string, string>, bundled: false },
+    { label: '--preserve-symlinks', args: ['--preserve-symlinks'], env: {}, bundled: true },
+    { label: '--preserve_symlinks', args: ['--preserve_symlinks'], env: {}, bundled: true },
+    { label: 'NODE_PRESERVE_SYMLINKS=1', args: [], env: { NODE_PRESERVE_SYMLINKS: '1' }, bundled: true },
+  ])('loads a dependency-shipped definition from the runtime instance under ', async ({ args, env, bundled }) => {
     const projectRoot = await createTempProject()
     await mkdir(join(projectRoot, 'node_modules'), { recursive: true })
     await symlink(resolve(import.meta.dirname, '../..'), join(projectRoot, 'node_modules/@holo-js'), 'dir')
@@ -173,24 +173,26 @@ describe('@holo-js/core runtime module helpers', () => {
     await mkdir(jobsRoot, { recursive: true })
     await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
     const definitionPath = join(jobsRoot, 'job.mjs')
-    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\n")
-    vi.stubEnv('NODE_OPTIONS', '')
-    vi.stubEnv('NODE_PRESERVE_SYMLINKS', '')
-    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
-    const originalExecArgv = process.execArgv
-    process.execArgv = execArgv
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const runtimeConfigUrl = pathToFileURL(resolve(import.meta.dirname, '../node_modules/@holo-js/config/dist/index.mjs')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const runtimeConfig = await import(${JSON.stringify(runtimeConfigUrl)})
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
+const definition = await importDefinition(${JSON.stringify(definitionPath)})
+console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source }))
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const childEnv: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', ESBUILD_BINARY_PATH: esbuildBinary, ...env }
+    const { stdout } = await promisify(execFile)(process.execPath, [...args, '--experimental-strip-types', childPath], { cwd: projectRoot, env: childEnv })
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string }
 
-    try {
-      const importDefinition = await loadProjectDefinitionRuntimeModules(projectRoot, [definitionPath])
-      const definition = await importDefinition(definitionPath) as { defineAppConfig: unknown }
-
-      if (bridged) expect(definition.defineAppConfig).toBe(holoConfig.defineAppConfig)
-      else expect(definition.defineAppConfig).not.toBe(holoConfig.defineAppConfig)
-    } finally {
-      process.execArgv = originalExecArgv
-      vi.unstubAllEnvs()
-    }
-  })
+    expect(result.bridged).toBe(true)
+    expect(result.source.endsWith('/job.mjs')).toBe(!bundled)
+  }, 30_000)
 
   it('does not import package export targets pruned from a production artifact', async () => {
     const projectRoot = await createTempProject()

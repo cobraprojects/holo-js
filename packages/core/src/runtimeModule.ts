@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -339,32 +339,27 @@ async function bundleRuntimeModule(
 
 const definitionGraphSources = new Map<string, { readonly sources: ReadonlyMap<string, string>, readonly native: boolean }>()
 
-function packageRootFromBase(base: string, packageName: string): string | undefined {
+function packageEntryFromBase(base: string, packageName: string): string | undefined {
   const require = nodeModule.createRequire(base)
   for (const directory of require.resolve.paths(packageName) ?? []) {
     const candidate = join(directory, packageName)
-    if (existsSync(join(candidate, 'package.json'))) return realpathSync(candidate)
+    if (!existsSync(join(candidate, 'package.json'))) continue
+
+    try {
+      return require.resolve(candidate)
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'MODULE_NOT_FOUND') return undefined
+
+      throw error
+    }
   }
 
   return undefined
 }
 
-function isPreserveSymlinksOption(option: string): boolean {
-  const [name] = option.split('=', 1)
-  return name === '--preserve-symlinks' || name === '--preserve-symlinks-main'
-}
-
-function symlinksPreserved(): boolean {
-  if (process.env.NODE_PRESERVE_SYMLINKS === '1') return true
-
-  return [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)]
-    .some(isPreserveSymlinksOption)
-}
-
 function holoPackageSharesRuntime(packageName: string, importerPath: string): boolean {
-  if (symlinksPreserved()) return false
-  const runtimeRoot = packageRootFromBase(import.meta.url, packageName)
-  return runtimeRoot !== undefined && runtimeRoot === packageRootFromBase(importerPath, packageName)
+  const runtimeEntry = packageEntryFromBase(import.meta.url, packageName)
+  return runtimeEntry !== undefined && runtimeEntry === packageEntryFromBase(importerPath, packageName)
 }
 
 function importRequiresBundle(
