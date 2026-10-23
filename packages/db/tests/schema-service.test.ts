@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, column, createSchemaService, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
@@ -551,6 +551,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       let restoreStarted!: () => void
       const restoring = new Promise<void>(resolve => { restoreStarted = resolve })
       let outcomesSettled: Promise<unknown> = Promise.resolve()
+      let pendingTimersWhenSettled: number | undefined
       const { db, schema } = await openDatabase(driver, {
         security: { allowUnsafeRawSql: true },
         logger: {
@@ -558,6 +559,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
             if (entry.source === 'schema:enableForeignKeys') {
               restoreStarted()
               await outcomesSettled
+              pendingTimersWhenSettled = vi.getTimerCount()
             } else if (entry.kind === 'query') {
               await restoring
             }
@@ -566,19 +568,23 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
       const controller = new AbortController()
       const listenersBefore = getEventListeners(controller.signal, 'abort').length
-      const timersBefore = process.getActiveResourcesInfo().filter(name => name === 'Timeout').length
 
       let outcomes!: Promise<unknown>[]
-      await schema.withoutForeignKeyConstraints(async () => {
-        outcomes = Array.from({ length: 20 }, () => db.unsafeQuery(unsafeSql('select 1'), { signal: controller.signal, timeoutMs: 60_000 })
-          .then(() => 'ran', (error: unknown) => error))
-        outcomesSettled = Promise.all(outcomes)
-      })
-      for (const outcome of await Promise.all(outcomes)) expect(outcome).toBeInstanceOf(TransactionError)
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        await schema.withoutForeignKeyConstraints(async () => {
+          outcomes = Array.from({ length: 20 }, () => db.unsafeQuery(unsafeSql('select 1'), { signal: controller.signal, timeoutMs: 60_000 })
+            .then(() => 'ran', (error: unknown) => error))
+          outcomesSettled = Promise.all(outcomes)
+        })
+        for (const outcome of await Promise.all(outcomes)) expect(outcome).toBeInstanceOf(TransactionError)
+      } finally {
+        vi.useRealTimers()
+      }
 
+      expect(pendingTimersWhenSettled).toBe(0)
       expect((await db.unsafeQuery<{ value: number }>(unsafeSql('select 1 as value'), { timeoutMs: 2_000 })).rows).toEqual([{ value: 1 }])
       expect(getEventListeners(controller.signal, 'abort').length).toBe(listenersBefore)
-      expect(process.getActiveResourcesInfo().filter(name => name === 'Timeout').length).toBe(timersBefore)
     }, 5_000)
 
     it('rejects a query issued from a rollback hook after the rollback failed', async () => {
