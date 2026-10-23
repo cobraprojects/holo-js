@@ -78,7 +78,7 @@ describe('file session lock reclamation under busy file errors', () => {
     const { release, waitedMs } = await acquireOnFakeClock(recordPath)
     expect(waitedMs).toBeLessThan(STALE_INTERVAL_MS)
     await release()
-  }, 15_000)
+  })
 
   it('retries a transient busy error while removing a stale lock', async () => {
     const { recordPath } = await createRecordPath()
@@ -90,7 +90,7 @@ describe('file session lock reclamation under busy file errors', () => {
     const { release, waitedMs } = await acquireOnFakeClock(recordPath)
     expect(waitedMs).toBeLessThan(1_000)
     await release()
-  }, 15_000)
+  })
 
   it('reports a release that cannot move its owner file aside and lets a later acquire in the same process reclaim the lock', async () => {
     const reports: Array<{ error: unknown, context: HoloErrorReportContext }> = []
@@ -105,5 +105,5 @@ describe('file session lock reclamation under busy file errors', () => {
     const { release: next, waitedMs } = await acquireOnFakeClock(recordPath)
     expect(waitedMs).toBeLessThan(STALE_INTERVAL_MS)
     await next()
-  }, 15_000)
+  })
 })

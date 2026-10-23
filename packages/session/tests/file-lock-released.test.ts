@@ -120,7 +120,7 @@ describe('released file locks across processes', () => {
 
     expect(await firstStore.take('session', 'first')).toEqual({ found: true, value: 1 })
     expect(await firstStore.take('session', 'second')).toEqual({ found: true, value: 2 })
-  }, 15_000)
+  })
 
   it('a completed operation leaves no lock directory on disk', async () => {
     const store = await openStore(await loadProcess())
@@ -130,7 +130,7 @@ describe('released file locks across processes', () => {
 
     await store.flash('session', 'key', 'value')
     await expect(readdir(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
-  }, 15_000)
+  })
 
   it('a retry frees the lock of every record whose release could neither move the lease aside nor publish it', async () => {
     const store = await openStore(await loadProcess())
@@ -148,7 +148,7 @@ describe('released file locks across processes', () => {
     for (const sessionId of sessionIds) {
       await waitFor(`the lock for ${sessionId} to be removed by its retry`, () => isAbsent(lockPathFor(sessionId)))
     }
-  }, 15_000)
+  })
 
   it('another store reclaims a lease whose release was published as released because it could not be moved aside', async () => {
     const releasingStore = await openStore(await loadProcess())
@@ -164,7 +164,7 @@ describe('released file locks across processes', () => {
 
     expect(await successor.take('session', 'second')).toEqual({ found: true, value: 2 })
     expect(await isAbsent(lockPath)).toBe(true)
-  }, 15_000)
+  })
 
   it('the releasing store reclaims its own unpublished lease on its next operation', async () => {
     const store = await openStore(await loadProcess())
@@ -179,7 +179,7 @@ describe('released file locks across processes', () => {
     await waitFor('the lock to be removed once the faults clear', () => isAbsent(lockPath))
     expect(await store.take('session', 'first')).toEqual({ found: true, value: 1 })
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
-  }, 15_000)
+  })
 
   it('reports that other processes must wait once the release retries stop publishing it', async () => {
     const store = await openStore(await loadProcess())
@@ -193,7 +193,7 @@ describe('released file locks across processes', () => {
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
     expect(await readdir(lockPath)).toHaveLength(1)
     expect((reports[0] as Error).cause).toMatchObject({ code: 'EPERM' })
-  }, 15_000)
+  })
 
   it('an I/O error while moving the lease aside rejects the release and the next operation recovers', async () => {
     const store = await openStore(await loadProcess())
@@ -209,7 +209,7 @@ describe('released file locks across processes', () => {
 
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
     expect(await isAbsent(lockPath)).toBe(true)
-  }, 15_000)
+  })
 
   it('an I/O error during acquisition leaves no pending lock directory and the next operation recovers', async () => {
     const store = await openStore(await loadProcess())
@@ -222,7 +222,7 @@ describe('released file locks across processes', () => {
     await store.flash('session', 'second', 2)
 
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
-  }, 15_000)
+  })
 
   it('lets another store proceed once a scheduled retry publishes the release', async () => {
     const releasingStore = await openStore(await loadProcess())
@@ -239,7 +239,7 @@ describe('released file locks across processes', () => {
 
     expect(await successor.take('session', 'second')).toEqual({ found: true, value: 2 })
     expect(await isAbsent(lockPath)).toBe(true)
-  }, 15_000)
+  })
 
   it('takes over when a waiter first reads a torn released lease', async () => {
     const holderProcess = await loadProcess()
@@ -256,7 +256,7 @@ describe('released file locks across processes', () => {
     await waiting
     expect(tornLeaseReads.armed).toBe(false)
     expect(await waiter.take('session', 'key')).toEqual({ found: true, value: 1 })
-  }, 15_000)
+  })
 
   it('does not reclaim a lease its own process still holds', async () => {
     const session = await loadProcess()

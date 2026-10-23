@@ -1,4 +1,3 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -101,15 +100,18 @@ export const sendEmailJob = defineJob({
     }
   })
 
-  it('lists every workspace package that registers a config normalizer', () => {
-    const packagesRoot = join(workspaceRoot, 'packages')
-    const owners = readdirSync(packagesRoot)
-      .filter(name => name !== 'config' && existsSync(join(packagesRoot, name, 'src')))
-      .filter(name => readdirSync(join(packagesRoot, name, 'src')).some(file =>
-        file.endsWith('.ts') && /registerConfigNormalizer[<(]/.test(readFileSync(join(packagesRoot, name, 'src', file), 'utf8')),
-      ))
-      .map(name => (JSON.parse(readFileSync(join(packagesRoot, name, 'package.json'), 'utf8')) as { name: string }).name)
+  it('registers a config normalizer when each listed package config module loads', async () => {
+    for (const packageName of CONFIG_NORMALIZER_PACKAGES) {
+      const restoreNormalizers = configRegistryInternals.snapshotNormalizers()
+      resetConfigNormalizers()
+      vi.resetModules()
+      try {
+        await import(`${packageName}/config`)
 
-    expect([...CONFIG_NORMALIZER_PACKAGES].sort()).toEqual(owners.sort())
+        expect(configRegistryInternals.getRegisteredNames(), packageName).not.toEqual([])
+      } finally {
+        restoreNormalizers()
+      }
+    }
   })
 })

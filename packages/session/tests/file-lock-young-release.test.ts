@@ -81,7 +81,7 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
     } finally {
       openGate()
     }
-  }, 15_000)
+  })
 
   it('lets the next writer acquire while the released young lease is still being unlinked', async () => {
     const openGate = holdTombstoneRemovals()
@@ -93,7 +93,7 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
     } finally {
       openGate()
     }
-  }, 15_000)
+  })
 
   it('bounds the unlink attempts for a burst of releases and removes every tombstone', async () => {
     const releases = 30

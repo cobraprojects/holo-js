@@ -13,8 +13,9 @@ async function listPublishablePackages(root) {
     const manifestPath = join(packagesDirectory, entry.name, 'package.json')
     try {
       await access(manifestPath)
-    } catch {
-      continue
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      throw error
     }
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
     if (manifest.private === true) continue
