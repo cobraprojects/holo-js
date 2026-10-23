@@ -73,7 +73,7 @@ export class SQLQueryCompiler {
     return this.withMetadata({
       sql,
       bindings,
-      unsafe: this.isUnsafeSelectPlan(plan) ? true : undefined,
+      unsafe: this.isUnsafeSelectPlan(plan, true) ? true : undefined,
       source: `query:select:${plan.source.tableName}`,
     }, this.createSelectMetadata(plan))
   }
@@ -269,7 +269,7 @@ export class SQLQueryCompiler {
         hasSubqueries: plan.selections.some(selection => selection.kind === 'subquery'),
       },
       safety: {
-        unsafe: this.isUnsafeSelectPlan(plan),
+        unsafe: this.isUnsafeSelectPlan(plan, true),
         containsRawSql: this.planContainsRawSql(plan),
       },
       debug: {
@@ -769,12 +769,14 @@ export class SQLQueryCompiler {
     return typeof value === 'object' && value !== null && 'kind' in value && (value as { kind?: unknown }).kind === 'json-set'
   }
 
-  protected isUnsafeSelectPlan(plan: SelectQueryPlan): boolean {
+  protected isUnsafeSelectPlan(plan: SelectQueryPlan, root = false): boolean {
     const hasUnsafeSelection = plan.selections.some(selection => (
       selection.kind === 'raw'
       || (selection.kind === 'subquery' && this.isUnsafeSelectPlan(selection.query))
     ))
-    const hasUnsafePredicate = plan.predicates.some(predicate => this.isUnsafePredicate(predicate))
+    const hasUnsafePredicate = plan.predicates.some(predicate => (
+      root ? this.isUnsafeRootPredicate(predicate) : this.isUnsafePredicate(predicate)
+    ))
     const hasUnsafeOrder = plan.orderBy.some(orderBy => orderBy.kind === 'raw')
     const hasUnsafeUnion = plan.unions.some(union => this.isUnsafeSelectPlan(union.query))
     const hasUnsafeJoin = plan.joins.some(join => typeof join.subquery !== 'undefined' && this.isUnsafeSelectPlan(join.subquery))
@@ -786,9 +788,15 @@ export class SQLQueryCompiler {
   }
 
   private isUnsafeWritePredicates(predicates: readonly QueryPredicateNode[]): boolean {
-    return predicates.some(predicate => (
-      predicate.kind === 'raw' ? !isTrustedRawPredicate(predicate) : this.isUnsafePredicate(predicate)
-    ))
+    return predicates.some(predicate => this.isUnsafeRootPredicate(predicate))
+  }
+
+  private isUnsafeRootPredicate(predicate: QueryPredicateNode): boolean {
+    if (predicate.kind === 'raw') {
+      return !isTrustedRawPredicate(predicate)
+    }
+
+    return this.isUnsafePredicate(predicate)
   }
 
   protected isUnsafePredicate(predicate: QueryPredicateNode): boolean {

@@ -237,6 +237,7 @@ export class TableQueryBuilder<
       this.connection,
       withSource(this.plan, createTableSource(table)),
       this.queryCacheConfig,
+      internalPlanHandoff,
     )
   }
 
@@ -1386,6 +1387,7 @@ export class TableQueryBuilder<
       this.connection,
       this.plan,
       normalizeQueryCacheConfig(config),
+      internalPlanHandoff,
     )
   }
 
@@ -2284,6 +2286,7 @@ export class TableQueryBuilder<
         transaction,
         this.plan,
         this.queryCacheConfig,
+        internalPlanHandoff,
       ).update(values))
     }
     const mutationRows = needsPreviousRows
@@ -2697,6 +2700,8 @@ export class TableQueryBuilder<
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
       withSelections(this.plan, [primaryKey as never, column as never]),
+      undefined,
+      internalPlanHandoff,
     )
     const rows = await uncachedSelection.get() as Record<string, unknown>[]
     for (const row of rows) {

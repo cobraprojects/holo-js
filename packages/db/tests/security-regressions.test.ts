@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, resetDB } from '../src'
+import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, onDatabaseDependencyInvalidated, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -215,6 +215,32 @@ describe('native database security boundaries', () => {
       }
     }
     expect(await db.table(table).count()).toBe(2)
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('deletes and updates by database-clock expiry under the default policy while a realtime listener is installed on %s', async driver => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `holo_clock_${randomUUID().replaceAll('-', '')}`
+    const futureExpiry = driver === 'sqlite' ? '2030-01-01T00:00:00.000Z' : '2030-01-01 00:00:00'
+    await schema.createTable(name, table => {
+      table.integer('id').primaryKey()
+      table.timestamp('expires_at')
+    })
+    const unsubscribe = onDatabaseDependencyInvalidated(() => {})
+    try {
+      await db.table(name).insert([{ id: 1, expires_at: futureExpiry }, { id: 2, expires_at: futureExpiry }])
+      const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(name), 'expires_at')
+        .where('id', 1)
+        .delete()
+      expect(claimed.affectedRows).toBe(1)
+      expect(await db.table(name).count()).toBe(1)
+      const extended = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(name), 'expires_at')
+        .where('id', 2)
+        .update({ expires_at: futureExpiry })
+      expect(extended.affectedRows).toBe(1)
+    } finally {
+      unsubscribe()
+      await schema.dropTable(name)
+    }
   })
 
   it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
