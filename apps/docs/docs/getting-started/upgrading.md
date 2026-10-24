@@ -2,7 +2,7 @@
 
 ## Upgrading from 0.3.x to 0.4.0
 
-0.4.0 is in preparation. This section collects upgrade steps as the release changes land.
+0.4.0 is a breaking release. Before you install it, upgrade Node.js and your framework: see [Node.js 22.18 or newer](#node-js-22-18-or-newer), [Framework peer dependencies](#framework-peer-dependencies), and [SvelteKit 3](#sveltekit-3). Then work through the sections below that apply to your app. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#040---2026-10-24) lists every change.
 
 [Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
 
@@ -57,6 +57,42 @@ export default defineSecurityConfig({
 ```
 
 Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
+
+### Realtime definitions use named exports
+
+Holo now builds the browser copy of each `server/realtime` file only from the definitions it recognizes, and sends none of your server code. Write each definition as a named export that calls `query()` or `mutation()` (or `defineRealtimeQuery()` and `defineRealtimeMutation()`), imported by name from `@holo-js/realtime`, with a string-literal `name`:
+
+```ts [server/realtime/posts.ts]
+import { query } from '@holo-js/realtime'
+
+export default query({ // [!code --]
+export const listPosts = query({ // [!code ++]
+  name: 'posts.list',
+  access: 'public',
+  handler: async ({ db }) => await db.table('posts').get(),
+})
+```
+
+- A definition written as `export default query(...)` doesn't reach the browser. Give it a named export.
+- A `server/realtime` file with no recognized definitions fails the build, naming the file. Move server-only helpers out of `server/realtime`.
+- A definition whose `name` isn't a string literal, such as a constant or an `env()` value, fails the build. Write the name inline.
+
+### `HOLO_SECURITY_TRUST_PROXY` is removed
+
+`HOLO_SECURITY_TRUST_PROXY` is gone. Holo now identifies visitors by their connection address, and reads forwarded headers only from proxies you list in `config/security.ts`:
+
+```ts [config/security.ts]
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  trustedProxies: ['127.0.0.1', '::1'],
+})
+```
+
+- Remove `HOLO_SECURITY_TRUST_PROXY` from your `.env` files.
+- If you set it, list your proxies' addresses or ranges instead. Use `'*'` for a hosting platform whose proxy address you don't know. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
+- Next.js apps need `trustedProxies`, because Next.js doesn't expose the connection address.
+- Call `ip(request)` without the second argument. It now follows `trustedProxies`.
 
 ### Realtime subscription isolation
 
@@ -418,9 +454,9 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 | --- | --- |
 | `@holo-js/adapter-next` | `next` 16.4.3 or newer on the 16 line, and `react` 19.2.6 or newer on the 19 line |
 | `@holo-js/adapter-nuxt` | `nuxt` 4.6.2 or newer on the 4 line, and `vue` 3.5.13 or newer on the 3 line |
-| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 2.70.2 or newer on the 2 line, and `svelte` 5.56.8 or newer on the 5 line |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.0 or newer on the 3 line, `@sveltejs/adapter-node` 6, and `svelte` 5.57.1 or newer on the 5 line. See [SvelteKit 3](#sveltekit-3). |
 
-`@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.56.8 instead of one exact version.
+`@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.57.1 instead of one exact version.
 
 Holo's own dependencies now require patched releases too: `ws` 8.21.0, `sharp` 0.35.5, `mysql2` 3.24.6, and `valibot` 1.5.0 or newer. Your package manager installs these for you. If your lockfile pins older versions, refresh it after upgrading.
 
@@ -600,7 +636,7 @@ Sessions written by 0.4 aren't readable by 0.3, because a session no longer stor
 Each Redis session is its own key: the store's `prefix`, then `holo:session:`, then the session ID. Sessions spread across a Redis Cluster, and they never sit under a bare session ID.
 
 - **Users sign in again once.** Sessions stored under the old keys aren't found after the upgrade. Users who chose remember me sign back in from their remember-me cookie; everyone else signs in again. Old keys expire at their own TTL, so you don't need to delete them.
-- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-dont-cross-between-03-and-04) for mixed-version deploys. An instance on 0.3 can't read the new keys.
+- **Deploy to every instance at once.** Follow [Sessions don't cross between 0.3 and 0.4](#sessions-don-t-cross-between-0-3-and-0-4) for mixed-version deploys. An instance on 0.3 can't read the new keys.
 - **Set a `prefix` to share a Redis database.** Holo's `holo:session:` namespace keeps session keys apart from other data, and a `prefix` separates apps that use the same database.
 - **Rotation takes two Redis steps.** Rotating a session copies it to the new ID and then deletes the old key, instead of running one script. If the process stops, or the delete fails, between the two steps, the old ID stays valid until its expiry. Under heavy concurrent writes to the same session, rotation falls back to reading the latest state, copying it, and deleting the old key without a check. A write or flash value that lands between that final read and the delete can be lost or kept on both IDs.
 
@@ -815,6 +851,20 @@ When Holo can read `config/queue.ts`, the config decides which queue packages `h
 
 `RealtimeAuthRequestAccessors` lists only `getCookie()` and `getHeader()`. Realtime authorization reads cookies and never writes cookies or redirects, so `appendResponseCookie()` and `redirectResponse()` are removed from the type. Remove them from the accessors you pass to `subscribeRealtimeQuery()`, because a typed object literal that still lists them fails to typecheck. Realtime authorization has no replacement for them.
 
+### Give custom auth contexts a request scope
+
+If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
+
+### Redis clients use ioredis 6
+
+Holo's Redis packages (`@holo-js/cache-redis`, `@holo-js/queue-redis`, `@holo-js/session`, `@holo-js/security`, and Redis scaling in `@holo-js/broadcast`) now need `ioredis` 6. Install it in your app if you use `ioredis` directly:
+
+```bash
+npm install ioredis@^6
+```
+
+ioredis 6 needs Node.js 20 or later. It uses RESP3, the newer Redis protocol, by default. Against a Redis server older than 6, it falls back to RESP2 automatically, so no config change is needed. The Redis queue driver uses BullMQ 6, which Holo installs for you.
+
 ## Earlier 0.3.x releases
 
 Recent Holo-JS releases moved config helpers into the package for each feature, and split database, queue, cache, and storage drivers into their own packages. Your config objects and runtime code keep the same shape. Only imports and dependencies change.
@@ -993,24 +1043,7 @@ If you maintain a Holo plugin:
 
 See [Writing Plugins](/advanced/plugins) for the full package layout.
 
-### 7. Declare your trusted proxies
-
-`HOLO_SECURITY_TRUST_PROXY` is gone. Holo now identifies visitors by their connection address, and reads forwarded headers only from proxies you list in `config/security.ts`:
-
-```ts [config/security.ts]
-import { defineSecurityConfig } from '@holo-js/security'
-
-export default defineSecurityConfig({
-  trustedProxies: ['127.0.0.1', '::1'],
-})
-```
-
-- Remove `HOLO_SECURITY_TRUST_PROXY` from your `.env` files.
-- If you set it, list your proxies' addresses or ranges instead. Use `'*'` for a hosting platform whose proxy address you don't know. See [Trusted proxies](/basics/security/cors-and-proxies#trusted-proxies).
-- Next.js apps need `trustedProxies`, because Next.js doesn't expose the connection address.
-- Call `ip(request)` without the second argument. It now follows `trustedProxies`.
-
-### 8. Verify
+### 7. Verify
 
 Regenerate Holo's files and check that everything compiles and passes:
 
@@ -1020,21 +1053,7 @@ npm run typecheck
 npm run build
 ```
 
-Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4 and `ip()` calls from step 7. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
-
-### Give custom auth contexts a request scope
-
-If you supply your own `AuthRuntimeContext`, add `getRequestScope(): object`. Return one stable object per request, with a different object for every request. Holo uses it to cache remember cookies safely and combine concurrent guard restorations into one browser session. Built-in auth contexts provide this automatically. Remember-cookie writes require a scope and throw `runtime_unconfigured` before changing authentication when it is missing. This includes remembered login, clearing an existing remember cookie on login or logout, and renewing it through other-device logout. Without a scope, you can still restore remembered guards sequentially; cookie reads remain uncached.
-
-### Redis clients use ioredis 6
-
-Holo's Redis packages (`@holo-js/cache-redis`, `@holo-js/queue-redis`, `@holo-js/session`, `@holo-js/security`, and Redis scaling in `@holo-js/broadcast`) now need `ioredis` 6. Install it in your app if you use `ioredis` directly:
-
-```bash
-npm install ioredis@^6
-```
-
-ioredis 6 needs Node.js 20 or later. It uses RESP3, the newer Redis protocol, by default. Against a Redis server older than 6, it falls back to RESP2 automatically, so no config change is needed. The Redis queue driver uses BullMQ 6, which Holo installs for you.
+Run your test suite as well. Fix any import errors the type checker reports; they point at the imports from steps 2 to 4. Then deploy as usual. Your deploy's build step runs `holo build`, which refreshes the generated files.
 
 ## Next steps
 
