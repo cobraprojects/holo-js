@@ -58,24 +58,36 @@ export default defineSecurityConfig({
 
 Without that, the app sees `http`, and a temporary URL signed with `https://` returns 404. Public files keep working because their path doesn't depend on the scheme.
 
-### Realtime definitions use named exports
+### Realtime definitions must reduce to browser stubs
 
-Holo now builds the browser copy of each `server/realtime` file only from the definitions it recognizes, and sends none of your server code. Write each definition as a named export that calls `query()` or `mutation()` (or `defineRealtimeQuery()` and `defineRealtimeMutation()`), imported by name from `@holo-js/realtime`, with a string-literal `name`:
+Holo now builds the browser copy of each `server/realtime` file only from the definitions it can reduce, and sends none of your server code. A definition it can't reduce stops the build or dev server with the file and export named; nothing is left out silently. See [Define queries](/realtime/#define-queries).
+
+Holo recognizes a definition that is exported directly:
+
+- `export const posts = query({...})` or `export default query({...})`, and the same with `mutation()`, `defineRealtimeQuery()`, or `defineRealtimeMutation()`.
+- The factory imported by name (`import { query } from '@holo-js/realtime'`), or called through the package's default or namespace import (`realtime.query({...})`).
 
 ```ts [server/realtime/posts.ts]
 import { query } from '@holo-js/realtime'
 
-export default query({ // [!code --]
-export const listPosts = query({ // [!code ++]
-  name: 'posts.list',
+const LIST_POSTS = 'posts.list'
+
+export const listPosts = query({
+  name: LIST_POSTS,
   access: 'public',
   handler: async ({ db }) => await db.table('posts').get(),
 })
 ```
 
-- A definition written as `export default query(...)` doesn't reach the browser. Give it a named export.
-- A `server/realtime` file with no recognized definitions fails the build, naming the file. Move server-only helpers out of `server/realtime`.
-- A definition whose `name` isn't a string literal, such as a constant or an `env()` value, fails the build. Write the name inline.
+Check these before you upgrade:
+
+- `name` must be a string literal, a template literal without `${}`, or a `const` in the same file set to one. A name from an import, `env()`, or any other expression fails the build. Write it inline or as a same-file `const`.
+- Don't spread another object into the options after `name`, or into options that have no `name`, since the spread could change the name. Those definitions fail the build. A spread before `name` is fine.
+- Export each definition directly. A definition re-exported through a local alias, such as `const posts = query({...})` followed by `export { posts }`, fails the build.
+- A `server/realtime` file with no definitions fails the build. Move server-only helpers out of `server/realtime`.
+- Files inside `server/realtime` can't be symbolic links, and neither can folders that point outside it. Holo stops with an error naming the link. `server/realtime` itself can be a link to another folder. With Next.js, that folder must be inside the Turbopack root (`turbopack.root`, or the workspace root Next.js finds from your lockfile).
+
+Browser source maps for `server/realtime` modules no longer include the server source, so a deployment that serves source maps doesn't expose handler code. No change is needed for this.
 
 ### `HOLO_SECURITY_TRUST_PROXY` is removed
 
