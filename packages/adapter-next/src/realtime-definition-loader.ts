@@ -2,6 +2,7 @@ import { createRealtimeClientDefinitionTransform } from './realtime-definition-t
 
 type LoaderContext = {
   cacheable?: () => void
+  readonly resourcePath?: string
   callback?(error: null, code: string, map: object): void
   getOptions?(): {
     readonly preserveServerHandlers?: boolean
@@ -14,7 +15,7 @@ export default function realtimeDefinitionLoader(this: LoaderContext, source: st
   if (this.resourceQuery === '?holo-realtime-server') {
     return source
   }
-  const result = createRealtimeClientDefinitionTransform(source, this.getOptions?.())
+  const result = createRealtimeClientDefinitionTransform(source, this.resourcePath ?? '<realtime module>', this.getOptions?.())
   if (this.callback) {
     this.callback(null, result.code, result.map)
     return undefined

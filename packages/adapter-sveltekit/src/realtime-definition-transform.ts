@@ -7,10 +7,10 @@ import {
 
 export { stripRealtimeServerHandlers }
 
-export function createRealtimeClientDefinitionModule(source: string): string {
-  return createSharedRealtimeClientDefinitionModule(source, '@holo-js/adapter-sveltekit/realtime')
+export function createRealtimeClientDefinitionModule(source: string, filePath: string): string {
+  return createSharedRealtimeClientDefinitionModule(source, '@holo-js/adapter-sveltekit/realtime', filePath)
 }
 
-export function createRealtimeClientDefinitionTransform(source: string, options: { readonly failClosed?: string } = {}): RealtimeDefinitionTransformResult {
-  return createSharedRealtimeClientDefinitionTransform(source, '@holo-js/adapter-sveltekit/realtime', options)
+export function createRealtimeClientDefinitionTransform(source: string, filePath: string): RealtimeDefinitionTransformResult {
+  return createSharedRealtimeClientDefinitionTransform(source, '@holo-js/adapter-sveltekit/realtime', filePath)
 }

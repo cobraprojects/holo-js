@@ -26,7 +26,6 @@ export type RealtimeDefinitionTransformResult = {
 
 export type RealtimeDefinitionTransformOptions = {
   readonly preserveServerHandlers?: boolean
-  readonly failClosed?: string
 }
 
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
@@ -47,8 +46,10 @@ function collectRealtimeFactories(sourceFile: ts.SourceFile): ReadonlyMap<string
     if (!ts.isNamedImports(statement.importClause.namedBindings)) continue
     for (const element of statement.importClause.namedBindings.elements) {
       const importedName = element.propertyName?.text ?? element.name.text
-      if (importedName === 'query' || importedName === 'mutation') {
-        factories.set(element.name.text, importedName)
+      if (importedName === 'query' || importedName === 'defineRealtimeQuery') {
+        factories.set(element.name.text, 'query')
+      } else if (importedName === 'mutation' || importedName === 'defineRealtimeMutation') {
+        factories.set(element.name.text, 'mutation')
       }
     }
   }
@@ -74,7 +75,7 @@ function collectDefinitions(sourceFile: ts.SourceFile): readonly RealtimeDefinit
       const name = nameProperty && ts.isPropertyAssignment(nameProperty)
         ? nameProperty.initializer.getText(sourceFile)
         : undefined
-      const unsafeName = nameProperty !== undefined && !(ts.isPropertyAssignment(nameProperty) && ts.isStringLiteral(nameProperty.initializer))
+      const unsafeName = nameProperty !== undefined && !(ts.isPropertyAssignment(nameProperty) && (ts.isStringLiteral(nameProperty.initializer) || ts.isNoSubstitutionTemplateLiteral(nameProperty.initializer)))
       const sourceLine = sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line
       definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}), ...(unsafeName ? { unsafeName: true as const } : {}) })
     }
@@ -176,13 +177,14 @@ export function stripRealtimeServerHandlers(source: string): string {
   }
 }
 
-export function createRealtimeClientDefinitionModule(source: string, importTarget: string): string {
-  return createRealtimeClientDefinitionTransform(source, importTarget).code
+export function createRealtimeClientDefinitionModule(source: string, importTarget: string, filePath: string): string {
+  return createRealtimeClientDefinitionTransform(source, importTarget, filePath).code
 }
 
 export function createRealtimeClientDefinitionTransform(
   source: string,
   importTarget: string,
+  filePath: string,
   options: RealtimeDefinitionTransformOptions = {},
 ): RealtimeDefinitionTransformResult {
   if (options.preserveServerHandlers) {
@@ -196,22 +198,12 @@ export function createRealtimeClientDefinitionTransform(
 
   const sourceFile = parseRealtimeSource(source)
   const definitions = collectDefinitions(sourceFile)
-  if (options.failClosed) {
-    if (definitions.length === 0) {
-      throw new Error(`${options.failClosed} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
-    }
-    const unsafe = definitions.find(definition => definition.unsafeName)
-    if (unsafe) {
-      throw new Error(`${options.failClosed} defines ${unsafe.exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
-    }
-  }
   if (definitions.length === 0) {
-    const code = stripRealtimeServerHandlers(source)
-    const sourceLineCount = source.split('\n').length
-    return Object.freeze({
-      code,
-      map: createSourceMap(source, code.split('\n').map((_, index) => Math.min(index, sourceLineCount - 1))),
-    })
+    throw new Error(`${filePath} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
+  }
+  const unsafe = definitions.find(definition => definition.unsafeName)
+  if (unsafe) {
+    throw new Error(`${filePath} defines ${unsafe.exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
   }
   const factories = [...new Set(definitions.map(definition => definition.factory))]
   const outputLines: string[] = [

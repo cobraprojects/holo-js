@@ -28,7 +28,7 @@ describe('realtime definition transform', () => {
       '  access: \'public\',',
       '  handler: async () => ({ ok: true }),',
       '})',
-    ].join('\n'))
+    ].join('\n'), 'server/realtime/posts.ts')
 
     expect(transformed).toContain('from \'@holo-js/adapter-sveltekit/realtime\'')
     expect(transformed).not.toContain('from \'@holo-js/realtime\'')
