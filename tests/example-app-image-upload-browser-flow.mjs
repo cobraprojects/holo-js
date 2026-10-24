@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { getExampleAppBrowser, observeExampleAppPage, signInAsExampleAppEditor } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage, signInAsExampleAppEditor } from './example-app-browser.mjs'
 
 const imageError = 'The selected file must be an image.'
 const imageFixtures = new URL('../packages/validation/tests/fixtures/images/', import.meta.url)
@@ -30,8 +30,7 @@ async function postIsListed(page, title) {
 }
 
 export async function assertExampleAppImageUploadBrowserFlow({ baseUrl }) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   try {
     const page = await context.newPage()
     const observed = observeExampleAppPage(page, { allowConsoleError: text => text.includes('status of 422') })

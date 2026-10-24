@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser, observeExampleAppPage, signInAsExampleAppEditor } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage, signInAsExampleAppEditor } from './example-app-browser.mjs'
 
 const realtimePath = '/admin/posts/realtime'
 const postSelector = '[data-post-id]'
@@ -110,8 +110,7 @@ async function openRealtimePage(page, failures) {
 }
 
 async function assertNextRealtimeQueryAfterLogout(baseUrl) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   try {
     assert.equal((await context.request.get('/login')).status(), 200)
     const token = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')?.value
@@ -140,8 +139,7 @@ async function assertNextRealtimeQueryAfterLogout(baseUrl) {
 }
 
 async function assertRealtimeMutationAfterLogout(baseUrl, appName, postId) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   try {
     assert.equal((await context.request.get('/login')).status(), 200)
     const token = (await context.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')?.value
@@ -178,8 +176,7 @@ async function assertRealtimeMutationAfterLogout(baseUrl, appName, postId) {
 }
 
 export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, cookieHeader, postId }) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
 
   try {
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
@@ -236,8 +233,7 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
 }
 
 async function assertPostCreationSavesNothingWithoutWorker(baseUrl) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   const title = `Unsaved while worker is unreachable ${Date.now()}`
   try {
     const page = await context.newPage()
@@ -259,8 +255,7 @@ async function assertPostCreationSavesNothingWithoutWorker(baseUrl) {
 }
 
 export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, cookieHeader, appName }) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
 
   try {
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))

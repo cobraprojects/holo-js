@@ -2,7 +2,7 @@ import { stopExampleAppProcess as stopProductionServer } from './example-app-pro
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { assertExampleAppAuthFlow } from './example-app-auth-flow.mjs'
-import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage } from './example-app-browser.mjs'
 import { assertExampleAppFormsBrowserFlow } from './example-app-forms-browser-flow.mjs'
 import { clearExampleAppRateLimitBuckets } from './example-app-rate-limit.mjs'
 import { assertExampleAppTokenAuthFlow } from './example-app-token-auth-flow.mjs'
@@ -32,8 +32,7 @@ async function waitForProductionApp(baseUrl, expectedTitle, child, output) {
 }
 
 async function assertBrowserNavigation(baseUrl, expectedTitle, framework) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   try {
     const page = await context.newPage()
     const observed = observeExampleAppPage(page)
@@ -56,12 +55,11 @@ async function assertBrowserNavigation(baseUrl, expectedTitle, framework) {
 }
 
 async function assertBrowserAuth(baseUrl, framework) {
-  const browser = await getExampleAppBrowser()
   for (const account of [
     { path: '/login', email: 'editor@example.com', password: 'secret-secret', destination: '/admin', logout: 'Logout', signedOut: '/' },
     { path: '/super-admin/login', email: 'super-admin@example.com', password: 'admin-secret', destination: '/super-admin', logout: 'Sign out of super admin', signedOut: '/super-admin/login' },
   ]) {
-    const context = await browser.newContext({ baseURL: baseUrl })
+    const context = await newExampleAppContext({ baseURL: baseUrl })
     try {
       const page = await context.newPage()
       const observed = observeExampleAppPage(page, {

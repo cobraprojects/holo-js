@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage } from './example-app-browser.mjs'
 
 const pngPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 const disguisedScript = '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><script>alert("holo-xss")</script></body></html>'
@@ -11,8 +11,7 @@ async function assertPublicStorageServesPassiveFilesOnly(baseUrl, publicRoot) {
   await mkdir(directory, { recursive: true })
   await writeFile(join(directory, 'pixel.png'), pngPixel)
   await writeFile(join(directory, 'avatar.png'), disguisedScript)
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl, acceptDownloads: true })
+  const context = await newExampleAppContext({ baseURL: baseUrl, acceptDownloads: true })
   try {
     const page = await context.newPage()
     const observed = observeExampleAppPage(page)
