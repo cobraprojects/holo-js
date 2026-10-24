@@ -146,6 +146,16 @@ describe('project tsconfig loading for bundled definitions', () => {
     expect(bundle.definition).toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'tool' })
   })
 
+  it('keeps a base config the references tsconfig extends alongside the snapshot', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './tsconfig.base.json' }),
+    })
+    await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { paths: { 'base/*': ['./lib/custom/*'] } } }))
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nexport const definition = { tool }\n")
+
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool' })
+  })
+
   it('keeps the default aliases for a references tsconfig whose snapshot is missing', async () => {
     const { projectRoot } = await createNuxtProject({ projectTsconfig: nuxtReferencesTsconfig, snapshot: false })
     await writeFile(join(projectRoot, 'entry.ts'), "import { util } from '@/lib/util'\nexport const definition = { util }\n")
@@ -216,6 +226,21 @@ describe('Nuxt tsconfig snapshot', () => {
     })
     await writeFile(join(projectRoot, 'entry.ts'), "import { tool } from 'custom/tool'\nimport { util } from '~~/lib/util'\nexport const definition = { tool, util }\n")
     expect((await importBundled(projectRoot, join(projectRoot, 'entry.ts'))).definition).toEqual({ tool: 'tool', util: 'util' })
+  })
+
+  it('resolves the copied app aliases against the app config base when the server config sets its own baseUrl', async () => {
+    const { projectRoot } = await createNuxtProject({ projectTsconfig: nuxtReferencesTsconfig, snapshot: false })
+
+    await writeNuxtTsconfigSnapshot(projectRoot, join(projectRoot, '.nuxt'), {
+      tsConfig: { compilerOptions: { paths: { '~~/*': ['../*'] } } },
+      serverTsConfig: { compilerOptions: { baseUrl: '..', paths: { 'custom/*': ['lib/custom/*'] } } },
+    })
+    const snapshot = JSON.parse(await readFile(join(projectRoot, '.holo-js/generated/nuxt-tsconfig.json'), 'utf8')) as { compilerOptions: { paths: Record<string, string[]> } }
+
+    expect(snapshot.compilerOptions.paths).toEqual({
+      '~~/*': [join(projectRoot, '*')],
+      'custom/*': [join(projectRoot, 'lib/custom/*')],
+    })
   })
 
   it('never exposes a partially written snapshot to a concurrent reader', async () => {

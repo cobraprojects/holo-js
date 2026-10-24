@@ -38,10 +38,10 @@ async function missingNuxtTsconfigSnapshot(projectRoot: string): Promise<boolean
   return !await pathExists(join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH))
 }
 
-function serverCompilerOptions(tsconfigs: NuxtPrepareTypesTsconfigs): Record<string, unknown> {
-  const appOptions = compilerOptionsOf(tsconfigs.tsConfig)
+function serverCompilerOptions(tsconfigs: NuxtPrepareTypesTsconfigs, typesDirectory: string): Record<string, unknown> {
+  const appOptions = absoluteCompilerOptions(compilerOptionsOf(tsconfigs.tsConfig), typesDirectory)
   if (!isRecord(tsconfigs.serverTsConfig)) return appOptions
-  const serverOptions = compilerOptionsOf(tsconfigs.serverTsConfig)
+  const serverOptions = absoluteCompilerOptions(compilerOptionsOf(tsconfigs.serverTsConfig), typesDirectory)
   const appPaths = isRecord(appOptions.paths) ? appOptions.paths : {}
   const rootAliases = Object.fromEntries(NITRO_ROOT_ALIASES.flatMap(alias => alias in appPaths ? [[alias, appPaths[alias]]] : []))
   return { ...serverOptions, paths: { ...rootAliases, ...(isRecord(serverOptions.paths) ? serverOptions.paths : {}) } }
@@ -52,7 +52,7 @@ async function writeNuxtTsconfigSnapshot(
   typesDirectory: string,
   tsconfigs: NuxtPrepareTypesTsconfigs,
 ): Promise<void> {
-  const contents = `${JSON.stringify({ compilerOptions: absoluteCompilerOptions(serverCompilerOptions(tsconfigs), typesDirectory) }, null, 2)}\n`
+  const contents = `${JSON.stringify({ compilerOptions: serverCompilerOptions(tsconfigs, typesDirectory) }, null, 2)}\n`
   const snapshotPath = join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH)
   if (await readFile(snapshotPath, 'utf8').catch(() => undefined) === contents) return
   await atomicFileInternals.writeTextFile(snapshotPath, contents)

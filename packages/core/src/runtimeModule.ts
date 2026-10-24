@@ -325,7 +325,7 @@ function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPat
   if (extendsTargets.length === 0) {
     delete derived.extends
   } else {
-    derived.extends = Array.isArray(config.extends) ? extendsTargets : extendsTargets[0]
+    derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
