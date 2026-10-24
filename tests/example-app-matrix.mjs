@@ -14,6 +14,7 @@ const pg = createRequire(join(root, 'packages/db-postgres/package.json'))('pg')
 const mysql = createRequire(join(root, 'packages/db-mysql/package.json'))('mysql2/promise')
 const frameworks = process.env.HOLO_TEST_FRAMEWORK ? [process.env.HOLO_TEST_FRAMEWORK] : ['next', 'nuxt', 'sveltekit']
 const drivers = process.env.HOLO_TEST_DRIVER ? [process.env.HOLO_TEST_DRIVER] : ['sqlite', 'postgres', 'mysql']
+const compiledMarker = 'Compiled in'
 
 async function runApp(framework, driver) {
   assert.ok(['next', 'nuxt', 'sveltekit'].includes(framework))
@@ -66,8 +67,9 @@ async function runApp(framework, driver) {
     log = createWriteStream(logPath)
     const child = spawn(process.execPath, ['tests/run.mjs'], { cwd: projectRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
     const capture = (chunk) => {
-      if (chunk.includes('Compiled in')) compiledAt.push(Date.now())
+      const searchFrom = Math.max(0, output.length - compiledMarker.length + 1)
       output += chunk.toString()
+      if (output.indexOf(compiledMarker, searchFrom) !== -1) compiledAt.push(Date.now())
       log.write(chunk)
     }
     child.stdout.on('data', capture)

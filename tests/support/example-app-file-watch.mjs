@@ -8,17 +8,29 @@ function formatEvent(event) {
   return `${new Date(event.at).toISOString()} ${event.change.padEnd(8)} ${event.file}`
 }
 
+function startWatcher(directory, events) {
+  const recordError = error => events.push({ at: Date.now(), change: 'error', file: `file watching stopped: ${error.message}` })
+  try {
+    const watcher = watch(directory, { recursive: true }, (type, file) => {
+      if (!file || file.split(sep).some(segment => ignoredSegments.has(segment))) return
+      const change = type === 'change' ? 'modified' : existsSync(join(directory, file)) ? 'created' : 'deleted'
+      events.push({ at: Date.now(), change, file })
+    })
+    watcher.on('error', recordError)
+    return watcher
+  } catch (error) {
+    recordError(error)
+    return undefined
+  }
+}
+
 export function watchExampleAppFiles(directory) {
   const events = []
-  const watcher = watch(directory, { recursive: true }, (type, file) => {
-    if (!file || file.split(sep).some(segment => ignoredSegments.has(segment))) return
-    const change = type === 'change' ? 'modified' : existsSync(join(directory, file)) ? 'created' : 'deleted'
-    events.push({ at: Date.now(), change, file })
-  })
+  const watcher = startWatcher(directory, events)
 
   return {
     close() {
-      watcher.close()
+      watcher?.close()
     },
     log() {
       return `${events.map(formatEvent).join('\n')}\n`
