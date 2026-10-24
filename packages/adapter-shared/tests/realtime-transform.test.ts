@@ -7,11 +7,11 @@ import {
 
 describe('shared realtime definition transform', () => {
   it('creates client definitions from exported query and mutation declarations', () => {
-    const output = createRealtimeClientDefinitionModule(`
+    const output = createRealtimeClientDefinitionModule({ source: `
       export const posts = query({ ...shared, name: 'posts.list', handler: async () => [] })
       export const rename = mutation({ name: 'posts.rename', authorize: () => true, handler: async () => true })
       const internal = query({ handler: async () => [] })
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(output).toContain("import { query, mutation } from '@holo-js/test/realtime'")
     expect(output).toContain("name: 'posts.list'")
     expect(output).toContain("name: 'posts.rename'")
@@ -20,20 +20,20 @@ describe('shared realtime definition transform', () => {
   })
 
   it('supports definitions without names and ignores unsupported declaration shapes', () => {
-    const output = createRealtimeClientDefinitionModule(`
+    const output = createRealtimeClientDefinitionModule({ source: `
       export const unnamed = query({ handler: async () => [] })
       export const indirect = makeQuery({ handler: async () => [] })
       export const missingArgument = query()
       export const nonObject = query(options)
       export const { destructured } = query({})
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(output).toContain('export const unnamed = query({')
     expect(output).not.toContain('name:')
     expect(output).not.toContain('indirect')
   })
 
   it('supports aliased factories, templates, comments, and nested syntax', () => {
-    const output = createRealtimeClientDefinitionModule(`
+    const output = createRealtimeClientDefinitionModule({ source: `
       import { query as defineQuery, mutation as defineMutation } from '@holo-js/realtime'
       export const templated = defineQuery({
         name: \`posts.templated\`,
@@ -41,7 +41,7 @@ describe('shared realtime definition transform', () => {
       })
       // The client definition must retain this declaration while removing its server closure.
       export const changed = defineMutation({ handler: async () => true })
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
 
     expect(output).toContain('export const templated = query({')
     expect(output).toContain('name: `posts.templated`')
@@ -50,16 +50,12 @@ describe('shared realtime definition transform', () => {
   })
 
   it('rejects malformed source instead of emitting a partial client module', () => {
-    expect(() => createRealtimeClientDefinitionModule(
-      'export const broken = query({ handler: () => {',
-      '@holo-js/test/realtime',
-      'server/realtime/posts.ts',
-    )).toThrow(SyntaxError)
+    expect(() => createRealtimeClientDefinitionModule({ source: 'export const broken = query({ handler: () => {', importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })).toThrow(SyntaxError)
   })
 
   it('emits source maps for generated and stripped modules', () => {
     const source = `export const posts = query({ name: 'posts.list', handler: async () => [] })`
-    const generated = createRealtimeClientDefinitionTransform(source, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    const generated = createRealtimeClientDefinitionTransform({ source: source, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     const strippedSource = 'const internal = { handler: () => true }'
 
     expect(generated.map).toMatchObject({
@@ -68,7 +64,7 @@ describe('shared realtime definition transform', () => {
       sourcesContent: [source],
     })
     expect(generated.map.mappings).not.toBe('')
-    expect(() => createRealtimeClientDefinitionTransform(strippedSource, '@holo-js/test/realtime', 'server/realtime/internal.ts')).toThrow('server/realtime/internal.ts')
+    expect(() => createRealtimeClientDefinitionTransform({ source: strippedSource, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/internal.ts' })).toThrow('server/realtime/internal.ts')
   })
 
   it('replaces server-only properties and methods through the TypeScript AST', () => {
@@ -91,11 +87,7 @@ describe('shared realtime definition transform', () => {
   })
 
   it('fails closed when no exported definitions exist', () => {
-    expect(() => createRealtimeClientDefinitionModule(
-      'const value = { handler: () => true }',
-      '@holo-js/test/realtime',
-      'server/realtime/internal.ts',
-    )).toThrow('server/realtime/internal.ts')
+    expect(() => createRealtimeClientDefinitionModule({ source: 'const value = { handler: () => true }', importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/internal.ts' })).toThrow('server/realtime/internal.ts')
   })
 
   it('retains server handlers while targeting the framework realtime adapter', () => {
@@ -106,9 +98,7 @@ describe('shared realtime definition transform', () => {
       export const posts = query({ name: 'posts.list', handler: async () => await Post.get() })
       export const rename = mutation({ name: 'posts.rename', handler: async () => true })
     `
-    const output = createRealtimeClientDefinitionTransform(source, '@holo-js/test/realtime', 'server/realtime/posts.ts', {
-      preserveServerHandlers: true,
-    }).code
+    const output = createRealtimeClientDefinitionTransform({ source: source, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts', preserveServerHandlers: true }).code
 
     expect(output).toContain('from "@holo-js/test/realtime"')
     expect(output).toContain("from '../models/Post'")
@@ -117,26 +107,34 @@ describe('shared realtime definition transform', () => {
   })
 
   it('recognizes the defineRealtimeQuery and defineRealtimeMutation exports as query and mutation definitions', () => {
-    const output = createRealtimeClientDefinitionModule(`
+    const output = createRealtimeClientDefinitionModule({ source: `
       import { defineRealtimeQuery, defineRealtimeMutation } from '@holo-js/realtime'
       export const posts = defineRealtimeQuery({ name: 'posts.list', handler: async () => [] })
       export const rename = defineRealtimeMutation({ name: 'posts.rename', handler: async () => true })
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(output).toContain("import { query, mutation } from '@holo-js/test/realtime'")
     expect(output).toContain('export const posts = query({')
     expect(output).toContain('export const rename = mutation({')
   })
 
   it('accepts a template literal without substitutions as a name', () => {
-    const output = createRealtimeClientDefinitionModule(`
+    const output = createRealtimeClientDefinitionModule({ source: `
       export const posts = query({ name: \`posts.list\`, handler: async () => [] })
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(output).toContain('name: `posts.list`')
   })
 
   it('fails closed for a name that interpolates a value', () => {
-    expect(() => createRealtimeClientDefinitionModule(`
+    expect(() => createRealtimeClientDefinitionModule({ source: `
       export const posts = query({ name: \`posts.\${process.env.SECRET}\`, handler: async () => [] })
-    `, '@holo-js/test/realtime', 'server/realtime/posts.ts')).toThrow('server/realtime/posts.ts')
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })).toThrow('server/realtime/posts.ts')
+  })
+
+  it('rejects a call whose options are not in the input object instead of ignoring them', () => {
+    expect(() => createRealtimeClientDefinitionTransform({
+      source: 'export const post = query({ name: \x27posts.list\x27, handler: async () => [] })',
+      importTarget: '@holo-js/test/realtime',
+      preserveServerHandlers: true,
+    } as never)).toThrow(TypeError)
   })
 })

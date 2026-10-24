@@ -28,6 +28,12 @@ export type RealtimeDefinitionTransformOptions = {
   readonly preserveServerHandlers?: boolean
 }
 
+export type RealtimeDefinitionTransformInput = RealtimeDefinitionTransformOptions & {
+  readonly source: string
+  readonly importTarget: string
+  readonly filePath: string
+}
+
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
   if (!('name' in property) || !property.name) return undefined
   return ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
@@ -177,17 +183,16 @@ export function stripRealtimeServerHandlers(source: string): string {
   }
 }
 
-export function createRealtimeClientDefinitionModule(source: string, importTarget: string, filePath: string): string {
-  return createRealtimeClientDefinitionTransform(source, importTarget, filePath).code
+export function createRealtimeClientDefinitionModule(input: Omit<RealtimeDefinitionTransformInput, 'preserveServerHandlers'>): string {
+  return createRealtimeClientDefinitionTransform(input).code
 }
 
-export function createRealtimeClientDefinitionTransform(
-  source: string,
-  importTarget: string,
-  filePath: string,
-  options: RealtimeDefinitionTransformOptions = {},
-): RealtimeDefinitionTransformResult {
-  if (options.preserveServerHandlers) {
+export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitionTransformInput): RealtimeDefinitionTransformResult {
+  if (typeof input !== 'object' || input === null || typeof input.source !== 'string' || typeof input.importTarget !== 'string' || typeof input.filePath !== 'string') {
+    throw new TypeError('createRealtimeClientDefinitionTransform takes one object with source, importTarget, and filePath strings, and an optional preserveServerHandlers flag.')
+  }
+  const { source, importTarget, filePath } = input
+  if (input.preserveServerHandlers) {
     const code = retargetRealtimeImports(source, importTarget)
     const sourceLineCount = source.split('\n').length
     return Object.freeze({

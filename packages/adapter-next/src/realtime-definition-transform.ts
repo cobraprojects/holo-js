@@ -9,7 +9,7 @@ import {
 export { stripRealtimeServerHandlers }
 
 export function createRealtimeClientDefinitionModule(source: string, filePath: string): string {
-  return createSharedRealtimeClientDefinitionModule(source, '@holo-js/adapter-next/realtime', filePath)
+  return createSharedRealtimeClientDefinitionModule({ source, importTarget: '@holo-js/adapter-next/realtime', filePath })
 }
 
 export function createRealtimeClientDefinitionTransform(
@@ -17,5 +17,5 @@ export function createRealtimeClientDefinitionTransform(
   filePath: string,
   options: RealtimeDefinitionTransformOptions = {},
 ): RealtimeDefinitionTransformResult {
-  return createSharedRealtimeClientDefinitionTransform(source, '@holo-js/adapter-next/realtime', filePath, options)
+  return createSharedRealtimeClientDefinitionTransform({ ...options, source, importTarget: '@holo-js/adapter-next/realtime', filePath })
 }
