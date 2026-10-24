@@ -4,7 +4,7 @@ import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { withHolo } from '../src/config'
 import realtimeDefinitionLoader from '../src/realtime-definition-loader'
-import { browserBuildSecret, createSecretRealtimeProject, realtimeProjectLayouts } from '../../../tests/support/realtime-browser-build'
+import { addSymlinkedRealtimeFile, browserBuildSecret, createSecretRealtimeProject, realtimeProjectLayouts, symlinkedFileError } from '../../../tests/support/realtime-browser-build'
 
 type WebpackStats = { hasErrors(): boolean, toString(options: string): string }
 type Webpack = (config: object, callback: (error: Error | null, stats?: WebpackStats) => void) => void
@@ -86,6 +86,31 @@ describe('Next realtime browser build', () => {
       expect(matches(relative(workspace, realFile))).toBe(true)
       expect(matches(`.${sep}${relative(workspace, realFile)}`)).toBe(true)
       expect(matches(relative(workspace, join(root, 'server/models/Post.ts')))).toBe(false)
+    } finally {
+      process.chdir(previousCwd)
+      await cleanup()
+    }
+  })
+
+  it('refuses a symlinked file inside server/realtime at config time and when a realtime module compiles', async () => {
+    const { root, cleanup } = await createSecretRealtimeProject()
+    const previousCwd = process.cwd()
+    try {
+      await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies: { '@holo-js/realtime': 'workspace:*' } }))
+      process.chdir(root)
+      const configureWebpack = withHolo().webpack as unknown as ConfigureWebpack
+      const watchRunCallbacks: Array<() => void> = []
+      const hook = { tap: (_name: string, callback: () => void) => watchRunCallbacks.push(callback) }
+      const { plugins } = configureWebpack({}, { isServer: false }) as unknown as { readonly plugins: ReadonlyArray<{ apply(compiler: object): void }> }
+      for (const plugin of plugins) plugin.apply({ hooks: { beforeRun: hook, watchRun: hook } })
+      expect(watchRunCallbacks).toHaveLength(2)
+      await addSymlinkedRealtimeFile(root)
+
+      for (const callback of watchRunCallbacks) expect(callback).toThrow(symlinkedFileError)
+
+      expect(() => withHolo()).toThrow(symlinkedFileError)
+      expect(() => configureWebpack({}, { isServer: false })).toThrow(symlinkedFileError)
+      expect(() => realtimeDefinitionLoader.call({ resourcePath: join(root, 'server/realtime/posts.ts') }, `export const posts = query({ name: 'posts.list' })`)).toThrow(symlinkedFileError)
     } finally {
       process.chdir(previousCwd)
       await cleanup()

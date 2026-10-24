@@ -8,6 +8,14 @@ export const browserBuildSecret = 'sk_live_browser_build'
 
 export type RealtimeProjectLayout = 'plain' | 'symlinked-root' | 'symlinked-realtime-directory'
 
+export const symlinkedFileError = 'server/realtime/linked.ts is a symbolic link; Holo can\'t guarantee its server code stays out of the browser bundle. Replace it with a regular file.'
+
+export async function addSymlinkedRealtimeFile(root: string): Promise<void> {
+  const target = join(root, '..', 'linked-target.ts')
+  await writeFile(target, `export const linked = 'server only'\n`)
+  await symlink(target, join(root, 'server/realtime/linked.ts'))
+}
+
 export const realtimeProjectLayouts: readonly RealtimeProjectLayout[] = ['plain', 'symlinked-root', 'symlinked-realtime-directory']
 
 export type SecretRealtimeProject = {

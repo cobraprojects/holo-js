@@ -1,5 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
-import { isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
+import { assertRealtimeDefinitionTree, isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { readFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { createRealtimeClientDefinitionTransform } from './realtime-definition-transform'
@@ -7,6 +7,8 @@ import { createRealtimeClientDefinitionTransform } from './realtime-definition-t
 type VitePlugin = {
   readonly name: string
   readonly enforce: 'pre'
+  buildStart(): void
+  configureServer(server: { readonly watcher: { on(event: 'all', listener: (event: string, path: string) => void): unknown } }): void
   load(id: string, options?: { readonly ssr?: boolean }): null | string
   transform(code: string, id: string, options?: { readonly ssr?: boolean }): null | {
     readonly code: string
@@ -28,10 +30,23 @@ export function isRealtimeDefinitionModule(
 export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
   const browserDefinitionIds = new Set<string>()
   const directories = resolveRealtimeDefinitionDirectories(rootDir)
+  let realtimeTreeChanged = false
   return {
     name: 'holo-sveltekit-realtime-client-definitions',
     enforce: 'pre',
+    buildStart() {
+      assertRealtimeDefinitionTree(rootDir)
+    },
+    configureServer(server) {
+      server.watcher.on('all', (_event, path) => {
+        if (isInRealtimeDefinitionDirectory(directories, path)) realtimeTreeChanged = true
+      })
+    },
     load(id, options) {
+      if (!options?.ssr && realtimeTreeChanged) {
+        assertRealtimeDefinitionTree(rootDir)
+        realtimeTreeChanged = false
+      }
       const path = id.split('?')[0] as string
       if (options?.ssr || !isRealtimeDefinitionModule(rootDir, path, directories)) {
         return null

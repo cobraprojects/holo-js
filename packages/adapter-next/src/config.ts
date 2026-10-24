@@ -1,4 +1,4 @@
-import { resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
+import { assertRealtimeDefinitionTree, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -136,7 +136,20 @@ type WebpackConfig = {
     rules?: unknown[]
     [key: string]: unknown
   }
+  plugins?: unknown[]
   [key: string]: unknown
+}
+
+type WebpackCompilerHook = { tap(name: string, callback: () => void): void }
+
+function createRealtimeDefinitionTreePlugin(rootDir: string): { apply(compiler: { readonly hooks: { readonly beforeRun: WebpackCompilerHook, readonly watchRun: WebpackCompilerHook } }): void } {
+  return {
+    apply(compiler) {
+      const assertTree = () => assertRealtimeDefinitionTree(rootDir)
+      compiler.hooks.beforeRun.tap('HoloRealtimeDefinitionTree', assertTree)
+      compiler.hooks.watchRun.tap('HoloRealtimeDefinitionTree', assertTree)
+    },
+  }
 }
 
 type WebpackConfigContext = {
@@ -312,6 +325,10 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     turbopack: mergedTurbopack,
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
+      if (hasRealtime) {
+        assertRealtimeDefinitionTree(process.cwd())
+        nextWebpackConfig.plugins = [...(nextWebpackConfig.plugins ?? []), createRealtimeDefinitionTreePlugin(process.cwd())]
+      }
       nextWebpackConfig.module = nextWebpackConfig.module ?? {}
       nextWebpackConfig.module.rules = [
         ...(nextWebpackConfig.module.rules ?? []),

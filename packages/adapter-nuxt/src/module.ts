@@ -1,5 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
-import { isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
+import { assertRealtimeDefinitionTree, isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { access, mkdir, readFile, readdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -500,9 +500,18 @@ function renderRealtimeDefinitionsModule(rootDir: string): string {
 
 function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
   const directories = resolveRealtimeDefinitionDirectories(rootDir)
+  let realtimeTreeChanged = false
   return {
     name: 'holo-realtime-client-definitions',
     enforce: 'pre',
+    buildStart() {
+      assertRealtimeDefinitionTree(rootDir)
+    },
+    configureServer(server: { readonly watcher: { on(event: 'all', listener: (event: string, path: string) => void): unknown } }) {
+      server.watcher.on('all', (_event, path) => {
+        if (isInRealtimeDefinitionDirectory(directories, path)) realtimeTreeChanged = true
+      })
+    },
     resolveId(source: string, importer: string | undefined, options?: { readonly ssr?: boolean }) {
       if (options?.ssr) {
         return null
@@ -512,6 +521,10 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       return resolved ? `${realtimeClientDefinitionPrefix}${resolved}` : null
     },
     load(id: string, options?: { readonly ssr?: boolean }) {
+      if (!options?.ssr && realtimeTreeChanged) {
+        assertRealtimeDefinitionTree(rootDir)
+        realtimeTreeChanged = false
+      }
       if (id.startsWith(realtimeClientDefinitionPrefix)) {
         const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
         return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
