@@ -1,10 +1,12 @@
 import { expect, it, onTestFinished } from 'vitest'
 import { normalizeBroadcastConfig, startBroadcastWorker } from '../src'
 
+const connection = { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } as const
+
 function configWithWorkerPort(port: number | string) {
   return normalizeBroadcastConfig({
     default: 'main',
-    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    connections: { main: connection },
     worker: { host: '127.0.0.1', port },
   })
 }
@@ -25,11 +27,20 @@ it.each([-1, 1.5, 'abc'])('rejects the worker port %s', (port) => {
 it('keeps requiring a positive public and connection port', () => {
   expect(() => normalizeBroadcastConfig({
     default: 'main',
-    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { port: 0 } } },
+    connections: { main: { ...connection, options: { port: 0 } } },
   })).toThrow('[Holo Broadcast] Broadcast connection "main" options port must be a positive integer.')
   expect(() => normalizeBroadcastConfig({
     default: 'main',
-    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    connections: { main: connection },
     worker: { publicPort: 0 },
   })).toThrow('[Holo Broadcast] Broadcast worker public port must be a positive integer.')
+})
+
+it('reports the port Bun bound when the worker port is 0', async () => {
+  const bunGlobal = globalThis as typeof globalThis & { Bun?: unknown }
+  bunGlobal.Bun = { serve: () => ({ port: 43_210, stop() {}, upgrade: () => false }) }
+  onTestFinished(() => { delete bunGlobal.Bun })
+  const worker = await startBroadcastWorker({ config: configWithWorkerPort(0) })
+  onTestFinished(() => worker.stop())
+  expect(worker.port).toBe(43_210)
 })

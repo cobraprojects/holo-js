@@ -18,7 +18,7 @@ it('uses the proxy session for the first route token and submission in native Ne
   const baseUrl = await new Promise<string>((resolve, reject) => {
     const inspect = (chunk: Buffer) => {
       output += chunk.toString()
-      const url = /Local:\s+(http:\/\/127\.0\.0\.1:\d+)/.exec(output)?.[1]
+      const url = /Local:\s+(http:\/\/127\.0\.0\.1:\d+)\r?\n/.exec(output)?.[1]
       if (url) resolve(url)
     }
     server.stdout.on('data', inspect)

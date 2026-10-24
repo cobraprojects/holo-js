@@ -103,7 +103,7 @@ console.log(JSON.stringify({ cookie }))
 `], { cwd: projectRoot })
     const { cookie } = JSON.parse(login.stdout.trim().split('\n').at(-1) ?? '{}') as { cookie: string }
     worker = spawn(process.execPath, [cli, 'broadcast:work'], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] })
-    const port = Number((await waitForOutput(worker, /\[broadcast\] Worker listening on 127\.0\.0\.1:(\d+)/))[1])
+    const port = Number((await waitForOutput(worker, /\[broadcast\] Worker listening on 127\.0\.0\.1:(\d+)\r?\n/))[1])
     const connect = async (headers: Record<string, string>) => {
       const socket = new NodeWebSocket(`ws://127.0.0.1:${port}/app/key`, { headers })
       sockets.push(socket)
