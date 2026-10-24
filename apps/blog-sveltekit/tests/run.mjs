@@ -648,16 +648,18 @@ try {
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
-  await startBroadcastWorker(`http://localhost:${port}`)
+  await startBroadcastWorker(`http://127.0.0.1:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
   database = await openExampleAppDatabase(cwd)
   await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
 
-  child = spawn('bun', ['run', 'dev', '--host', 'localhost', '--port', port], {
+  // The port was reserved on 127.0.0.1. With --host localhost Vite listens on ::1 only, so another process could
+  // take 127.0.0.1 on the same port and answer this journey's requests to localhost.
+  child = spawn('bun', ['run', 'dev', '--host', '127.0.0.1', '--port', port], {
     cwd,
     detached: true,
     env: createChildEnv({
-      APP_URL: `http://localhost:${port}`,
+      APP_URL: `http://127.0.0.1:${port}`,
       MAIL_MAILER: 'log',
       MAIL_LOG_BODIES: 'true',
     }),
@@ -700,15 +702,15 @@ try {
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
-  await run('bun', ['run', 'build'], 0, { APP_URL: `http://localhost:${port}` })
-  await startBroadcastWorker(`http://localhost:${port}`)
+  await run('bun', ['run', 'build'], 0, { APP_URL: `http://127.0.0.1:${port}` })
+  await startBroadcastWorker(`http://127.0.0.1:${port}`)
   await assertExampleAppProductionFlow({
     cwd,
-    baseUrl: `http://localhost:${port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     env: createChildEnv({
       PORT: port,
-      HOST: 'localhost',
-      APP_URL: `http://localhost:${port}`,
+      HOST: '127.0.0.1',
+      APP_URL: `http://127.0.0.1:${port}`,
       MAIL_MAILER: 'log',
       MAIL_LOG_BODIES: 'true',
     }),

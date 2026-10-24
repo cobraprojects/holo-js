@@ -63,7 +63,12 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
     process.exitCode = code
     const deadline = setTimeout(() => exit.call(process, code), SHUTDOWN_DEADLINE_MS)
     deadline.unref()
-    setImmediate(() => void closeCurrent())
+    // Without another handler the signal's default action ends the process, so Holo ends it once closed
+    // instead of waiting for handles it does not own, such as Next's static export worker timers.
+    const ownsTermination = process.listenerCount(signal) === 1
+    setImmediate(() => void closeCurrent().then(() => {
+      if (ownsTermination) exit.call(process, code)
+    }))
   }
   const listeners = TERMINATION_SIGNALS.map(signal => [signal, () => onSignal(signal)] as const)
   const patchedExit = ((code?: ExitCode) => {

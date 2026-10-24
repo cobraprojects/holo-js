@@ -296,6 +296,25 @@ describe('Next termination shutdown', () => {
     expect(result.durationMs).toBeLessThan(10_000)
   })
 
+  it('terminates after closing when no other handler is installed, even while foreign handles stay open', async () => {
+    // Next's static export worker leaves page timeout timers running and relies on SIGINT's default action to end it.
+    const result = await runChild(`
+      ${prelude}
+      holdOpen()
+      installNextShutdown({
+        close: async () => {
+          console.log('close:done')
+        },
+        report: error => console.log('reported', error),
+      })
+      process.on('exit', () => console.log('exit'))
+      console.log('ready')
+    `, { signalAfterReady: 'SIGINT' })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done', 'exit'])
+    expect(result.code).toBe(130)
+  }, 20_000)
+
   it('reports a failed close through the injected reporter and still exits', async () => {
     const result = await runChild(`
       ${prelude}

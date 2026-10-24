@@ -95,13 +95,13 @@ async function runApp(framework, driver) {
       const report = `${framework}/${driver} app journey left ${leftRunning.length} process(es) running after it exited; stopped them before cleanup:\n${leftRunning.map(({ pid, command }) => `  ${pid} ${command}`).join('\n')}\n`
       output += report
       log.write(report)
-      process.stdout.write(process.env.GITHUB_ACTIONS ? `::warning title=Example app journey left processes running::${report.replaceAll('\n', '%0A')}\n` : report)
     }
     const unprompted = compiledAt.filter(at => !fileWatch.hasSourceEditBefore(at)).length
     if (unprompted > 0 && process.env.GITHUB_ACTIONS) {
       process.stdout.write(`::warning title=Unprompted Next HMR compile (#380)::${framework}/${driver} printed '${compiledMarker}' ${unprompted} time(s) without a source edit. File changes before each are at the end of ${relative(root, logPath)} in the example-app-logs-${framework} artifact.\n`)
     }
     assert.equal(code, 0, `${framework}/${driver} app journey failed.\n${output}`)
+    assert.deepEqual(leftRunning, [], `${framework}/${driver} app journey must stop every process it started.\n${output}`)
   } catch (error) {
     failure = error
   }
