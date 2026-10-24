@@ -79,6 +79,16 @@ async function importBundled(projectRoot: string, entryPath: string): Promise<Re
   }
 }
 
+async function writeCompanyTsconfigPackage(projectRoot: string): Promise<void> {
+  const packageRoot = join(projectRoot, 'node_modules/@company/tsconfig')
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@company/tsconfig', exports: { './server': './server.json', './base.json': './base.json' } }))
+  await writeFile(join(packageRoot, 'base.json'), JSON.stringify({ compilerOptions: { baseUrl: '../../..', paths: { 'company/*': ['lib/custom/*'] } } }))
+  await writeFile(join(packageRoot, 'server.json'), JSON.stringify({ extends: './base.json', compilerOptions: { paths: { 'shared/*': ['lib/*'] } } }))
+}
+
+const companyEntry = "import { tool } from 'company/tool'\nimport { util } from 'shared/util'\nimport { title } from '~/app/models/Post'\nexport const definition = { tool, util, title }\n"
+
 describe('project tsconfig loading for bundled definitions', () => {
   it('reads JSON with comments and trailing commas, keeping strings intact', () => {
     expect(parseTsconfigText('{ // note\n "url": "http://x/*", /* block */ "list": [1, 2,], }')).toEqual({
@@ -168,6 +178,34 @@ describe('project tsconfig loading for bundled definitions', () => {
     await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { util } from 'own/util'\nimport { helper } from '#imports'\nexport const definition = { tool, util, helper }\n")
 
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', helper: 'imports' })
+  })
+
+  it('merges the Nuxt aliases with the paths of a package tsconfig the references tsconfig extends', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: '@company/tsconfig/server' }),
+    })
+    await writeCompanyTsconfigPackage(projectRoot)
+    await writeFile(join(projectRoot, 'own.ts'), companyEntry)
+
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', title: 'post' })
+  })
+
+  it('merges the Nuxt aliases with the paths of a package tsconfig a legacy tsconfig extends next to Nuxt', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', '@company/tsconfig/server'] }),
+    })
+    await writeCompanyTsconfigPackage(projectRoot)
+    await writeFile(join(projectRoot, 'own.ts'), companyEntry)
+
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', title: 'post' })
+  })
+
+  it('fails with the name of a package tsconfig that cannot be resolved', async () => {
+    const { projectRoot, entryPath } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', '@company/missing-tsconfig'] }),
+    })
+
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@company/missing-tsconfig"')
   })
 
   it('keeps the default aliases for a references tsconfig whose snapshot is missing', async () => {

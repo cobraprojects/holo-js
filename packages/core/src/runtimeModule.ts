@@ -320,6 +320,39 @@ async function readTsconfigFile(path: string): Promise<JsonObject | undefined> {
   return text === undefined ? undefined : parseTsconfigText(text)
 }
 
+const PACKAGE_NAME_PATTERN = /^(?:@[^/]+\/)?[^/]+$/
+
+function resolvePackageTsconfigField(packageName: string, requireFromConfig: NodeJS.Require): string | undefined {
+  try {
+    const manifestPath = requireFromConfig.resolve(`${packageName}/package.json`)
+    const manifest = parseTsconfigText(readFileSync(manifestPath, 'utf8'))
+    return manifest && typeof manifest.tsconfig === 'string' ? resolve(dirname(manifestPath), manifest.tsconfig) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function resolveExtendedTsconfig(entry: string, configPath: string): string {
+  if (entry.startsWith('.') || isAbsolute(entry)) {
+    const path = resolve(dirname(configPath), entry)
+    return path.endsWith('.json') ? path : `${path}.json`
+  }
+
+  const requireFromConfig = nodeModule.createRequire(configPath)
+  const fromField = PACKAGE_NAME_PATTERN.test(entry) ? resolvePackageTsconfigField(entry, requireFromConfig) : undefined
+  if (fromField) return fromField
+  const candidates = entry.endsWith('.json') ? [entry] : [entry, `${entry}.json`, `${entry}/tsconfig.json`]
+  for (const candidate of candidates) {
+    try {
+      const resolved = requireFromConfig.resolve(candidate)
+      if (resolved.endsWith('.json')) return resolved
+    } catch {
+      continue
+    }
+  }
+  throw new Error(`[@holo-js/core] Cannot resolve the tsconfig "${entry}" extended by ${configPath}. Install the package that provides it or fix the "extends" entry.`)
+}
+
 async function resolveTsconfigPaths(projectRoot: string, configPath: string, seen: Set<string>): Promise<ResolvedTsconfigPaths> {
   if (seen.has(configPath)) return { paths: {} }
   seen.add(configPath)
@@ -328,10 +361,9 @@ async function resolveTsconfigPaths(projectRoot: string, configPath: string, see
 
   let inherited: ResolvedTsconfigPaths = { paths: {} }
   for (const entry of extendsEntries(config)) {
-    if (!entry.startsWith('.') && !isAbsolute(entry)) continue
-    const parentPath = resolve(dirname(configPath), entry)
+    const parentPath = resolveExtendedTsconfig(entry, configPath)
     if (isInside(parentPath, join(projectRoot, NUXT_BUILD_DIRECTORY))) continue
-    const parent = await resolveTsconfigPaths(projectRoot, parentPath.endsWith('.json') ? parentPath : `${parentPath}.json`, seen)
+    const parent = await resolveTsconfigPaths(projectRoot, parentPath, seen)
     inherited = { paths: { ...inherited.paths, ...parent.paths }, baseUrl: parent.baseUrl ?? inherited.baseUrl }
   }
 
