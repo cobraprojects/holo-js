@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
-import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +19,19 @@ const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+// The scaffold smoke polls package.json while `holo dev` installs through this swap, so
+// replace the manifest by renaming a complete file instead of truncating it in place.
+async function replaceFileAtomically(path, contents) {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, contents, { flag: 'wx' })
+    await rename(temporaryPath, path)
+  } catch (error) {
+    await rm(temporaryPath, { force: true })
+    throw error
+  }
 }
 
 async function pathExists(path) {
@@ -202,7 +216,7 @@ export async function activateLocalWorkspacePackages(projectRoot, stagingRoot) {
   try {
     const localPackageRoots = await readLocalPackageRoots(stagingRoot)
     const manifest = resolveProjectLocalDependencies(JSON.parse(original), localPackageRoots)
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    await replaceFileAtomically(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   } catch (error) {
     await rm(backupPath, { force: true })
     throw error
@@ -213,6 +227,6 @@ export async function restoreProjectManifest(projectRoot) {
   const manifestPath = join(projectRoot, 'package.json')
   const backupPath = join(projectRoot, manifestBackupName)
   const original = await readFile(backupPath, 'utf8')
-  await writeFile(manifestPath, original)
+  await replaceFileAtomically(manifestPath, original)
   await rm(backupPath, { force: true })
 }
