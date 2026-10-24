@@ -501,6 +501,7 @@ function renderRealtimeDefinitionsModule(rootDir: string): string {
 function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
   const directories = resolveRealtimeDefinitionDirectories(rootDir)
   let realtimeTreeChanged = false
+  const loadedDefinitionIds = new Set<string>()
   return {
     name: 'holo-realtime-client-definitions',
     enforce: 'pre',
@@ -527,6 +528,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       }
       if (id.startsWith(realtimeClientDefinitionPrefix)) {
         const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
+        loadedDefinitionIds.add(id)
         return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
       }
       if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id, directories)) {
@@ -534,6 +536,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       }
 
       const sourcePath = id.split('?')[0] as string
+      loadedDefinitionIds.add(id)
       return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
     },
     transform(code: string, id: string, options?: { readonly ssr?: boolean }) {
@@ -541,7 +544,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
         const compiled = compileBrowserValidation(code, id)
         if (compiled) return { code: compiled, map: null }
       }
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id, directories)) {
+      if (options?.ssr || loadedDefinitionIds.has(id) || !isRealtimeDefinitionModule(rootDir, id, directories)) {
         return null
       }
 

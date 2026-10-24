@@ -10,6 +10,23 @@ export type RealtimeProjectLayout = 'plain' | 'symlinked-root' | 'symlinked-real
 
 export const symlinkedFileError = 'server/realtime/linked.ts is a symbolic link; Holo can\'t guarantee its server code stays out of the browser bundle. Replace it with a regular file.'
 
+export async function useFactoryNamedExports(root: string): Promise<void> {
+  await writeFile(join(root, 'server/realtime/posts.ts'), [
+    `import realtime from '@holo-js/realtime'`,
+    `const SECRET = '${browserBuildSecret}'`,
+    `export const query = realtime.query({ name: 'posts.list', handler: async () => SECRET })`,
+    `export const mutation = realtime.mutation({ name: 'posts.rename', handler: async () => SECRET })`,
+    '',
+  ].join('\n'))
+  await writeFile(join(root, 'client.ts'), [
+    `import { query as posts, mutation } from './server/realtime/posts'`,
+    `import { query as aliased } from '#realtime/posts'`,
+    `import { query as resolved } from 'virtual:posts'`,
+    'export default [posts, mutation, aliased, resolved]',
+    '',
+  ].join('\n'))
+}
+
 export async function addSymlinkedRealtimeFile(root: string): Promise<void> {
   const target = join(root, '..', 'linked-target.ts')
   await writeFile(target, `export const linked = 'server only'\n`)
@@ -33,6 +50,7 @@ export async function createSecretRealtimeProject(layout: RealtimeProjectLayout 
   await mkdir(realtimeDirectory, { recursive: true })
   if (layout === 'symlinked-realtime-directory') {
     await symlink(realtimeDirectory, join(projectDirectory, 'server/realtime'), 'dir')
+    await writeFile(join(workspace, 'package-lock.json'), '{}')
   }
   const root = layout === 'symlinked-root' ? join(workspace, 'linked-project') : projectDirectory
   if (layout === 'symlinked-root') {

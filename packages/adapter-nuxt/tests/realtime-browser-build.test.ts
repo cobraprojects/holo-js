@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { moduleInternals } from '../src/module'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
-import { addSymlinkedRealtimeFile, browserBuildSecret, buildBrowserBundleWithVite, createSecretRealtimeProject, realtimeProjectLayouts, symlinkedFileError } from '../../../tests/support/realtime-browser-build'
+import { addSymlinkedRealtimeFile, browserBuildSecret, buildBrowserBundleWithVite, createSecretRealtimeProject, realtimeProjectLayouts, symlinkedFileError, useFactoryNamedExports } from '../../../tests/support/realtime-browser-build'
 
 describe('Nuxt realtime browser build', () => {
   it.each(realtimeProjectLayouts)('keeps handler source out of the browser bundle and its source maps with a %s project', async (layout) => {
@@ -45,4 +45,17 @@ describe('Nuxt realtime browser build', () => {
       await cleanup()
     }
   })
+
+  it('builds exports named after the factories through relative, aliased, and plugin-resolved imports', async () => {
+    const { root, cleanup } = await createSecretRealtimeProject()
+    try {
+      await useFactoryNamedExports(root)
+      const bundle = await buildBrowserBundleWithVite(root, moduleInternals.createRealtimeDefinitionVitePlugin(root))
+      expect(bundle).toContain('posts.list')
+      expect(bundle).toContain('posts.rename')
+      expect(bundle).not.toContain(browserBuildSecret)
+    } finally {
+      await cleanup()
+    }
+  }, 30_000)
 })

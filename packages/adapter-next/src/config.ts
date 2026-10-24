@@ -1,7 +1,8 @@
 import { assertRealtimeDefinitionTree, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
@@ -68,6 +69,7 @@ interface TurbopackIgnoreIssueRule {
 }
 
 interface TurbopackConfig {
+  readonly root?: string
   readonly ignoreIssue?: readonly TurbopackIgnoreIssueRule[]
   readonly rules?: Record<string, unknown>
   readonly [key: string]: unknown
@@ -77,6 +79,7 @@ interface NextConfig {
   readonly serverExternalPackages?: string[]
   readonly transpilePackages?: string[]
   readonly outputFileTracingExcludes?: Record<string, string[]>
+  readonly outputFileTracingRoot?: string
   readonly experimental?: Record<string, unknown>
   readonly turbopack?: TurbopackConfig
   readonly rewrites?: () => Promise<unknown>
@@ -194,14 +197,45 @@ function escapePathSegments(segments: readonly string[]): string {
   return segments.map(segment => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(pathSeparatorPattern)
 }
 
-function resolveRealtimeDefinitionPatterns(rootDir: string): { readonly absolute: readonly RegExp[], readonly projectRelative: readonly RegExp[] } {
-  const directories = resolveRealtimeDefinitionDirectories(rootDir)
+type NextFindRoot = { findRootDirAndLockFiles(directory: string): { readonly rootDir?: string } }
+
+function loadNextFindRoot(projectRoot: string): NextFindRoot {
+  const projectRequire = createRequire(join(projectRoot, 'package.json'))
+  try {
+    return projectRequire('next/dist/lib/find-root') as NextFindRoot
+  } catch {
+    return createRequire(import.meta.url)('next/dist/lib/find-root') as NextFindRoot
+  }
+}
+
+function resolveTurbopackRoot(nextConfig: NextConfig, projectRoot: string): string {
+  const configured = nextConfig.outputFileTracingRoot || nextConfig.turbopack?.root || process.env.NEXT_PRIVATE_OUTPUT_TRACE_ROOT
+  let root = configured ? resolve(projectRoot, configured) : undefined
+  if (!root) {
+    try {
+      root = loadNextFindRoot(projectRoot).findRootDirAndLockFiles(projectRoot).rootDir
+    } catch (error) {
+      throw new Error('Holo could not determine the Turbopack root for a symlinked server/realtime folder. Set turbopack.root in next.config.', { cause: error })
+    }
+  }
+  if (!root) {
+    throw new Error('Holo could not determine the Turbopack root for a symlinked server/realtime folder. Set turbopack.root in next.config.')
+  }
+  return existsSync(root) ? realpathSync.native(root) : root
+}
+
+function resolveRealtimeDefinitionPatterns(nextConfig: NextConfig, projectRoot: string): { readonly absolute: readonly RegExp[], readonly turbopackRelative: readonly RegExp[] } {
+  const directories = resolveRealtimeDefinitionDirectories(projectRoot)
+  const linkedDirectories = directories.filter(directory => !directory.endsWith('/server/realtime'))
+  const turbopackRoot = linkedDirectories.length > 0 ? resolveTurbopackRoot(nextConfig, projectRoot) : undefined
   return {
     absolute: directories.map(directory => new RegExp(`^${escapePathSegments(directory.split('/'))}${pathSeparatorPattern}`)),
-    projectRelative: directories.filter(directory => !directory.endsWith('/server/realtime')).map((directory) => {
-      const segments = directory.split('/').filter(segment => segment !== '')
-      const suffixes = segments.map((_, index) => escapePathSegments(segments.slice(index)))
-      return new RegExp(`^(?:\\.${pathSeparatorPattern})?(?:${suffixes.join('|')})${pathSeparatorPattern}`)
+    turbopackRelative: linkedDirectories.map((directory) => {
+      const relativeDirectory = relative(turbopackRoot as string, directory)
+      if (relativeDirectory === '' || relativeDirectory.startsWith('..') || isAbsolute(relativeDirectory)) {
+        throw new Error(`server/realtime resolves to ${directory}, outside the Turbopack root ${turbopackRoot}. Move the folder inside the root or set turbopack.root in next.config.`)
+      }
+      return new RegExp(`^(?:\\.${pathSeparatorPattern})?${escapePathSegments(relativeDirectory.replaceAll('\\', '/').split('/'))}${pathSeparatorPattern}`)
     }),
   }
 }
@@ -274,7 +308,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
-  const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(process.cwd()) : { absolute: [], projectRelative: [] }
+  const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
     ...existingTurbopack,
     rules: {
@@ -287,8 +321,8 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       ...(hasRealtime
         ? {
             '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.projectRelative]),
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.projectRelative]),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.turbopackRelative]),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.turbopackRelative]),
             ],
           }
         : {}),

@@ -70,7 +70,7 @@ function boundNames(name: ts.BindingName): readonly string[] {
   return name.elements.flatMap(element => ts.isBindingElement(element) ? boundNames(element.name) : [])
 }
 
-function collectRealtimeBindings(sourceFile: ts.SourceFile): RealtimeBindings {
+function collectRealtimeBindings(sourceFile: ts.SourceFile, importTarget: string): RealtimeBindings {
   const factories = new Map<string, RealtimeFactory>([
     ['query', 'query'],
     ['mutation', 'mutation'],
@@ -79,7 +79,8 @@ function collectRealtimeBindings(sourceFile: ts.SourceFile): RealtimeBindings {
   const aliases = new Set<string>()
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !statement.importClause || statement.importClause.isTypeOnly) continue
-    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== '@holo-js/realtime') continue
+    if (!ts.isStringLiteral(statement.moduleSpecifier)
+      || (statement.moduleSpecifier.text !== '@holo-js/realtime' && statement.moduleSpecifier.text !== importTarget)) continue
     const { name, namedBindings } = statement.importClause
     if (name) namespaces.add(name.text)
     if (namedBindings && ts.isNamespaceImport(namedBindings)) namespaces.add(namedBindings.name.text)
@@ -227,9 +228,9 @@ function unreducibleDefinitionError(filePath: string, exportedName: string): Err
   return new Error(`${filePath} exports ${exportedName} through a query or mutation call that cannot be reduced to a browser definition. Export each definition directly, as export const name = query({ name: 'posts.list', ... }) or export default query({ ... }).`)
 }
 
-function collectDefinitions(sourceFile: ts.SourceFile, filePath: string): readonly RealtimeDefinition[] {
+function collectDefinitions(sourceFile: ts.SourceFile, filePath: string, importTarget: string): readonly RealtimeDefinition[] {
   const definitions: RealtimeDefinition[] = []
-  const bindings = collectRealtimeBindings(sourceFile)
+  const bindings = collectRealtimeBindings(sourceFile, importTarget)
   const constants = collectStringConstants(sourceFile)
   const definitionLocals = collectDefinitionLocals(sourceFile, bindings)
 
@@ -391,7 +392,7 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
   }
 
   const sourceFile = parseRealtimeSource(source)
-  const definitions = collectDefinitions(sourceFile, filePath)
+  const definitions = collectDefinitions(sourceFile, filePath, importTarget)
   if (definitions.length === 0) {
     throw new Error(`${filePath} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
   }

@@ -325,4 +325,15 @@ describe('shared realtime definition transform', () => {
       mutation: { kind: 'mutation', name: 'posts.rename', handler: null },
     })
   })
+
+  it('returns an emitted stub unchanged when a bundler transforms it again', () => {
+    const source = `
+      import realtime from '@holo-js/realtime'
+      export const query = realtime.query({ name: 'posts.list', handler: async () => [] })
+      export default realtime.mutation({ name: 'posts.rename', handler: async () => true })
+    `
+    const stub = createRealtimeClientDefinitionModule({ source, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
+    expect(stub).toContain("import { query as _query, mutation } from '@holo-js/test/realtime'")
+    expect(createRealtimeClientDefinitionModule({ source: stub, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })).toBe(stub)
+  })
 })
