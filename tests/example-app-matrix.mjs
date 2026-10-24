@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createExampleAppFixture } from './support/example-app-fixture.mjs'
+import { watchExampleAppFiles } from './support/example-app-file-watch.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const pg = createRequire(join(root, 'packages/db-postgres/package.json'))('pg')
@@ -27,6 +28,8 @@ async function runApp(framework, driver) {
   let mysqlAdmin
   const env = { ...process.env, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
   const logPath = join(root, 'coverage', `app-${framework}-${driver}.log`)
+  const fileWatch = watchExampleAppFiles(fixture.directory)
+  const compiledAt = []
   let output = ''
   let log
   try {
@@ -62,17 +65,29 @@ async function runApp(framework, driver) {
     await mkdir(join(root, 'coverage'), { recursive: true })
     log = createWriteStream(logPath)
     const child = spawn(process.execPath, ['tests/run.mjs'], { cwd: projectRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
-    child.stdout.on('data', chunk => { output += chunk.toString(); log.write(chunk) })
-    child.stderr.on('data', chunk => { output += chunk.toString(); log.write(chunk) })
+    const capture = (chunk) => {
+      if (chunk.includes('Compiled in')) compiledAt.push(Date.now())
+      output += chunk.toString()
+      log.write(chunk)
+    }
+    child.stdout.on('data', capture)
+    child.stderr.on('data', capture)
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject)
       child.once('close', resolve)
     })
+    if (compiledAt.length > 0 || code !== 0) {
+      const report = `\n${fileWatch.before(code === 0 ? compiledAt : [...compiledAt, Date.now()])}\n`
+      output += report
+      log.write(report)
+    }
     assert.equal(code, 0, `${framework}/${driver} app journey failed.\n${output}`)
   } finally {
+    fileWatch.close()
     if (log) await new Promise((resolve, reject) => { log.once('error', reject); log.end(resolve) })
     await mkdir(join(root, 'coverage'), { recursive: true })
     await writeFile(logPath, output)
+    await writeFile(join(root, 'coverage', `app-${framework}-${driver}-files.log`), fileWatch.log())
     try {
       if (postgresAdmin) {
         await postgresAdmin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)

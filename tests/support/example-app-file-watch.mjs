@@ -1,0 +1,33 @@
+import { existsSync, watch } from 'node:fs'
+import { join, sep } from 'node:path'
+
+const ignoredSegments = new Set(['node_modules', '.next'])
+const windowMs = 5000
+
+function formatEvent(event) {
+  return `${new Date(event.at).toISOString()} ${event.change.padEnd(8)} ${event.file}`
+}
+
+export function watchExampleAppFiles(directory) {
+  const events = []
+  const watcher = watch(directory, { recursive: true }, (type, file) => {
+    if (!file || file.split(sep).some(segment => ignoredSegments.has(segment))) return
+    const change = type === 'change' ? 'modified' : existsSync(join(directory, file)) ? 'created' : 'deleted'
+    events.push({ at: Date.now(), change, file })
+  })
+
+  return {
+    close() {
+      watcher.close()
+    },
+    log() {
+      return `${events.map(formatEvent).join('\n')}\n`
+    },
+    before(times) {
+      return times.map(at => [
+        `File changes in the ${windowMs / 1000}s before ${new Date(at).toISOString()}:`,
+        ...events.filter(event => event.at <= at && event.at > at - windowMs).map(formatEvent),
+      ].join('\n')).join('\n\n')
+    },
+  }
+}
