@@ -1,0 +1,35 @@
+import { expect, it, onTestFinished } from 'vitest'
+import { normalizeBroadcastConfig, startBroadcastWorker } from '../src'
+
+function configWithWorkerPort(port: number | string) {
+  return normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    worker: { host: '127.0.0.1', port },
+  })
+}
+
+it('binds an operating-system assigned port when the worker port is 0 and reports the bound port', async () => {
+  const config = configWithWorkerPort(0)
+  expect(config.worker.port).toBe(0)
+  const worker = await startBroadcastWorker({ config })
+  onTestFinished(() => worker.stop())
+  expect(worker.port).toBeGreaterThan(0)
+  expect((await fetch(`http://127.0.0.1:${worker.port}/health`)).status).toBe(200)
+})
+
+it.each([-1, 1.5, 'abc'])('rejects the worker port %s', (port) => {
+  expect(() => configWithWorkerPort(port)).toThrow('[Holo Broadcast] Broadcast worker port must be 0 or a positive integer.')
+})
+
+it('keeps requiring a positive public and connection port', () => {
+  expect(() => normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret', options: { port: 0 } } },
+  })).toThrow('[Holo Broadcast] Broadcast connection "main" options port must be a positive integer.')
+  expect(() => normalizeBroadcastConfig({
+    default: 'main',
+    connections: { main: { driver: 'holo', appId: 'app', key: 'key', secret: 'secret' } },
+    worker: { publicPort: 0 },
+  })).toThrow('[Holo Broadcast] Broadcast worker public port must be a positive integer.')
+})

@@ -1,16 +1,32 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { once } from 'node:events'
-import { createServer } from 'node:net'
 import { expect, it } from 'vitest'
 import { stagePublishedPackage, symlinkPackageDependency } from '../../../tests/support/published-package'
 
 const execute = promisify(execFile)
 const NodeWebSocket = WebSocket as unknown as new (url: string, init: { readonly headers: Record<string, string> }) => WebSocket
 const root = resolve(import.meta.dirname, '../../..')
+
+type Packet = { event: string, channel?: string, data?: string }
+
+function waitForOutput(child: ChildProcess, pattern: RegExp): Promise<RegExpMatchArray> {
+  return new Promise((resolve, reject) => {
+    let output = ''
+    const inspect = (chunk: unknown) => {
+      output += String(chunk)
+      const match = output.match(pattern)
+      if (match) resolve(match)
+    }
+    child.stdout?.on('data', inspect)
+    child.stderr?.on('data', inspect)
+    child.once('exit', () => reject(new Error(`Process exited before printing ${pattern}:\n${output}`)))
+  })
+}
 
 it('reports an actionable install hint when the real CLI cannot resolve the broadcast package', async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'holo-native-broadcast-installation-'))
@@ -19,20 +35,14 @@ it('reports an actionable install hint when the real CLI cannot resolve the broa
     await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module' }))
     await writeFile(join(projectRoot, 'config/broadcast.mjs'), "export default { default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'main', secret: 'secret' } } }")
     await stagePublishedPackage(join(root, 'packages/cli'), join(projectRoot, 'node_modules/@holo-js/cli'), join(root, 'packages/cli/dist'))
-    const result = await execute(process.execPath, ['--input-type=module', '--eval', `
-import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
-import { spawnSync } from 'node:child_process'
-const require = createRequire(import.meta.url)
-assert.throws(() => require.resolve('@holo-js/broadcast'), { code: 'MODULE_NOT_FOUND' })
-const result = spawnSync(process.execPath, ['./node_modules/@holo-js/cli/dist/bin/holo.mjs', 'broadcast:work'], { encoding: 'utf8', timeout: 10000 })
-assert.equal(result.error, undefined)
-assert.notEqual(result.status, 0)
-assert.match(result.stderr, /Unable to load @holo-js\\/broadcast/)
-assert.match(result.stderr, /holo install broadcast/)
-console.log('Native broadcast installation behavior passed')
-`], { cwd: projectRoot })
-    expect(result.stdout).toContain('Native broadcast installation behavior passed')
+    expect(() => createRequire(join(projectRoot, 'package.json')).resolve('@holo-js/broadcast')).toThrow(expect.objectContaining({ code: 'MODULE_NOT_FOUND' }))
+    const failure: unknown = await execute(process.execPath, ['./node_modules/@holo-js/cli/dist/bin/holo.mjs', 'broadcast:work'], { cwd: projectRoot })
+      .then(() => undefined, (error: unknown) => error)
+    expect(failure).toMatchObject({ code: expect.any(Number) })
+    const { code, stderr } = failure as { code: number, stderr: string }
+    expect(code).not.toBe(0)
+    expect(stderr).toMatch(/Unable to load @holo-js\/broadcast/)
+    expect(stderr).toMatch(/holo install broadcast/)
   } finally {
     await rm(projectRoot, { recursive: true, force: true })
   }
@@ -40,12 +50,6 @@ console.log('Native broadcast installation behavior passed')
 
 it('refreshes prepared channel discovery and authorizes fresh private subscriptions with the authenticated user through the real CLI worker', async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'holo-native-broadcast-lifecycle-'))
-  const reservation = createServer()
-  reservation.listen(0, '127.0.0.1')
-  await once(reservation, 'listening')
-  const address = reservation.address()
-  if (!address || typeof address === 'string') throw new Error('Expected a native worker port')
-  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
   let worker: ReturnType<typeof spawn> | undefined
   const sockets: WebSocket[] = []
   try {
@@ -74,7 +78,7 @@ it('refreshes prepared channel discovery and authorizes fresh private subscripti
     await writeFile(join(projectRoot, 'config/app.ts'), "export default { name: 'Broadcast Lifecycle', key: 'test-key' }")
     await writeFile(join(projectRoot, 'config/database.ts'), "export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: './storage/database.sqlite' } } }")
     await writeFile(join(projectRoot, 'server/models/User.ts'), "import { column, defineGeneratedTable, defineModel } from '@holo-js/db'; export default defineModel(defineGeneratedTable('users', { id: column.integer().primaryKey(), email: column.string() }), { timestamps: false, fillable: ['email'] })")
-    await writeFile(join(projectRoot, 'config/broadcast.ts'), `import { defineBroadcastConfig } from '@holo-js/broadcast'; export default defineBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'key', secret: 'secret' } }, worker: { host: '127.0.0.1', port: ${address.port} } })`)
+    await writeFile(join(projectRoot, 'config/broadcast.ts'), `import { defineBroadcastConfig } from '@holo-js/broadcast'; export default defineBroadcastConfig({ default: 'main', connections: { main: { driver: 'holo', appId: 'main', key: 'key', secret: 'secret' } }, worker: { host: '127.0.0.1', port: 0 } })`)
     const cli = join(projectRoot, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
     await writeFile(join(projectRoot, 'server/channels/old.ts'), "import { defineChannel } from '@holo-js/broadcast'; export default defineChannel('old.{id}', { type: 'private', authorize() { return false } })")
     await execute(process.execPath, [cli, 'prepare'], { cwd: projectRoot })
@@ -99,39 +103,46 @@ console.log(JSON.stringify({ cookie }))
 `], { cwd: projectRoot })
     const { cookie } = JSON.parse(login.stdout.trim().split('\n').at(-1) ?? '{}') as { cookie: string }
     worker = spawn(process.execPath, [cli, 'broadcast:work'], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] })
-    let output = ''
-    worker.stdout?.on('data', chunk => { output += String(chunk) })
-    worker.stderr?.on('data', chunk => { output += String(chunk) })
-    await expect.poll(() => {
-      if (worker?.exitCode !== null) throw new Error(output)
-      return output
-    }, { timeout: 10000 }).toContain('[broadcast] Worker listening on')
+    const port = Number((await waitForOutput(worker, /\[broadcast\] Worker listening on 127\.0\.0\.1:(\d+)/))[1])
     const connect = async (headers: Record<string, string>) => {
-      const socket = new NodeWebSocket(`ws://127.0.0.1:${address.port}/app/key`, { headers })
+      const socket = new NodeWebSocket(`ws://127.0.0.1:${port}/app/key`, { headers })
       sockets.push(socket)
-      const packets: Array<{ event: string, channel?: string, data?: string }> = []
-      socket.addEventListener('message', message => { packets.push(JSON.parse(String(message.data)) as { event: string, channel?: string, data?: string }) })
+      const packets: Packet[] = []
+      socket.addEventListener('message', message => { packets.push(JSON.parse(String(message.data)) as Packet) })
       await new Promise<void>((resolve, reject) => {
         socket.addEventListener('open', () => resolve(), { once: true })
         socket.addEventListener('error', () => reject(new Error('Native worker connection failed')), { once: true })
       })
       socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-fresh.42' } }))
-      return { socket, packets }
+      const next = (matches: (packet: Packet) => boolean) => new Promise<Packet>((resolve, reject) => {
+        const check = () => {
+          const packet = packets.find(matches)
+          if (packet) resolve(packet)
+        }
+        socket.addEventListener('message', check)
+        socket.addEventListener('close', () => reject(new Error(`Socket closed before the expected packet: ${JSON.stringify(packets)}`)), { once: true })
+        check()
+      })
+      return { socket, packets, next }
     }
     const guest = await connect({})
-    await expect.poll(() => guest.packets.find(packet => packet.event === 'pusher:subscription_error' && packet.channel === 'private-fresh.42')?.data, { timeout: 10000 })
-      .toBe(JSON.stringify({ type: 'AuthError', error: 'Unable to authorize the channel subscription.', status: 403 }))
+    const rejected = await guest.next(packet => packet.channel === 'private-fresh.42')
+    expect(rejected).toEqual({
+      event: 'pusher:subscription_error',
+      channel: 'private-fresh.42',
+      data: JSON.stringify({ type: 'AuthError', error: 'Unable to authorize the channel subscription.', status: 403 }),
+    })
     expect(guest.socket.readyState).toBe(WebSocket.OPEN)
     expect(cookie.startsWith('holo_session=')).toBe(true)
     const member = await connect({ cookie })
-    await expect.poll(() => member.packets.some(packet => packet.event === 'pusher_internal:subscription_succeeded' && packet.channel === 'private-fresh.42'), { timeout: 10000 }).toBe(true)
+    expect(await member.next(packet => packet.channel === 'private-fresh.42')).toMatchObject({ event: 'pusher_internal:subscription_succeeded' })
     expect(guest.packets.some(packet => packet.event === 'pusher_internal:subscription_succeeded')).toBe(false)
     const closed = once(worker, 'close')
     for (const socket of sockets) socket.close()
     worker.kill('SIGINT')
     const [code] = await closed
-    if (process.platform !== 'win32') expect(code, output).toBe(0)
-    await expect(fetch(`http://127.0.0.1:${address.port}/health`)).rejects.toThrow()
+    if (process.platform !== 'win32') expect(code).toBe(0)
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow()
   } finally {
     for (const socket of sockets) socket.close()
     if (worker && worker.exitCode === null && worker.signalCode === null) {

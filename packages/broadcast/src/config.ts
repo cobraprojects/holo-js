@@ -243,6 +243,7 @@ function normalizeBroadcastPort(
   value: string | number | undefined,
   fallback: number,
   label: string,
+  allowEphemeral = false,
 ): number {
   const normalized = typeof value === 'number'
     ? value
@@ -250,8 +251,12 @@ function normalizeBroadcastPort(
       ? Number(value.trim())
       : fallback
 
+  if (allowEphemeral && normalized === 0) {
+    return normalized
+  }
+
   if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`[Holo Broadcast] ${label} must be a positive integer.`)
+    throw new Error(`[Holo Broadcast] ${label} must be ${allowEphemeral ? '0 or ' : ''}a positive integer.`)
   }
 
   return normalized
@@ -340,7 +345,7 @@ function normalizeBroadcastWorkerConfig(
 
   return Object.freeze({
     host: normalizeOptionalBroadcastString(worker?.host, 'Broadcast worker host') ?? DEFAULT_BROADCAST_WORKER_HOST,
-    port: normalizeBroadcastPort(worker?.port, fallbackPort, 'Broadcast worker port'),
+    port: normalizeBroadcastPort(worker?.port, fallbackPort, 'Broadcast worker port', true),
     path: normalizeOptionalBroadcastString(worker?.path, 'Broadcast worker path') ?? DEFAULT_BROADCAST_WORKER_PATH,
     publicHost,
     publicPort,
