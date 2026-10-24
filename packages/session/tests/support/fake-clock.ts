@@ -32,6 +32,7 @@ export async function advanceUntil(condition: () => boolean, description: string
 export async function finishesWithoutTheClock<T>(operation: Promise<T>, description: string): Promise<T> {
   let done = false
   const running = operation.finally(() => { done = true })
+  running.catch(() => undefined)
   await settle()
   if (!done) throw new Error(`${description} should finish without waiting on the clock`)
   return await running
