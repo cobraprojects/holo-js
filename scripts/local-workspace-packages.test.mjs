@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -69,6 +69,46 @@ test('project manifests use local packages only during dependency installation',
   }
 })
 
+test('project manifest swaps never expose a partially written package.json', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'holo-local-install-atomic-'))
+  const projectRoot = join(tempRoot, 'project')
+  const stagingRoot = join(tempRoot, 'packages')
+  const manifestPath = join(projectRoot, 'package.json')
+  const originalContents = `${JSON.stringify({ dependencies: { '@holo-js/core': '^0.3.9' } }, null, 2)}\n`
+
+  try {
+    await mkdir(projectRoot, { recursive: true })
+    await mkdir(stagingRoot, { recursive: true })
+    await writeFile(manifestPath, originalContents)
+    await writeFile(join(stagingRoot, 'workspace-packages.json'), `${JSON.stringify({
+      '@holo-js/core': join(stagingRoot, 'core'),
+    })}\n`)
+
+    // A reader that opened package.json before a swap keeps the complete previous file
+    // only when the swap renames a fresh file into place instead of truncating in place.
+    const beforeActivate = await open(manifestPath, 'r')
+    try {
+      await activateLocalWorkspacePackages(projectRoot, stagingRoot)
+      assert.equal(await beforeActivate.readFile('utf8'), originalContents)
+    } finally {
+      await beforeActivate.close()
+    }
+
+    const activatedContents = await readFile(manifestPath, 'utf8')
+    const beforeRestore = await open(manifestPath, 'r')
+    try {
+      await restoreProjectManifest(projectRoot)
+      assert.equal(await beforeRestore.readFile('utf8'), activatedContents)
+    } finally {
+      await beforeRestore.close()
+    }
+
+    assert.equal(await readFile(manifestPath, 'utf8'), originalContents)
+    assert.deepEqual((await readdir(projectRoot)).sort(), ['package.json'])
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
 
 test('packed local manifests preserve publishing ranges outside archive substitutions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'holo-local-archives-'))
