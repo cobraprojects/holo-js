@@ -10,12 +10,12 @@ import { WORKSPACE_CATALOG } from '../src/generated/workspaceCatalog'
 
 const catalogMediaRange = WORKSPACE_CATALOG['@holo-js/media']
 const catalogMediaVersion = minVersion(catalogMediaRange)!
-// A range the current release satisfies, written differently from the catalog range so preservation is observable.
 const compatibleMediaRange = `~${catalogMediaVersion.major}.${catalogMediaVersion.minor}.0`
-// A range from the previous release line, which the current release doesn't satisfy.
-const olderMediaRange = catalogMediaVersion.minor > 0
-  ? `^${catalogMediaVersion.major}.${catalogMediaVersion.minor - 1}.0`
-  : `^${catalogMediaVersion.major - 1}.0.0`
+const previousReleaseLineMediaRange = catalogMediaVersion.major > 0
+  ? `^${catalogMediaVersion.major - 1}.0.0`
+  : catalogMediaVersion.minor > 0
+    ? `^0.${catalogMediaVersion.minor - 1}.0`
+    : undefined
 
 const temporaryDirectories: string[] = []
 
@@ -69,8 +69,8 @@ it.each([false, true])('preserves declared Media without an app config when a Me
   expect((await loadConfigDirectory(root, { preferCache: false })).media).toEqual({})
 })
 
-it('upgrades declared Media from an older release line to the catalog range', async () => {
-  const root = await createProject(olderMediaRange)
+it.skipIf(previousReleaseLineMediaRange === undefined)('upgrades declared Media from the previous release line to the catalog range', async () => {
+  const root = await createProject(previousReleaseLineMediaRange)
   await runProjectPrepare(root)
 
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
