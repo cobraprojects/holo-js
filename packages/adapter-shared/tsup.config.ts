@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     client: 'src/client.ts',
     build: 'src/build.ts',
+    'realtime-directories': 'src/realtime-directories.ts',
     'server-errors': 'src/server-errors.ts',
     'sveltekit/request-context': 'src/sveltekit/request-context.ts',
     'next/request-context': 'src/next/request-context.ts',

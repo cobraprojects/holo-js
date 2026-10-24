@@ -17,8 +17,9 @@ describe('Next realtime definition loader', () => {
     expect(callback).toHaveBeenCalledWith(
       null,
       expect.stringContaining('posts.list'),
-      expect.objectContaining({ sourcesContent: [source] }),
+      expect.objectContaining({ sources: ['realtime.ts'] }),
     )
+    expect(callback.mock.calls[0]?.[2]).not.toHaveProperty('sourcesContent')
   })
 
   it('preserves handlers for server rendering builds', () => {

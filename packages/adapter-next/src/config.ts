@@ -1,6 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { assertRealtimeDefinitionTree, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
@@ -67,6 +69,7 @@ interface TurbopackIgnoreIssueRule {
 }
 
 interface TurbopackConfig {
+  readonly root?: string
   readonly ignoreIssue?: readonly TurbopackIgnoreIssueRule[]
   readonly rules?: Record<string, unknown>
   readonly [key: string]: unknown
@@ -76,6 +79,7 @@ interface NextConfig {
   readonly serverExternalPackages?: string[]
   readonly transpilePackages?: string[]
   readonly outputFileTracingExcludes?: Record<string, string[]>
+  readonly outputFileTracingRoot?: string
   readonly experimental?: Record<string, unknown>
   readonly turbopack?: TurbopackConfig
   readonly rewrites?: () => Promise<unknown>
@@ -135,7 +139,20 @@ type WebpackConfig = {
     rules?: unknown[]
     [key: string]: unknown
   }
+  plugins?: unknown[]
   [key: string]: unknown
+}
+
+type WebpackCompilerHook = { tap(name: string, callback: () => void): void }
+
+function createRealtimeDefinitionTreePlugin(rootDir: string): { apply(compiler: { readonly hooks: { readonly beforeRun: WebpackCompilerHook, readonly watchRun: WebpackCompilerHook } }): void } {
+  return {
+    apply(compiler) {
+      const assertTree = () => assertRealtimeDefinitionTree(rootDir)
+      compiler.hooks.beforeRun.tap('HoloRealtimeDefinitionTree', assertTree)
+      compiler.hooks.watchRun.tap('HoloRealtimeDefinitionTree', assertTree)
+    },
+  }
 }
 
 type WebpackConfigContext = {
@@ -174,9 +191,62 @@ function isOptionalServerExternalPackageInstalled(packageName: string, manifest:
   return PACKAGE_DEPENDENCY_FIELDS.some(field => Boolean(manifest?.[field]?.[packageName]))
 }
 
-function createRealtimeDefinitionWebpackRule(loaderPath: string, preserveServerHandlers: boolean): Record<string, unknown> {
+const pathSeparatorPattern = '[\\\\/]'
+
+function escapePathSegments(segments: readonly string[]): string {
+  return segments.map(segment => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(pathSeparatorPattern)
+}
+
+type NextFindRoot = { findRootDirAndLockFiles(directory: string): { readonly rootDir?: string } }
+
+function loadNextFindRoot(projectRoot: string): NextFindRoot {
+  const projectRequire = createRequire(join(projectRoot, 'package.json'))
+  try {
+    return projectRequire('next/dist/lib/find-root') as NextFindRoot
+  } catch {
+    return createRequire(import.meta.url)('next/dist/lib/find-root') as NextFindRoot
+  }
+}
+
+function resolveTurbopackRoot(nextConfig: NextConfig, projectRoot: string): string {
+  const configured = nextConfig.outputFileTracingRoot || nextConfig.turbopack?.root || process.env.NEXT_PRIVATE_OUTPUT_TRACE_ROOT
+  let root = configured ? resolve(projectRoot, configured) : undefined
+  if (!root) {
+    try {
+      root = loadNextFindRoot(projectRoot).findRootDirAndLockFiles(projectRoot).rootDir
+    } catch (error) {
+      throw new Error('Holo could not determine the Turbopack root for a symlinked server/realtime folder. Set turbopack.root in next.config.', { cause: error })
+    }
+  }
+  if (!root) {
+    throw new Error('Holo could not determine the Turbopack root for a symlinked server/realtime folder. Set turbopack.root in next.config.')
+  }
+  return existsSync(root) ? realpathSync.native(root) : root
+}
+
+function resolveRealtimeDefinitionPatterns(nextConfig: NextConfig, projectRoot: string): { readonly absolute: readonly RegExp[], readonly turbopackRelative: readonly RegExp[] } {
+  const directories = resolveRealtimeDefinitionDirectories(projectRoot)
+  const linkedDirectories = directories.filter(directory => !directory.endsWith('/server/realtime'))
+  const turbopackRoot = linkedDirectories.length > 0 ? resolveTurbopackRoot(nextConfig, projectRoot) : undefined
   return {
-    test: /(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/,
+    absolute: directories.map(directory => new RegExp(`^${escapePathSegments(directory.split('/'))}${pathSeparatorPattern}`)),
+    turbopackRelative: linkedDirectories.map((directory) => {
+      const relativeDirectory = relative(turbopackRoot as string, directory)
+      if (relativeDirectory === '' || relativeDirectory.startsWith('..') || isAbsolute(relativeDirectory)) {
+        throw new Error(`server/realtime resolves to ${directory}, outside the Turbopack root ${turbopackRoot}. Move the folder inside the root or set turbopack.root in next.config.`)
+      }
+      return new RegExp(`^(?:\\.${pathSeparatorPattern})?${escapePathSegments(relativeDirectory.replaceAll('\\', '/').split('/'))}${pathSeparatorPattern}`)
+    }),
+  }
+}
+
+function createRealtimeDefinitionWebpackRule(
+  loaderPath: string,
+  preserveServerHandlers: boolean,
+  directoryPatterns: readonly RegExp[],
+): Record<string, unknown> {
+  return {
+    test: [/(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/, ...directoryPatterns.map(pattern => new RegExp(`${pattern.source}.+\\.[cm]?[jt]sx?$`))],
     use: [{
       loader: loaderPath,
       options: { preserveServerHandlers },
@@ -187,6 +257,7 @@ function createRealtimeDefinitionWebpackRule(loaderPath: string, preserveServerH
 function createRealtimeDefinitionTurbopackRule(
   loaderPath: string,
   environment: 'browser' | 'server',
+  directoryPatterns: readonly RegExp[],
 ): Record<string, unknown> {
   const environmentCondition = environment === 'browser'
     ? 'browser'
@@ -197,7 +268,7 @@ function createRealtimeDefinitionTurbopackRule(
       all: [
         environmentCondition,
         {
-          path: /(?:^|[\\/])server[\\/]realtime[\\/]/,
+          any: [{ path: /(?:^|[\\/])server[\\/]realtime[\\/]/ }, ...directoryPatterns.map(path => ({ path }))],
         },
       ],
     },
@@ -237,6 +308,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
+  const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
     ...existingTurbopack,
     rules: {
@@ -249,8 +321,8 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       ...(hasRealtime
         ? {
             '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser'),
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server'),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.turbopackRelative]),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.turbopackRelative]),
             ],
           }
         : {}),
@@ -287,10 +359,14 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     turbopack: mergedTurbopack,
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
+      if (hasRealtime) {
+        assertRealtimeDefinitionTree(process.cwd())
+        nextWebpackConfig.plugins = [...(nextWebpackConfig.plugins ?? []), createRealtimeDefinitionTreePlugin(process.cwd())]
+      }
       nextWebpackConfig.module = nextWebpackConfig.module ?? {}
       nextWebpackConfig.module.rules = [
         ...(nextWebpackConfig.module.rules ?? []),
-        ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer)] : []),
+        ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer, realtimeDirectoryPatterns.absolute)] : []),
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
       ]

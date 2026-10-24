@@ -267,6 +267,7 @@ In preparation, not yet released.
 
 - Raise dependency floors past published advisories: `ws` 8.21.0, `sharp` 0.35.5, `mysql2` 3.24.6 and `valibot` 1.5.0, with framework peers Next.js 16.4.3, Nuxt 4.6.2 (and `@nuxt/kit`), SvelteKit 2.70.2 and Svelte 5.56.8. Next.js 16.4.0 and earlier on the 16 line have two critical unauthenticated remote code execution advisories (GHSA-673q-mjm6-r5xr, GHSA-2464-fhr4-w9xw) and a high Server Actions denial of service (GHSA-p3m5-59mp-jv5r). Nuxt before 4.6.2 skips server route rules for case-variant paths (GHSA-vjh5-4x84-xrqp) and doesn't sanitize `useHeadSafe` input in server islands (GHSA-xfq5-w38q-pc2x). Scaffolded apps get the new floors.
 - The dependency audit also checks the lowest version each workspace catalog range allows, since those ranges become published peer ranges and scaffolded app versions. A floor inside an advisory range fails the audit with the same severity rules and `audit-exceptions.json` exceptions as locked versions.
+- Browser builds no longer carry `server/realtime` source in their source maps. The client realtime transform's map has no `sourcesContent`, and Nuxt loads every `server/realtime` module as its browser stub, so a deployment that serves browser source maps no longer exposes handler code. Before, the map embedded the whole server module. The Next, Nuxt, and SvelteKit adapters also recognize `server/realtime` modules when the project root or the `server/realtime` folder is reached through a symlink. Before, SvelteKit skipped modules under a symlinked root, and all three sent a symlinked `server/realtime` folder's modules to the browser unreduced. A symbolic link to a file inside `server/realtime`, or to a folder outside it, now stops the build or dev server with an error naming the link.
 
 ### Changed
 
@@ -279,6 +280,7 @@ In preparation, not yet released.
 
 - Holo CLI writes generated and updated project files, including `package.json`, through a temporary file and an atomic rename. Editors, watchers and package managers reading a file while `holo dev` or `holo install` updates it no longer see an empty or truncated file.
 - Next.js realtime queries call React `use()` on every render, so a query that suspends for its first result renders without React errors on Next.js 16.4.
+- The browser build of a `server/realtime` module accepts definitions made through the package's default or namespace import (`realtime.query({...})`), an `export default query({...})` definition, and a `name` read from a same-file `const` set to a string literal. Before, the documented default-import form failed the build, and a default-exported definition next to named ones was left out of the browser module. An exported definition the build can't reduce, such as one re-exported through a local alias, or whose `name` a later spread or computed key could change, now fails the build, naming the file and the export. The browser module still holds only string-literal names and the factory import.
 
 ## 0.3.28
 

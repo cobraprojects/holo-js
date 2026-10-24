@@ -181,6 +181,10 @@ You can also import your [models](/orm/) and use them directly, as in the quick 
 
 Holo strips handlers out of the browser bundle, so database code and secrets in them never reach the client.
 
+Export each definition directly, as `export const posts = query({...})` or `export default query({...})`, with a `name` that is a string literal or a `const` in the same file set to one. Don't spread other objects into the options after `name` or without one. Any other exported definition fails the build with the file and export named.
+
+`server/realtime` itself can be a symbolic link to another folder. With Next.js, the folder it points to must be inside the Turbopack root (`turbopack.root`, or the workspace root Next.js finds from your lockfile). Files inside it can't be links, and neither can folders that point outside it: Holo stops with an error naming the link. Holo checks when the dev server or build starts, and on each rebuild. With Next.js on Turbopack, it checks again only when a realtime module compiles, so restart `holo dev` after adding a link.
+
 ## Call queries from components
 
 Call the query like a function, inside a component:
