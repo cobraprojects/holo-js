@@ -310,7 +310,46 @@ function absoluteCompilerOptions(options: JsonObject, directory: string): JsonOb
   return result
 }
 
-function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): JsonObject {
+interface ResolvedTsconfigPaths {
+  readonly paths: JsonObject
+  readonly baseUrl?: string
+}
+
+async function readTsconfigFile(path: string): Promise<JsonObject | undefined> {
+  const text = await readFile(path, 'utf8').catch(() => undefined)
+  return text === undefined ? undefined : parseTsconfigText(text)
+}
+
+async function resolveTsconfigPaths(projectRoot: string, configPath: string, seen: Set<string>): Promise<ResolvedTsconfigPaths> {
+  if (seen.has(configPath)) return { paths: {} }
+  seen.add(configPath)
+  const config = await readTsconfigFile(configPath)
+  if (!config) return { paths: {} }
+
+  let inherited: ResolvedTsconfigPaths = { paths: {} }
+  for (const entry of extendsEntries(config)) {
+    if (!entry.startsWith('.') && !isAbsolute(entry)) continue
+    const parentPath = resolve(dirname(configPath), entry)
+    if (isInside(parentPath, join(projectRoot, NUXT_BUILD_DIRECTORY))) continue
+    const parent = await resolveTsconfigPaths(projectRoot, parentPath.endsWith('.json') ? parentPath : `${parentPath}.json`, seen)
+    inherited = { paths: { ...inherited.paths, ...parent.paths }, baseUrl: parent.baseUrl ?? inherited.baseUrl }
+  }
+
+  const compilerOptions = isRecord(config.compilerOptions) ? config.compilerOptions : {}
+  const baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(dirname(configPath), compilerOptions.baseUrl) : inherited.baseUrl
+  const ownPaths = isRecord(compilerOptions.paths) ? absoluteCompilerOptions({ paths: compilerOptions.paths }, baseUrl ?? dirname(configPath)).paths : {}
+  return { paths: { ...inherited.paths, ...(isRecord(ownPaths) ? ownPaths : {}) }, baseUrl }
+}
+
+async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {
+  const snapshot = snapshotPath ? await readTsconfigFile(snapshotPath) : undefined
+  const snapshotOptions = snapshot && isRecord(snapshot.compilerOptions) ? snapshot.compilerOptions : undefined
+  if (snapshotOptions) return isRecord(snapshotOptions.paths) ? snapshotOptions.paths : {}
+  const defaults = absoluteCompilerOptions({ paths: DEFAULT_LOADER_PATHS }, projectRoot).paths
+  return isRecord(defaults) ? defaults : {}
+}
+
+async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): Promise<JsonObject> {
   const entries = extendsEntries(config)
   const extendsTargets = entries.flatMap(entry => {
     if (isNuxtBuildPath(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
@@ -328,17 +367,11 @@ function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPat
     derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
+  const user = await resolveTsconfigPaths(projectRoot, join(projectRoot, 'tsconfig.json'), new Set())
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
-  let baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(projectRoot, compilerOptions.baseUrl) : undefined
-  if (!snapshotPath) {
-    baseUrl ??= projectRoot
-    compilerOptions.paths = { ...DEFAULT_LOADER_PATHS, ...(isRecord(compilerOptions.paths) ? compilerOptions.paths : {}) }
-  }
-  if (baseUrl) {
-    compilerOptions.baseUrl = baseUrl
-  } else if (isRecord(compilerOptions.paths)) {
-    compilerOptions.paths = absoluteCompilerOptions({ paths: compilerOptions.paths }, projectRoot).paths
-  }
+  const baseUrl = user.baseUrl ?? (snapshotPath ? undefined : projectRoot)
+  if (baseUrl) compilerOptions.baseUrl = baseUrl
+  compilerOptions.paths = { ...await nuxtLoaderPaths(projectRoot, snapshotPath), ...user.paths }
   derived.compilerOptions = compilerOptions
   return derived
 }
@@ -354,7 +387,7 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
     const snapshotPath = join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH)
     const hasSnapshot = await pathExists(snapshotPath)
     const derivedPath = join(tempDir, 'tsconfig.json')
-    await writeFile(derivedPath, `${JSON.stringify(deriveLoaderConfig(projectRoot, config, hasSnapshot ? snapshotPath : undefined), null, 2)}\n`, 'utf8')
+    await writeFile(derivedPath, `${JSON.stringify(await deriveLoaderConfig(projectRoot, config, hasSnapshot ? snapshotPath : undefined), null, 2)}\n`, 'utf8')
     return derivedPath
   }
 

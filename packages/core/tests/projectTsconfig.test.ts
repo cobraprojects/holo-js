@@ -146,14 +146,28 @@ describe('project tsconfig loading for bundled definitions', () => {
     expect(bundle.definition).toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'tool' })
   })
 
-  it('keeps a base config the references tsconfig extends alongside the snapshot', async () => {
-    const { projectRoot } = await createNuxtProject({
-      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './tsconfig.base.json' }),
+  it('merges the Nuxt aliases with the paths of a base config the references tsconfig extends', async () => {
+    const { projectRoot, entryPath } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './config/tsconfig.base.json' }),
     })
-    await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { paths: { 'base/*': ['./lib/custom/*'] } } }))
-    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nexport const definition = { tool }\n")
+    await mkdir(join(projectRoot, 'config'), { recursive: true })
+    await writeFile(join(projectRoot, 'config/tsconfig.base.json'), JSON.stringify({ compilerOptions: { paths: { 'base/*': ['../lib/custom/*'], 'custom/*': ['../lib/override/*'] } } }))
+    await mkdir(join(projectRoot, 'lib/override'), { recursive: true })
+    await writeFile(join(projectRoot, 'lib/override/tool.ts'), "export const tool = 'override'\n")
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { title } from '~/app/models/Post'\nexport const definition = { tool, title }\n")
 
-    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool' })
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', title: 'post' })
+    expect((await importBundled(projectRoot, entryPath)).definition).toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'override' })
+  })
+
+  it('merges the Nuxt aliases with the paths of a legacy tsconfig that extends both Nuxt and a base config', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', './tsconfig.base.json'], compilerOptions: { paths: { 'own/*': ['*'] } } }),
+    })
+    await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { baseUrl: './lib', paths: { 'base/*': ['custom/*'] } } }))
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { util } from 'own/util'\nimport { helper } from '#imports'\nexport const definition = { tool, util, helper }\n")
+
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', helper: 'imports' })
   })
 
   it('keeps the default aliases for a references tsconfig whose snapshot is missing', async () => {
