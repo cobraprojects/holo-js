@@ -85,6 +85,24 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
       expect(module).toContain('export const rename = mutation({')
     })
 
+    it('emits an export default definition', () => {
+      const module = contract.createModule([
+        `import { mutation } from '@holo-js/realtime'`,
+        `export default mutation({ name: 'posts.rename', handler: async () => true })`,
+      ].join('\n'), 'server/realtime/posts.ts')
+      expect(module).toContain(`import { mutation } from '${contract.importTarget}'`)
+      expect(module).toContain('export default mutation({')
+      expect(module).toContain(`name: 'posts.rename'`)
+    })
+
+    it('fails closed when a default definition name is not a string literal', () => {
+      expect(() => contract.createModule([
+        `import realtime from '@holo-js/realtime'`,
+        `const NAME = process.env.POSTS_NAME`,
+        `export default realtime.query({ name: NAME, handler: async () => [] })`,
+      ].join('\n'), 'server/realtime/posts.ts')).toThrow(/server\/realtime\/posts\.ts.*default/)
+    })
+
     it('keeps the default export of a file that also has named definitions', () => {
       const module = contract.createModule([
         `import { query } from '@holo-js/realtime'`,

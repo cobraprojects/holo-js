@@ -253,6 +253,9 @@ describe('shared realtime definition transform', () => {
     ['a default export of a local definition', 'default', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport default posts'],
     ['an export list of a local definition', 'listed', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport { posts as listed }'],
     ['a default export nested in another value', 'default', 'export default [query({ name: \'posts.list\', handler: async () => [] })]'],
+    ['a factory held in a local', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst q = realtime.query\nexport const aliased = q({ name: \'posts.list\', handler: async () => [] })'],
+    ['a factory destructured from the default import', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst { mutation: m } = realtime\nexport const aliased = m({ name: \'posts.rename\', handler: async () => true })'],
+    ['a member of an aliased namespace', 'aliased', 'import * as realtime from \'@holo-js/realtime\'\nconst r = realtime\nexport const aliased = r.query({ name: \'posts.list\', handler: async () => [] })'],
   ])('fails closed for %s and names the export', (_, exportName, source) => {
     const transform = () => createRealtimeClientDefinitionModule({ source: `
       export const kept = query({ name: 'posts.kept', handler: async () => [] })
@@ -260,5 +263,27 @@ describe('shared realtime definition transform', () => {
     `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(transform).toThrow('server/realtime/posts.ts')
     expect(transform).toThrow(exportName)
+  })
+
+  it.each([
+    ['a later name property that overrides a literal', '{ name: \'posts.list\', name: process.env.NAME, handler: async () => [] }'],
+    ['a computed name key', '{ [\'name\']: process.env.NAME, handler: async () => [] }'],
+    ['a computed key that may be the name', '{ name: \'posts.list\', [key]: \'other\', handler: async () => [] }'],
+    ['a spread after the name', '{ name: \'posts.list\', ...overrides, handler: async () => [] }'],
+    ['a spread with no explicit name', '{ ...shared, handler: async () => [] }'],
+  ])('rejects a definition whose name the browser cannot know from %s', (_, options) => {
+    expect(() => createRealtimeClientDefinitionModule({
+      source: `export const posts = query(${options})`,
+      importTarget: '@holo-js/test/realtime',
+      filePath: 'server/realtime/posts.ts',
+    })).toThrow(/server\/realtime\/posts\.ts.*posts/)
+  })
+
+  it('uses the name the runtime sees when the name key is repeated or computed from a literal', () => {
+    const output = createRealtimeClientDefinitionModule({ source: `
+      export const posts = query({ name: 'posts.old', ['name']: 'posts.list', handler: async () => [] })
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
+    expect(output).toContain("name: 'posts.list'")
+    expect(output).not.toContain('posts.old')
   })
 })
