@@ -6,7 +6,6 @@ type RealtimeDefinition = {
   readonly exportedName: string
   readonly factory: RealtimeFactory
   readonly name?: string
-  readonly unsafeName?: true
   readonly sourceLine: number
 }
 
@@ -41,49 +40,153 @@ function propertyName(property: ts.ObjectLiteralElementLike): string | undefined
     : undefined
 }
 
-function collectRealtimeFactories(sourceFile: ts.SourceFile): ReadonlyMap<string, RealtimeFactory> {
+const realtimeFactoryExports: ReadonlyMap<string, RealtimeFactory> = new Map([
+  ['query', 'query'],
+  ['mutation', 'mutation'],
+  ['defineRealtimeQuery', 'query'],
+  ['defineRealtimeMutation', 'mutation'],
+])
+
+type RealtimeBindings = {
+  readonly factories: ReadonlyMap<string, RealtimeFactory>
+  readonly namespaces: ReadonlySet<string>
+}
+
+function collectRealtimeBindings(sourceFile: ts.SourceFile): RealtimeBindings {
   const factories = new Map<string, RealtimeFactory>([
     ['query', 'query'],
     ['mutation', 'mutation'],
   ])
+  const namespaces = new Set<string>()
   for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement) || !statement.importClause?.namedBindings) continue
+    if (!ts.isImportDeclaration(statement) || !statement.importClause || statement.importClause.isTypeOnly) continue
     if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== '@holo-js/realtime') continue
-    if (!ts.isNamedImports(statement.importClause.namedBindings)) continue
-    for (const element of statement.importClause.namedBindings.elements) {
+    const { name, namedBindings } = statement.importClause
+    if (name) namespaces.add(name.text)
+    if (namedBindings && ts.isNamespaceImport(namedBindings)) namespaces.add(namedBindings.name.text)
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue
+    for (const element of namedBindings.elements) {
+      if (element.isTypeOnly) continue
       const importedName = element.propertyName?.text ?? element.name.text
-      if (importedName === 'query' || importedName === 'defineRealtimeQuery') {
-        factories.set(element.name.text, 'query')
-      } else if (importedName === 'mutation' || importedName === 'defineRealtimeMutation') {
-        factories.set(element.name.text, 'mutation')
+      if (importedName === 'default') {
+        namespaces.add(element.name.text)
+        continue
+      }
+      const factory = realtimeFactoryExports.get(importedName)
+      if (factory) factories.set(element.name.text, factory)
+    }
+  }
+  return { factories, namespaces }
+}
+
+function resolveFactory(callee: ts.Expression, bindings: RealtimeBindings): RealtimeFactory | undefined {
+  if (ts.isIdentifier(callee)) return bindings.factories.get(callee.text)
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && bindings.namespaces.has(callee.expression.text)) {
+    return realtimeFactoryExports.get(callee.name.text)
+  }
+  if (ts.isElementAccessExpression(callee) && ts.isIdentifier(callee.expression) && bindings.namespaces.has(callee.expression.text)
+    && ts.isStringLiteralLike(callee.argumentExpression)) {
+    return realtimeFactoryExports.get(callee.argumentExpression.text)
+  }
+  return undefined
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let current = expression
+  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isSatisfiesExpression(current)
+    || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current)) {
+    current = current.expression
+  }
+  return current
+}
+
+function containsFactoryCall(node: ts.Node, bindings: RealtimeBindings): boolean {
+  if (ts.isCallExpression(node) && resolveFactory(node.expression, bindings)) return true
+  return ts.forEachChild(node, child => containsFactoryCall(child, bindings) || undefined) ?? false
+}
+
+function collectStringConstants(sourceFile: ts.SourceFile): ReadonlyMap<string, ts.StringLiteralLike> {
+  const constants = new Map<string, ts.StringLiteralLike>()
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isStringLiteralLike(declaration.initializer)) {
+        constants.set(declaration.name.text, declaration.initializer)
       }
     }
   }
-  return factories
+  return constants
 }
 
-function collectDefinitions(sourceFile: ts.SourceFile): readonly RealtimeDefinition[] {
-  const definitions: RealtimeDefinition[] = []
-  const factories = collectRealtimeFactories(sourceFile)
-  for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement)
-      || !statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue
+function resolveDefinitionName(
+  definitionNode: ts.ObjectLiteralExpression,
+  constants: ReadonlyMap<string, ts.StringLiteralLike>,
+): ts.StringLiteralLike | null | undefined {
+  const nameProperty = definitionNode.properties.find(property => propertyName(property) === 'name')
+  if (!nameProperty) return undefined
+  if (ts.isShorthandPropertyAssignment(nameProperty)) return constants.get(nameProperty.name.text) ?? null
+  if (!ts.isPropertyAssignment(nameProperty)) return null
+  if (ts.isStringLiteralLike(nameProperty.initializer)) return nameProperty.initializer
+  if (ts.isIdentifier(nameProperty.initializer)) return constants.get(nameProperty.initializer.text) ?? null
+  return null
+}
 
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer || !ts.isCallExpression(declaration.initializer)) continue
-      const factoryNode = declaration.initializer.expression
-      if (!ts.isIdentifier(factoryNode)) continue
-      const factory = factories.get(factoryNode.text)
-      if (!factory) continue
-      const definitionNode = declaration.initializer.arguments[0]
-      if (!definitionNode || !ts.isObjectLiteralExpression(definitionNode)) continue
-      const nameProperty = definitionNode.properties.find(property => propertyName(property) === 'name')
-      const name = nameProperty && ts.isPropertyAssignment(nameProperty)
-        ? nameProperty.initializer.getText(sourceFile)
-        : undefined
-      const unsafeName = nameProperty !== undefined && !(ts.isPropertyAssignment(nameProperty) && (ts.isStringLiteral(nameProperty.initializer) || ts.isNoSubstitutionTemplateLiteral(nameProperty.initializer)))
-      const sourceLine = sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line
-      definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}), ...(unsafeName ? { unsafeName: true as const } : {}) })
+function unreducibleDefinitionError(filePath: string, exportedName: string): Error {
+  return new Error(`${filePath} exports ${exportedName} through a query or mutation call that cannot be reduced to a browser definition. Export each definition directly, as export const name = query({ name: 'posts.list', ... }) or export default query({ ... }).`)
+}
+
+function collectDefinitions(sourceFile: ts.SourceFile, filePath: string): readonly RealtimeDefinition[] {
+  const definitions: RealtimeDefinition[] = []
+  const bindings = collectRealtimeBindings(sourceFile)
+  const constants = collectStringConstants(sourceFile)
+  const definitionLocals = new Set<string>()
+
+  const reduce = (exportedName: string, expression: ts.Expression, node: ts.Node): boolean => {
+    const call = unwrapExpression(expression)
+    const factory = ts.isCallExpression(call) ? resolveFactory(call.expression, bindings) : undefined
+    if (!ts.isCallExpression(call) || !factory) {
+      if (containsFactoryCall(expression, bindings)) throw unreducibleDefinitionError(filePath, exportedName)
+      return false
+    }
+    const definitionNode = call.arguments[0]
+    if (!definitionNode || !ts.isObjectLiteralExpression(definitionNode)) throw unreducibleDefinitionError(filePath, exportedName)
+    const name = resolveDefinitionName(definitionNode, constants)
+    if (name === null) {
+      throw new Error(`${filePath} defines ${exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
+    }
+    const sourceLine = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line
+    definitions.push({ exportedName, factory, sourceLine, ...(name ? { name: name.getText(sourceFile) } : {}) })
+    return true
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)) {
+      const exported = statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false
+      for (const declaration of statement.declarationList.declarations) {
+        if (!declaration.initializer) continue
+        if (!exported) {
+          if (ts.isIdentifier(declaration.name) && containsFactoryCall(declaration.initializer, bindings)) {
+            definitionLocals.add(declaration.name.text)
+          }
+          continue
+        }
+        const exportedName = ts.isIdentifier(declaration.name) ? declaration.name.text : declaration.name.getText(sourceFile)
+        if (!ts.isIdentifier(declaration.name)) {
+          if (containsFactoryCall(declaration.initializer, bindings)) throw unreducibleDefinitionError(filePath, exportedName)
+          continue
+        }
+        if (reduce(exportedName, declaration.initializer, declaration)) definitionLocals.add(exportedName)
+      }
+    } else if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+      const expression = unwrapExpression(statement.expression)
+      if (ts.isIdentifier(expression) && definitionLocals.has(expression.text)) throw unreducibleDefinitionError(filePath, 'default')
+      reduce('default', statement.expression, statement)
+    } else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && !statement.isTypeOnly
+      && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) {
+        const localName = element.propertyName?.text ?? element.name.text
+        if (!element.isTypeOnly && definitionLocals.has(localName)) throw unreducibleDefinitionError(filePath, element.name.text)
+      }
     }
   }
   return Object.freeze(definitions)
@@ -202,13 +305,9 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
   }
 
   const sourceFile = parseRealtimeSource(source)
-  const definitions = collectDefinitions(sourceFile)
+  const definitions = collectDefinitions(sourceFile, filePath)
   if (definitions.length === 0) {
     throw new Error(`${filePath} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
-  }
-  const unsafe = definitions.find(definition => definition.unsafeName)
-  if (unsafe) {
-    throw new Error(`${filePath} defines ${unsafe.exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
   }
   const factories = [...new Set(definitions.map(definition => definition.factory))]
   const outputLines: string[] = [
@@ -217,7 +316,9 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
   ]
   const sourceLines: Array<number | undefined> = [undefined, undefined]
   for (const definition of definitions) {
-    outputLines.push(`export const ${definition.exportedName} = ${definition.factory}({`)
+    outputLines.push(definition.exportedName === 'default'
+      ? `export default ${definition.factory}({`
+      : `export const ${definition.exportedName} = ${definition.factory}({`)
     sourceLines.push(definition.sourceLine)
     if (definition.name) {
       outputLines.push(`  name: ${definition.name},`)

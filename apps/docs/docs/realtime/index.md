@@ -181,6 +181,8 @@ You can also import your [models](/orm/) and use them directly, as in the quick 
 
 Holo strips handlers out of the browser bundle, so database code and secrets in them never reach the client.
 
+Export each definition directly, as `export const posts = query({...})` or `export default query({...})`, with a `name` that is a string literal or a `const` in the same file set to one. Any other exported definition fails the build with the file and export named, so no server code reaches the browser.
+
 ## Call queries from components
 
 Call the query like a function, inside a component:

@@ -64,5 +64,52 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
     it('fails closed when a definition name is not a string literal', () => {
       expect(() => contract.createModule(`export const post = query({ name: process.env.POSTS_NAME, handler: async () => [] })`, 'server/realtime/posts.ts')).toThrow('server/realtime/posts.ts')
     })
+
+    it('emits definitions reached through a default import', () => {
+      const module = contract.createModule([
+        `import realtime from '@holo-js/realtime'`,
+        `export const listPosts = realtime.query({ name: 'posts.list', access: 'public', handler: async ({ db }) => await db.table('posts').get() })`,
+      ].join('\n'), 'server/realtime/posts.ts')
+      expect(module).toContain(`import { query } from '${contract.importTarget}'`)
+      expect(module).toContain('export const listPosts = query({')
+      expect(module).toContain(`name: 'posts.list'`)
+      expect(module).not.toContain('db.table')
+    })
+
+    it('emits definitions reached through a namespace import', () => {
+      const module = contract.createModule([
+        `import * as realtime from '@holo-js/realtime'`,
+        `export const rename = realtime.defineRealtimeMutation({ name: 'posts.rename', handler: async () => true })`,
+      ].join('\n'), 'server/realtime/posts.ts')
+      expect(module).toContain(`import { mutation } from '${contract.importTarget}'`)
+      expect(module).toContain('export const rename = mutation({')
+    })
+
+    it('keeps the default export of a file that also has named definitions', () => {
+      const module = contract.createModule([
+        `import { query } from '@holo-js/realtime'`,
+        `export const posts = query({ name: 'posts.list', handler: async () => [] })`,
+        `export default query({ name: 'posts.default', handler: async () => [] })`,
+      ].join('\n'), 'server/realtime/posts.ts')
+      expect(module).toContain('export const posts = query({')
+      expect(module).toContain('export default query({')
+      expect(module).toContain(`name: 'posts.default'`)
+    })
+
+    it('inlines a name read from a same-file string const', () => {
+      const module = contract.createModule([
+        `const POSTS = 'posts.list'`,
+        `export const posts = query({ name: POSTS, handler: async () => [] })`,
+      ].join('\n'), 'server/realtime/posts.ts')
+      expect(module).toContain(`name: 'posts.list'`)
+      expect(module).not.toContain('POSTS')
+    })
+
+    it('fails closed for an exported definition it cannot reduce', () => {
+      expect(() => contract.createModule([
+        `export const posts = query({ name: 'posts.list', handler: async () => [] })`,
+        `export default query(options)`,
+      ].join('\n'), 'server/realtime/posts.ts')).toThrow(/server\/realtime\/posts\.ts.*default/)
+    })
   })
 }
