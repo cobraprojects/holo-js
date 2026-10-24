@@ -166,3 +166,60 @@ test('an exception for tooling-only code is enforced only by --all', async () =>
     await rm(checkout, { recursive: true, force: true })
   }
 })
+
+async function runFloorScenario({ floor, locked, severity, exceptions = [], args = [] }) {
+  const checkout = await mkdtemp(join(tmpdir(), 'holo-audit-floor-'))
+  try {
+    await mkdir(join(checkout, 'packages', 'adapter'), { recursive: true })
+    await writeFile(join(checkout, 'package.json'), JSON.stringify({
+      private: true, workspaces: { packages: ['packages/*'], catalog: { framework: floor } },
+    }))
+    await writeFile(join(checkout, 'packages', 'adapter', 'package.json'), JSON.stringify({
+      name: '@holo-js/adapter', peerDependencies: { framework: 'catalog:' },
+    }))
+    await writeFile(join(checkout, 'bun.lock'), JSON.stringify({
+      lockfileVersion: 1,
+      packages: { framework: [`framework@${locked}`, '', {}] },
+    }))
+    await writeFile(join(checkout, 'audit.json'), JSON.stringify({
+      framework: [{ severity, vulnerable_versions: '>=1.0.0 <=1.4.0', title: 'Framework vulnerability', url: 'https://example.test/framework' }],
+    }))
+    await writeFile(join(checkout, 'audit-exceptions.json'), JSON.stringify(exceptions))
+    return await execFileAsync(process.execPath, [script, ...args, '--report', 'audit.json'], { cwd: checkout })
+      .then(value => ({ ...value, code: 0 }), error => error)
+  } finally {
+    await rm(checkout, { recursive: true, force: true })
+  }
+}
+
+test('blocks a catalog floor inside an advisory range even when the lockfile resolves a patched version', async () => {
+  const result = await runFloorScenario({ floor: '^1.3.8', locked: '1.4.2', severity: 'critical' })
+  assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stdout, /BLOCK framework@1\.3\.8 \(critical\) catalog floor \^1\.3\.8: Framework vulnerability/)
+})
+
+test('passes once the catalog floor is past the advisory range', async () => {
+  const result = await runFloorScenario({ floor: '^1.4.3', locked: '1.4.3', severity: 'critical' })
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`)
+  assert.doesNotMatch(result.stdout, /Framework vulnerability/)
+})
+
+test('applies the severity policy to catalog floors', async () => {
+  const reported = await runFloorScenario({ floor: '^1.3.8', locked: '1.4.2', severity: 'moderate' })
+  assert.equal(reported.code, 0, `${reported.stdout}\n${reported.stderr}`)
+  assert.match(reported.stdout, /REPORT framework@1\.3\.8 \(moderate\) catalog floor/)
+  const blocked = await runFloorScenario({ floor: '^1.3.8', locked: '1.4.2', severity: 'moderate', args: ['--all'] })
+  assert.equal(blocked.code, 1, `${blocked.stdout}\n${blocked.stderr}`)
+  assert.match(blocked.stdout, /BLOCK framework@1\.3\.8 \(moderate\) catalog floor/)
+})
+
+test('honours an audit exception for a catalog floor', async () => {
+  const result = await runFloorScenario({
+    floor: '^1.3.8',
+    locked: '1.4.2',
+    severity: 'critical',
+    exceptions: [{ advisory: 'https://example.test/framework', package: 'framework', version: '1.3.8', expires: '2999-01-01', reason: 'Raised by a follow-up.' }],
+  })
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stdout, /EXCEPT framework@1\.3\.8 \(critical\) catalog floor/)
+})
