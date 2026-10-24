@@ -20,20 +20,22 @@ it('binds an operating-system assigned port when the worker port is 0 and report
   expect((await fetch(`http://127.0.0.1:${worker.port}/health`)).status).toBe(200)
 })
 
-it.each([-1, 1.5, 'abc'])('rejects the worker port %s', (port) => {
-  expect(() => configWithWorkerPort(port)).toThrow('[Holo Broadcast] Broadcast worker port must be 0 or a positive integer.')
+it.each([-1, 1.5, 'abc', 65_536])('rejects the worker port %s', (port) => {
+  expect(() => configWithWorkerPort(port)).toThrow('[Holo Broadcast] Broadcast worker port must be an integer between 0 and 65535.')
 })
 
-it('keeps requiring a positive public and connection port', () => {
-  expect(() => normalizeBroadcastConfig({
-    default: 'main',
-    connections: { main: { ...connection, options: { port: 0 } } },
-  })).toThrow('[Holo Broadcast] Broadcast connection "main" options port must be a positive integer.')
+it('keeps requiring a non-zero public and connection port within range', () => {
+  for (const port of [0, 65_536]) {
+    expect(() => normalizeBroadcastConfig({
+      default: 'main',
+      connections: { main: { ...connection, options: { port } } },
+    })).toThrow('[Holo Broadcast] Broadcast connection "main" options port must be an integer between 1 and 65535.')
+  }
   expect(() => normalizeBroadcastConfig({
     default: 'main',
     connections: { main: connection },
     worker: { publicPort: 0 },
-  })).toThrow('[Holo Broadcast] Broadcast worker public port must be a positive integer.')
+  })).toThrow('[Holo Broadcast] Broadcast worker public port must be an integer between 1 and 65535.')
 })
 
 it('reports the port Bun bound when the worker port is 0', async () => {

@@ -320,11 +320,14 @@ describe('@holo-js/config broadcast normalization', () => {
       default: 'broken',
     })).toThrow('Broadcast driver "ably" is not supported yet')
 
-    expect(() => normalizeBroadcastConfig({
-      worker: {
-        port: 'zero',
-      },
-    })).toThrow('Broadcast worker port must be a positive integer')
+    for (const port of ['zero', -1, 1.5, 65_536]) {
+      expect(() => normalizeBroadcastConfig({
+        worker: {
+          port,
+        },
+      })).toThrow('[Holo Broadcast] Broadcast worker port must be an integer between 0 and 65535.')
+    }
+    expect(normalizeBroadcastConfig({ worker: { port: 0 } }).worker.port).toBe(0)
 
     expect(() => normalizeBroadcastConfig({
       worker: {
@@ -572,6 +575,6 @@ describe('@holo-js/config broadcast normalization', () => {
           },
         },
       },
-    })).toThrow('must be a positive integer')
+    })).toThrow('[Holo Broadcast] Broadcast connection "reverb" options port must be an integer between 1 and 65535.')
   })
 })

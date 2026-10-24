@@ -251,12 +251,9 @@ function normalizeBroadcastPort(
       ? Number(value.trim())
       : fallback
 
-  if (allowEphemeral && normalized === 0) {
-    return normalized
-  }
-
-  if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`[Holo Broadcast] ${label} must be ${allowEphemeral ? '0 or ' : ''}a positive integer.`)
+  const minimum = allowEphemeral ? 0 : 1
+  if (!Number.isInteger(normalized) || normalized < minimum || normalized > 65_535) {
+    throw new Error(`[Holo Broadcast] ${label} must be an integer between ${minimum} and 65535.`)
   }
 
   return normalized
