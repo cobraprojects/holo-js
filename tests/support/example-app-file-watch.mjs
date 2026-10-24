@@ -2,6 +2,7 @@ import { existsSync, watch } from 'node:fs'
 import { join, sep } from 'node:path'
 
 const ignoredSegments = new Set(['node_modules', '.next'])
+const runtimeSegments = new Set(['storage', '.holo-js'])
 const windowMs = 5000
 
 function formatEvent(event) {
@@ -34,6 +35,10 @@ export function watchExampleAppFiles(directory) {
     },
     log() {
       return `${events.map(formatEvent).join('\n')}\n`
+    },
+    hasSourceEditBefore(at) {
+      return events.some(event => event.at <= at && event.at > at - windowMs && event.change !== 'error'
+        && !event.file.split(sep).some(segment => runtimeSegments.has(segment)))
     },
     before(times) {
       return times.map(at => [

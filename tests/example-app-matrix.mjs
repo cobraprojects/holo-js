@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createExampleAppFixture } from './support/example-app-fixture.mjs'
 import { watchExampleAppFiles } from './support/example-app-file-watch.mjs'
@@ -82,6 +82,10 @@ async function runApp(framework, driver) {
       const report = `\n${fileWatch.before(code === 0 ? compiledAt : [...compiledAt, Date.now()])}\n`
       output += report
       log.write(report)
+    }
+    const unprompted = compiledAt.filter(at => !fileWatch.hasSourceEditBefore(at)).length
+    if (unprompted > 0 && process.env.GITHUB_ACTIONS) {
+      process.stdout.write(`::warning title=Unprompted Next HMR compile (#380)::${framework}/${driver} printed '${compiledMarker}' ${unprompted} time(s) without a source edit. File changes before each are at the end of ${relative(root, logPath)} in the example-app-logs-${framework} artifact.\n`)
     }
     assert.equal(code, 0, `${framework}/${driver} app journey failed.\n${output}`)
   } finally {
