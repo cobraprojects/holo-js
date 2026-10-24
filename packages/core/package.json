@@ -45,7 +45,8 @@
     "@holo-js/config": "catalog:",
     "@holo-js/db": "catalog:",
     "@holo-js/kernel": "catalog:",
-    "esbuild": "catalog:"
+    "esbuild": "catalog:",
+    "typescript": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/auth": "catalog:",
@@ -137,7 +138,6 @@
     "@holo-js/storage-s3": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

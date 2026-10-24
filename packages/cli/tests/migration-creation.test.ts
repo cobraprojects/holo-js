@@ -10,6 +10,7 @@ import { runCacheTableCommand } from '../src/cache-migrations'
 import { runQueueFailedTableCommand, runQueueTableCommand } from '../src/queue-migrations'
 import { createMediaTableMigration, runMediaTableCommand } from '../src/media-migrations'
 import { runMakeMigration } from '../src/generators'
+import { createMigrationFiles } from '../src/migration-creation'
 import { ensureProjectConfig, prepareProjectDiscovery } from '../src/project'
 import type { IoStreams } from '../src/cli-types'
 
@@ -82,10 +83,13 @@ describe('migration creation commands', () => {
   it('reports the blocked project lock when migration creation times out without removing it', async () => {
     const lockPath = join(await realpath(root), '.holo-js/migration-create.lock')
     await mkdir(lockPath)
-    await expect(runMakeMigration(io, root, { args: ['blocked_migration'], flags: {} })).rejects.toThrow(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`)
+    const clock = [0, 29_999, 30_000]
+    const now = vi.fn(() => clock.shift() ?? Number.POSITIVE_INFINITY)
+    await expect(createMigrationFiles(root, () => [{ name: 'blocked_migration' }], { io, prepare: true, now })).rejects.toThrow(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`)
+    expect(now).toHaveBeenCalledTimes(3)
     expect((await stat(lockPath)).isDirectory()).toBe(true)
     expect(await migrationFiles()).toEqual([])
-  }, 35_000)
+  })
 
   it('refuses an on-disk duplicate hidden by stale discovery', async () => {
     await write('server/db/migrations/2026_01_01_000000_add_status.ts', 'export default { up() {} }\n')

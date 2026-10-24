@@ -650,6 +650,7 @@
         "@holo-js/db": "catalog:",
         "@holo-js/kernel": "catalog:",
         "esbuild": "catalog:",
+        "typescript": "catalog:",
       },
       "devDependencies": {
         "@holo-js/auth": "catalog:",
@@ -669,7 +670,6 @@
         "@holo-js/storage-s3": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
-        "typescript": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {

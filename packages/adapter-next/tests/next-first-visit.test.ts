@@ -1,140 +1,29 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import { connect, createServer } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { expect, it, onTestFinished, vi } from 'vitest'
-
-function runProcess(
-  command: string,
-  args: readonly string[],
-  options: { cwd: string, env: NodeJS.ProcessEnv, deadlineMs: number },
-): Promise<{ code: number | null, output: string }> {
-  return new Promise((resolve, reject) => {
-    const posix = process.platform !== 'win32'
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'], detached: posix })
-    let output = ''
-    const killGroup = () => {
-      if (child.exitCode !== null || child.signalCode !== null) return
-      try {
-        if (posix && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
-      } catch {
-        child.kill('SIGKILL')
-      }
-    }
-    onTestFinished(killGroup)
-    const deadline = setTimeout(() => {
-      killGroup()
-      reject(new Error(`${args.join(' ')} did not finish within ${options.deadlineMs}ms.\n${output}`))
-    }, options.deadlineMs)
-    child.stdout.on('data', chunk => { output += chunk.toString() })
-    child.stderr.on('data', chunk => { output += chunk.toString() })
-    child.once('error', (error) => {
-      clearTimeout(deadline)
-      reject(error)
-    })
-    child.once('close', (code) => {
-      clearTimeout(deadline)
-      resolve({ code, output })
-    })
-  })
-}
-
-function acceptsConnections(port: number): Promise<boolean> {
-  return new Promise(resolve => {
-    const socket = connect(port, '127.0.0.1')
-    socket.once('connect', () => {
-      socket.destroy()
-      resolve(true)
-    })
-    socket.once('error', () => {
-      socket.destroy()
-      resolve(false)
-    })
-  })
-}
+import { expect, inject, it, onTestFinished } from 'vitest'
+import { nextBin, nextEnv } from './support/next-first-visit-app'
 
 it('uses the proxy session for the first route token and submission in native Next', async () => {
-  const repository = resolve(import.meta.dirname, '../../..')
-  const root = await mkdtemp(join(tmpdir(), 'holo-next-first-visit-'))
-  onTestFinished(() => rm(root, { recursive: true, force: true }))
-  const requireNext = createRequire(join(repository, 'apps/blog-next/package.json'))
-  await symlink(join(repository, 'apps/blog-next/node_modules'), join(root, 'node_modules'), 'dir')
-  const security = JSON.stringify(join(repository, 'packages/security/src/index.ts'))
-  const session = JSON.stringify(join(repository, 'packages/session/src/index.ts'))
-  const accessor = JSON.stringify(join(repository, 'packages/core/src/portable/csrfSession.ts'))
-  const sessionPath = JSON.stringify(join(root, 'sessions'))
-  const files = {
-    'package.json': JSON.stringify({ private: true, type: 'module' }),
-    'next.config.mjs': 'export default { experimental: { externalDir: true } }',
-    'app/page.js': 'export default function Page() { return null }',
-    'app/layout.js': 'export default function Layout({ children }) { return <html><body>{children}</body></html> }',
-    'security.js': `
-import { configureSecurityRuntime, defineSecurityConfig } from ${security}
-import * as session from ${session}
-import { createCsrfSessionAccessor } from ${accessor}
-session.configureSessionRuntime({
-  config: session.normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: ${sessionPath} } } }),
-  stores: { file: session.createFileSessionStore(${sessionPath}) }, appKey: 'next-first-visit-key',
-})
-configureSecurityRuntime({
-  config: defineSecurityConfig({ csrf: { enabled: true } }), csrfSigningKey: 'next-first-visit-key',
-  csrfSession: createCsrfSessionAccessor(session, () => 'holo_session'),
-})
-`,
-    'proxy.js': `
-import './security.js'
-import { csrfProtection } from ${JSON.stringify(join(repository, 'packages/security/src/next/server.ts'))}
-export const proxy = csrfProtection()
-export const config = { matcher: ['/api/:path*'] }
-`,
-    'app/api/token/route.js': `
-import '../../../security.js'
-import { csrf } from ${security}
-export async function GET(request) { return Response.json({ token: await csrf.token(request) }) }
-`,
-    'app/api/submit/route.js': `
-import '../../../security.js'
-import { csrf } from ${security}
-export async function POST(request) { await csrf.verify(request); return Response.json({ ok: true }) }
-`,
-  }
-  for (const [name, content] of Object.entries(files)) {
-    const path = join(root, name)
-    await mkdir(resolve(path, '..'), { recursive: true })
-    await writeFile(path, content)
-  }
-  const nextBin = requireNext.resolve('next/dist/bin/next')
-  const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' }
-  const build = await runProcess(process.execPath, [nextBin, 'build', '--webpack'], { cwd: root, env, deadlineMs: 100_000 })
-  expect(build.code, build.output).toBe(0)
-  const portServer = createServer()
-  await new Promise<void>(resolve => portServer.listen(0, '127.0.0.1', resolve))
-  const address = portServer.address()
-  if (!address || typeof address === 'string') throw new Error('Expected a TCP port')
-  await new Promise<void>((resolve, reject) => portServer.close(error => error ? reject(error) : resolve()))
-  const server = spawn(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', String(address.port)], {
-    cwd: root,
-    env,
+  const server = spawn(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', '0'], {
+    cwd: inject('nextFirstVisitRoot'),
+    env: nextEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  let output = ''
-  server.stdout.on('data', chunk => { output += chunk.toString() })
-  server.stderr.on('data', chunk => { output += chunk.toString() })
   onTestFinished(async () => {
     if (server.exitCode !== null || server.signalCode !== null) return
     const closed = new Promise<void>(resolve => server.once('exit', () => resolve()))
     server.kill('SIGTERM')
     await closed
   })
-  const baseUrl = `http://127.0.0.1:${address.port}`
-  await vi.waitUntil(async () => {
-    if (server.exitCode !== null || server.signalCode !== null) throw new Error('Next exited before it was ready')
-    return acceptsConnections(address.port)
-  }, { timeout: 60_000, interval: 100 }).catch(error => {
-    throw new Error(`Next did not start listening: ${output}`, { cause: error })
+  let output = ''
+  const baseUrl = await new Promise<string>((resolve, reject) => {
+    const inspect = (chunk: Buffer) => {
+      output += chunk.toString()
+      const url = /Local:\s+(http:\/\/127\.0\.0\.1:\d+)\r?\n/.exec(output)?.[1]
+      if (url) resolve(url)
+    }
+    server.stdout.on('data', inspect)
+    server.stderr.on('data', inspect)
+    server.once('exit', () => reject(new Error(`Next exited before it was listening:\n${output}`)))
   })
   const first = await fetch(`${baseUrl}/api/token`)
   expect(first.status, output).toBe(200)

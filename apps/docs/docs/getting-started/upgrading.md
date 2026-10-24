@@ -323,6 +323,30 @@ import { loginForm } from '#lib/schemas/auth.js'
 
 6. `@sveltejs/adapter-node` 6 no longer reads `ORIGIN` when the server starts. It reads the public origin at build time, from `paths.origin`. Holo sets `paths.origin` from `APP_URL` when the build runs, so build with `APP_URL` set to your public address (for example `APP_URL=https://example.com bun run build`). Without it, the server assumes `https`, and SvelteKit rejects form posts from `http` origins with 403.
 
+### Update your tsconfig.json
+
+New projects get the `tsconfig.json` that each framework's own generator writes. Existing projects keep working, so this step is optional.
+
+In Nuxt, replace `{ "extends": "./.nuxt/tsconfig.json" }` with the layout `nuxi init` writes:
+
+```json [tsconfig.json]
+{
+  "files": [],
+  "references": [
+    { "path": "./.nuxt/tsconfig.app.json" },
+    { "path": "./.nuxt/tsconfig.server.json" },
+    { "path": "./.nuxt/tsconfig.shared.json" },
+    { "path": "./.nuxt/tsconfig.node.json" }
+  ]
+}
+```
+
+Server files are then type-checked with Nuxt's server settings instead of the browser ones, and Holo adds its generated types and `config/` to that server config. Run `npx nuxt prepare` and then `npm run typecheck`.
+
+In Next.js, start from the `tsconfig.json` that `create-next-app` writes and add `".holo-js/generated/**/*.ts"` to `include`. Its `**/*.ts` pattern also covers files at the project root, such as `proxy.ts`, so `npm run typecheck` may report errors in files it skipped before.
+
+In SvelteKit, start from the `tsconfig.json` that `sv create` writes and add `"server"`, `"config"`, and `".holo-js/generated/**/*.ts"` to `include`.
+
 ### Request body limit
 
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).
