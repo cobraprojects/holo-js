@@ -229,6 +229,52 @@ const errors = useValidationErrors('default', { pageData: data })
 
 Passing `pageData` is required for flash restoration. Without the layout load and `pageData`, a failed submission shows no field errors and doesn't restore the submitted input, on the server or in the browser. If `APP_KEY` is empty, Holo writes no flash cookie and logs a warning when debugging is on.
 
+### SvelteKit 3
+
+Holo supports SvelteKit 3 (`@sveltejs/kit` 3.1 or newer, `@sveltejs/adapter-node` 6, and Svelte 5.57.1 or newer). SvelteKit 2 is no longer supported. Follow SvelteKit's [migration guide](https://svelte.dev/docs/kit/migrating-to-sveltekit-3), starting with `npx sv migrate sveltekit-3`, then make these Holo changes:
+
+1. Move the options from `svelte.config.js` into the `sveltekit()` call in `vite.config.ts`, wrapped with `withHoloSvelteKit()`, and delete `svelte.config.js`. SvelteKit 3 ignores that file, and `holo prepare` stops with an error while it exists.
+
+```ts [vite.config.ts]
+import adapter from '@sveltejs/adapter-node'
+import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
+import { sveltekit } from '@sveltejs/kit/vite'
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  plugins: [
+    sveltekit(withHoloSvelteKit({
+      adapter: adapter(),
+      preprocess: vitePreprocess(),
+    })),
+  ],
+})
+```
+
+2. Replace `$lib` imports with `#lib`, and include the file extension. Add the subpath imports to `package.json`:
+
+```json [package.json]
+{
+  "imports": {
+    "#lib": "./src/lib/index.js",
+    "#lib/*": "./src/lib/*"
+  }
+}
+```
+
+```ts
+import { loginForm } from '#lib/schemas/auth.js'
+```
+
+3. Make `tsconfig.json` extend `$app/tsconfig` and list `include` and `exclude` yourself. Holo's scaffold writes this for new projects.
+
+4. Import `Handle`, `HandleFetch`, `HandleServerError`, `Reroute`, and `sequence` from `@sveltejs/kit/hooks`. `json()` is deprecated, so return `Response.json(...)` from endpoints.
+
+5. If your `handleError` reads `status` or `message` from its input, read them from the `kind` and `error` fields instead. Holo's handler does this for you, and returns the same messages as before.
+
+6. `@sveltejs/adapter-node` 6 no longer reads `ORIGIN` when the server starts. It reads the public origin at build time, from `paths.origin`. Holo sets `paths.origin` from `APP_URL` when the build runs, so build with `APP_URL` set to your public address (for example `APP_URL=https://example.com bun run build`). Without it, the server assumes `https`, and SvelteKit rejects form posts from `http` origins with 403.
+
 ### Request body limit
 
 Holo now reads at most 1 MiB of any request body that isn't `multipart/form-data` before your code runs. This covers CSRF token checks, Nuxt CSRF, form validation, Realtime requests, Broadcast auth, and social sign-in callbacks. A larger body gets a `413` response. Set `maxBodyBytes` in `config/security.ts` to raise that limit for large JSON or text payloads. Multipart bodies, which carry file uploads, are limited to 8 MiB by `maxUploadBodyBytes`. Set it to raise that limit. See [Request body limit](/basics/security/#request-body-limit).

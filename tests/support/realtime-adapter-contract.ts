@@ -13,8 +13,8 @@ type RealtimeTransformResult = {
 export type RealtimeAdapterContract = {
   readonly adapterName: string
   readonly importTarget: string
-  readonly createModule: (source: string) => string
-  readonly createTransform: (source: string) => RealtimeTransformResult
+  readonly createModule: (source: string, filePath: string) => string
+  readonly createTransform: (source: string, filePath: string) => RealtimeTransformResult
   readonly stripHandlers: (source: string) => string
 }
 
@@ -27,7 +27,7 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
     ].join('\n')
 
     it('emits framework-targeted client definitions from shared AST semantics', () => {
-      const module = contract.createModule(source)
+      const module = contract.createModule(source, 'server/realtime/posts.ts')
       expect(module).toContain(`from '${contract.importTarget}'`)
       expect(module).toContain('export const post = query({')
       expect(module).toContain('export const updatePost = mutation({')
@@ -35,7 +35,7 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
     })
 
     it('returns mutable source maps accepted by framework build pipelines', () => {
-      const result = contract.createTransform(source)
+      const result = contract.createTransform(source, 'server/realtime/posts.ts')
       expect(result.map).toMatchObject({ version: 3, sources: ['realtime.ts'] })
       expect(result.map.sourcesContent).toEqual([source])
       expect(result.map.mappings).not.toBe('')
@@ -54,7 +54,15 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
     })
 
     it('rejects malformed definitions instead of returning partial output', () => {
-      expect(() => contract.createTransform(`export const post = query({ handler: () => {`)).toThrow(SyntaxError)
+      expect(() => contract.createTransform(`export const post = query({ handler: () => {`, 'server/realtime/posts.ts')).toThrow(SyntaxError)
+    })
+
+    it('fails closed for a module with no definitions and never returns its source', () => {
+      expect(() => contract.createModule(`export const ADMIN_TOKEN = 'sk_live_example'`, 'server/realtime/admin.ts')).toThrow('server/realtime/admin.ts')
+    })
+
+    it('fails closed when a definition name is not a string literal', () => {
+      expect(() => contract.createModule(`export const post = query({ name: process.env.POSTS_NAME, handler: async () => [] })`, 'server/realtime/posts.ts')).toThrow('server/realtime/posts.ts')
     })
   })
 }

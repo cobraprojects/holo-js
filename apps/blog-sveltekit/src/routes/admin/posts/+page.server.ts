@@ -4,7 +4,7 @@ import { broadcast } from '@holo-js/broadcast'
 import { DB } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 
-import { deletePost, getAdminPostsData } from '$lib/server/blog'
+import { deletePost, getAdminPostsData } from '#lib/server/blog.js'
 import { blogPostChanged } from '../../../../server/broadcast/blog-post-changed'
 import BlogPostSaved from '../../../../server/events/blog/post-saved'
 import Post from '../../../../server/models/Post'

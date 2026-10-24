@@ -67,17 +67,17 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/v1/tokens/+server.ts
-import { json } from '@sveltejs/kit'
+
 import auth from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { loginForm } from '$lib/schemas/auth'
+import { loginForm } from '#lib/schemas/auth.js'
 
 export async function POST({ request }: { request: Request }) {
   const input = await validate(request, loginForm, { throttle: 'login' })
 
   const token = await auth.guard('api').login(input)
 
-  return json({
+  return Response.json({
     token: token.plainTextToken,
     abilities: token.abilities,
   }, {

@@ -78,13 +78,13 @@ const form = useForm(contactForm, {
 The endpoint returns the current token and the API's configured field name, so a separate frontend doesn't need to read the API's configuration cookie:
 
 ```ts [src/routes/api/csrf-token/+server.ts]
-import { json } from '@sveltejs/kit'
+
 import { csrf } from '@holo-js/security'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ request }) => {
   const { name: field, value: token } = await csrf.field(request)
-  return json({ token, field })
+  return Response.json({ token, field })
 }
 ```
 
@@ -175,14 +175,14 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { protect } from '@holo-js/security'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request }) => {
   await protect(request)
 
-  return json({ ok: true })
+  return Response.json({ ok: true })
 }
 ```
 

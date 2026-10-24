@@ -511,7 +511,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       }
 
       const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
-      return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'))
+      return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
     },
     transform(code: string, id: string, options?: { readonly ssr?: boolean }) {
       if (!options?.ssr && !id.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(id)) {
@@ -522,7 +522,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
         return null
       }
 
-      return createRealtimeClientDefinitionTransform(code)
+      return createRealtimeClientDefinitionTransform(code, id.split('?')[0] as string)
     },
   }
 }

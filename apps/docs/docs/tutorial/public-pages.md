@@ -64,14 +64,14 @@ export default defineEventHandler(async (event) => await getTagArchive(String(ev
 
 ```ts [SvelteKit]
 // src/routes/+page.server.ts
-import { getHomePageData } from '$lib/server/blog'
+import { getHomePageData } from '#lib/server/blog.js'
 
 export async function load() {
   return await getHomePageData()
 }
 
 // src/routes/posts/+page.server.ts
-import { getPublishedPosts } from '$lib/server/blog'
+import { getPublishedPosts } from '#lib/server/blog.js'
 
 export async function load() {
   return { posts: await getPublishedPosts() }
@@ -80,7 +80,7 @@ export async function load() {
 // src/routes/posts/[slug]/+page.server.ts
 import { error } from '@sveltejs/kit'
 
-import { getPublishedPostBySlug } from '$lib/server/blog'
+import { getPublishedPostBySlug } from '#lib/server/blog.js'
 import type { PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {
@@ -95,7 +95,7 @@ export const load = (async ({ params }) => {
 // src/routes/categories/[slug]/+page.server.ts
 import { error } from '@sveltejs/kit'
 
-import { getCategoryArchive } from '$lib/server/blog'
+import { getCategoryArchive } from '#lib/server/blog.js'
 import type { PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {
@@ -110,7 +110,7 @@ export const load = (async ({ params }) => {
 // src/routes/tags/[slug]/+page.server.ts
 import { error } from '@sveltejs/kit'
 
-import { getTagArchive } from '$lib/server/blog'
+import { getTagArchive } from '#lib/server/blog.js'
 import type { PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {

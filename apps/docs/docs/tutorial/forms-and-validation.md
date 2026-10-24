@@ -231,8 +231,8 @@ export default defineEventHandler(async (event) => {
 import { redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { postForm } from '$lib/schemas/blog'
-import { createPost, getAdminPostFormData } from '$lib/server/blog'
+import { postForm } from '#lib/schemas/blog.js'
+import { createPost, getAdminPostFormData } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {
@@ -251,8 +251,8 @@ export const actions = {
 import { error, redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { postForm } from '$lib/schemas/blog'
-import { getAdminPostById, updatePost } from '$lib/server/blog'
+import { postForm } from '#lib/schemas/blog.js'
+import { getAdminPostById, updatePost } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {

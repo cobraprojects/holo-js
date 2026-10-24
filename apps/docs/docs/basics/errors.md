@@ -43,7 +43,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/posts/[slug]/+server.ts
-import { error, json } from '@sveltejs/kit'
+import { error } from '@sveltejs/kit'
 import Post from '../../../../../server/models/Post'
 
 export async function GET({ params }) {
@@ -53,7 +53,7 @@ export async function GET({ params }) {
     error(404, 'Post not found.')
   }
 
-  return json(post)
+  return Response.json(post)
 }
 ```
 

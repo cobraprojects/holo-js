@@ -1,4 +1,3 @@
-import { json } from '@sveltejs/kit'
 import auth from '@holo-js/auth'
 
 import Post from '../../../../../server/models/Post'
@@ -7,7 +6,7 @@ export async function GET() {
   const currentUser = await auth.guard('api').user()
 
   if (!currentUser) {
-    return json({
+    return Response.json({
       ok: false,
       message: 'Unauthenticated.',
     }, { status: 401 })
@@ -16,7 +15,7 @@ export async function GET() {
   const userId = currentUser.id
 
   if (!await currentUser.can('viewAny', Post)) {
-    return json({
+    return Response.json({
       ok: false,
       message: 'Forbidden.',
     }, { status: 403 })
@@ -28,7 +27,7 @@ export async function GET() {
     .orderBy('published_at', 'desc')
     .get()
 
-  return json({
+  return Response.json({
     ok: true,
     posts,
   })

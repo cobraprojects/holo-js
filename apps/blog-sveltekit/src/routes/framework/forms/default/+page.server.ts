@@ -1,5 +1,5 @@
 import { validate } from '@holo-js/forms'
-import { contactForm } from '$lib/schemas/framework-forms'
+import { contactForm } from '#lib/schemas/framework-forms.js'
 import type { Actions } from './$types'
 
 export const actions = {

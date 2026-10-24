@@ -107,12 +107,12 @@ function createChildEnv(overrides = {}) {
   return env
 }
 
-function run(command, args, timeout = 0) {
+function run(command, args, timeout = 0, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       detached: true,
-      env: createChildEnv(),
+      env: createChildEnv(environment),
       stdio: 'inherit',
     })
 
@@ -700,7 +700,7 @@ try {
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
-  await run('bun', ['run', 'build'])
+  await run('bun', ['run', 'build'], 0, { APP_URL: `http://localhost:${port}` })
   await startBroadcastWorker(`http://localhost:${port}`)
   await assertExampleAppProductionFlow({
     cwd,
@@ -709,7 +709,6 @@ try {
       PORT: port,
       HOST: 'localhost',
       APP_URL: `http://localhost:${port}`,
-      ORIGIN: `http://localhost:${port}`,
       MAIL_MAILER: 'log',
       MAIL_LOG_BODIES: 'true',
     }),

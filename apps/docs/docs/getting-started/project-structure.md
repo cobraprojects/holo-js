@@ -132,8 +132,7 @@ src/
 ├── hooks.ts
 ├── hooks.server.ts   # Your server hooks
 └── routes/           # Pages, +server.ts endpoints, load functions
-svelte.config.js      # Wrapped with withHoloSvelteKit()
-vite.config.ts
+vite.config.ts        # sveltekit(withHoloSvelteKit(...))
 ```
 
 :::

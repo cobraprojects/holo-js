@@ -1,5 +1,5 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
   "compilerOptions": {
     "strict": true,
     "noEmit": true,
@@ -12,6 +12,10 @@
     "config/**/*.ts",
     ".holo-js/generated/**/*.ts",
     ".holo-js/generated/**/*.d.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "src/service-worker"
   ]
 }

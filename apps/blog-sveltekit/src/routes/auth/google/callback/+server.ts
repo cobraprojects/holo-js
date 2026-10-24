@@ -1,4 +1,4 @@
-import { json, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import auth from '@holo-js/auth'
 import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
 
@@ -14,7 +14,7 @@ async function handleCallback(request: Request): Promise<Response> {
     throw error
   })
   if (!result.ok) {
-    return json({
+    return Response.json({
       message: result.message,
     }, {
       status: result.status,

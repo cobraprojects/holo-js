@@ -240,7 +240,7 @@ SvelteKit form actions work with both `useForm()` and plain HTML forms. Throwing
 import { redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 import { csrf } from '@holo-js/security'
-import { postForm } from '$lib/schemas/post'
+import { postForm } from '#lib/schemas/post.js'
 import Post from '../../../../server/models/Post'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -267,7 +267,7 @@ With `useForm()`, keep a normal `<form method="post">`. The adapter takes over t
 ```svelte [src/routes/posts/new/+page.svelte]
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { postForm } from '$lib/schemas/post'
+  import { postForm } from '#lib/schemas/post.js'
 
   import type { PageData } from './$types'
 
@@ -341,7 +341,7 @@ Here is a page that shows the flashed errors with a plain HTML form:
 `csrf.input(request)` returns `{ type: 'hidden', name, value }`, ready to spread onto an `<input>`.
 
 ::: warning
-`useForm()` in SvelteKit needs the Holo config wrapper. Projects created with Holo already have it in `svelte.config.js`: `withHoloSvelteKit(...)` from `@holo-js/adapter-sveltekit/config`. Keep it when you edit that file.
+`useForm()` in SvelteKit needs the Holo config wrapper. Projects created with Holo already have it in `vite.config.ts`: `sveltekit(withHoloSvelteKit(...))`, with `withHoloSvelteKit()` from `@holo-js/adapter-sveltekit/config`. Keep it when you edit that file.
 :::
 
 ## SvelteKit: remote functions
@@ -350,7 +350,7 @@ Holo schemas are [Standard Schema](https://standardschema.dev) objects, so Svelt
 
 ```ts [src/routes/posts/posts.remote.ts]
 import { form } from '$app/server'
-import { postForm } from '$lib/schemas/post'
+import { postForm } from '#lib/schemas/post.js'
 import Post from '../../../server/models/Post'
 
 export const createPost = form(postForm, async (data) => {

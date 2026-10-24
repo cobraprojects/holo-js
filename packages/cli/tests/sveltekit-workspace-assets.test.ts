@@ -8,7 +8,7 @@ import { renderSvelteViteConfig } from '../src/project/scaffold/framework-render
 const directories: string[] = []
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })))
 })
 
 describe('SvelteKit scaffold workspace assets', () => {
@@ -25,7 +25,6 @@ describe('SvelteKit scaffold workspace assets', () => {
     await writeFile(join(project, 'package.json'), JSON.stringify({ name: 'scaffold-asset-test', private: true, type: 'module' }))
     await symlink(resolve(import.meta.dirname, '../node_modules'), join(workspace, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
     await writeFile(join(project, 'vite.config.ts'), renderSvelteViteConfig(false))
-    await writeFile(join(project, 'svelte.config.js'), 'export default { kit: {} }')
     await writeFile(join(project, 'src/routes/+page.svelte'), '<h1>Workspace assets</h1>')
     await writeFile(font, 'workspace font asset')
     await writeFile(generated, ':root { color: red }')

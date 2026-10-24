@@ -48,17 +48,17 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/forgot-password/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { requestPasswordReset } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { forgotPasswordForm } from '$lib/schemas/auth'
+import { forgotPasswordForm } from '#lib/schemas/auth.js'
 
 export async function POST({ request }: { request: Request }) {
   const input = await validate(request, forgotPasswordForm)
 
   await requestPasswordReset(input)
 
-  return json({
+  return Response.json({
     ok: true,
     status: 200,
     data: { message: 'If an account exists for that email, a reset link has been sent.' },
@@ -124,17 +124,17 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/reset-password/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { resetPassword } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { resetPasswordForm } from '$lib/schemas/auth'
+import { resetPasswordForm } from '#lib/schemas/auth.js'
 
 export async function POST({ request }: { request: Request }) {
   const input = await validate(request, resetPasswordForm)
 
   await resetPassword(input)
 
-  return json({ ok: true, status: 200, data: { redirectTo: '/login' } })
+  return Response.json({ ok: true, status: 200, data: { redirectTo: '/login' } })
 }
 ```
 

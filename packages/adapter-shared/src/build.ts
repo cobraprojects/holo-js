@@ -6,6 +6,7 @@ type RealtimeDefinition = {
   readonly exportedName: string
   readonly factory: RealtimeFactory
   readonly name?: string
+  readonly unsafeName?: true
   readonly sourceLine: number
 }
 
@@ -27,6 +28,12 @@ export type RealtimeDefinitionTransformOptions = {
   readonly preserveServerHandlers?: boolean
 }
 
+export type RealtimeDefinitionTransformInput = RealtimeDefinitionTransformOptions & {
+  readonly source: string
+  readonly importTarget: string
+  readonly filePath: string
+}
+
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
   if (!('name' in property) || !property.name) return undefined
   return ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
@@ -45,8 +52,10 @@ function collectRealtimeFactories(sourceFile: ts.SourceFile): ReadonlyMap<string
     if (!ts.isNamedImports(statement.importClause.namedBindings)) continue
     for (const element of statement.importClause.namedBindings.elements) {
       const importedName = element.propertyName?.text ?? element.name.text
-      if (importedName === 'query' || importedName === 'mutation') {
-        factories.set(element.name.text, importedName)
+      if (importedName === 'query' || importedName === 'defineRealtimeQuery') {
+        factories.set(element.name.text, 'query')
+      } else if (importedName === 'mutation' || importedName === 'defineRealtimeMutation') {
+        factories.set(element.name.text, 'mutation')
       }
     }
   }
@@ -72,8 +81,9 @@ function collectDefinitions(sourceFile: ts.SourceFile): readonly RealtimeDefinit
       const name = nameProperty && ts.isPropertyAssignment(nameProperty)
         ? nameProperty.initializer.getText(sourceFile)
         : undefined
+      const unsafeName = nameProperty !== undefined && !(ts.isPropertyAssignment(nameProperty) && (ts.isStringLiteral(nameProperty.initializer) || ts.isNoSubstitutionTemplateLiteral(nameProperty.initializer)))
       const sourceLine = sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line
-      definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}) })
+      definitions.push({ exportedName: declaration.name.text, factory, sourceLine, ...(name ? { name } : {}), ...(unsafeName ? { unsafeName: true as const } : {}) })
     }
   }
   return Object.freeze(definitions)
@@ -173,16 +183,16 @@ export function stripRealtimeServerHandlers(source: string): string {
   }
 }
 
-export function createRealtimeClientDefinitionModule(source: string, importTarget: string): string {
-  return createRealtimeClientDefinitionTransform(source, importTarget).code
+export function createRealtimeClientDefinitionModule(input: Omit<RealtimeDefinitionTransformInput, 'preserveServerHandlers'>): string {
+  return createRealtimeClientDefinitionTransform(input).code
 }
 
-export function createRealtimeClientDefinitionTransform(
-  source: string,
-  importTarget: string,
-  options: RealtimeDefinitionTransformOptions = {},
-): RealtimeDefinitionTransformResult {
-  if (options.preserveServerHandlers) {
+export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitionTransformInput): RealtimeDefinitionTransformResult {
+  if (typeof input !== 'object' || input === null || typeof input.source !== 'string' || typeof input.importTarget !== 'string' || typeof input.filePath !== 'string') {
+    throw new TypeError('createRealtimeClientDefinitionTransform takes one object with source, importTarget, and filePath strings, and an optional preserveServerHandlers flag.')
+  }
+  const { source, importTarget, filePath } = input
+  if (input.preserveServerHandlers) {
     const code = retargetRealtimeImports(source, importTarget)
     const sourceLineCount = source.split('\n').length
     return Object.freeze({
@@ -194,12 +204,11 @@ export function createRealtimeClientDefinitionTransform(
   const sourceFile = parseRealtimeSource(source)
   const definitions = collectDefinitions(sourceFile)
   if (definitions.length === 0) {
-    const code = stripRealtimeServerHandlers(source)
-    const sourceLineCount = source.split('\n').length
-    return Object.freeze({
-      code,
-      map: createSourceMap(source, code.split('\n').map((_, index) => Math.min(index, sourceLineCount - 1))),
-    })
+    throw new Error(`${filePath} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
+  }
+  const unsafe = definitions.find(definition => definition.unsafeName)
+  if (unsafe) {
+    throw new Error(`${filePath} defines ${unsafe.exportedName} with a name that is not a string literal, so it cannot be sent to the browser.`)
   }
   const factories = [...new Set(definitions.map(definition => definition.factory))]
   const outputLines: string[] = [

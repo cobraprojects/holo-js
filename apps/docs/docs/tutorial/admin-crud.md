@@ -382,7 +382,7 @@ export const load = (async ({ request }) => ({
 })) satisfies LayoutServerLoad
 
 // src/routes/admin/+page.server.ts
-import { getAdminDashboardData } from '$lib/server/blog'
+import { getAdminDashboardData } from '#lib/server/blog.js'
 
 export async function load() {
   return await getAdminDashboardData()
@@ -392,8 +392,8 @@ export async function load() {
 import { redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { categoryForm } from '$lib/schemas/blog'
-import { createCategory, deleteCategory, getAdminCategoriesData } from '$lib/server/blog'
+import { categoryForm } from '#lib/schemas/blog.js'
+import { createCategory, deleteCategory, getAdminCategoriesData } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {
@@ -417,8 +417,8 @@ export const actions = {
 import { error, redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { categoryForm } from '$lib/schemas/blog'
-import { getAdminCategoryById, updateCategory } from '$lib/server/blog'
+import { categoryForm } from '#lib/schemas/blog.js'
+import { getAdminCategoryById, updateCategory } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {
@@ -442,8 +442,8 @@ export const actions = {
 import { redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { tagForm } from '$lib/schemas/blog'
-import { createTag, deleteTag, getAdminTagsData } from '$lib/server/blog'
+import { tagForm } from '#lib/schemas/blog.js'
+import { createTag, deleteTag, getAdminTagsData } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {
@@ -467,8 +467,8 @@ export const actions = {
 import { error, redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
 
-import { tagForm } from '$lib/schemas/blog'
-import { getAdminTagById, updateTag } from '$lib/server/blog'
+import { tagForm } from '#lib/schemas/blog.js'
+import { getAdminTagById, updateTag } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {
@@ -491,7 +491,7 @@ export const actions = {
 // src/routes/admin/posts/+page.server.ts
 import { redirect } from '@sveltejs/kit'
 
-import { deletePost, getAdminPostsData } from '$lib/server/blog'
+import { deletePost, getAdminPostsData } from '#lib/server/blog.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {

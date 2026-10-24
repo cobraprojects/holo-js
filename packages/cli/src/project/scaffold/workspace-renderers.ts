@@ -113,7 +113,7 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
 
   if (framework.scaffold.tsconfig === 'sveltekit') {
     return `${JSON.stringify({
-      extends: './.svelte-kit/tsconfig.json',
+      extends: '$app/tsconfig',
       compilerOptions: {
         strict: true,
         noEmit: true,
@@ -127,6 +127,9 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
         '.holo-js/generated/**/*.ts',
         '.holo-js/generated/**/*.d.ts',
         'vite.config.ts',
+      ],
+      exclude: [
+        'src/service-worker',
       ],
     }, null, 2)}\n`
   }

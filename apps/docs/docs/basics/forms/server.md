@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
 // src/routes/posts/new/+page.server.ts
 import { redirect } from '@sveltejs/kit'
 import { validate } from '@holo-js/forms'
-import { postForm } from '$lib/schemas/post'
+import { postForm } from '#lib/schemas/post.js'
 import Post from '../../../../server/models/Post'
 import type { Actions } from './$types'
 
@@ -137,7 +137,7 @@ When the input is valid but something else is wrong, throw `ValidationException.
 ```ts [src/routes/account/+page.server.ts]
 import { validate } from '@holo-js/forms'
 import { ValidationException } from '@holo-js/validation'
-import { changeEmailForm } from '$lib/schemas/account'
+import { changeEmailForm } from '#lib/schemas/account.js'
 import User from '../../../server/models/User'
 import type { Actions } from './$types'
 

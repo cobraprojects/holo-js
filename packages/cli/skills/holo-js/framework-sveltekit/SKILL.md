@@ -13,7 +13,7 @@ Use `@holo-js/adapter-sveltekit`. Read [runtime services](https://docs.holo-js.c
 ## Integration rules
 
 - Initialize request context in the documented SvelteKit hook and expose request-scoped services through locals.
-- Keep shared schemas in browser-safe modules and use `$lib/server` for database, secrets, mail, and drivers.
+- Keep shared schemas in browser-safe modules and use `#lib/server` for database, secrets, mail, and drivers.
 - Validate actions through the adapter and return the documented structured failure shape.
 - Use SvelteKit `redirect`, `fail`, and error APIs. Authentication owns cookie side effects.
 - Clean up subscriptions established during a request or component lifecycle.

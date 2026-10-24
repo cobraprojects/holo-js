@@ -176,7 +176,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/verify-email/resend/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 import { serializeValidationException } from '@holo-js/validation'
@@ -184,7 +184,7 @@ import { serializeValidationException } from '@holo-js/validation'
 export async function POST() {
   const current = await user()
   if (!current) {
-    return json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
+    return Response.json({ ok: false, status: 401, errors: { _root: ['Sign in before requesting another verification email.'] } }, { status: 401 })
   }
 
   try {
@@ -192,15 +192,15 @@ export async function POST() {
     await resendEmailVerification()
   } catch (error) {
     if (error instanceof SecurityRateLimitError) {
-      return json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
+      return Response.json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
     }
 
     const payload = serializeValidationException(error)
     if (!payload) throw error
-    return json(payload, { status: payload.status })
+    return Response.json(payload, { status: payload.status })
   }
 
-  return json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })
+  return Response.json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })
 }
 ```
 
