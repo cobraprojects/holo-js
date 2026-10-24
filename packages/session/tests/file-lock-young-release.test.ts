@@ -104,6 +104,7 @@ describe('releasing a freshly created lease under a Windows filesystem', () => {
     openGate()
 
     await advanceUntil(() => leftoverTombstones().length < releases, 'the first queued tombstone removal', TOMBSTONE_RETRY_BUDGET_MS)
+    await advanceTo(Date.now() + 2 * TOMBSTONE_RETRY_BUDGET_MS)
     const overflow = leftoverTombstones()
     expect(overflow.length).toBeGreaterThan(0)
     expect(overflow.length).toBeLessThan(releases)

@@ -11,8 +11,11 @@ let root: string | undefined
 let owner: ChildProcess | undefined
 let record: SessionRecord
 
-async function startLockOwner(sessionRoot: string, sessionId: string, driverEntry: string): Promise<ChildProcess> {
-  const child = fork(new URL('./support/file-session-worker.mjs', import.meta.url), [sessionRoot, sessionId, driverEntry], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+function forkLockOwner(sessionRoot: string, sessionId: string, driverEntry: string): ChildProcess {
+  return fork(new URL('./support/file-session-worker.mjs', import.meta.url), [sessionRoot, sessionId, driverEntry], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+}
+
+async function waitUntilLocked(child: ChildProcess): Promise<void> {
   let stderr = ''
   child.stderr?.on('data', (value: Buffer) => { stderr += value.toString() })
   await new Promise<void>((resolveLocked, reject) => {
@@ -24,7 +27,6 @@ async function startLockOwner(sessionRoot: string, sessionId: string, driverEntr
     })
   })
   child.removeAllListeners('exit')
-  return child
 }
 
 async function stopLockOwner(child: ChildProcess): Promise<void> {
@@ -42,7 +44,8 @@ describe('file session locking with a real owner process', () => {
     const now = new Date()
     record = { id: randomUUID(), store: 'file', data: { userId: 42 }, createdAt: now, lastActivityAt: now, expiresAt: new Date(now.getTime() - 1_000) }
     await createFileSessionStore(root).write(record)
-    owner = await startLockOwner(root, record.id, join(packageBuildRoot, 'index.mjs'))
+    owner = forkLockOwner(root, record.id, join(packageBuildRoot, 'index.mjs'))
+    await waitUntilLocked(owner)
   }, 60_000)
 
   afterAll(async () => {

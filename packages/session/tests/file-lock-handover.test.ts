@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as ErrorReporting from '@holo-js/kernel/error-reporting'
 import type * as SessionModule from '../src'
-import { advanceTo, advanceUntil, settle, useFakeClock } from './support/fake-clock'
+import { advanceTo, advanceUntil, finishesWithoutTheClock, settle, useFakeClock } from './support/fake-clock'
 import { busyError, createMemoryFs, type MemoryFs } from './support/memory-fs'
 
 const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
@@ -78,11 +78,7 @@ async function releaseAcquisition(acquisition: Acquisition): Promise<void> {
   const release = acquisition.release
   if (!release || acquisition.released) throw new Error(`${acquisition.label} does not hold the lock`)
   acquisition.released = true
-  let done = false
-  const releasing = release().finally(() => { done = true })
-  await settle()
-  if (!done) throw new Error(`${acquisition.label} should release without waiting on the clock`)
-  await releasing
+  await finishesWithoutTheClock(release(), `Releasing ${acquisition.label}`)
 }
 
 function pendingPathOf(label: string): string {

@@ -67,6 +67,11 @@ async function writeForeignLease(lockPath: string, owner: ForeignOwner): Promise
   await fs.promises.utimes(lockPath, aged, aged)
 }
 
+async function releaseForeignLease(lockPath: string, owner: ForeignOwner): Promise<void> {
+  await fs.promises.rename(ownerFile(lockPath, owner), `${lockPath}.${owner.token}.released`)
+  await fs.promises.rmdir(lockPath)
+}
+
 function track<T>(operation: Promise<T>): { readonly settled: () => boolean, readonly result: Promise<T> } {
   let settled = false
   const result = operation.finally(() => { settled = true })
@@ -100,7 +105,8 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
   it('keeps a live owner\'s lease even when its timestamps are old, and acquires once the owner releases', async () => {
     const store = openStore(await startProcess())
     const { record, lockPath } = await createSession(store)
-    await writeForeignLease(lockPath, { host: hostname(), pid: foreignProcess(), token: randomUUID() })
+    const owner = { host: hostname(), pid: foreignProcess(), token: randomUUID() }
+    await writeForeignLease(lockPath, owner)
     const startedAt = Date.now()
     const flash = track(store.flash(record.id, 'notice', 'Saved'))
 
@@ -108,7 +114,7 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
     expect(flash.settled()).toBe(false)
     expect(fs.names(lockPath)).toHaveLength(1)
 
-    await fs.promises.rm(lockPath, { recursive: true })
+    await releaseForeignLease(lockPath, owner)
     await advanceUntil(flash.settled, 'the flash to acquire the released lock', 2 * POLL_MS)
     await flash.result
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
@@ -162,7 +168,8 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
   it('times out on a live lock and writes successfully after release', async () => {
     const store = openStore(await startProcess())
     const { record, lockPath } = await createSession(store)
-    await writeForeignLease(lockPath, { host: hostname(), pid: foreignProcess(), token: randomUUID() })
+    const owner = { host: hostname(), pid: foreignProcess(), token: randomUUID() }
+    await writeForeignLease(lockPath, owner)
     const startedAt = Date.now()
     const blocked = track(store.flash(record.id, 'notice', 'Blocked'))
 
@@ -170,7 +177,7 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(STALL_MS)
     await expect(blocked.result).rejects.toThrow('Timed out acquiring file session lock')
 
-    await fs.promises.rm(lockPath, { recursive: true })
+    await releaseForeignLease(lockPath, owner)
     await finishesWithoutTheClock(store.flash(record.id, 'notice', 'Saved'), 'Flashing after the owner released')
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
