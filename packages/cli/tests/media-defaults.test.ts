@@ -3,8 +3,19 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import '@holo-js/media/config'
+import { minVersion } from 'semver'
 import { afterEach, expect, it } from 'vitest'
 import { runProjectPrepare } from '../src/dev'
+import { WORKSPACE_CATALOG } from '../src/generated/workspaceCatalog'
+
+const catalogMediaRange = WORKSPACE_CATALOG['@holo-js/media']
+const catalogMediaVersion = minVersion(catalogMediaRange)!
+const compatibleMediaRange = `~${catalogMediaVersion.major}.${catalogMediaVersion.minor}.0`
+const previousReleaseLineMediaRange = catalogMediaVersion.major > 0
+  ? `^${catalogMediaVersion.major - 1}.0.0`
+  : catalogMediaVersion.minor > 0
+    ? `^0.${catalogMediaVersion.minor - 1}.0`
+    : undefined
 
 const temporaryDirectories: string[] = []
 
@@ -12,7 +23,7 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function createProject(): Promise<string> {
+async function createProject(mediaRange = compatibleMediaRange): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-media-defaults-'))
   temporaryDirectories.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
@@ -28,8 +39,8 @@ async function createProject(): Promise<string> {
     private: true,
     type: 'module',
     dependencies: {
-      '@holo-js/media': '^0.3.16',
-      '@holo-js/db-mysql': '^0.3.16',
+      '@holo-js/media': mediaRange,
+      '@holo-js/db-mysql': mediaRange,
     },
   }))
   await writeFile(join(root, 'config/app.mjs'), 'export default {}\n')
@@ -52,10 +63,21 @@ it.each([false, true])('preserves declared Media without an app config when a Me
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
     dependencies: Record<string, string>
   }
-  expect(manifest.dependencies['@holo-js/media']).toBe('^0.3.16')
+  expect(manifest.dependencies['@holo-js/media']).toBe(compatibleMediaRange)
   expect(manifest.dependencies['@holo-js/db-mysql']).toBeUndefined()
   await expect(readFile(join(root, 'config/media.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
   expect((await loadConfigDirectory(root, { preferCache: false })).media).toEqual({})
+})
+
+it.skipIf(previousReleaseLineMediaRange === undefined)('upgrades declared Media from the previous release line to the catalog range', async () => {
+  const root = await createProject(previousReleaseLineMediaRange)
+  await runProjectPrepare(root)
+
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+    dependencies: Record<string, string>
+  }
+  expect(manifest.dependencies['@holo-js/media']).toBe(catalogMediaRange)
+  expect(manifest.dependencies['@holo-js/db-mysql']).toBeUndefined()
 })
 
 it('honors an app Media config override during preparation', async () => {
