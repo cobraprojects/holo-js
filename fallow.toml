@@ -1,5 +1,4 @@
 entry = [
-  "packages/session/tests/support/windows-fs-loader/fs.mjs",
   "packages/cli/tests/global-setup.ts",
 ]
 

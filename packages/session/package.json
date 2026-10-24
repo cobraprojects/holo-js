@@ -40,7 +40,7 @@
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run",
-    "test:platform": "vitest --run tests/file-lock.test.ts tests/file-lock-busy.test.ts tests/file-lock-handover.test.ts tests/file-lock-released.test.ts tests/file-lock-young-release.test.ts --pool forks --maxWorkers 1 --reporter=json"
+    "test:platform": "vitest --run tests/file-lock.test.ts tests/file-lock-contention.test.ts tests/file-lock-busy.test.ts tests/file-lock-handover.test.ts tests/file-lock-released.test.ts tests/file-lock-young-release.test.ts --pool forks --maxWorkers 1 --reporter=json"
   },
   "dependencies": {
     "@holo-js/config": "catalog:",
