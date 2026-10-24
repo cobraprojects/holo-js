@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-
-- New projects get the `tsconfig.json` that each framework's own generator writes: the Nuxt 4 project references layout from `nuxi init`, the `create-next-app` 16 config, and the `sv create` config for SvelteKit 3. Holo adds only what it needs: `.holo-js/generated/**/*.ts` for Next.js, and `server`, `config`, and `.holo-js/generated/**/*.ts` for SvelteKit. In Nuxt, `@holo-js/adapter-nuxt` adds Holo's generated types and `config/` to Nuxt's server config when Nuxt generates types. Existing projects keep working. See [Update your tsconfig.json](apps/docs/docs/getting-started/upgrading.md#update-your-tsconfig-json).
-- In Nuxt projects, Holo bundles models, jobs, and other server code with the server config Nuxt generates, plus the `~`, `@`, `~~`, and `@@` aliases Nitro resolves at runtime. Custom `alias` entries in `nuxt.config.ts` keep working with both the project references layout and the older `extends` layout.
-
 ## 0.4.0 - 2026-10-24
 
 0.4.0 is a breaking release. Read the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-03x-to-040) before upgrading. [Realtime](apps/docs/docs/realtime/index.md) and [Broadcast](apps/docs/docs/broadcasting/index.md) are **Experimental** in this release.
@@ -174,6 +167,8 @@
 - The published runtime audit accepts reviewed, time-boxed exceptions in `audit-exceptions.json` for blocking advisories that have no patched release. node-forge 1.4.0 (GHSA-86w9-cpqp-85rv), reachable only through the application's Nuxt peer, is excepted until 2026-12-17. The unpublished docs site's VitePress 1 toolchain (vite 5.4.21 and esbuild 0.21.5) has docs-only exceptions until the same date. A braces 3.0.3 exception has been removed, because the audit no longer reports GHSA-vfj7-8cjw-p6xm for it.
 - Nuxt auth redirects write the status and `Location` header through the request's native response, including for supplied request events outside a Nitro build. Redirect responses no longer include h3's HTML meta-refresh body.
 - The documentation and package READMEs mark Realtime and Broadcast as **Experimental**. Production reliability work continues in the Realtime production readiness milestone; the label doesn't change runtime behavior.
+- New projects get the `tsconfig.json` that each framework's own generator writes: the Nuxt 4 project references layout from `nuxi init`, the `create-next-app` 16 config, and the `sv create` config for SvelteKit 3. Holo adds only what it needs: `.holo-js/generated/**/*.ts` for Next.js, and `server`, `config`, and `.holo-js/generated/**/*.ts` for SvelteKit. In Nuxt, `@holo-js/adapter-nuxt` adds Holo's generated types and `config/` to Nuxt's server config when Nuxt generates types. Existing projects keep working. See [Update your tsconfig.json](apps/docs/docs/getting-started/upgrading.md#update-your-tsconfigjson).
+- In Nuxt projects, Holo bundles models, jobs, and other server code with the server config Nuxt generates, plus the `~`, `@`, `~~`, and `@@` aliases Nitro resolves at runtime. Custom `alias` entries in `nuxt.config.ts` keep working with both the project references layout and the older `extends` layout.
 
 ### Fixed
 
@@ -247,6 +242,7 @@
 - Postgres JSON paths quote every segment, so a segment with a comma, quote, backslash, brace, or the word `NULL` matches the key it names. Before, `whereJson('settings->a,b', ...)` on Postgres read the path `a` then `b`. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#postgres-json-path-segments).
 - SQLite JSON paths match any key that isn't a plain identifier, such as one with a comma, space, quote, backslash, bracket, dot, or leading digit, and `updateJson()` writes to it. Before, `whereJson()` matched no rows for such a key, and `updateJson()` silently changed nothing. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#sqlite-json-path-segments).
 - The `memory` cache keeps at most 10,000 entries when `maxEntries` isn't set and removes the oldest first. Before, the store had no limit. See [Upgrading](apps/docs/docs/getting-started/upgrading.md#memory-cache-limit).
+- **Update `tsconfig.json` to your framework's current layout (optional).** Existing projects keep working. Nuxt apps can replace `{ "extends": "./.nuxt/tsconfig.json" }` with the project references layout from `nuxi init`, so server files are type-checked with Nuxt's server settings. In Next.js, the `create-next-app` include also type-checks root files such as `proxy.ts`. See [Update your tsconfig.json](apps/docs/docs/getting-started/upgrading.md#update-your-tsconfigjson).
 
 ## 0.3.28
 
