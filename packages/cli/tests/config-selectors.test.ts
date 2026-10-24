@@ -34,9 +34,12 @@ async function createProject(): Promise<string> {
   return root
 }
 
+// Database configs only need defineDatabaseConfig; its @holo-js/db/config entry avoids loading the whole ORM per config load.
+const sourceEntries: Readonly<Record<string, string>> = { db: 'db/src/databaseConfig.ts' }
+
 async function writeConfig(root: string, name: string, source: string, overrides?: string): Promise<void> {
   const rendered = source.replace(/'@holo-js\/([^']+)'/g, (_, packageName: string) =>
-    JSON.stringify(resolve(import.meta.dirname, `../../${packageName}/src/index.ts`)))
+    JSON.stringify(resolve(import.meta.dirname, '../..', sourceEntries[packageName] ?? `${packageName}/src/index.ts`)))
   if (!overrides) {
     await writeFile(join(root, 'config', `${name}.ts`), rendered)
     return

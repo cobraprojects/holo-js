@@ -223,6 +223,43 @@ async function verifyPackageImports(tempRoot, packages) {
   run(tempRoot, 'node', [smokePath])
 }
 
+async function verifyNextClientDeclarations(tempRoot) {
+  const entryPath = join(tempRoot, 'next-client-declarations.ts')
+  await writeFile(entryPath, [
+    `import { AuthProvider, useAuth, type HoloAuthUser, type UseAuthResult } from '@holo-js/auth/next/client'`,
+    `import { auth } from '@holo-js/auth/next/server'`,
+    `import { field, schema } from '@holo-js/validation'`,
+    `import { useForm } from '@holo-js/adapter-next/client'`,
+    `const loginForm = schema({ email: field.string().required().email() })`,
+    'useForm(loginForm, {',
+    `  initialValues: { email: '' },`,
+    '  async submitter({ formData, values }) {',
+    '    const email: string = values.email',
+    `    const submittedEmail = formData.get('email')`,
+    '    void submittedEmail',
+    '    return { ok: true, status: 200, data: { email } }',
+    '  },',
+    '})',
+    'const currentAuth = useAuth()',
+    'const user: HoloAuthUser | null = currentAuth.user',
+    'const authResult: UseAuthResult = currentAuth',
+    'void AuthProvider',
+    'void user',
+    'void authResult',
+    'void auth',
+    '',
+  ].join('\n'))
+  run(tempRoot, process.execPath, [
+    join(rootDir, 'node_modules/typescript/bin/tsc'),
+    '--module', 'nodenext',
+    '--moduleResolution', 'nodenext',
+    '--target', 'es2022',
+    '--strict',
+    '--noEmit',
+    entryPath,
+  ])
+}
+
 async function copyFrameworkApp(source, target, catalog) {
   await cp(source, target, {
     recursive: true,
@@ -440,6 +477,7 @@ export async function validatePublishedPackageSmoke(options = {}) {
     const stagedNodeModules = await stagePackages(registryRoot, packages, catalog)
     await linkExternalDependencies(stagedNodeModules)
     await verifyPackageImports(registryRoot, packages)
+    await verifyNextClientDeclarations(registryRoot)
     await buildFrameworkCopies(tempRoot, stagedNodeModules, options.framework, catalog)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })

@@ -2738,7 +2738,7 @@ export async function startBroadcastWorker(
 
       return Object.freeze({
         host: config.worker.host,
-        port: config.worker.port,
+        port: server.port,
         async stop() {
           heartbeat.stop()
           server.stop(true)

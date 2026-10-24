@@ -18,17 +18,17 @@ type MigrationCreation = {
   readonly skipIfExists?: boolean
 }
 
-async function withMigrationCreationLock<TResult>(projectRoot: string, callback: () => Promise<TResult>): Promise<TResult> {
+async function withMigrationCreationLock<TResult>(projectRoot: string, now: () => number, callback: () => Promise<TResult>): Promise<TResult> {
   const lockPath = join(projectRoot, '.holo-js/migration-create.lock')
   await mkdir(dirname(lockPath), { recursive: true })
-  const started = Date.now()
+  const started = now()
   while (true) {
     try {
       await mkdir(lockPath)
       break
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
-      if (Date.now() - started >= 30_000) throw new Error(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`, { cause: error })
+      if (now() - started >= 30_000) throw new Error(`Timed out waiting for another migration creation command to finish. If no command is running, remove "${lockPath}".`, { cause: error })
       await wait(10)
     }
   }
@@ -55,10 +55,10 @@ async function createdTableNames(path: string): Promise<string[]> {
 export async function createMigrationFiles(
   projectRoot: string,
   plan: (project: Awaited<ReturnType<typeof ensureProjectConfig>>) => readonly MigrationCreation[] | Promise<readonly MigrationCreation[]>,
-  options: { readonly io?: IoStreams, readonly prepare?: boolean } = {},
+  options: { readonly io?: IoStreams, readonly prepare?: boolean, readonly now?: () => number } = {},
 ): Promise<string[]> {
   const root = await realpath(projectRoot)
-  const created = await withMigrationCreationLock(root, async () => {
+  const created = await withMigrationCreationLock(root, options.now ?? Date.now, async () => {
     const project = await ensureProjectConfig(root)
     const registry = await loadGeneratedProjectRegistry(root) ?? await prepareProjectDiscovery(root, project.config)
     const migrationsDir = resolve(root, project.config.paths.migrations)
