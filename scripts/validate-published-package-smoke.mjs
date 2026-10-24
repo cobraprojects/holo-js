@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { createServer } from 'node:net'
+import { connect, createServer } from 'node:net'
 
 import { dependencySections, resolveReleaseManifest } from './release-manifests.mjs'
 
@@ -62,6 +62,41 @@ async function getAvailablePort() {
   })
 }
 
+function acceptsConnection(port) {
+  return new Promise((resolvePromise, reject) => {
+    const socket = connect(port, '127.0.0.1')
+    // A connection attempt that stalls counts as not ready yet, so the readiness deadline still applies.
+    socket.setTimeout(1000, () => {
+      socket.destroy()
+      resolvePromise(false)
+    })
+    socket.once('connect', () => {
+      socket.destroy()
+      resolvePromise(true)
+    })
+    socket.once('error', (error) => {
+      if (error.code === 'ECONNREFUSED') resolvePromise(false)
+      else reject(error)
+    })
+  })
+}
+
+// Readiness is only "the port accepts connections"; the response is asserted once afterwards,
+// so a wrong page fails as an assertion instead of being retried until a timeout.
+async function waitForConnection(server, closed, port) {
+  const deadline = Date.now() + 45000
+  while (!await acceptsConnection(port)) {
+    if (server.exitCode !== null || server.signalCode !== null) {
+      await closed
+      throw new Error(`Production server exited with ${server.signalCode ? `signal ${server.signalCode}` : `code ${server.exitCode}`} before accepting connections.`)
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for the production server to accept connections on 127.0.0.1:${port}.`)
+    }
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+  }
+}
+
 async function stopServer(server) {
   if (server.exitCode !== null || server.signalCode !== null) return
 
@@ -75,7 +110,7 @@ async function stopServer(server) {
   }
 }
 
-async function assertProductionApp(appRoot, app, env) {
+export async function assertProductionApp(appRoot, app, env) {
   const port = await getAvailablePort()
   const output = []
   const cliPath = join(appRoot, 'node_modules/@holo-js/cli/dist/bin/holo.mjs')
@@ -92,36 +127,21 @@ async function assertProductionApp(appRoot, app, env) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  const closed = new Promise(resolvePromise => server.once('close', resolvePromise))
   server.stdout?.on('data', chunk => output.push(String(chunk)))
   server.stderr?.on('data', chunk => output.push(String(chunk)))
 
   const url = `http://127.0.0.1:${port}`
-  const deadline = Date.now() + 45000
-  let lastError
   try {
-    while (Date.now() < deadline) {
-      if (server.exitCode !== null) {
-        throw new Error(`Production server exited with code ${server.exitCode}.`)
-      }
-
-      try {
-        const response = await fetch(url)
-        const body = await response.text()
-        assert.equal(response.status, 200, body)
-        assert.match(body, new RegExp(app.expectedTitle))
-        assert.doesNotMatch(
-          output.join(''),
-          /UnhandledPromiseRejection|uncaughtException|ReferenceError|TypeError:/,
-        )
-        return
-      } catch (error) {
-        lastError = error
-      }
-
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
-    }
-
-    throw new Error(`Timed out waiting for ${url}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+    await waitForConnection(server, closed, port)
+    const response = await fetch(url)
+    const body = await response.text()
+    assert.equal(response.status, 200, body)
+    assert.match(body, new RegExp(app.expectedTitle))
+    assert.doesNotMatch(
+      output.join(''),
+      /UnhandledPromiseRejection|uncaughtException|ReferenceError|TypeError:/,
+    )
   } catch (error) {
     throw new Error([
       error instanceof Error ? error.message : String(error),

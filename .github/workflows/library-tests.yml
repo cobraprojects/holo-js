@@ -77,9 +77,16 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: Cache npm downloads for the pinned package managers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/npm-cache
+          key: npm-${{ runner.os }}-pnpm@10.34.7-yarn@1.22.22
       - name: Install pinned package managers
         working-directory: ${{ runner.temp }}
-        run: npm install --global pnpm@10.34.7 yarn@1.22.22
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache
+        run: npm install --global --prefer-offline pnpm@10.34.7 yarn@1.22.22
       - name: Verify package managers
         working-directory: ${{ runner.temp }}
         run: |

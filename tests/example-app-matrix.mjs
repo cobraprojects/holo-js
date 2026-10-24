@@ -6,6 +6,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, relative, resolve } from 'node:path'
 import { test } from 'node:test'
+import { closeWriteStream, exampleAppRunVariable, stopTaggedProcesses } from './example-app-process.mjs'
 import { createExampleAppFixture } from './support/example-app-fixture.mjs'
 import { watchExampleAppFiles } from './support/example-app-file-watch.mjs'
 
@@ -27,12 +28,13 @@ async function runApp(framework, driver) {
   const filename = join(projectRoot, 'storage', `${name}.sqlite`)
   let postgresAdmin
   let mysqlAdmin
-  const env = { ...process.env, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
+  const env = { ...process.env, [exampleAppRunVariable]: name, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
   const logPath = join(root, 'coverage', `app-${framework}-${driver}.log`)
   const fileWatch = watchExampleAppFiles(fixture.directory)
   const compiledAt = []
   let output = ''
   let log
+  let failure
   try {
     {
       const generatedBroadcastKey = (await readFile(join(projectRoot, '.env'), 'utf8').catch(() => '')).match(/^BROADCAST_APP_KEY=(.+)$/m)?.[1]?.trim()
@@ -65,6 +67,8 @@ async function runApp(framework, driver) {
     env.DB_URL = env[`DB_${driver.toUpperCase()}_URL`]
     await mkdir(join(root, 'coverage'), { recursive: true })
     log = createWriteStream(logPath)
+    // A failed log write must not crash the run; closeWriteStream reports it during cleanup.
+    log.on('error', () => {})
     const child = spawn(process.execPath, ['tests/run.mjs'], { cwd: projectRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
     const capture = (chunk) => {
       const searchFrom = Math.max(0, output.length - compiledMarker.length + 1)
@@ -74,45 +78,67 @@ async function runApp(framework, driver) {
     }
     child.stdout.on('data', capture)
     child.stderr.on('data', capture)
+    const closed = new Promise(resolve => child.once('close', resolve))
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject)
-      child.once('close', resolve)
+      child.once('exit', (exitCode, signal) => resolve(exitCode ?? signal))
     })
+    // Anything the journey left running (dev servers, workers) still writes to storage/ and holds the output pipes.
+    const leftRunning = await stopTaggedProcesses(name)
+    await closed
     if (compiledAt.length > 0 || code !== 0) {
       const report = `\n${fileWatch.before(code === 0 ? compiledAt : [...compiledAt, Date.now()])}\n`
       output += report
       log.write(report)
+    }
+    if (leftRunning.length > 0) {
+      const report = `${framework}/${driver} app journey left ${leftRunning.length} process(es) running after it exited; stopped them before cleanup:\n${leftRunning.map(({ pid, command }) => `  ${pid} ${command}`).join('\n')}\n`
+      output += report
+      log.write(report)
+      process.stdout.write(process.env.GITHUB_ACTIONS ? `::warning title=Example app journey left processes running::${report.replaceAll('\n', '%0A')}\n` : report)
     }
     const unprompted = compiledAt.filter(at => !fileWatch.hasSourceEditBefore(at)).length
     if (unprompted > 0 && process.env.GITHUB_ACTIONS) {
       process.stdout.write(`::warning title=Unprompted Next HMR compile (#380)::${framework}/${driver} printed '${compiledMarker}' ${unprompted} time(s) without a source edit. File changes before each are at the end of ${relative(root, logPath)} in the example-app-logs-${framework} artifact.\n`)
     }
     assert.equal(code, 0, `${framework}/${driver} app journey failed.\n${output}`)
-  } finally {
-    fileWatch.close()
-    if (log) await new Promise((resolve, reject) => { log.once('error', reject); log.end(resolve) })
+  } catch (error) {
+    failure = error
+  }
+  // Every cleanup step runs, and none of their errors replaces the journey's own failure.
+  const cleanupErrors = []
+  const attempt = async (step) => {
+    try {
+      await step()
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+  }
+  fileWatch.close()
+  await attempt(() => stopTaggedProcesses(name))
+  await attempt(async () => {
     await mkdir(join(root, 'coverage'), { recursive: true })
     await writeFile(logPath, output)
     await writeFile(join(root, 'coverage', `app-${framework}-${driver}-files.log`), fileWatch.log())
-    try {
-      if (postgresAdmin) {
-        await postgresAdmin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
-        await postgresAdmin.query(`DROP ROLE IF EXISTS ${name}`)
-        await postgresAdmin.query(`DROP ROLE IF EXISTS ${insertOnlyRole}`)
-        await postgresAdmin.end()
-      }
-    } finally {
-      try {
-        if (mysqlAdmin) {
-          await mysqlAdmin.query(`DROP DATABASE IF EXISTS ${name}`)
-          await mysqlAdmin.end()
-        }
-      } finally {
-        await Promise.all(['', '-wal', '-shm'].map(suffix => rm(`${filename}${suffix}`, { force: true })))
-        await rm(fixture.directory, { recursive: true, force: true })
-      }
-    }
+  })
+  if (log) await attempt(() => closeWriteStream(log))
+  if (postgresAdmin) {
+    await attempt(async () => {
+      await postgresAdmin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+      await postgresAdmin.query(`DROP ROLE IF EXISTS ${name}`)
+      await postgresAdmin.query(`DROP ROLE IF EXISTS ${insertOnlyRole}`)
+    })
+    await attempt(() => postgresAdmin.end())
   }
+  if (mysqlAdmin) {
+    await attempt(() => mysqlAdmin.query(`DROP DATABASE IF EXISTS ${name}`))
+    await attempt(() => mysqlAdmin.end())
+  }
+  await attempt(() => Promise.all(['', '-wal', '-shm'].map(suffix => rm(`${filename}${suffix}`, { force: true }))))
+  await attempt(() => rm(fixture.directory, { recursive: true, force: true }))
+  if (failure && cleanupErrors.length > 0) throw new AggregateError([failure, ...cleanupErrors], failure.message)
+  if (failure) throw failure
+  if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, `${framework}/${driver} example app cleanup failed`)
 }
 
 test('real example app database matrix', { concurrency: 3 }, async suite => {
