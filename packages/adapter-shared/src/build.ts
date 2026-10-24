@@ -13,7 +13,7 @@ export type RealtimeDefinitionSourceMap = {
   readonly version: 3
   readonly file: string
   readonly sources: readonly string[]
-  readonly sourcesContent: readonly string[]
+  readonly sourcesContent?: readonly string[]
   readonly names: readonly string[]
   readonly mappings: string
 }
@@ -132,11 +132,12 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 }
 
 function containsFactoryCall(node: ts.Node, bindings: RealtimeBindings): boolean {
-  if (ts.isCallExpression(node)) {
-    const root = referenceRoot(node.expression)
-    if (resolveFactory(node.expression, bindings) || (root && bindings.aliases.has(root.text))) return true
-  }
+  if (ts.isCallExpression(node) && resolveFactory(node.expression, bindings)) return true
   return ts.forEachChild(node, child => containsFactoryCall(child, bindings) || undefined) ?? false
+}
+
+function containsRealtimeReference(node: ts.Node, bindings: RealtimeBindings): boolean {
+  return containsFactoryCall(node, bindings) || referencesName(node, new Set([...bindings.namespaces, ...bindings.aliases]))
 }
 
 function collectStringConstants(sourceFile: ts.SourceFile): ReadonlyMap<string, ts.StringLiteralLike> {
@@ -210,7 +211,7 @@ function collectDefinitionLocals(sourceFile: ts.SourceFile, bindings: RealtimeBi
     changed = false
     for (const declaration of declarations) {
       if (!declaration.initializer) continue
-      if (!containsFactoryCall(declaration.initializer, bindings) && !referencesName(declaration.initializer, locals)) continue
+      if (!containsRealtimeReference(declaration.initializer, bindings) && !referencesName(declaration.initializer, locals)) continue
       for (const name of boundNames(declaration.name)) {
         if (!locals.has(name)) {
           locals.add(name)
@@ -236,7 +237,7 @@ function collectDefinitions(sourceFile: ts.SourceFile, filePath: string): readon
     const call = unwrapExpression(expression)
     const factory = ts.isCallExpression(call) ? resolveFactory(call.expression, bindings) : undefined
     if (!ts.isCallExpression(call) || !factory) {
-      if (containsFactoryCall(expression, bindings) || referencesName(expression, definitionLocals)) {
+      if (containsRealtimeReference(expression, bindings) || referencesName(expression, definitionLocals)) {
         throw unreducibleDefinitionError(filePath, exportedName)
       }
       return
@@ -291,7 +292,7 @@ function encodeVlq(value: number): string {
   return encoded
 }
 
-function createSourceMap(source: string, sourceLines: readonly (number | undefined)[]): RealtimeDefinitionSourceMap {
+function createSourceMap(sourceLines: readonly (number | undefined)[], sourcesContent?: readonly string[]): RealtimeDefinitionSourceMap {
   let previousSourceLine = 0
   const mappings = sourceLines.map((sourceLine) => {
     if (typeof sourceLine === 'undefined') return ''
@@ -304,7 +305,7 @@ function createSourceMap(source: string, sourceLines: readonly (number | undefin
     version: 3 as const,
     file: 'realtime.client.ts',
     sources: ['realtime.ts'],
-    sourcesContent: [source],
+    ...(sourcesContent ? { sourcesContent } : {}),
     names: [],
     mappings,
   }
@@ -385,7 +386,7 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
     const sourceLineCount = source.split('\n').length
     return Object.freeze({
       code,
-      map: createSourceMap(source, code.split('\n').map((_, index) => Math.min(index, sourceLineCount - 1))),
+      map: createSourceMap(code.split('\n').map((_, index) => Math.min(index, sourceLineCount - 1)), [source]),
     })
   }
 
@@ -424,7 +425,7 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
 
   return Object.freeze({
     code: outputLines.join('\n'),
-    map: createSourceMap(source, sourceLines),
+    map: createSourceMap(sourceLines),
   })
 }
 

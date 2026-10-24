@@ -505,12 +505,16 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
       const resolved = resolveRealtimeDefinitionImport(source, importer)
       return resolved ? `${realtimeClientDefinitionPrefix}${resolved}` : null
     },
-    load(id: string) {
-      if (!id.startsWith(realtimeClientDefinitionPrefix)) {
+    load(id: string, options?: { readonly ssr?: boolean }) {
+      if (id.startsWith(realtimeClientDefinitionPrefix)) {
+        const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
+        return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
+      }
+      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id)) {
         return null
       }
 
-      const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
+      const sourcePath = id.split('?')[0] as string
       return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
     },
     transform(code: string, id: string, options?: { readonly ssr?: boolean }) {

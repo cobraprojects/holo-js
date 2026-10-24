@@ -62,7 +62,7 @@ describe('Nuxt realtime module transforms', () => {
     const plugin = moduleInternals.createRealtimeDefinitionVitePlugin(root) as {
       resolveId(source: string, importer?: string, options?: { ssr?: boolean }): string | null
       load(id: string): string | null
-      transform(code: string, id: string, options?: { ssr?: boolean }): { code: string, map: { sourcesContent: string[] } } | null
+      transform(code: string, id: string, options?: { ssr?: boolean }): { code: string, map: { sources: string[], sourcesContent?: string[] } } | null
     }
 
     expect(plugin.resolveId(sourcePath, undefined, { ssr: true })).toBeNull()
@@ -73,7 +73,8 @@ describe('Nuxt realtime module transforms', () => {
     expect(plugin.load(resolved!)).toContain('posts.list')
     expect(plugin.transform(source, sourcePath, { ssr: true })).toBeNull()
     expect(plugin.transform(source, join(root, 'server/models/Post.ts'))).toBeNull()
-    expect(plugin.transform(source, sourcePath)).toMatchObject({ map: { sourcesContent: [source] } })
+    expect(plugin.transform(source, sourcePath)?.map).toMatchObject({ sources: ['realtime.ts'] })
+    expect(plugin.transform(source, sourcePath)?.map).not.toHaveProperty('sourcesContent')
 
     const vite: { plugins?: unknown[] } = {}
     moduleInternals.addVitePlugin(vite, plugin)

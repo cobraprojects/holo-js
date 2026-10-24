@@ -69,9 +69,8 @@ const post = form<{ title: string }>({ title: ')' })
     const code = `import { query } from '@holo-js/realtime'\nexport const posts = query({ name: 'posts.list' })`
     expect(plugin.transform(code, '/app/server/realtime/posts.ts', { ssr: true })).toBeNull()
     expect(plugin.transform(code, '/app/server/models/Post.ts')).toBeNull()
-    expect(plugin.transform(code, '/app/server/realtime/posts.ts')).toMatchObject({
-      map: { sourcesContent: [code] },
-    })
+    expect(plugin.transform(code, '/app/server/realtime/posts.ts')?.map).toMatchObject({ sources: ['realtime.ts'] })
+    expect(plugin.transform(code, '/app/server/realtime/posts.ts')?.map).not.toHaveProperty('sourcesContent')
   })
 })
 

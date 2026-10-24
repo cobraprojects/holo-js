@@ -77,8 +77,8 @@ describe('shared realtime definition transform', () => {
     expect(generated.map).toMatchObject({
       file: 'realtime.client.ts',
       sources: ['realtime.ts'],
-      sourcesContent: [source],
     })
+    expect(generated.map).not.toHaveProperty('sourcesContent')
     expect(generated.map.mappings).not.toBe('')
     expect(() => createRealtimeClientDefinitionTransform({ source: strippedSource, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/internal.ts' })).toThrow('server/realtime/internal.ts')
   })
@@ -260,6 +260,10 @@ describe('shared realtime definition transform', () => {
     ['an export list before the local definition it names', 'listed', 'export { posts as listed }\nconst posts = query({ name: \'posts.list\', handler: async () => [] })'],
     ['an exported alias of a definition', 'alias', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport const alias = posts'],
     ['an exported alias of an alias of a definition', 'listed', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nconst again = posts\nexport { again as listed }'],
+    ['a computed member of the default import', 'rename', 'import realtime from \'@holo-js/realtime\'\nconst key = \'mutation\'\nexport const rename = realtime[key]({ name: \'posts.rename\', handler: async () => true })'],
+    ['a computed member of the namespace import', 'rename', 'import * as realtime from \'@holo-js/realtime\'\nexport const rename = realtime[\'muta\' + \'tion\']({ name: \'posts.rename\', handler: async () => true })'],
+    ['a member of the default import that is not a factory', 'other', 'import realtime from \'@holo-js/realtime\'\nexport const other = realtime.createRealtimeClient({ name: \'posts.list\' })'],
+    ['an exported reference to the realtime import', 'exposed', 'import * as realtime from \'@holo-js/realtime\'\nexport const exposed = realtime'],
     ['a factory held in a local', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst q = realtime.query\nexport const aliased = q({ name: \'posts.list\', handler: async () => [] })'],
     ['a factory destructured from the default import', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst { mutation: m } = realtime\nexport const aliased = m({ name: \'posts.rename\', handler: async () => true })'],
     ['a member of an aliased namespace', 'aliased', 'import * as realtime from \'@holo-js/realtime\'\nconst r = realtime\nexport const aliased = r.query({ name: \'posts.list\', handler: async () => [] })'],

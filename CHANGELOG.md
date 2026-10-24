@@ -267,6 +267,7 @@ In preparation, not yet released.
 
 - Raise dependency floors past published advisories: `ws` 8.21.0, `sharp` 0.35.5, `mysql2` 3.24.6 and `valibot` 1.5.0, with framework peers Next.js 16.4.3, Nuxt 4.6.2 (and `@nuxt/kit`), SvelteKit 2.70.2 and Svelte 5.56.8. Next.js 16.4.0 and earlier on the 16 line have two critical unauthenticated remote code execution advisories (GHSA-673q-mjm6-r5xr, GHSA-2464-fhr4-w9xw) and a high Server Actions denial of service (GHSA-p3m5-59mp-jv5r). Nuxt before 4.6.2 skips server route rules for case-variant paths (GHSA-vjh5-4x84-xrqp) and doesn't sanitize `useHeadSafe` input in server islands (GHSA-xfq5-w38q-pc2x). Scaffolded apps get the new floors.
 - The dependency audit also checks the lowest version each workspace catalog range allows, since those ranges become published peer ranges and scaffolded app versions. A floor inside an advisory range fails the audit with the same severity rules and `audit-exceptions.json` exceptions as locked versions.
+- Browser builds no longer carry `server/realtime` source in their source maps. The client realtime transform's map has no `sourcesContent`, and Nuxt loads every `server/realtime` module as its browser stub, so a deployment that serves browser source maps no longer exposes handler code. Before, the map embedded the whole server module.
 
 ### Changed
 

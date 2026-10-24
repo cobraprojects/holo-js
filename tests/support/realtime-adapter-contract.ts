@@ -5,7 +5,7 @@ type RealtimeTransformResult = {
   readonly map: {
     readonly version: 3
     readonly sources: readonly string[]
-    readonly sourcesContent: readonly string[]
+    readonly sourcesContent?: readonly string[]
     readonly mappings: string
   }
 }
@@ -37,13 +37,25 @@ export function runRealtimeAdapterContract(contract: RealtimeAdapterContract): v
     it('returns mutable source maps accepted by framework build pipelines', () => {
       const result = contract.createTransform(source, 'server/realtime/posts.ts')
       expect(result.map).toMatchObject({ version: 3, sources: ['realtime.ts'] })
-      expect(result.map.sourcesContent).toEqual([source])
+      expect(result.map).not.toHaveProperty('sourcesContent')
       expect(result.map.mappings).not.toBe('')
 
       const sources = [...result.map.sources]
       const mutableSources = result.map.sources as string[]
       mutableSources.splice(0, mutableSources.length, ...sources)
       expect(result.map.sources).toEqual(sources)
+    })
+
+    it('keeps server source out of the client code and its source map', () => {
+      const secretSource = [
+        `import { query } from '@holo-js/realtime'`,
+        `const SECRET = 'sk_live_contract_secret'`,
+        `export const posts = query({ name: 'posts.list', handler: async () => SECRET })`,
+      ].join('\n')
+      const result = contract.createTransform(secretSource, 'server/realtime/posts.ts')
+      expect(result.code).not.toContain('sk_live_contract_secret')
+      expect(JSON.stringify(result.map)).not.toContain('sk_live_contract_secret')
+      expect(JSON.stringify(result.map)).not.toContain('handler: async')
     })
 
     it('removes server-only handlers while retaining nested client metadata', () => {
