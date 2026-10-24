@@ -279,7 +279,7 @@ In preparation, not yet released.
 
 - Holo CLI writes generated and updated project files, including `package.json`, through a temporary file and an atomic rename. Editors, watchers and package managers reading a file while `holo dev` or `holo install` updates it no longer see an empty or truncated file.
 - Next.js realtime queries call React `use()` on every render, so a query that suspends for its first result renders without React errors on Next.js 16.4.
-- The browser build of a `server/realtime` module accepts definitions made through the package's default or namespace import (`realtime.query({...})`), an `export default query({...})` definition, and a `name` read from a same-file `const` set to a string literal. Before, the documented default-import form failed the build, and a default-exported definition next to named ones was left out of the browser module. An exported definition the build can't reduce now fails it, naming the file and the export, and the browser module still holds only string-literal names and the factory import.
+- The browser build of a `server/realtime` module accepts definitions made through the package's default or namespace import (`realtime.query({...})`), an `export default query({...})` definition, and a `name` read from a same-file `const` set to a string literal. Before, the documented default-import form failed the build, and a default-exported definition next to named ones was left out of the browser module. An exported definition the build can't reduce, such as one re-exported through a local alias, or whose `name` a later spread or computed key could change, now fails the build, naming the file and the export. The browser module still holds only string-literal names and the factory import.
 
 ## 0.3.28
 
