@@ -5,6 +5,7 @@ import * as nodeModule from 'node:module'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
+import type { Diagnostic } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
 import * as holoKernelModule from '@holo-js/kernel'
@@ -275,14 +276,23 @@ function extendsEntries(config: JsonObject): string[] {
   return []
 }
 
+function referencePaths(config: JsonObject): string[] {
+  if (!Array.isArray(config.references)) return []
+  return config.references.flatMap(reference => isRecord(reference) && typeof reference.path === 'string' ? [reference.path] : [])
+}
+
 function isInside(path: string, directory: string): boolean {
   const relativePath = relative(directory, path)
   return relativePath !== '' && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath)
 }
 
-function isNuxtBuildExtends(projectRoot: string, entry: string): boolean {
+function isNuxtBuildPath(projectRoot: string, entry: string): boolean {
   if (!entry.startsWith('.') && !isAbsolute(entry)) return false
   return isInside(resolve(projectRoot, entry), join(projectRoot, NUXT_BUILD_DIRECTORY))
+}
+
+function usesNuxtBuildTsconfig(projectRoot: string, config: JsonObject): boolean {
+  return [...extendsEntries(config), ...referencePaths(config)].some(entry => isNuxtBuildPath(projectRoot, entry))
 }
 
 function absoluteCompilerOptions(options: JsonObject, directory: string): JsonObject {
@@ -301,31 +311,72 @@ function absoluteCompilerOptions(options: JsonObject, directory: string): JsonOb
   return result
 }
 
-function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): JsonObject {
+const NO_INPUTS_FOUND_DIAGNOSTIC = 18003
+
+async function readTsconfigFile(path: string): Promise<JsonObject | undefined> {
+  const text = await readFile(path, 'utf8').catch(() => undefined)
+  return text === undefined ? undefined : parseTsconfigText(text)
+}
+
+function tsconfigError(projectRoot: string, message: string): Error {
+  return new Error(`[@holo-js/core] Cannot load ${join(projectRoot, 'tsconfig.json')} for bundling: ${message}`)
+}
+
+async function parseProjectTsconfigPaths(projectRoot: string): Promise<{ readonly paths: JsonObject, readonly baseUrl?: string }> {
+  const ts = await import('typescript')
+  const nuxtDirectory = join(projectRoot, NUXT_BUILD_DIRECTORY)
+  const insideNuxt = (path: string) => isInside(resolve(path), nuxtDirectory)
+  const describe = (diagnostic: Diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+  const parsed = ts.getParsedCommandLineOfConfigFile(join(projectRoot, 'tsconfig.json'), {}, {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    getCurrentDirectory: () => projectRoot,
+    fileExists: path => insideNuxt(path) || ts.sys.fileExists(path),
+    readFile: path => insideNuxt(path) ? '{}' : ts.sys.readFile(path),
+    readDirectory: () => [],
+    onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+      throw tsconfigError(projectRoot, describe(diagnostic))
+    },
+  })
+  const error = parsed?.errors.find(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error && diagnostic.code !== NO_INPUTS_FOUND_DIAGNOSTIC)
+  if (error) throw tsconfigError(projectRoot, describe(error))
+
+  const options = parsed?.options ?? {}
+  const pathsBase = options.baseUrl ?? (typeof options.pathsBasePath === 'string' ? options.pathsBasePath : projectRoot)
+  const paths = options.paths ? absoluteCompilerOptions({ paths: options.paths }, pathsBase).paths : {}
+  return { paths: isRecord(paths) ? paths : {}, baseUrl: options.baseUrl }
+}
+
+async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {
+  const snapshot = snapshotPath ? await readTsconfigFile(snapshotPath) : undefined
+  const snapshotOptions = snapshot && isRecord(snapshot.compilerOptions) ? snapshot.compilerOptions : undefined
+  if (snapshotOptions) return isRecord(snapshotOptions.paths) ? snapshotOptions.paths : {}
+  const defaults = absoluteCompilerOptions({ paths: DEFAULT_LOADER_PATHS }, projectRoot).paths
+  return isRecord(defaults) ? defaults : {}
+}
+
+async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): Promise<JsonObject> {
   const entries = extendsEntries(config)
-  const droppedNuxt = !snapshotPath && entries.some(entry => isNuxtBuildExtends(projectRoot, entry))
   const extendsTargets = entries.flatMap(entry => {
-    if (isNuxtBuildExtends(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
+    if (isNuxtBuildPath(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
     return [entry.startsWith('.') ? resolve(projectRoot, entry) : entry]
   })
   const derived: JsonObject = { ...config }
+  if (referencePaths(config).some(entry => isNuxtBuildPath(projectRoot, entry))) {
+    delete derived.files
+    delete derived.references
+    if (snapshotPath && !entries.some(entry => isNuxtBuildPath(projectRoot, entry))) extendsTargets.unshift(snapshotPath)
+  }
   if (extendsTargets.length === 0) {
     delete derived.extends
   } else {
-    derived.extends = typeof config.extends === 'string' ? extendsTargets[0] : extendsTargets
+    derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
+  const user = await parseProjectTsconfigPaths(projectRoot)
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
-  let baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(projectRoot, compilerOptions.baseUrl) : undefined
-  if (droppedNuxt) {
-    baseUrl ??= projectRoot
-    compilerOptions.paths = { ...DEFAULT_LOADER_PATHS, ...(isRecord(compilerOptions.paths) ? compilerOptions.paths : {}) }
-  }
-  if (baseUrl) {
-    compilerOptions.baseUrl = baseUrl
-  } else if (isRecord(compilerOptions.paths)) {
-    compilerOptions.paths = absoluteCompilerOptions({ paths: compilerOptions.paths }, projectRoot).paths
-  }
+  const baseUrl = user.baseUrl ?? (snapshotPath ? undefined : projectRoot)
+  if (baseUrl) compilerOptions.baseUrl = baseUrl
+  compilerOptions.paths = { ...await nuxtLoaderPaths(projectRoot, snapshotPath), ...user.paths }
   derived.compilerOptions = compilerOptions
   return derived
 }
@@ -334,14 +385,14 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
   const projectTsconfigPath = join(projectRoot, 'tsconfig.json')
   if (await pathExists(projectTsconfigPath)) {
     const config = await readProjectTsconfig(projectRoot)
-    if (!config || !extendsEntries(config).some(entry => isNuxtBuildExtends(projectRoot, entry))) {
+    if (!config || !usesNuxtBuildTsconfig(projectRoot, config)) {
       return projectTsconfigPath
     }
 
     const snapshotPath = join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH)
     const hasSnapshot = await pathExists(snapshotPath)
     const derivedPath = join(tempDir, 'tsconfig.json')
-    await writeFile(derivedPath, `${JSON.stringify(deriveLoaderConfig(projectRoot, config, hasSnapshot ? snapshotPath : undefined), null, 2)}\n`, 'utf8')
+    await writeFile(derivedPath, `${JSON.stringify(await deriveLoaderConfig(projectRoot, config, hasSnapshot ? snapshotPath : undefined), null, 2)}\n`, 'utf8')
     return derivedPath
   }
 
@@ -749,13 +800,13 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 export const runtimeModuleInternals = {
   absoluteCompilerOptions,
   bundleRuntimeModule,
-  extendsEntries,
-  isNuxtBuildExtends,
+  usesNuxtBuildTsconfig,
   parseTsconfigText,
   readProjectTsconfig,
   importModule,
   importOptionalRuntimeModule,
   isMissingOptionalModule,
+  isRecord,
   loadEsbuild,
   pathExists,
   registerRuntimeModuleInstance,

@@ -36,6 +36,8 @@ Nuxt's `server/` folder holds both Nitro code and Holo code:
 | Pages, layouts, route middleware | `app/pages`, `app/layouts`, `app/middleware` |
 | Code shared by client and server, such as form schemas | `shared/` |
 
+The scaffold's `tsconfig.json` is the one `nuxi init` writes. It points at the separate configs Nuxt generates in `.nuxt/` for app, server, shared, and build-time code. When Nuxt generates its types, Holo adds its generated types and your `config/` folder to the server config, so models, jobs, and config files are type-checked as server code.
+
 ## Use Holo in event handlers
 
 Import models and services and use them inside `defineEventHandler`:
