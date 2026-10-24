@@ -8,7 +8,7 @@
     "dev": "holo dev",
     "build": "holo build",
     "start": "holo start",
-    "lint": "eslint app config lib server tests next.config.ts vitest.config.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern",
+    "lint": "eslint app config lib server tests next.config.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",

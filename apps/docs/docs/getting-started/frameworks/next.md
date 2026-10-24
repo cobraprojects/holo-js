@@ -43,7 +43,7 @@ Start the app with the package scripts (`npm run dev`, `npm run start`), not wit
 | Proxy (middleware) | `proxy.ts` at the project root |
 | Models, jobs, events, and other Holo code | `server/` |
 
-The scaffold's `tsconfig.json` maps `@/*` to the project root, so you can import `@/server/models/Post` from anywhere.
+The scaffold's `tsconfig.json` is the one `create-next-app` writes, with `.holo-js/generated/**/*.ts` added to `include` for Holo's generated types. It maps `@/*` to the project root, so you can import `@/server/models/Post` from anywhere.
 
 ## Use Holo in route handlers
 

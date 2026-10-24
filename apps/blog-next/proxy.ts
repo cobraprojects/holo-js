@@ -1,5 +1,6 @@
 import { authOnly, guestOnly, protectRoutes } from '@holo-js/auth/next/server'
 import { csrfProtection } from '@holo-js/security/next/server'
+import type { NextRequest } from 'next/server'
 
 const csrf = csrfProtection()
 const auth = protectRoutes(
@@ -23,7 +24,7 @@ const auth = protectRoutes(
   }),
 )
 
-export async function proxy(request: Parameters<typeof csrf>[0]) {
+export async function proxy(request: NextRequest) {
   const csrfResponse = await csrf(request)
   if (csrfResponse?.status === 419) {
     return csrfResponse

@@ -10,12 +10,16 @@ import { initializeProjectRuntime } from '../src/runtime'
 const temporaryDirectories: string[] = []
 const blogNuxtRoot = resolve(import.meta.dirname, '../../../apps/blog-nuxt')
 const generatedDirectories = new Set(['node_modules', 'storage', '.holo-js', '.nuxt', '.output'])
+const tsconfigLayouts = [
+  { layout: 'project references', tsconfig: undefined },
+  { layout: 'legacy extends', tsconfig: '{ "extends": "./.nuxt/tsconfig.json" }\n' },
+]
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function createUpgradedNuxtProject(): Promise<string> {
+async function createUpgradedNuxtProject(tsconfig: string | undefined): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-nuxt-snapshot-'))
   temporaryDirectories.push(root)
   await cp(blogNuxtRoot, root, {
@@ -23,6 +27,7 @@ async function createUpgradedNuxtProject(): Promise<string> {
     filter: source => !generatedDirectories.has(source.slice(blogNuxtRoot.length + 1).split('/')[0] ?? ''),
   })
   await symlink(join(blogNuxtRoot, 'node_modules'), join(root, 'node_modules'), 'dir')
+  if (tsconfig) await writeFile(join(root, 'tsconfig.json'), tsconfig)
   await mkdir(join(root, 'storage'), { recursive: true })
   await mkdir(join(root, 'lib/custom'), { recursive: true })
   await writeFile(join(root, 'lib/custom/label.ts'), "export const label = 'custom'\n")
@@ -56,13 +61,13 @@ export const IndexLabel = defineJob<{ name: string }>({
   const nuxtPrepare = spawnSync('bun', ['x', 'nuxt', 'prepare'], { cwd: root, encoding: 'utf8' })
   expect(nuxtPrepare.status, nuxtPrepare.stderr).toBe(0)
   await rm(join(root, '.holo-js/generated/nuxt-tsconfig.json'), { force: true })
-  expect(existsSync(join(root, '.nuxt/tsconfig.json'))).toBe(true)
+  expect(existsSync(join(root, '.nuxt/tsconfig.server.json'))).toBe(true)
   expect(existsSync(join(root, '.holo-js/generated/nuxt-tsconfig.json'))).toBe(false)
   return root
 }
 
-it('prepares an upgraded Nuxt project whose custom alias is used in a model before any snapshot exists', async () => {
-  const root = await createUpgradedNuxtProject()
+it.each(tsconfigLayouts)('prepares a Nuxt project with the $layout tsconfig whose custom alias is used in a model before any snapshot exists', async ({ tsconfig }) => {
+  const root = await createUpgradedNuxtProject(tsconfig)
 
   await runProjectPrepare(root)
 
@@ -74,8 +79,8 @@ it('prepares an upgraded Nuxt project whose custom alias is used in a model befo
   expect(registry.jobs.map(job => job.sourcePath)).toContain('server/jobs/custom/index-label.ts')
 }, 300_000)
 
-it('initializes the runtime for an upgraded Nuxt project whose custom alias is used in a job before any snapshot exists', async () => {
-  const root = await createUpgradedNuxtProject()
+it.each(tsconfigLayouts)('initializes the runtime for a Nuxt project with the $layout tsconfig whose custom alias is used in a job before any snapshot exists', async ({ tsconfig }) => {
+  const root = await createUpgradedNuxtProject(tsconfig)
   const previousDirectory = process.cwd()
   process.chdir(root)
 

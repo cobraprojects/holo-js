@@ -1,21 +1,14 @@
 {
   "extends": "$app/tsconfig",
   "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true
+    "strict": true
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.svelte",
-    "server/**/*.ts",
-    "config/**/*.ts",
-    ".holo-js/generated/**/*.ts",
-    ".holo-js/generated/**/*.d.ts",
+    "src",
     "vite.config.ts",
+    "server",
+    "config",
+    ".holo-js/generated/**/*.ts",
     "tests/**/*.ts"
-  ],
-  "exclude": [
-    "src/service-worker"
   ]
 }
