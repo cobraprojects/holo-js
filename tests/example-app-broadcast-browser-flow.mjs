@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage } from './example-app-browser.mjs'
 
 const adminPath = '/admin'
 const createPostPath = '/admin/posts/new'
@@ -122,8 +122,7 @@ async function createPostThroughBrowser(page, title) {
 }
 
 export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, cookieHeader }) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
 
   try {
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
@@ -166,7 +165,7 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
     assert.equal((await unknown.json()).error, 'not-found')
     const malformed = await context.request.post('/broadcasting/auth', { headers, form: { socket_id: 'native.http' } })
     assert.equal(malformed.status(), 400)
-    const visitor = await browser.newContext({ baseURL: baseUrl })
+    const visitor = await newExampleAppContext({ baseURL: baseUrl })
     try {
       assert.equal((await visitor.request.get('/login')).status(), 200)
       const cookie = (await visitor.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
@@ -200,7 +199,7 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
       `Expected the dashboard broadcast activity to show created: ${title}.`,
     )
 
-    const otherUser = await browser.newContext({ baseURL: baseUrl })
+    const otherUser = await newExampleAppContext({ baseURL: baseUrl })
     try {
       const otherUserDashboard = await otherUser.newPage()
       const otherUserFailures = observeExampleAppPage(otherUserDashboard).failures

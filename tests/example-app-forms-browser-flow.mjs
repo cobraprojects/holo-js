@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
+import { newExampleAppContext, observeExampleAppPage } from './example-app-browser.mjs'
 
 export async function assertExampleAppFormsBrowserFlow({ baseUrl, framework }) {
-  const browser = await getExampleAppBrowser()
-  const context = await browser.newContext({ baseURL: baseUrl })
+  const context = await newExampleAppContext({ baseURL: baseUrl })
   try {
     const page = await context.newPage()
     const observed = observeExampleAppPage(page)
@@ -38,7 +37,7 @@ export async function assertExampleAppFormsBrowserFlow({ baseUrl, framework }) {
   }
 
   if (framework === 'nuxt') {
-    const requestContext = await browser.newContext({ baseURL: baseUrl })
+    const requestContext = await newExampleAppContext({ baseURL: baseUrl })
     try {
       assert.equal((await requestContext.request.get('/framework/forms')).status(), 200)
       const csrf = (await requestContext.cookies()).find(cookie => cookie.name === 'XSRF-TOKEN')
@@ -69,7 +68,7 @@ export async function assertExampleAppFormsBrowserFlow({ baseUrl, framework }) {
 
   const paths = framework === 'sveltekit' ? ['/framework/forms', '/framework/forms/default'] : ['/framework/forms']
   await Promise.all(paths.flatMap(path => [false, true].map(async javaScriptEnabled => {
-    const flashContext = await browser.newContext({ baseURL: baseUrl, javaScriptEnabled })
+    const flashContext = await newExampleAppContext({ baseURL: baseUrl, javaScriptEnabled })
     try {
       const page = await flashContext.newPage()
       const observed = observeExampleAppPage(page, { allowRequestFailure: (_url, failure) => !javaScriptEnabled && failure === 'csp' })

@@ -1,6 +1,7 @@
 import { chromium } from 'playwright'
 
 let browserPromise
+const nextPageUpdates = new Set(['addedPage', 'removedPage', 'reloadPage', 'serverComponentChanges', 'staticParamsChanged', 'turbopack-message'])
 
 export function observeExampleAppPage(page, options = {}) {
   const failures = []
@@ -43,13 +44,34 @@ export async function signInAsExampleAppEditor(page) {
   await page.waitForURL(url => url.pathname === '/admin', { timeout: 20000 })
 }
 
-export async function getExampleAppBrowser() {
+async function getExampleAppBrowser() {
   browserPromise ??= chromium.launch({ headless: true }).catch((error) => {
     browserPromise = undefined
     throw error
   })
 
   return await browserPromise
+}
+
+function isNextPageUpdate(message) {
+  try {
+    return nextPageUpdates.has(JSON.parse(message)?.type)
+  } catch {
+    return false
+  }
+}
+
+export async function newExampleAppContext(options) {
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext(options)
+  await context.routeWebSocket(/\/_next\/hmr(?:\?|$)/, (page) => {
+    const server = page.connectToServer()
+    server.onMessage((message) => {
+      if (!isNextPageUpdate(message)) page.send(message)
+    })
+    server.onClose(() => {})
+  })
+  return context
 }
 
 export async function closeExampleAppBrowser() {
