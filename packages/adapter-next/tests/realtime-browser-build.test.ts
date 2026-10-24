@@ -1,12 +1,15 @@
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { withHolo } from '../src/config'
 import realtimeDefinitionLoader from '../src/realtime-definition-loader'
-import { browserBuildSecret, createSecretRealtimeProject } from '../../../tests/support/realtime-browser-build'
+import { browserBuildSecret, createSecretRealtimeProject, realtimeProjectLayouts } from '../../../tests/support/realtime-browser-build'
 
 type WebpackStats = { hasErrors(): boolean, toString(options: string): string }
 type Webpack = (config: object, callback: (error: Error | null, stats?: WebpackStats) => void) => void
+type WebpackRule = { readonly use: ReadonlyArray<{ readonly loader: string, readonly options?: object }> }
+type ConfigureWebpack = (config: object, context: { readonly isServer: boolean }) => { readonly module: { readonly rules: readonly WebpackRule[] } }
 
 const loadWebpack = (): Webpack => {
   const require = createRequire(import.meta.url)
@@ -14,12 +17,26 @@ const loadWebpack = (): Webpack => {
   return bundle().webpack
 }
 
+function createClientRealtimeRule(root: string, loaderPath: string): WebpackRule {
+  const previousCwd = process.cwd()
+  process.chdir(root)
+  try {
+    const configureWebpack = withHolo().webpack as unknown as ConfigureWebpack
+    const rule = configureWebpack({}, { isServer: false }).module.rules.find(entry => entry.use[0]?.loader.includes('realtime-definition-loader'))
+    if (!rule) throw new Error('withHolo() did not add the realtime definition rule')
+    return { ...rule, use: rule.use.map(entry => ({ ...entry, loader: loaderPath })) }
+  } finally {
+    process.chdir(previousCwd)
+  }
+}
+
 describe('Next realtime browser build', () => {
-  it('keeps handler source out of the webpack browser bundle and its source maps', async () => {
-    const root = await createSecretRealtimeProject()
+  it.each(realtimeProjectLayouts)('keeps handler source out of the webpack browser bundle and its source maps with a %s project', async (layout) => {
+    const { root, cleanup } = await createSecretRealtimeProject(layout)
     const loaderKey = Symbol.for('holo.test.realtimeDefinitionLoader')
     Reflect.set(globalThis, loaderKey, realtimeDefinitionLoader)
     try {
+      await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies: { '@holo-js/realtime': 'workspace:*' } }))
       await writeFile(join(root, 'loader.cjs'), [
         `module.exports = function (source) { return globalThis[Symbol.for('holo.test.realtimeDefinitionLoader')].call(this, source) }`,
         '',
@@ -36,7 +53,7 @@ describe('Next realtime browser build', () => {
         externalsType: 'module',
         externals: { '@holo-js/adapter-next/realtime': '@holo-js/adapter-next/realtime' },
         resolve: { extensions: ['.ts', '.js'] },
-        module: { rules: [{ test: /server[\\/]realtime[\\/].*\.ts$/, use: [join(root, 'loader.cjs')] }, { test: /client\.ts$/, type: 'javascript/esm' }] },
+        module: { rules: [createClientRealtimeRule(root, join(root, 'loader.cjs')), { test: /client\.ts$/, type: 'javascript/esm' }] },
       }, (error, result) => error || !result ? reject(error ?? new Error('webpack returned no stats')) : resolve(result)))
       expect(stats.hasErrors(), stats.toString('errors-only')).toBe(false)
       const files = await readdir(join(root, 'dist'))
@@ -48,7 +65,30 @@ describe('Next realtime browser build', () => {
       expect(bundle).not.toContain('handler: async')
     } finally {
       Reflect.deleteProperty(globalThis, loaderKey)
-      await rm(root, { recursive: true, force: true })
+      await cleanup()
     }
   }, 60_000)
+
+  it('applies the browser Turbopack rule to a symlinked realtime directory, relative to any ancestor root', async () => {
+    const { root, cleanup } = await createSecretRealtimeProject('symlinked-realtime-directory')
+    const previousCwd = process.cwd()
+    try {
+      await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies: { '@holo-js/realtime': 'workspace:*' } }))
+      process.chdir(root)
+      const turbopack = (withHolo() as { readonly turbopack?: { readonly rules?: Record<string, unknown> } }).turbopack
+      const [browserRule] = turbopack?.rules?.['*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}'] as Array<{ condition: { all: [unknown, { any: Array<{ path: RegExp }> }] } }>
+      const patterns = browserRule?.condition.all[1].any.map(entry => entry.path) ?? []
+      const realFile = join(await realpath(join(root, 'server/realtime')), 'posts.ts')
+      const workspace = join(root, '..')
+      const matches = (path: string) => patterns.some(pattern => pattern.test(path))
+
+      expect(matches(realFile)).toBe(true)
+      expect(matches(relative(workspace, realFile))).toBe(true)
+      expect(matches(`.${sep}${relative(workspace, realFile)}`)).toBe(true)
+      expect(matches(relative(workspace, join(root, 'server/models/Post.ts')))).toBe(false)
+    } finally {
+      process.chdir(previousCwd)
+      await cleanup()
+    }
+  })
 })

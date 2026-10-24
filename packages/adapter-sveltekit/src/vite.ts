@@ -1,4 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
+import { isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { readFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { createRealtimeClientDefinitionTransform } from './realtime-definition-transform'
@@ -15,21 +16,24 @@ type VitePlugin = {
 
 const realtimeFileExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'])
 
-export function isRealtimeDefinitionModule(rootDir: string, id: string): boolean {
-  const normalizedRoot = rootDir.replaceAll('\\', '/').replace(/\/+$/, '')
-  const normalizedId = (id.split('?')[0] as string).replaceAll('\\', '/')
-  return normalizedId.startsWith(`${normalizedRoot}/server/realtime/`)
-    && realtimeFileExtensions.has(extname(normalizedId))
+export function isRealtimeDefinitionModule(
+  rootDir: string,
+  id: string,
+  directories: readonly string[] = resolveRealtimeDefinitionDirectories(rootDir),
+): boolean {
+  return isInRealtimeDefinitionDirectory(directories, id)
+    && realtimeFileExtensions.has(extname(id.split('?')[0] as string))
 }
 
 export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
   const browserDefinitionIds = new Set<string>()
+  const directories = resolveRealtimeDefinitionDirectories(rootDir)
   return {
     name: 'holo-sveltekit-realtime-client-definitions',
     enforce: 'pre',
     load(id, options) {
       const path = id.split('?')[0] as string
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, path)) {
+      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, path, directories)) {
         return null
       }
 
@@ -41,7 +45,7 @@ export function holoSvelteKitRealtime(rootDir = process.cwd()): VitePlugin {
         const compiled = compileBrowserValidation(code, id)
         if (compiled) return { code: compiled, map: null }
       }
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id) || browserDefinitionIds.has(id)) {
+      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id, directories) || browserDefinitionIds.has(id)) {
         return null
       }
 

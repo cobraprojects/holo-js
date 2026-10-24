@@ -1,4 +1,5 @@
 import { compileBrowserValidation } from '@holo-js/adapter-shared/build'
+import { isInRealtimeDefinitionDirectory, resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { access, mkdir, readFile, readdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -424,10 +425,14 @@ function addViteOptimizeDeps(opts: NuxtOptionsWithNitro, deps: readonly string[]
   ]
 }
 
-function isRealtimeDefinitionModule(_rootDir: string, id: string): boolean {
+function isRealtimeDefinitionModule(
+  rootDir: string,
+  id: string,
+  directories: readonly string[] = resolveRealtimeDefinitionDirectories(rootDir),
+): boolean {
   const [sourcePath = ''] = id.split('?')
   const normalizedId = sourcePath.replaceAll('\\', '/')
-  return normalizedId.includes('/server/realtime/')
+  return (normalizedId.includes('/server/realtime/') || isInRealtimeDefinitionDirectory(directories, normalizedId))
     && MODEL_FILE_EXTENSIONS.has(extname(normalizedId))
 }
 
@@ -494,6 +499,7 @@ function renderRealtimeDefinitionsModule(rootDir: string): string {
 }
 
 function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
+  const directories = resolveRealtimeDefinitionDirectories(rootDir)
   return {
     name: 'holo-realtime-client-definitions',
     enforce: 'pre',
@@ -510,7 +516,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
         const sourcePath = id.slice(realtimeClientDefinitionPrefix.length)
         return createRealtimeClientDefinitionModule(readFileSync(sourcePath, 'utf8'), sourcePath)
       }
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id)) {
+      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id, directories)) {
         return null
       }
 
@@ -522,7 +528,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
         const compiled = compileBrowserValidation(code, id)
         if (compiled) return { code: compiled, map: null }
       }
-      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id)) {
+      if (options?.ssr || !isRealtimeDefinitionModule(rootDir, id, directories)) {
         return null
       }
 

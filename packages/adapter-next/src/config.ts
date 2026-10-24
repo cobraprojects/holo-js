@@ -1,3 +1,4 @@
+import { resolveRealtimeDefinitionDirectories } from '@holo-js/adapter-shared/realtime-directories'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -174,9 +175,31 @@ function isOptionalServerExternalPackageInstalled(packageName: string, manifest:
   return PACKAGE_DEPENDENCY_FIELDS.some(field => Boolean(manifest?.[field]?.[packageName]))
 }
 
-function createRealtimeDefinitionWebpackRule(loaderPath: string, preserveServerHandlers: boolean): Record<string, unknown> {
+const pathSeparatorPattern = '[\\\\/]'
+
+function escapePathSegments(segments: readonly string[]): string {
+  return segments.map(segment => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(pathSeparatorPattern)
+}
+
+function resolveRealtimeDefinitionPatterns(rootDir: string): { readonly absolute: readonly RegExp[], readonly projectRelative: readonly RegExp[] } {
+  const directories = resolveRealtimeDefinitionDirectories(rootDir)
   return {
-    test: /(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/,
+    absolute: directories.map(directory => new RegExp(`^${escapePathSegments(directory.split('/'))}${pathSeparatorPattern}`)),
+    projectRelative: directories.filter(directory => !directory.endsWith('/server/realtime')).map((directory) => {
+      const segments = directory.split('/').filter(segment => segment !== '')
+      const suffixes = segments.map((_, index) => escapePathSegments(segments.slice(index)))
+      return new RegExp(`^(?:\\.${pathSeparatorPattern})?(?:${suffixes.join('|')})${pathSeparatorPattern}`)
+    }),
+  }
+}
+
+function createRealtimeDefinitionWebpackRule(
+  loaderPath: string,
+  preserveServerHandlers: boolean,
+  directoryPatterns: readonly RegExp[],
+): Record<string, unknown> {
+  return {
+    test: [/(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/, ...directoryPatterns.map(pattern => new RegExp(`${pattern.source}.+\\.[cm]?[jt]sx?$`))],
     use: [{
       loader: loaderPath,
       options: { preserveServerHandlers },
@@ -187,6 +210,7 @@ function createRealtimeDefinitionWebpackRule(loaderPath: string, preserveServerH
 function createRealtimeDefinitionTurbopackRule(
   loaderPath: string,
   environment: 'browser' | 'server',
+  directoryPatterns: readonly RegExp[],
 ): Record<string, unknown> {
   const environmentCondition = environment === 'browser'
     ? 'browser'
@@ -197,7 +221,7 @@ function createRealtimeDefinitionTurbopackRule(
       all: [
         environmentCondition,
         {
-          path: /(?:^|[\\/])server[\\/]realtime[\\/]/,
+          any: [{ path: /(?:^|[\\/])server[\\/]realtime[\\/]/ }, ...directoryPatterns.map(path => ({ path }))],
         },
       ],
     },
@@ -237,6 +261,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
+  const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(process.cwd()) : { absolute: [], projectRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
     ...existingTurbopack,
     rules: {
@@ -249,8 +274,8 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       ...(hasRealtime
         ? {
             '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser'),
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server'),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.projectRelative]),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server', [...realtimeDirectoryPatterns.absolute, ...realtimeDirectoryPatterns.projectRelative]),
             ],
           }
         : {}),
@@ -290,7 +315,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       nextWebpackConfig.module = nextWebpackConfig.module ?? {}
       nextWebpackConfig.module.rules = [
         ...(nextWebpackConfig.module.rules ?? []),
-        ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer)] : []),
+        ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer, realtimeDirectoryPatterns.absolute)] : []),
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
       ]

@@ -564,11 +564,11 @@ export default defineConfig({
       ) => Record<string, unknown>
       const client = webpack({}, { isServer: false }) as {
         transformed: boolean
-        module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
+        module: { rules: Array<{ test: RegExp[], use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
       }
       expect(client.transformed).toBe(true)
       expect(client.module.rules[1]?.use[0]?.loader).toContain('validation-loader')
-      expect(client.module.rules[0]?.test.test('server/realtime/posts.ts')).toBe(true)
+      expect(client.module.rules[0]?.test.some(pattern => pattern.test('server/realtime/posts.ts'))).toBe(true)
       expect(client.module.rules[0]?.use[0]).toMatchObject({
         loader: expect.stringContaining('realtime-definition-loader'),
         options: { preserveServerHandlers: false },
@@ -576,7 +576,7 @@ export default defineConfig({
 
       const server = webpack({}, { isServer: true }) as {
         transformed: boolean
-        module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
+        module: { rules: Array<{ test: RegExp[], use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
       }
       expect(server.transformed).toBe(true)
       expect(server.module.rules[0]?.use[0]).toMatchObject({

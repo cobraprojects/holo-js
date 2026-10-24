@@ -10,6 +10,12 @@
     "directory": "packages/adapter-shared"
   },
   "exports": {
+    "./realtime-directories": {
+      "@holo-js/source": "./src/realtime-directories.ts",
+      "types": "./dist/realtime-directories.d.ts",
+      "import": "./dist/realtime-directories.mjs",
+      "default": "./dist/realtime-directories.mjs"
+    },
     "./server-errors": {
       "@holo-js/source": "./src/server-errors.ts",
       "types": "./dist/server-errors.d.ts",
