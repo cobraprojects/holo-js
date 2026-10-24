@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- New projects get the `tsconfig.json` that each framework's own generator writes: the Nuxt 4 project references layout from `nuxi init`, the `create-next-app` 16 config, and the `sv create` config for SvelteKit 3. Holo adds only what it needs: `.holo-js/generated/**/*.ts` for Next.js, and `server`, `config`, and `.holo-js/generated/**/*.ts` for SvelteKit. In Nuxt, `@holo-js/adapter-nuxt` adds Holo's generated types and `config/` to Nuxt's server config when Nuxt generates types. Existing projects keep working. See [Update your tsconfig.json](apps/docs/docs/getting-started/upgrading.md#update-your-tsconfig-json).
+- In Nuxt projects, Holo bundles models, jobs, and other server code with the server config Nuxt generates, plus the `~`, `@`, `~~`, and `@@` aliases Nitro resolves at runtime. Custom `alias` entries in `nuxt.config.ts` keep working with both the project references layout and the older `extends` layout.
+
 ## 0.4.0 - 2026-10-24
 
 0.4.0 is a breaking release. Read the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-03x-to-040) before upgrading. [Realtime](apps/docs/docs/realtime/index.md) and [Broadcast](apps/docs/docs/broadcasting/index.md) are **Experimental** in this release.

@@ -238,10 +238,29 @@ async function pluginGeneratedTypePaths(rootDir: string): Promise<readonly strin
   return Object.freeze([...new Set(paths)].sort())
 }
 
+type NuxtTypeReference = { path?: string, types?: string }
+
+type NuxtGeneratedTsconfig = { include?: string[], [key: string]: unknown }
+
+interface NuxtPrepareTypesPayload {
+  references: NuxtTypeReference[]
+  serverReferences?: NuxtTypeReference[]
+  tsConfig: NuxtGeneratedTsconfig
+  serverTsConfig?: NuxtGeneratedTsconfig
+}
+
 interface NuxtHookContext {
   hook(
     name: 'prepare:types',
-    callback: (payload: { references: Array<{ path?: string, types?: string }> }) => void,
+    callback: (payload: NuxtPrepareTypesPayload) => void | Promise<void>,
+  ): void
+  hook(
+    name: 'nitro:prepare:types',
+    callback: (payload: { references: NuxtTypeReference[] }) => void,
+  ): void
+  hook(
+    name: 'nitro:config',
+    callback: (config: { typescript?: { tsConfig?: NuxtGeneratedTsconfig } }) => void,
   ): void
   hook(
     name: 'vite:extendConfig',
@@ -895,21 +914,28 @@ const holoNuxtModule: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions
       await ensureModelRegistryTypesPlaceholder(authTypesPath)
       await ensureModelRegistryTypesPlaceholder(authorizationTypesPath)
       await ensureModelRegistryTypesPlaceholder(modelRegistryTypesPath)
-      nuxt.hook('prepare:types', ({ references }) => {
-        references.push({ types: '@holo-js/adapter-nuxt' })
-        references.push({ path: authTypesPath })
-        references.push({ path: authorizationTypesPath })
-        references.push({ path: modelRegistryTypesPath })
-        for (const path of pluginTypesPaths) references.push({ path })
+      const serverTypeReferences = [authTypesPath, authorizationTypesPath, modelRegistryTypesPath, ...pluginTypesPaths].map(path => ({ path }))
+      const serverTypeIncludes = [resolve(rootDir, 'config/**/*')]
+      nuxt.hook('prepare:types', ({ references, serverReferences, serverTsConfig }) => {
+        references.push({ types: '@holo-js/adapter-nuxt' }, ...serverTypeReferences)
+        serverReferences?.push(...serverTypeReferences)
+        if (serverTsConfig) serverTsConfig.include = [...serverTsConfig.include ?? [], ...serverTypeIncludes]
       })
-      nuxt.hook('prepare:types', async (payload) => {
-        const { tsConfig } = payload as unknown as { readonly tsConfig: Record<string, unknown> }
+      nuxt.hook('nitro:prepare:types', ({ references }) => {
+        references.push(...serverTypeReferences)
+      })
+      nuxt.hook('nitro:config', (nitroConfig) => {
+        nitroConfig.typescript ??= {}
+        nitroConfig.typescript.tsConfig ??= {}
+        nitroConfig.typescript.tsConfig.include = [...nitroConfig.typescript.tsConfig.include ?? [], ...serverTypeIncludes]
+      })
+      nuxt.hook('prepare:types', async ({ tsConfig, serverTsConfig }) => {
         const options = nuxt.options as typeof nuxt.options & { readonly typesDir?: string, readonly buildDir?: string }
         const { projectTsconfigInternals } = await import('@holo-js/core')
         await projectTsconfigInternals.writeNuxtTsconfigSnapshot(
           rootDir,
           options.typesDir || options.buildDir || resolve(rootDir, '.nuxt'),
-          tsConfig,
+          { tsConfig, serverTsConfig },
         )
       })
     }

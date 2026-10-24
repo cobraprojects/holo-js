@@ -1,5 +1,74 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.0 to 0.4.1
+
+### Update your tsconfig.json
+
+New projects now get the `tsconfig.json` that each framework's own generator writes. Existing projects keep working without changes. To match the new layout, replace your `tsconfig.json`:
+
+::: code-group
+
+```json [Next.js]
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": { "@/*": ["./*"] }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts",
+    ".holo-js/generated/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}
+```
+
+```json [Nuxt]
+{
+  // https://nuxt.com/docs/guide/concepts/typescript
+  "files": [],
+  "references": [
+    { "path": "./.nuxt/tsconfig.app.json" },
+    { "path": "./.nuxt/tsconfig.server.json" },
+    { "path": "./.nuxt/tsconfig.shared.json" },
+    { "path": "./.nuxt/tsconfig.node.json" }
+  ]
+}
+```
+
+```json [SvelteKit]
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "strict": true
+  },
+  "include": ["src", "vite.config.ts", "server", "config", ".holo-js/generated/**/*.ts"]
+}
+```
+
+:::
+
+In Nuxt, this replaces `{ "extends": "./.nuxt/tsconfig.json" }`. Server files are then type-checked with Nuxt's server settings instead of the browser ones, and Holo adds its generated types and `config/` to that server config. Run `npx nuxt prepare` and then `npm run typecheck`.
+
+In Next.js, the new `include` also covers files at the project root, such as `proxy.ts`, so `npm run typecheck` may report errors in files it skipped before.
+
 ## Upgrading from 0.3.x to 0.4.0
 
 0.4.0 is a breaking release. Before you install it, upgrade Node.js and your framework: see [Node.js 22.18 or newer](#node-js-22-18-or-newer), [Framework peer dependencies](#framework-peer-dependencies), and [SvelteKit 3](#sveltekit-3). Then work through the sections below that apply to your app. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#040---2026-10-24) lists every change.

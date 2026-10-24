@@ -9565,11 +9565,6 @@ export default defineConfig({
     expect(generatedTypes).not.toContain('ignored')
     expect(generatedTypes).not.toContain('hidden')
     expect(projectInternals.getConfigExtensionPriority('config.custom')).toBe(Number.MAX_SAFE_INTEGER)
-
-    const nextTsconfig = JSON.parse(projectInternals.renderScaffoldTsconfig({ framework: 'next' }))
-    const nuxtTsconfig = JSON.parse(projectInternals.renderScaffoldTsconfig({ framework: 'nuxt' }))
-    expect(nextTsconfig.compilerOptions.jsx).toBe('preserve')
-    expect(nuxtTsconfig.compilerOptions).toBeUndefined()
   })
 
   it('does not re-declare built-in redis or security config sections in generated config types', async () => {

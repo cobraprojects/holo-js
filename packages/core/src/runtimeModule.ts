@@ -275,14 +275,23 @@ function extendsEntries(config: JsonObject): string[] {
   return []
 }
 
+function referencePaths(config: JsonObject): string[] {
+  if (!Array.isArray(config.references)) return []
+  return config.references.flatMap(reference => isRecord(reference) && typeof reference.path === 'string' ? [reference.path] : [])
+}
+
 function isInside(path: string, directory: string): boolean {
   const relativePath = relative(directory, path)
   return relativePath !== '' && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath)
 }
 
-function isNuxtBuildExtends(projectRoot: string, entry: string): boolean {
+function isNuxtBuildPath(projectRoot: string, entry: string): boolean {
   if (!entry.startsWith('.') && !isAbsolute(entry)) return false
   return isInside(resolve(projectRoot, entry), join(projectRoot, NUXT_BUILD_DIRECTORY))
+}
+
+function usesNuxtBuildTsconfig(projectRoot: string, config: JsonObject): boolean {
+  return [...extendsEntries(config), ...referencePaths(config)].some(entry => isNuxtBuildPath(projectRoot, entry))
 }
 
 function absoluteCompilerOptions(options: JsonObject, directory: string): JsonObject {
@@ -303,21 +312,25 @@ function absoluteCompilerOptions(options: JsonObject, directory: string): JsonOb
 
 function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): JsonObject {
   const entries = extendsEntries(config)
-  const droppedNuxt = !snapshotPath && entries.some(entry => isNuxtBuildExtends(projectRoot, entry))
   const extendsTargets = entries.flatMap(entry => {
-    if (isNuxtBuildExtends(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
+    if (isNuxtBuildPath(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
     return [entry.startsWith('.') ? resolve(projectRoot, entry) : entry]
   })
   const derived: JsonObject = { ...config }
+  if (referencePaths(config).some(entry => isNuxtBuildPath(projectRoot, entry))) {
+    delete derived.files
+    delete derived.references
+    if (snapshotPath && !entries.some(entry => isNuxtBuildPath(projectRoot, entry))) extendsTargets.unshift(snapshotPath)
+  }
   if (extendsTargets.length === 0) {
     delete derived.extends
   } else {
-    derived.extends = typeof config.extends === 'string' ? extendsTargets[0] : extendsTargets
+    derived.extends = Array.isArray(config.extends) ? extendsTargets : extendsTargets[0]
   }
 
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
   let baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(projectRoot, compilerOptions.baseUrl) : undefined
-  if (droppedNuxt) {
+  if (!snapshotPath) {
     baseUrl ??= projectRoot
     compilerOptions.paths = { ...DEFAULT_LOADER_PATHS, ...(isRecord(compilerOptions.paths) ? compilerOptions.paths : {}) }
   }
@@ -334,7 +347,7 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
   const projectTsconfigPath = join(projectRoot, 'tsconfig.json')
   if (await pathExists(projectTsconfigPath)) {
     const config = await readProjectTsconfig(projectRoot)
-    if (!config || !extendsEntries(config).some(entry => isNuxtBuildExtends(projectRoot, entry))) {
+    if (!config || !usesNuxtBuildTsconfig(projectRoot, config)) {
       return projectTsconfigPath
     }
 
@@ -749,8 +762,7 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 export const runtimeModuleInternals = {
   absoluteCompilerOptions,
   bundleRuntimeModule,
-  extendsEntries,
-  isNuxtBuildExtends,
+  usesNuxtBuildTsconfig,
   parseTsconfigText,
   readProjectTsconfig,
   importModule,

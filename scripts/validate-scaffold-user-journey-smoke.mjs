@@ -935,6 +935,7 @@ async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPac
   })
   assert.match(scaffold.stdout, /Created Holo project:/)
   assert.match(scaffold.stdout, /dependencies installed/i)
+  const scaffoldedTsconfig = await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')
 
   await overlayLocalPackages(projectRoot, localPackageEnv.HOLO_LOCAL_PACKAGES_ROOT)
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
@@ -977,6 +978,8 @@ export default defineMigration({
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
   run(journey.framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: { ...localPackageEnv, APP_URL: `http://localhost:${journey.port}` } })
+  run(journey.framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: { ...localPackageEnv, APP_URL: `http://localhost:${journey.port}` } })
+  assert.equal(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8'), scaffoldedTsconfig, `${journey.framework} rewrote the scaffolded tsconfig.json`)
 
   const server = spawn(process.execPath, [cliPath, 'start'], {
     cwd: projectRoot,

@@ -106,9 +106,27 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
   const framework = getFrameworkDescriptor(options.framework)
 
   if (framework.scaffold.tsconfig === 'nuxt') {
-    return `${JSON.stringify({
-      extends: './.nuxt/tsconfig.json',
-    }, null, 2)}\n`
+    return [
+      '{',
+      '  // https://nuxt.com/docs/guide/concepts/typescript',
+      '  "files": [],',
+      '  "references": [',
+      '    {',
+      '      "path": "./.nuxt/tsconfig.app.json"',
+      '    },',
+      '    {',
+      '      "path": "./.nuxt/tsconfig.server.json"',
+      '    },',
+      '    {',
+      '      "path": "./.nuxt/tsconfig.shared.json"',
+      '    },',
+      '    {',
+      '      "path": "./.nuxt/tsconfig.node.json"',
+      '    }',
+      '  ]',
+      '}',
+      '',
+    ].join('\n')
   }
 
   if (framework.scaffold.tsconfig === 'sveltekit') {
@@ -116,41 +134,45 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
       extends: '$app/tsconfig',
       compilerOptions: {
         strict: true,
-        noEmit: true,
-        skipLibCheck: true,
       },
-      include: [
-        'src/**/*.ts',
-        'src/**/*.svelte',
-        'server/**/*.ts',
-        'config/**/*.ts',
-        '.holo-js/generated/**/*.ts',
-        '.holo-js/generated/**/*.d.ts',
-        'vite.config.ts',
-      ],
-      exclude: [
-        'src/service-worker',
-      ],
+      include: ['src', 'vite.config.ts', 'server', 'config', '.holo-js/generated/**/*.ts'],
     }, null, 2)}\n`
   }
 
-  const include = ['next-env.d.ts', 'app/**/*.ts', 'app/**/*.tsx', 'server/**/*.ts', 'config/**/*.ts', '.holo-js/generated/**/*.ts', '.holo-js/generated/**/*.d.ts']
-
   return `${JSON.stringify({
     compilerOptions: {
-      target: 'ES2022',
-      module: 'ESNext',
-      moduleResolution: 'Bundler',
+      target: 'ES2017',
+      lib: ['dom', 'dom.iterable', 'esnext'],
+      allowJs: true,
+      skipLibCheck: true,
       strict: true,
       noEmit: true,
-      skipLibCheck: true,
-      jsx: 'preserve',
+      esModuleInterop: true,
+      module: 'esnext',
+      moduleResolution: 'bundler',
+      resolveJsonModule: true,
+      isolatedModules: true,
+      jsx: 'react-jsx',
+      incremental: true,
+      plugins: [
+        {
+          name: 'next',
+        },
+      ],
       paths: {
-        '~/*': ['./*'],
         '@/*': ['./*'],
       },
     },
-    include,
+    include: [
+      'next-env.d.ts',
+      '**/*.ts',
+      '**/*.tsx',
+      '.next/types/**/*.ts',
+      '.next/dev/types/**/*.ts',
+      '**/*.mts',
+      '.holo-js/generated/**/*.ts',
+    ],
+    exclude: ['node_modules'],
   }, null, 2)}\n`
 }
 

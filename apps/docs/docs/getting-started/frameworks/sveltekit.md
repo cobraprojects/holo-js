@@ -48,6 +48,8 @@ New projects use `@sveltejs/adapter-node`. `vite.config.ts` also lists Holo's pa
 | Server-only helpers | `src/lib/server/` |
 | Holo models, jobs, events, and so on | `server/` at the project root |
 
+The scaffold's `tsconfig.json` is the one `sv create` writes, with `server`, `config`, and `.holo-js/generated/**/*.ts` added to `include` so `svelte-check` also checks your Holo code.
+
 ## Use Holo in `load` functions
 
 Import models and query them in a server `load` function:
