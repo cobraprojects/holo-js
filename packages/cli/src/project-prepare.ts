@@ -4,6 +4,7 @@ import type {
   HoloProjectPrepareCommand,
   HoloProjectPrepareRun,
 } from '@holo-js/kernel'
+import { projectTsconfigInternals } from '@holo-js/core'
 import type { IoStreams } from './cli-types'
 import { installProjectDependencies, resolvePackageManagerSpawn, resolveProjectPackageManager, terminateProcessOnAbort } from './package-manager'
 import {
@@ -66,7 +67,7 @@ export async function runProjectPrepare(
   options.signal?.throwIfAborted()
   const project = options.prepareSchema === false
     ? await ensureProjectConfig(projectRoot)
-    : await prepareSchemaArtifacts(projectRoot, false)
+    : await prepareSchemaArtifacts(projectRoot, false, options.signal)
   const command = options.command ?? 'prepare'
   const run: HoloProjectPrepareRun = options.changes && command === 'dev'
     ? { kind: 'incremental', command: 'dev', changes: options.changes }
@@ -87,11 +88,23 @@ export async function prepareProjectSchema(projectRoot: string): Promise<Awaited
   return await prepareSchemaArtifacts(projectRoot, true)
 }
 
-async function prepareSchemaArtifacts(projectRoot: string, prepareFramework: boolean): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
+async function prepareSchemaArtifacts(
+  projectRoot: string,
+  prepareFramework: boolean,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof ensureProjectConfig>>> {
   const project = await ensureProjectConfig(projectRoot)
   await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
+  await prepareNuxtTsconfigSnapshot(projectRoot, signal)
   await prepareProjectDiscovery(projectRoot, project.config, prepareFramework)
   return project
+}
+
+export async function prepareNuxtTsconfigSnapshot(projectRoot: string, signal?: AbortSignal): Promise<void> {
+  if (!await projectTsconfigInternals.missingNuxtTsconfigSnapshot(projectRoot)) return
+  const { sync } = await resolveFrameworkPreparation(projectRoot)
+  if (!sync) return
+  await runFrameworkSync(projectRoot, sync, signal)
 }
 
 async function runFrameworkSync(

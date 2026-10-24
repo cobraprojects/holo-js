@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
-import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
 import * as holoConfigModule from '@holo-js/config'
@@ -185,10 +185,164 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+const NUXT_BUILD_DIRECTORY = '.nuxt'
+export const NUXT_TSCONFIG_SNAPSHOT_PATH = '.holo-js/generated/nuxt-tsconfig.json'
+const DEFAULT_LOADER_PATHS = { '~/*': ['./*'], '@/*': ['./*'] }
+
+type JsonObject = Record<string, unknown>
+
+function isRecord(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stripJsonComments(text: string): string {
+  let output = ''
+  let index = 0
+  while (index < text.length) {
+    const char = text[index] as string
+    if (char === '"') {
+      const end = findStringEnd(text, index)
+      output += text.slice(index, end)
+      index = end
+      continue
+    }
+    if (char === '/' && text[index + 1] === '/') {
+      const newline = text.indexOf('\n', index)
+      index = newline === -1 ? text.length : newline
+      continue
+    }
+    if (char === '/' && text[index + 1] === '*') {
+      const close = text.indexOf('*/', index + 2)
+      index = close === -1 ? text.length : close + 2
+      continue
+    }
+    output += char
+    index++
+  }
+  return output
+}
+
+function findStringEnd(text: string, start: number): number {
+  for (let index = start + 1; index < text.length; index++) {
+    if (text[index] === '\\') index++
+    else if (text[index] === '"') return index + 1
+  }
+  return text.length
+}
+
+function stripTrailingCommas(text: string): string {
+  let output = ''
+  let index = 0
+  while (index < text.length) {
+    const char = text[index] as string
+    if (char === '"') {
+      const end = findStringEnd(text, index)
+      output += text.slice(index, end)
+      index = end
+      continue
+    }
+    if (char === ',') {
+      const closing = /\s*[}\]]/y
+      closing.lastIndex = index + 1
+      if (closing.test(text)) {
+        index++
+        continue
+      }
+    }
+    output += char
+    index++
+  }
+  return output
+}
+
+function parseTsconfigText(text: string): JsonObject | undefined {
+  try {
+    const parsed = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as unknown
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function readProjectTsconfig(projectRoot: string): Promise<JsonObject | undefined> {
+  const text = await readFile(join(projectRoot, 'tsconfig.json'), 'utf8').catch(() => undefined)
+  return text === undefined ? undefined : parseTsconfigText(text)
+}
+
+function extendsEntries(config: JsonObject): string[] {
+  if (typeof config.extends === 'string') return [config.extends]
+  if (Array.isArray(config.extends)) return config.extends.filter((entry): entry is string => typeof entry === 'string')
+  return []
+}
+
+function isInside(path: string, directory: string): boolean {
+  const relativePath = relative(directory, path)
+  return relativePath !== '' && relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath)
+}
+
+function isNuxtBuildExtends(projectRoot: string, entry: string): boolean {
+  if (!entry.startsWith('.') && !isAbsolute(entry)) return false
+  return isInside(resolve(projectRoot, entry), join(projectRoot, NUXT_BUILD_DIRECTORY))
+}
+
+function absoluteCompilerOptions(options: JsonObject, directory: string): JsonObject {
+  const result: JsonObject = { ...options }
+  const baseUrl = typeof options.baseUrl === 'string' ? resolve(directory, options.baseUrl) : undefined
+  if (baseUrl) result.baseUrl = baseUrl
+  if (isRecord(options.paths)) {
+    const pathBase = baseUrl ?? directory
+    result.paths = Object.fromEntries(Object.entries(options.paths).map(([alias, targets]) => [
+      alias,
+      Array.isArray(targets)
+        ? targets.map(target => typeof target === 'string' && !isAbsolute(target) ? resolve(pathBase, target) : target)
+        : targets,
+    ]))
+  }
+  return result
+}
+
+function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): JsonObject {
+  const entries = extendsEntries(config)
+  const droppedNuxt = !snapshotPath && entries.some(entry => isNuxtBuildExtends(projectRoot, entry))
+  const extendsTargets = entries.flatMap(entry => {
+    if (isNuxtBuildExtends(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
+    return [entry.startsWith('.') ? resolve(projectRoot, entry) : entry]
+  })
+  const derived: JsonObject = { ...config }
+  if (extendsTargets.length === 0) {
+    delete derived.extends
+  } else {
+    derived.extends = typeof config.extends === 'string' ? extendsTargets[0] : extendsTargets
+  }
+
+  const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
+  let baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(projectRoot, compilerOptions.baseUrl) : undefined
+  if (droppedNuxt) {
+    baseUrl ??= projectRoot
+    compilerOptions.paths = { ...DEFAULT_LOADER_PATHS, ...(isRecord(compilerOptions.paths) ? compilerOptions.paths : {}) }
+  }
+  if (baseUrl) {
+    compilerOptions.baseUrl = baseUrl
+  } else if (isRecord(compilerOptions.paths)) {
+    compilerOptions.paths = absoluteCompilerOptions({ paths: compilerOptions.paths }, projectRoot).paths
+  }
+  derived.compilerOptions = compilerOptions
+  return derived
+}
+
 async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promise<string> {
   const projectTsconfigPath = join(projectRoot, 'tsconfig.json')
   if (await pathExists(projectTsconfigPath)) {
-    return projectTsconfigPath
+    const config = await readProjectTsconfig(projectRoot)
+    if (!config || !extendsEntries(config).some(entry => isNuxtBuildExtends(projectRoot, entry))) {
+      return projectTsconfigPath
+    }
+
+    const snapshotPath = join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH)
+    const hasSnapshot = await pathExists(snapshotPath)
+    const derivedPath = join(tempDir, 'tsconfig.json')
+    await writeFile(derivedPath, `${JSON.stringify(deriveLoaderConfig(projectRoot, config, hasSnapshot ? snapshotPath : undefined), null, 2)}\n`, 'utf8')
+    return derivedPath
   }
 
   const tsconfigPath = join(tempDir, 'tsconfig.json')
@@ -593,7 +747,12 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 }
 
 export const runtimeModuleInternals = {
+  absoluteCompilerOptions,
   bundleRuntimeModule,
+  extendsEntries,
+  isNuxtBuildExtends,
+  parseTsconfigText,
+  readProjectTsconfig,
   importModule,
   importOptionalRuntimeModule,
   isMissingOptionalModule,

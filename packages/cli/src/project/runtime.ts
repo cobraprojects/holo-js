@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -141,31 +141,6 @@ export async function isModulePackage(projectRoot: string): Promise<boolean> {
   }
 }
 
-function getProjectTsconfigPath(projectRoot: string): string {
-  return join(projectRoot, 'tsconfig.json')
-}
-
-async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promise<string> {
-  const projectTsconfigPath = getProjectTsconfigPath(projectRoot)
-  if (await pathExists(projectTsconfigPath)) {
-    return projectTsconfigPath
-  }
-
-  const tsconfigPath = join(tempDir, 'tsconfig.json')
-  const contents = JSON.stringify({
-    compilerOptions: {
-      baseUrl: projectRoot,
-      paths: {
-        '~/*': ['./*'],
-        '@/*': ['./*'],
-      },
-    },
-  }, null, 2)
-
-  await writeFile(tsconfigPath, `${contents}\n`, 'utf8')
-  return tsconfigPath
-}
-
 export async function bundleProjectModule(
   projectRoot: string,
   entryPath: string,
@@ -174,7 +149,8 @@ export async function bundleProjectModule(
   const runtimeTempRoot = join(projectRoot, CLI_RUNTIME_ROOT)
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
-  const tsconfigPath = await writeLoaderTsconfig(projectRoot, tempDir)
+  const { projectTsconfigInternals } = await import('@holo-js/core')
+  const tsconfigPath = await projectTsconfigInternals.writeLoaderTsconfig(projectRoot, tempDir)
   const outdir = join(tempDir, 'out')
   const outfile = join(outdir, `${basename(entryPath, extname(entryPath))}.mjs`)
 
