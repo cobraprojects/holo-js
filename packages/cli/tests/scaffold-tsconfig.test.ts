@@ -25,10 +25,13 @@ async function scaffoldTsconfig(framework: ProjectScaffoldOptions['framework']):
   return await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')
 }
 
+function jsonFile(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`
+}
+
 describe('scaffolded tsconfig.json', () => {
   it('writes the Nuxt 4 project references layout that nuxi init writes', async () => {
     expect(await scaffoldTsconfig('nuxt')).toBe(`{
-  // https://nuxt.com/docs/guide/concepts/typescript
   "files": [],
   "references": [
     {
@@ -49,7 +52,7 @@ describe('scaffolded tsconfig.json', () => {
   })
 
   it('writes the create-next-app 16 config and includes the generated Holo types', async () => {
-    expect(JSON.parse(await scaffoldTsconfig('next'))).toEqual({
+    expect(await scaffoldTsconfig('next')).toBe(jsonFile({
       compilerOptions: {
         target: 'ES2017',
         lib: ['dom', 'dom.iterable', 'esnext'],
@@ -77,14 +80,14 @@ describe('scaffolded tsconfig.json', () => {
         '.holo-js/generated/**/*.ts',
       ],
       exclude: ['node_modules'],
-    })
+    }))
   })
 
   it('writes the sv create config and includes the Holo server, config, and generated directories', async () => {
-    expect(JSON.parse(await scaffoldTsconfig('sveltekit'))).toEqual({
+    expect(await scaffoldTsconfig('sveltekit')).toBe(jsonFile({
       extends: '$app/tsconfig',
       compilerOptions: { strict: true },
       include: ['src', 'vite.config.ts', 'server', 'config', '.holo-js/generated/**/*.ts'],
-    })
+    }))
   })
 })

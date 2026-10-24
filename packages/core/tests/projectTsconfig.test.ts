@@ -20,7 +20,6 @@ const nuxtTsconfigContents = JSON.stringify({
 }, null, 2)
 
 const nuxtReferencesTsconfig = `{
-  // https://nuxt.com/docs/guide/concepts/typescript
   "files": [],
   "references": [
     { "path": "./.nuxt/tsconfig.app.json" },

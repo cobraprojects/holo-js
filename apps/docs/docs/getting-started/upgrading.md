@@ -4,45 +4,12 @@
 
 ### Update your tsconfig.json
 
-New projects now get the `tsconfig.json` that each framework's own generator writes. Existing projects keep working without changes. To match the new layout, replace your `tsconfig.json`:
+New projects now get the `tsconfig.json` that each framework's own generator writes. Existing projects keep working, so this step is optional.
 
-::: code-group
+In Nuxt, replace `{ "extends": "./.nuxt/tsconfig.json" }` with the layout `nuxi init` writes:
 
-```json [Next.js]
+```json [tsconfig.json]
 {
-  "compilerOptions": {
-    "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "incremental": true,
-    "plugins": [{ "name": "next" }],
-    "paths": { "@/*": ["./*"] }
-  },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts",
-    ".holo-js/generated/**/*.ts"
-  ],
-  "exclude": ["node_modules"]
-}
-```
-
-```json [Nuxt]
-{
-  // https://nuxt.com/docs/guide/concepts/typescript
   "files": [],
   "references": [
     { "path": "./.nuxt/tsconfig.app.json" },
@@ -53,21 +20,11 @@ New projects now get the `tsconfig.json` that each framework's own generator wri
 }
 ```
 
-```json [SvelteKit]
-{
-  "extends": "$app/tsconfig",
-  "compilerOptions": {
-    "strict": true
-  },
-  "include": ["src", "vite.config.ts", "server", "config", ".holo-js/generated/**/*.ts"]
-}
-```
+Server files are then type-checked with Nuxt's server settings instead of the browser ones, and Holo adds its generated types and `config/` to that server config. Run `npx nuxt prepare` and then `npm run typecheck`.
 
-:::
+In Next.js, start from the `tsconfig.json` that `create-next-app` writes and add `".holo-js/generated/**/*.ts"` to `include`. Its `**/*.ts` pattern also covers files at the project root, such as `proxy.ts`, so `npm run typecheck` may report errors in files it skipped before.
 
-In Nuxt, this replaces `{ "extends": "./.nuxt/tsconfig.json" }`. Server files are then type-checked with Nuxt's server settings instead of the browser ones, and Holo adds its generated types and `config/` to that server config. Run `npx nuxt prepare` and then `npm run typecheck`.
-
-In Next.js, the new `include` also covers files at the project root, such as `proxy.ts`, so `npm run typecheck` may report errors in files it skipped before.
+In SvelteKit, start from the `tsconfig.json` that `sv create` writes and add `"server"`, `"config"`, and `".holo-js/generated/**/*.ts"` to `include`.
 
 ## Upgrading from 0.3.x to 0.4.0
 

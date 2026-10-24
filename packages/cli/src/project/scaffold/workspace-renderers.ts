@@ -106,27 +106,15 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
   const framework = getFrameworkDescriptor(options.framework)
 
   if (framework.scaffold.tsconfig === 'nuxt') {
-    return [
-      '{',
-      '  // https://nuxt.com/docs/guide/concepts/typescript',
-      '  "files": [],',
-      '  "references": [',
-      '    {',
-      '      "path": "./.nuxt/tsconfig.app.json"',
-      '    },',
-      '    {',
-      '      "path": "./.nuxt/tsconfig.server.json"',
-      '    },',
-      '    {',
-      '      "path": "./.nuxt/tsconfig.shared.json"',
-      '    },',
-      '    {',
-      '      "path": "./.nuxt/tsconfig.node.json"',
-      '    }',
-      '  ]',
-      '}',
-      '',
-    ].join('\n')
+    return `${JSON.stringify({
+      files: [],
+      references: [
+        { path: './.nuxt/tsconfig.app.json' },
+        { path: './.nuxt/tsconfig.server.json' },
+        { path: './.nuxt/tsconfig.shared.json' },
+        { path: './.nuxt/tsconfig.node.json' },
+      ],
+    }, null, 2)}\n`
   }
 
   if (framework.scaffold.tsconfig === 'sveltekit') {

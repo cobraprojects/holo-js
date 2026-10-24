@@ -768,6 +768,7 @@ export const runtimeModuleInternals = {
   importModule,
   importOptionalRuntimeModule,
   isMissingOptionalModule,
+  isRecord,
   loadEsbuild,
   pathExists,
   registerRuntimeModuleInstance,

@@ -5,6 +5,7 @@ import { NUXT_TSCONFIG_SNAPSHOT_PATH, runtimeModuleInternals } from './runtimeMo
 
 const {
   absoluteCompilerOptions,
+  isRecord,
   parseTsconfigText,
   readProjectTsconfig,
   usesNuxtBuildTsconfig,
@@ -13,18 +14,12 @@ const {
 
 const NITRO_ROOT_ALIASES = ['~', '~/*', '@', '@/*', '~~', '~~/*', '@@', '@@/*']
 
-type JsonObject = Record<string, unknown>
-
 interface NuxtPrepareTypesTsconfigs {
   readonly tsConfig?: unknown
   readonly serverTsConfig?: unknown
 }
 
-function isRecord(value: unknown): value is JsonObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function compilerOptionsOf(tsConfig: unknown): JsonObject {
+function compilerOptionsOf(tsConfig: unknown): Record<string, unknown> {
   return isRecord(tsConfig) && isRecord(tsConfig.compilerOptions) ? tsConfig.compilerOptions : {}
 }
 
@@ -43,7 +38,7 @@ async function missingNuxtTsconfigSnapshot(projectRoot: string): Promise<boolean
   return !await pathExists(join(projectRoot, NUXT_TSCONFIG_SNAPSHOT_PATH))
 }
 
-function serverCompilerOptions(tsconfigs: NuxtPrepareTypesTsconfigs): JsonObject {
+function serverCompilerOptions(tsconfigs: NuxtPrepareTypesTsconfigs): Record<string, unknown> {
   const appOptions = compilerOptionsOf(tsconfigs.tsConfig)
   if (!isRecord(tsconfigs.serverTsConfig)) return appOptions
   const serverOptions = compilerOptionsOf(tsconfigs.serverTsConfig)
