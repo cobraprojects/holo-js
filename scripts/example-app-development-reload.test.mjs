@@ -35,11 +35,11 @@ async function startFakeDevelopmentApp(context, respond = () => undefined) {
 }
 
 test('a development reload passes through restart answers and names written earlier', async context => {
-  const requests = new Map([['fake-app', 3]])
+  const requests = new Map([['fake-app', 4]])
   let served = 'fake-app'
   const app = await startFakeDevelopmentApp(context, (name, request, response) => {
     // Each new name is first answered by the server still running the previous one, which then drops a request
-    // as it stops, and then by a starting server.
+    // as it stops, before and after sending headers, and then by a starting server.
     const count = (requests.get(name) ?? 0) + 1
     requests.set(name, count)
     if (count === 1) {
@@ -52,6 +52,11 @@ test('a development reload passes through restart answers and names written earl
       return 'handled'
     }
     if (count === 3) {
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': '64' })
+      response.write('{"na', () => request.socket.destroy())
+      return 'handled'
+    }
+    if (count === 4) {
       response.statusCode = 503
       response.end('<title>Starting Nuxt... | Nuxt</title>')
       return 'handled'

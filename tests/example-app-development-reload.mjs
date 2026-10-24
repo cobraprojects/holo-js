@@ -23,14 +23,15 @@ export async function assertExampleAppDevelopmentReload({ cwd, baseUrl }) {
   // written earlier means the reload is pending; every other answer or request error is the failure itself.
   const readReloadState = async name => {
     let response
+    let body
     try {
       response = await fetch(url)
+      body = await response.text()
     } catch (error) {
       const reason = `${error.message} (${error.cause?.code ?? error.cause?.message ?? 'no cause'})`
       if (restartingConnectionErrors.has(error.cause?.code)) return `failed while the server restarted: ${reason}`
       throw new Error(`Request to ${url} failed while waiting for the name ${name}: ${reason}`, { cause: error })
     }
-    const body = await response.text()
     if (response.status === 503) return 'answered 503 while starting'
     assert.equal(response.status, 200, `${url} answered ${response.status} while waiting for the name ${name}:\n${body}`)
     let observed
