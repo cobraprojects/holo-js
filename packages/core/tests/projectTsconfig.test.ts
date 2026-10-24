@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import { projectTsconfigInternals } from '../src/projectTsconfig'
 import { runtimeModuleInternals } from '../src/runtimeModule'
@@ -77,6 +78,20 @@ async function importBundled(projectRoot: string, entryPath: string): Promise<Re
   } finally {
     await bundled.cleanup()
   }
+}
+
+async function writeLibraryFolders(projectRoot: string, folders: readonly string[]): Promise<void> {
+  for (const folder of folders) {
+    await mkdir(join(projectRoot, folder), { recursive: true })
+    await writeFile(join(projectRoot, folder, 'tool.ts'), `export const tool = '${folder}'\n`)
+  }
+}
+
+function typescriptResolvedFolder(projectRoot: string, specifier: string): string {
+  const parsed = ts.getParsedCommandLineOfConfigFile(join(projectRoot, 'tsconfig.json'), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined })
+  const resolved = ts.resolveModuleName(specifier, join(projectRoot, 'own.ts'), parsed?.options ?? {}, ts.sys).resolvedModule?.resolvedFileName
+  if (!resolved) throw new Error(`TypeScript did not resolve ${specifier}`)
+  return basename(dirname(resolved))
 }
 
 async function writeCompanyTsconfigPackage(projectRoot: string): Promise<void> {
@@ -206,6 +221,31 @@ describe('project tsconfig loading for bundled definitions', () => {
     })
 
     await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@company/missing-tsconfig"')
+  })
+
+  it('resolves inherited paths against the baseUrl the project tsconfig overrides, as TypeScript does', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './tsconfig.base.json', compilerOptions: { baseUrl: './src' } }),
+    })
+    await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { baseUrl: './old', paths: { 'shared-lib/*': ['*'] } } }))
+    await writeLibraryFolders(projectRoot, ['old', 'src'])
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
+
+    expect(typescriptResolvedFolder(projectRoot, 'shared-lib/tool')).toBe('src')
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'src' })
+  })
+
+  it('resolves inherited paths against the folder of the config that defines them when no config sets baseUrl, as TypeScript does', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './config/tsconfig.base.json' }),
+    })
+    await mkdir(join(projectRoot, 'config'), { recursive: true })
+    await writeFile(join(projectRoot, 'config/tsconfig.base.json'), JSON.stringify({ compilerOptions: { paths: { 'shared-lib/*': ['../old/*'] } } }))
+    await writeLibraryFolders(projectRoot, ['old', 'src'])
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
+
+    expect(typescriptResolvedFolder(projectRoot, 'shared-lib/tool')).toBe('old')
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'old' })
   })
 
   it('keeps the default aliases for a references tsconfig whose snapshot is missing', async () => {

@@ -310,8 +310,13 @@ function absoluteCompilerOptions(options: JsonObject, directory: string): JsonOb
   return result
 }
 
-interface ResolvedTsconfigPaths {
-  readonly paths: JsonObject
+interface TsconfigPathEntry {
+  readonly targets: unknown
+  readonly directory: string
+}
+
+interface TsconfigPathsChain {
+  readonly paths: Readonly<Record<string, TsconfigPathEntry>>
   readonly baseUrl?: string
 }
 
@@ -353,24 +358,38 @@ function resolveExtendedTsconfig(entry: string, configPath: string): string {
   throw new Error(`[@holo-js/core] Cannot resolve the tsconfig "${entry}" extended by ${configPath}. Install the package that provides it or fix the "extends" entry.`)
 }
 
-async function resolveTsconfigPaths(projectRoot: string, configPath: string, seen: Set<string>): Promise<ResolvedTsconfigPaths> {
+async function collectTsconfigPaths(projectRoot: string, configPath: string, seen: Set<string>): Promise<TsconfigPathsChain> {
   if (seen.has(configPath)) return { paths: {} }
   seen.add(configPath)
   const config = await readTsconfigFile(configPath)
   if (!config) return { paths: {} }
 
-  let inherited: ResolvedTsconfigPaths = { paths: {} }
+  let inherited: TsconfigPathsChain = { paths: {} }
   for (const entry of extendsEntries(config)) {
     const parentPath = resolveExtendedTsconfig(entry, configPath)
     if (isInside(parentPath, join(projectRoot, NUXT_BUILD_DIRECTORY))) continue
-    const parent = await resolveTsconfigPaths(projectRoot, parentPath, seen)
+    const parent = await collectTsconfigPaths(projectRoot, parentPath, seen)
     inherited = { paths: { ...inherited.paths, ...parent.paths }, baseUrl: parent.baseUrl ?? inherited.baseUrl }
   }
 
   const compilerOptions = isRecord(config.compilerOptions) ? config.compilerOptions : {}
-  const baseUrl = typeof compilerOptions.baseUrl === 'string' ? resolve(dirname(configPath), compilerOptions.baseUrl) : inherited.baseUrl
-  const ownPaths = isRecord(compilerOptions.paths) ? absoluteCompilerOptions({ paths: compilerOptions.paths }, baseUrl ?? dirname(configPath)).paths : {}
-  return { paths: { ...inherited.paths, ...(isRecord(ownPaths) ? ownPaths : {}) }, baseUrl }
+  const directory = dirname(configPath)
+  const ownPaths = isRecord(compilerOptions.paths)
+    ? Object.fromEntries(Object.entries(compilerOptions.paths).map(([alias, targets]) => [alias, { targets, directory }]))
+    : {}
+  return {
+    paths: { ...inherited.paths, ...ownPaths },
+    baseUrl: typeof compilerOptions.baseUrl === 'string' ? resolve(directory, compilerOptions.baseUrl) : inherited.baseUrl,
+  }
+}
+
+async function resolveTsconfigPaths(projectRoot: string, configPath: string): Promise<{ readonly paths: JsonObject, readonly baseUrl?: string }> {
+  const chain = await collectTsconfigPaths(projectRoot, configPath, new Set())
+  const paths = Object.fromEntries(Object.entries(chain.paths).map(([alias, entry]) => {
+    const resolved = absoluteCompilerOptions({ paths: { [alias]: entry.targets } }, chain.baseUrl ?? entry.directory).paths
+    return [alias, isRecord(resolved) ? resolved[alias] : entry.targets]
+  }))
+  return { paths, baseUrl: chain.baseUrl }
 }
 
 async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {
@@ -399,7 +418,7 @@ async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snaps
     derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
-  const user = await resolveTsconfigPaths(projectRoot, join(projectRoot, 'tsconfig.json'), new Set())
+  const user = await resolveTsconfigPaths(projectRoot, join(projectRoot, 'tsconfig.json'))
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
   const baseUrl = user.baseUrl ?? (snapshotPath ? undefined : projectRoot)
   if (baseUrl) compilerOptions.baseUrl = baseUrl
