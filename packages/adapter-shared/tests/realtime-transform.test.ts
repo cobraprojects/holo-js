@@ -1,13 +1,28 @@
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   createRealtimeClientDefinitionModule,
   createRealtimeClientDefinitionTransform,
   stripRealtimeServerHandlers,
 } from '../src'
+
+async function loadStubInNode(source: string): Promise<Record<string, unknown>> {
+  const directory = await mkdtemp(join(tmpdir(), 'holo-realtime-stub-'))
+  try {
+    await writeFile(join(directory, 'factories.mjs'), [
+      'export const query = definition => ({ kind: \'query\', ...definition })',
+      'export const mutation = definition => ({ kind: \'mutation\', ...definition })',
+    ].join('\n'))
+    await writeFile(join(directory, 'stub.mjs'), createRealtimeClientDefinitionModule({ source, importTarget: './factories.mjs', filePath: 'server/realtime/posts.ts' }))
+    await writeFile(join(directory, 'print.mjs'), 'const stub = await import(\'./stub.mjs\')\nconsole.log(JSON.stringify(Object.fromEntries(Object.entries(stub).map(([key, value]) => [key, { ...value, handler: value.handler ?? null }]))))\n')
+    return JSON.parse(execFileSync('node', [join(directory, 'print.mjs')], { encoding: 'utf8' })) as Record<string, unknown>
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
 
 describe('shared realtime definition transform', () => {
   it('creates client definitions from exported query and mutation declarations', () => {
@@ -143,23 +158,12 @@ describe('shared realtime definition transform', () => {
     const docs = await readFile(new URL('../../../apps/docs/docs/realtime/index.md', import.meta.url), 'utf8')
     const section = docs.slice(docs.indexOf('### Default export'))
     const snippet = section.slice(section.indexOf('```ts\n') + 6, section.indexOf('\n```', section.indexOf('```ts\n')))
-    const directory = await mkdtemp(join(tmpdir(), 'holo-realtime-stub-'))
-    try {
-      await writeFile(join(directory, 'factories.mjs'), [
-        'export const query = definition => ({ kind: \'query\', ...definition })',
-        'export const mutation = definition => ({ kind: \'mutation\', ...definition })',
-      ].join('\n'))
-      const output = createRealtimeClientDefinitionModule({ source: snippet, importTarget: './factories.mjs', filePath: 'server/realtime/posts.ts' })
-      await writeFile(join(directory, 'stub.mjs'), output)
-      const stub = await import(pathToFileURL(join(directory, 'stub.mjs')).href) as Record<string, unknown>
+    const output = createRealtimeClientDefinitionModule({ source: snippet, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
 
-      expect(snippet).toContain('import realtime from \'@holo-js/realtime\'')
-      expect(stub.listPosts).toEqual({ kind: 'query', name: 'posts.list', handler: undefined })
-      expect(output).not.toContain('db.table')
-      expect(output).not.toContain('public')
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(snippet).toContain('import realtime from \'@holo-js/realtime\'')
+    expect(await loadStubInNode(snippet)).toEqual({ listPosts: { kind: 'query', name: 'posts.list', handler: null } })
+    expect(output).not.toContain('db.table')
+    expect(output).not.toContain('public')
   })
 
   it('recognizes every factory reached through a default or namespace import', () => {
@@ -253,6 +257,9 @@ describe('shared realtime definition transform', () => {
     ['a default export of a local definition', 'default', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport default posts'],
     ['an export list of a local definition', 'listed', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport { posts as listed }'],
     ['a default export nested in another value', 'default', 'export default [query({ name: \'posts.list\', handler: async () => [] })]'],
+    ['an export list before the local definition it names', 'listed', 'export { posts as listed }\nconst posts = query({ name: \'posts.list\', handler: async () => [] })'],
+    ['an exported alias of a definition', 'alias', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nexport const alias = posts'],
+    ['an exported alias of an alias of a definition', 'listed', 'const posts = query({ name: \'posts.list\', handler: async () => [] })\nconst again = posts\nexport { again as listed }'],
     ['a factory held in a local', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst q = realtime.query\nexport const aliased = q({ name: \'posts.list\', handler: async () => [] })'],
     ['a factory destructured from the default import', 'aliased', 'import realtime from \'@holo-js/realtime\'\nconst { mutation: m } = realtime\nexport const aliased = m({ name: \'posts.rename\', handler: async () => true })'],
     ['a member of an aliased namespace', 'aliased', 'import * as realtime from \'@holo-js/realtime\'\nconst r = realtime\nexport const aliased = r.query({ name: \'posts.list\', handler: async () => [] })'],
@@ -285,5 +292,33 @@ describe('shared realtime definition transform', () => {
     `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
     expect(output).toContain("name: 'posts.list'")
     expect(output).not.toContain('posts.old')
+  })
+
+  it('reduces a factory callee wrapped in parentheses or a type assertion', () => {
+    const output = createRealtimeClientDefinitionModule({ source: `
+      import realtime from '@holo-js/realtime'
+      export const posts = (query as typeof query)({ name: 'posts.list', handler: async () => [] })
+      export default (realtime.mutation)({ name: 'posts.rename', handler: async () => true })
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })
+    expect(output).toContain('export const posts = query({')
+    expect(output).toContain('export default mutation({')
+  })
+
+  it('ignores ambient const declarations when resolving a name', () => {
+    expect(() => createRealtimeClientDefinitionModule({ source: `
+      declare const NAME = 'posts.list'
+      export const posts = query({ name: NAME, handler: async () => [] })
+    `, importTarget: '@holo-js/test/realtime', filePath: 'server/realtime/posts.ts' })).toThrow(/server\/realtime\/posts\.ts.*posts/)
+  })
+
+  it('emits a module Node can load when an export shares a factory name', async () => {
+    expect(await loadStubInNode(`
+      import realtime from '@holo-js/realtime'
+      export const query = realtime.query({ name: 'posts.list', handler: async () => [] })
+      export const mutation = realtime.mutation({ name: 'posts.rename', handler: async () => true })
+    `)).toEqual({
+      query: { kind: 'query', name: 'posts.list', handler: null },
+      mutation: { kind: 'mutation', name: 'posts.rename', handler: null },
+    })
   })
 })

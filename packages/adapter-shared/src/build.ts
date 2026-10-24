@@ -109,12 +109,14 @@ function collectRealtimeBindings(sourceFile: ts.SourceFile): RealtimeBindings {
 
 function namespaceMember(callee: ts.Expression, bindings: RealtimeBindings): string | undefined {
   if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return undefined
-  if (!ts.isIdentifier(callee.expression) || !bindings.namespaces.has(callee.expression.text)) return undefined
+  const namespace = unwrapExpression(callee.expression)
+  if (!ts.isIdentifier(namespace) || !bindings.namespaces.has(namespace.text)) return undefined
   if (ts.isPropertyAccessExpression(callee)) return callee.name.text
   return ts.isStringLiteralLike(callee.argumentExpression) ? callee.argumentExpression.text : undefined
 }
 
-function resolveFactory(callee: ts.Expression, bindings: RealtimeBindings): RealtimeFactory | undefined {
+function resolveFactory(wrappedCallee: ts.Expression, bindings: RealtimeBindings): RealtimeFactory | undefined {
+  const callee = unwrapExpression(wrappedCallee)
   if (ts.isIdentifier(callee)) return bindings.factories.get(callee.text)
   const member = namespaceMember(callee, bindings)
   return member === undefined ? undefined : realtimeFactoryExports.get(member)
@@ -140,7 +142,8 @@ function containsFactoryCall(node: ts.Node, bindings: RealtimeBindings): boolean
 function collectStringConstants(sourceFile: ts.SourceFile): ReadonlyMap<string, ts.StringLiteralLike> {
   const constants = new Map<string, ts.StringLiteralLike>()
   for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
+    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)
+      || statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) continue
     for (const declaration of statement.declarationList.declarations) {
       if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isStringLiteralLike(declaration.initializer)) {
         constants.set(declaration.name.text, declaration.initializer)
@@ -186,6 +189,39 @@ function resolveDefinitionName(definitionNode: ts.ObjectLiteralExpression, const
   return name
 }
 
+function referencesName(node: ts.Node, names: ReadonlySet<string>): boolean {
+  if (ts.isIdentifier(node) && names.has(node.text)) {
+    const parent = node.parent
+    const isPropertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node)
+      || ((ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent)
+        || ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent)) && parent.name === node)
+    if (!isPropertyName) return true
+  }
+  return ts.forEachChild(node, child => referencesName(child, names) || undefined) ?? false
+}
+
+function collectDefinitionLocals(sourceFile: ts.SourceFile, bindings: RealtimeBindings): ReadonlySet<string> {
+  const locals = new Set<string>()
+  const declarations = sourceFile.statements
+    .filter(ts.isVariableStatement)
+    .flatMap(statement => [...statement.declarationList.declarations])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const declaration of declarations) {
+      if (!declaration.initializer) continue
+      if (!containsFactoryCall(declaration.initializer, bindings) && !referencesName(declaration.initializer, locals)) continue
+      for (const name of boundNames(declaration.name)) {
+        if (!locals.has(name)) {
+          locals.add(name)
+          changed = true
+        }
+      }
+    }
+  }
+  return locals
+}
+
 function unreducibleDefinitionError(filePath: string, exportedName: string): Error {
   return new Error(`${filePath} exports ${exportedName} through a query or mutation call that cannot be reduced to a browser definition. Export each definition directly, as export const name = query({ name: 'posts.list', ... }) or export default query({ ... }).`)
 }
@@ -194,14 +230,16 @@ function collectDefinitions(sourceFile: ts.SourceFile, filePath: string): readon
   const definitions: RealtimeDefinition[] = []
   const bindings = collectRealtimeBindings(sourceFile)
   const constants = collectStringConstants(sourceFile)
-  const definitionLocals = new Set<string>()
+  const definitionLocals = collectDefinitionLocals(sourceFile, bindings)
 
-  const recordDefinition = (exportedName: string, expression: ts.Expression, node: ts.Node): boolean => {
+  const recordDefinition = (exportedName: string, expression: ts.Expression, node: ts.Node): void => {
     const call = unwrapExpression(expression)
     const factory = ts.isCallExpression(call) ? resolveFactory(call.expression, bindings) : undefined
     if (!ts.isCallExpression(call) || !factory) {
-      if (containsFactoryCall(expression, bindings)) throw unreducibleDefinitionError(filePath, exportedName)
-      return false
+      if (containsFactoryCall(expression, bindings) || referencesName(expression, definitionLocals)) {
+        throw unreducibleDefinitionError(filePath, exportedName)
+      }
+      return
     }
     const definitionNode = call.arguments[0]
     if (!definitionNode || !ts.isObjectLiteralExpression(definitionNode)) throw unreducibleDefinitionError(filePath, exportedName)
@@ -211,29 +249,22 @@ function collectDefinitions(sourceFile: ts.SourceFile, filePath: string): readon
     }
     const sourceLine = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line
     definitions.push({ exportedName, factory, sourceLine, ...(name.literal ? { name: name.literal.getText(sourceFile) } : {}) })
-    return true
   }
 
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)) {
-      const exported = statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false
+      if (!statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue
       for (const declaration of statement.declarationList.declarations) {
         if (!declaration.initializer) continue
-        if (!exported) {
-          if (ts.isIdentifier(declaration.name) && containsFactoryCall(declaration.initializer, bindings)) {
-            definitionLocals.add(declaration.name.text)
+        if (!ts.isIdentifier(declaration.name)) {
+          if (boundNames(declaration.name).some(name => definitionLocals.has(name))) {
+            throw unreducibleDefinitionError(filePath, declaration.name.getText(sourceFile))
           }
           continue
         }
-        if (!ts.isIdentifier(declaration.name)) {
-          if (containsFactoryCall(declaration.initializer, bindings)) throw unreducibleDefinitionError(filePath, declaration.name.getText(sourceFile))
-          continue
-        }
-        if (recordDefinition(declaration.name.text, declaration.initializer, declaration)) definitionLocals.add(declaration.name.text)
+        recordDefinition(declaration.name.text, declaration.initializer, declaration)
       }
     } else if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      const root = referenceRoot(statement.expression)
-      if (root && definitionLocals.has(root.text)) throw unreducibleDefinitionError(filePath, 'default')
       recordDefinition('default', statement.expression, statement)
     } else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && !statement.isTypeOnly
       && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
@@ -363,16 +394,25 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
   if (definitions.length === 0) {
     throw new Error(`${filePath} has no query or mutation definitions, so it cannot be sent to the browser. Keep server-only code out of server/realtime, or move it out of that folder.`)
   }
-  const factories = [...new Set(definitions.map(definition => definition.factory))]
+  const exportedNames = new Set(definitions.map(definition => definition.exportedName))
+  const factoryLocals = new Map<RealtimeFactory, string>()
+  for (const definition of definitions) {
+    if (factoryLocals.has(definition.factory)) continue
+    let local: string = definition.factory
+    while (exportedNames.has(local)) local = `_${local}`
+    factoryLocals.set(definition.factory, local)
+  }
+  const importSpecifiers = [...factoryLocals].map(([factory, local]) => factory === local ? factory : `${factory} as ${local}`)
   const outputLines: string[] = [
-    `import { ${factories.join(', ')} } from '${importTarget}'`,
+    `import { ${importSpecifiers.join(', ')} } from '${importTarget}'`,
     '',
   ]
   const sourceLines: Array<number | undefined> = [undefined, undefined]
   for (const definition of definitions) {
+    const factory = factoryLocals.get(definition.factory)
     outputLines.push(definition.exportedName === 'default'
-      ? `export default ${definition.factory}({`
-      : `export const ${definition.exportedName} = ${definition.factory}({`)
+      ? `export default ${factory}({`
+      : `export const ${definition.exportedName} = ${factory}({`)
     sourceLines.push(definition.sourceLine)
     if (definition.name) {
       outputLines.push(`  name: ${definition.name},`)
