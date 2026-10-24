@@ -5,6 +5,7 @@ import * as nodeModule from 'node:module'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
+import type { Diagnostic } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
 import * as holoKernelModule from '@holo-js/kernel'
@@ -310,86 +311,39 @@ function absoluteCompilerOptions(options: JsonObject, directory: string): JsonOb
   return result
 }
 
-interface TsconfigPathEntry {
-  readonly targets: unknown
-  readonly directory: string
-}
-
-interface TsconfigPathsChain {
-  readonly paths: Readonly<Record<string, TsconfigPathEntry>>
-  readonly baseUrl?: string
-}
+const NO_INPUTS_FOUND_DIAGNOSTIC = 18003
 
 async function readTsconfigFile(path: string): Promise<JsonObject | undefined> {
   const text = await readFile(path, 'utf8').catch(() => undefined)
   return text === undefined ? undefined : parseTsconfigText(text)
 }
 
-const PACKAGE_NAME_PATTERN = /^(?:@[^/]+\/)?[^/]+$/
-
-function resolvePackageTsconfigField(packageName: string, requireFromConfig: NodeJS.Require): string | undefined {
-  try {
-    const manifestPath = requireFromConfig.resolve(`${packageName}/package.json`)
-    const manifest = parseTsconfigText(readFileSync(manifestPath, 'utf8'))
-    return manifest && typeof manifest.tsconfig === 'string' ? resolve(dirname(manifestPath), manifest.tsconfig) : undefined
-  } catch {
-    return undefined
-  }
+function tsconfigError(projectRoot: string, message: string): Error {
+  return new Error(`[@holo-js/core] Cannot load ${join(projectRoot, 'tsconfig.json')} for bundling: ${message}`)
 }
 
-function resolveExtendedTsconfig(entry: string, configPath: string): string {
-  if (entry.startsWith('.') || isAbsolute(entry)) {
-    const path = resolve(dirname(configPath), entry)
-    return path.endsWith('.json') ? path : `${path}.json`
-  }
+async function parseProjectTsconfigPaths(projectRoot: string): Promise<{ readonly paths: JsonObject, readonly baseUrl?: string }> {
+  const ts = await import('typescript')
+  const nuxtDirectory = join(projectRoot, NUXT_BUILD_DIRECTORY)
+  const insideNuxt = (path: string) => isInside(resolve(path), nuxtDirectory)
+  const describe = (diagnostic: Diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+  const parsed = ts.getParsedCommandLineOfConfigFile(join(projectRoot, 'tsconfig.json'), {}, {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    getCurrentDirectory: () => projectRoot,
+    fileExists: path => insideNuxt(path) || ts.sys.fileExists(path),
+    readFile: path => insideNuxt(path) ? '{}' : ts.sys.readFile(path),
+    readDirectory: () => [],
+    onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+      throw tsconfigError(projectRoot, describe(diagnostic))
+    },
+  })
+  const error = parsed?.errors.find(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error && diagnostic.code !== NO_INPUTS_FOUND_DIAGNOSTIC)
+  if (error) throw tsconfigError(projectRoot, describe(error))
 
-  const requireFromConfig = nodeModule.createRequire(configPath)
-  const fromField = PACKAGE_NAME_PATTERN.test(entry) ? resolvePackageTsconfigField(entry, requireFromConfig) : undefined
-  if (fromField) return fromField
-  const candidates = entry.endsWith('.json') ? [entry] : [entry, `${entry}.json`, `${entry}/tsconfig.json`]
-  for (const candidate of candidates) {
-    try {
-      const resolved = requireFromConfig.resolve(candidate)
-      if (resolved.endsWith('.json')) return resolved
-    } catch {
-      continue
-    }
-  }
-  throw new Error(`[@holo-js/core] Cannot resolve the tsconfig "${entry}" extended by ${configPath}. Install the package that provides it or fix the "extends" entry.`)
-}
-
-async function collectTsconfigPaths(projectRoot: string, configPath: string, seen: Set<string>): Promise<TsconfigPathsChain> {
-  if (seen.has(configPath)) return { paths: {} }
-  seen.add(configPath)
-  const config = await readTsconfigFile(configPath)
-  if (!config) return { paths: {} }
-
-  let inherited: TsconfigPathsChain = { paths: {} }
-  for (const entry of extendsEntries(config)) {
-    const parentPath = resolveExtendedTsconfig(entry, configPath)
-    if (isInside(parentPath, join(projectRoot, NUXT_BUILD_DIRECTORY))) continue
-    const parent = await collectTsconfigPaths(projectRoot, parentPath, seen)
-    inherited = { paths: { ...inherited.paths, ...parent.paths }, baseUrl: parent.baseUrl ?? inherited.baseUrl }
-  }
-
-  const compilerOptions = isRecord(config.compilerOptions) ? config.compilerOptions : {}
-  const directory = dirname(configPath)
-  const ownPaths = isRecord(compilerOptions.paths)
-    ? Object.fromEntries(Object.entries(compilerOptions.paths).map(([alias, targets]) => [alias, { targets, directory }]))
-    : {}
-  return {
-    paths: { ...inherited.paths, ...ownPaths },
-    baseUrl: typeof compilerOptions.baseUrl === 'string' ? resolve(directory, compilerOptions.baseUrl) : inherited.baseUrl,
-  }
-}
-
-async function resolveTsconfigPaths(projectRoot: string, configPath: string): Promise<{ readonly paths: JsonObject, readonly baseUrl?: string }> {
-  const chain = await collectTsconfigPaths(projectRoot, configPath, new Set())
-  const paths = Object.fromEntries(Object.entries(chain.paths).map(([alias, entry]) => {
-    const resolved = absoluteCompilerOptions({ paths: { [alias]: entry.targets } }, chain.baseUrl ?? entry.directory).paths
-    return [alias, isRecord(resolved) ? resolved[alias] : entry.targets]
-  }))
-  return { paths, baseUrl: chain.baseUrl }
+  const options = parsed?.options ?? {}
+  const pathsBase = options.baseUrl ?? (typeof options.pathsBasePath === 'string' ? options.pathsBasePath : projectRoot)
+  const paths = options.paths ? absoluteCompilerOptions({ paths: options.paths }, pathsBase).paths : {}
+  return { paths: isRecord(paths) ? paths : {}, baseUrl: options.baseUrl }
 }
 
 async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {
@@ -418,7 +372,7 @@ async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snaps
     derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
-  const user = await resolveTsconfigPaths(projectRoot, join(projectRoot, 'tsconfig.json'))
+  const user = await parseProjectTsconfigPaths(projectRoot)
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
   const baseUrl = user.baseUrl ?? (snapshotPath ? undefined : projectRoot)
   if (baseUrl) compilerOptions.baseUrl = baseUrl

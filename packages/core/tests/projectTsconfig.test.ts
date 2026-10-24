@@ -98,8 +98,8 @@ async function writeCompanyTsconfigPackage(projectRoot: string): Promise<void> {
   const packageRoot = join(projectRoot, 'node_modules/@company/tsconfig')
   await mkdir(packageRoot, { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@company/tsconfig', exports: { './server': './server.json', './base.json': './base.json' } }))
-  await writeFile(join(packageRoot, 'base.json'), JSON.stringify({ compilerOptions: { baseUrl: '../../..', paths: { 'company/*': ['lib/custom/*'] } } }))
-  await writeFile(join(packageRoot, 'server.json'), JSON.stringify({ extends: './base.json', compilerOptions: { paths: { 'shared/*': ['lib/*'] } } }))
+  await writeFile(join(packageRoot, 'base.json'), JSON.stringify({ compilerOptions: { baseUrl: '../../..' } }))
+  await writeFile(join(packageRoot, 'server.json'), JSON.stringify({ extends: './base.json', compilerOptions: { paths: { 'company/*': ['lib/custom/*'], 'shared/*': ['lib/*'] } } }))
 }
 
 const companyEntry = "import { tool } from 'company/tool'\nimport { util } from 'shared/util'\nimport { title } from '~/app/models/Post'\nexport const definition = { tool, util, title }\n"
@@ -181,18 +181,21 @@ describe('project tsconfig loading for bundled definitions', () => {
     await writeFile(join(projectRoot, 'lib/override/tool.ts'), "export const tool = 'override'\n")
     await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { title } from '~/app/models/Post'\nexport const definition = { tool, title }\n")
 
+    expect(typescriptResolvedFolder(projectRoot, 'base/tool')).toBe('custom')
+    expect(typescriptResolvedFolder(projectRoot, 'custom/tool')).toBe('override')
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', title: 'post' })
     expect((await importBundled(projectRoot, entryPath)).definition).toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'override' })
   })
 
   it('merges the Nuxt aliases with the paths of a legacy tsconfig that extends both Nuxt and a base config', async () => {
     const { projectRoot } = await createNuxtProject({
-      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', './tsconfig.base.json'], compilerOptions: { paths: { 'own/*': ['*'] } } }),
+      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', './tsconfig.base.json'] }),
     })
     await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { baseUrl: './lib', paths: { 'base/*': ['custom/*'] } } }))
-    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { util } from 'own/util'\nimport { helper } from '#imports'\nexport const definition = { tool, util, helper }\n")
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'base/tool'\nimport { helper } from '#imports'\nexport const definition = { tool, helper }\n")
 
-    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', helper: 'imports' })
+    expect(typescriptResolvedFolder(projectRoot, 'base/tool')).toBe('custom')
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', helper: 'imports' })
   })
 
   it('merges the Nuxt aliases with the paths of a package tsconfig the references tsconfig extends', async () => {
@@ -202,6 +205,8 @@ describe('project tsconfig loading for bundled definitions', () => {
     await writeCompanyTsconfigPackage(projectRoot)
     await writeFile(join(projectRoot, 'own.ts'), companyEntry)
 
+    expect(typescriptResolvedFolder(projectRoot, 'company/tool')).toBe('custom')
+    expect(typescriptResolvedFolder(projectRoot, 'shared/util')).toBe('lib')
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', title: 'post' })
   })
 
@@ -212,6 +217,8 @@ describe('project tsconfig loading for bundled definitions', () => {
     await writeCompanyTsconfigPackage(projectRoot)
     await writeFile(join(projectRoot, 'own.ts'), companyEntry)
 
+    expect(typescriptResolvedFolder(projectRoot, 'company/tool')).toBe('custom')
+    expect(typescriptResolvedFolder(projectRoot, 'shared/util')).toBe('lib')
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', title: 'post' })
   })
 
@@ -220,7 +227,7 @@ describe('project tsconfig loading for bundled definitions', () => {
       projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', '@company/missing-tsconfig'] }),
     })
 
-    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@company/missing-tsconfig"')
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow(/Cannot load .*tsconfig\.json for bundling: .*@company\/missing-tsconfig/)
   })
 
   it('resolves inherited paths against the baseUrl the project tsconfig overrides, as TypeScript does', async () => {
@@ -228,6 +235,20 @@ describe('project tsconfig loading for bundled definitions', () => {
       projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './tsconfig.base.json', compilerOptions: { baseUrl: './src' } }),
     })
     await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { baseUrl: './old', paths: { 'shared-lib/*': ['*'] } } }))
+    await writeLibraryFolders(projectRoot, ['old', 'src'])
+    await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
+
+    expect(typescriptResolvedFolder(projectRoot, 'shared-lib/tool')).toBe('src')
+    expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'src' })
+  })
+
+  it('keeps the options of a config two extended configs share, as TypeScript does', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: ['./tsconfig.a.json', './tsconfig.b.json'] }),
+    })
+    await writeFile(join(projectRoot, 'tsconfig.common.json'), JSON.stringify({ compilerOptions: { baseUrl: './src', paths: { 'shared-lib/*': ['*'] } } }))
+    await writeFile(join(projectRoot, 'tsconfig.a.json'), JSON.stringify({ extends: './tsconfig.common.json', compilerOptions: { baseUrl: './old' } }))
+    await writeFile(join(projectRoot, 'tsconfig.b.json'), JSON.stringify({ extends: './tsconfig.common.json' }))
     await writeLibraryFolders(projectRoot, ['old', 'src'])
     await writeFile(join(projectRoot, 'own.ts'), "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
 
