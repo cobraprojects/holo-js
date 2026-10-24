@@ -18,7 +18,7 @@ function createEvent(value: string, accept = 'application/json', path = '/login'
       delete: (name: string) => { flashed.delete(name) },
       serialize: (name: string, value: string) => `${name}=${value}`,
       set: (name: string, value: string) => { flashed.set(name, value) },
-    },
+    } as unknown as RequestEvent['cookies'],
   }
   return { event: event as RequestEvent, flashed }
 }
@@ -37,7 +37,7 @@ describe('SvelteKit validation hooks', () => {
         await validate(await event.request.formData(), loginSchema)
         return new Response('success')
       } catch (error) {
-        await hooks.handleError({ event: { ...event }, error, status: 500, message: 'failure' })
+        await hooks.handleError({ event: { ...event }, kind: 'unknown', error })
         if (event === first.event) await waiting
         else releaseFirst()
         return new Response('framework error', { status: 500 })
@@ -61,7 +61,7 @@ describe('SvelteKit validation hooks', () => {
       try {
         await validate(await event.request.formData(), loginSchema)
       } catch (error) {
-        await hooks.handleError({ event: { ...event }, error, status: 500, message: 'failure' })
+        await hooks.handleError({ event: { ...event }, kind: 'unknown', error })
       }
       return new Response('native failure', { status: 500 })
     } })
@@ -96,17 +96,17 @@ describe('SvelteKit validation hooks', () => {
       handleError: ({ error }) => ({ message: error === ordinaryError ? 'application error' : 'unexpected' }),
     })
     await expect(hooks.handle({ event, resolve: async (event) => {
-      await hooks.handleError({ event, error: ValidationException.withMessages({ email: ['Invalid.'] }), status: 500, message: 'failure' })
+      await hooks.handleError({ event, kind: 'unknown', error: ValidationException.withMessages({ email: ['Invalid.'] }) })
       throw ordinaryError
     } })).rejects.toBe(ordinaryError)
     flashed.clear()
-    await hooks.handleError({ event: { ...event }, error: ValidationException.withMessages({ email: ['Late failure.'] }), status: 500, message: 'failure' })
+    await hooks.handleError({ event: { ...event }, kind: 'unknown', error: ValidationException.withMessages({ email: ['Late failure.'] }) })
     expect(flashed.size).toBe(0)
-    expect(await hooks.handleError({ event, error: ordinaryError, status: 500, message: 'failure' })).toEqual({ message: 'application error' })
-    const response = await hooks.handle({ event, resolve: () => new Response('success') })
+    expect(await hooks.handleError({ event, kind: 'unknown', error: ordinaryError })).toEqual({ message: 'application error' })
+    const response = await hooks.handle({ event, resolve: async () => new Response('success') })
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('success')
-    await hooks.handleError({ event, error: ValidationException.withMessages({ email: ['After success.'] }), status: 500, message: 'failure' })
+    await hooks.handleError({ event, kind: 'unknown', error: ValidationException.withMessages({ email: ['After success.'] }) })
     expect(flashed.size).toBe(0)
   })
 

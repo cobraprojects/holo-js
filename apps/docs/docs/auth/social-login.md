@@ -120,7 +120,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/auth/google/callback/+server.ts
-import { json, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import auth from '@holo-js/auth'
 import { callback } from '@holo-js/auth-social'
 import type { RequestHandler } from './$types'
@@ -128,7 +128,7 @@ import type { RequestHandler } from './$types'
 export const GET: RequestHandler = async ({ request }) => {
   const result = await callback('google', request)
   if (!result.ok) {
-    return json({ message: result.message }, { status: result.status })
+    return Response.json({ message: result.message }, { status: result.status })
   }
 
   const session = await auth.guard(result.guard).loginUsing(result.user)
@@ -255,7 +255,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/auth/google/callback/+server.ts
-import { json, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import auth from '@holo-js/auth'
 import { callback, SocialAuthConflictError } from '@holo-js/auth-social'
 import type { RequestHandler } from './$types'
@@ -268,7 +268,7 @@ export const GET: RequestHandler = async ({ request }) => {
     throw error
   })
   if (!result.ok) {
-    return json({ message: result.message }, { status: result.status })
+    return Response.json({ message: result.message }, { status: result.status })
   }
 
   const session = await auth.guard(result.guard).loginUsing(result.user)

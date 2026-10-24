@@ -194,7 +194,7 @@ export default defineEventHandler(async (event) => {
 
 ```ts [SvelteKit]
 // src/routes/api/cart/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { cookie, createSession, parseCookieHeader, readSession, writeSession } from '@holo-js/session'
 
 const CART_COOKIE = 'holo_cart'
@@ -210,7 +210,7 @@ export async function POST({ request }) {
     data: { ...cart.data, items: [...items, productId] },
   })
 
-  return json({ items: updated.data.items }, {
+  return Response.json({ items: updated.data.items }, {
     headers: { 'set-cookie': cookie(CART_COOKIE, updated.id) },
   })
 }

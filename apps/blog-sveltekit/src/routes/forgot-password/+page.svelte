@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { forgotPasswordForm } from '$lib/schemas/auth'
+  import { forgotPasswordForm } from '#lib/schemas/auth.js'
   import type { PageData } from './$types'
 
   export let data: PageData

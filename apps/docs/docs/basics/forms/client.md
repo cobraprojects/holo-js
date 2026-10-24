@@ -91,7 +91,7 @@ const form = useForm(registerForm, {
 <!-- src/routes/register/+page.svelte -->
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { registerForm } from '$lib/schemas/register'
+  import { registerForm } from '#lib/schemas/register.js'
 
   import type { PageData } from './$types'
 

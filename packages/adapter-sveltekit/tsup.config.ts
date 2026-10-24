@@ -16,7 +16,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['$app/stores', '@holo-js/realtime', '@holo-js/realtime/client', 'svelte/reactivity', 'svelte/store'],
+  external: ['$app/state','@holo-js/realtime', '@holo-js/realtime/client', 'svelte/reactivity', 'svelte/store'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

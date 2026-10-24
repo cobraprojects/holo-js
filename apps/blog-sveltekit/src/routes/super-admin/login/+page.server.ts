@@ -3,7 +3,7 @@ import auth from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 import { csrf } from '@holo-js/security'
 
-import { loginForm } from '$lib/schemas/auth'
+import { loginForm } from '#lib/schemas/auth.js'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async ({ request }) => ({

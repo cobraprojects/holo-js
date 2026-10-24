@@ -46,7 +46,7 @@ export default defineEventHandler(async (event) => {
 import { redirect } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { loginForm } from '$lib/schemas/auth'
+import { loginForm } from '#lib/schemas/auth.js'
 import type { Actions } from './$types'
 
 export const actions = {

@@ -58,13 +58,23 @@ async function handleUnexpectedError() {
   const hooks = createSvelteKitHoloHooks({ handle: ({ event, resolve }) => resolve(event) })
   return hooks.handleError({
     event: createEvent(),
+    kind: 'unknown',
     error: internalFailure,
-    status: 500,
-    message: 'Internal Error',
   })
 }
 
 describe('SvelteKit unhandled errors', () => {
+  it('returns a synchronous result so render errors keep the application message', () => {
+    const hooks = createSvelteKitHoloHooks({
+      handle: ({ event, resolve }) => resolve(event),
+      handleError: () => ({ message: 'Custom message' }),
+    })
+
+    const result = hooks.handleError({ event: createEvent(), kind: 'unknown', error: internalFailure })
+
+    expect(result).toEqual({ message: 'Custom message' })
+  })
+
   it('logs the error and returns SvelteKit\'s generic message without an application hook', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -92,9 +102,8 @@ describe('SvelteKit unhandled errors', () => {
 
     const response = await hooks.handleError({
       event: createEvent(),
-      error: new Error('Not found: /wp-admin'),
-      status: 404,
-      message: 'Not Found',
+      kind: 'framework',
+      error: { status: 404, message: 'Not Found' },
     })
 
     expect(response).toEqual({ message: 'Not Found' })

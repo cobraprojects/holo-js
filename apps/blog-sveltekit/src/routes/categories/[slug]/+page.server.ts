@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit'
 
-import { getCategoryArchive } from '$lib/server/blog'
+import { getCategoryArchive } from '#lib/server/blog.js'
 import type { PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {

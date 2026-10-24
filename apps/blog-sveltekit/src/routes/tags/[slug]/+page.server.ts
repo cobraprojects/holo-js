@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit'
 
-import { getTagArchive } from '$lib/server/blog'
+import { getTagArchive } from '#lib/server/blog.js'
 import type { PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {

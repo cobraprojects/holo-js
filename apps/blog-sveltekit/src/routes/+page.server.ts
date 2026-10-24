@@ -1,4 +1,4 @@
-import { getHomePageData } from '$lib/server/blog'
+import { getHomePageData } from '#lib/server/blog.js'
 
 export async function load() {
   return await getHomePageData()

@@ -146,7 +146,7 @@ export default defineEventHandler(async () => {
 
 ```ts [SvelteKit]
 // src/routes/api/welcome/+server.ts
-import { json } from '@sveltejs/kit'
+
 import { sendMail } from '@holo-js/mail'
 import WelcomeMail from '../../../../server/mail/welcome'
 import type { RequestHandler } from './$types'
@@ -154,7 +154,7 @@ import type { RequestHandler } from './$types'
 export const POST: RequestHandler = async () => {
   await sendMail(WelcomeMail({ to: 'ava@example.com', name: 'Ava' }))
 
-  return json({ sent: true })
+  return Response.json({ sent: true })
 }
 ```
 

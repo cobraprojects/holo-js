@@ -1,35 +1,38 @@
 # Using Holo with SvelteKit
 
-Holo runs inside your SvelteKit 2 project. You write `load` functions, form actions, and `+server.ts` endpoints as usual, and call Holo models and services from them.
+Holo runs inside your SvelteKit 3 project. You write `load` functions, form actions, and `+server.ts` endpoints as usual, and call Holo models and services from them.
 
 This page explains how Holo plugs into SvelteKit and where your code goes. It assumes a project created with `npm create holo-js@latest -- --framework sveltekit`.
 
 ## How Holo plugs in
 
-`svelte.config.js` wraps your config with `withHoloSvelteKit()`:
+SvelteKit 3 reads its options from the `sveltekit()` plugin in `vite.config.ts`. Holo wraps those options with `withHoloSvelteKit()`:
 
-```js [svelte.config.js]
+```ts [vite.config.ts]
 import adapter from '@sveltejs/adapter-node'
 import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
+import { sveltekit } from '@sveltejs/kit/vite'
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+import { defineConfig } from 'vite'
 
-/** @type {import('@sveltejs/kit').Config} */
-const config = withHoloSvelteKit({
-  preprocess: vitePreprocess(),
-  kit: {
-    adapter: adapter(),
-  },
+export default defineConfig({
+  plugins: [
+    sveltekit(withHoloSvelteKit({
+      adapter: adapter(),
+      preprocess: vitePreprocess(),
+    })),
+  ],
 })
-
-export default config
 ```
 
 The wrapper points SvelteKit's hook files at Holo-generated hooks in `.holo-js/generated/`. Those hooks start the Holo runtime, run each request with its own session and user, handle the routes Holo adds, and then call your own hooks from `src/hooks.server.ts` and `src/hooks.ts`.
 
-Edit the object inside `withHoloSvelteKit()` like a normal SvelteKit config. Leave the wrapper in place.
+Edit the object inside `withHoloSvelteKit()` like the options you pass to `sveltekit()`. Leave the wrapper in place.
+
+SvelteKit 3 no longer reads `svelte.config.js`. If your project still has one, move its options into the `sveltekit()` call and delete the file. `holo prepare` stops with an error until you do.
 
 ::: warning
-Don't set `kit.files.hooks` yourself. `withHoloSvelteKit()` throws an error if you point the hooks somewhere else. Put your hook code in `src/hooks.server.ts` and `src/hooks.ts` instead.
+Don't set `files.hooks` yourself. `withHoloSvelteKit()` throws an error if you point the hooks somewhere else. Put your hook code in `src/hooks.server.ts` and `src/hooks.ts` instead.
 :::
 
 New projects use `@sveltejs/adapter-node`. `vite.config.ts` also lists Holo's packages under `ssr.external` so Vite loads them from `node_modules` on the server.
@@ -85,14 +88,12 @@ Keep Holo calls in server-only files: `+page.server.ts`, `+layout.server.ts`, `+
 ## Use Holo in endpoints
 
 ```ts [src/routes/api/posts/+server.ts]
-import { json } from '@sveltejs/kit'
-
 import Post from '../../../../server/models/Post'
 
 export async function GET() {
   const posts = await Post.where('status', 'published').latest().get()
 
-  return json({ posts })
+  return Response.json({ posts })
 }
 ```
 

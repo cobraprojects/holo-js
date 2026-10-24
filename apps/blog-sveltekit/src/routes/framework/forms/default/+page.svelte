@@ -3,7 +3,7 @@
   import type { PageData } from './$types'
 
   export let data: PageData
-  import { contactForm } from '$lib/schemas/framework-forms'
+  import { contactForm } from '#lib/schemas/framework-forms.js'
 
   const contact = useForm(contactForm, { pageData: data, initialValues: { email: 'ava@example.com', password: '' } })
 </script>

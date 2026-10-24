@@ -2,10 +2,12 @@
   import { adminPosts, renameAdminPost } from '../../../../../server/realtime/posts'
 
   const data = adminPosts()
+  /** @type {number | null} */
   let selectedPostId = null
   let title = ''
   let saving = false
 
+  /** @param {{ id: number, title: string }} post */
   function selectPost(post) {
     selectedPostId = post.id
     title = `${post.title} updated`

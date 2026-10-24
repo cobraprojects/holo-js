@@ -1,7 +1,5 @@
-declare module '$app/stores' {
-  import type { Readable } from 'svelte/store'
-
-  export const page: Readable<{
+declare module '$app/state' {
+  export const page: {
     readonly form: unknown
-  }>
+  }
 }

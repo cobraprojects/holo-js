@@ -1,7 +1,15 @@
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
 const generatedDirectories = new Set(['node_modules', 'storage', '.holo-js', '.next', '.nuxt', '.output', '.svelte-kit', 'build', 'dist'])
+
+async function linkAppNodeModules(appModules, projectModules) {
+  await mkdir(projectModules)
+  for (const entry of await readdir(appModules)) {
+    if (entry === '$app') continue
+    await symlink(join(appModules, entry), join(projectModules, entry), 'dir')
+  }
+}
 
 export async function createExampleAppFixture(root, framework) {
   const directory = await mkdtemp(join(root, '.holo-test-example-app-'))
@@ -23,7 +31,7 @@ export async function createExampleAppFixture(root, framework) {
     for (const name of ['packages', 'tests', 'node_modules']) {
       await symlink(join(root, name), join(directory, name), 'dir')
     }
-    await symlink(join(root, 'apps', `blog-${framework}`, 'node_modules'), join(projectRoot, 'node_modules'), 'dir')
+    await linkAppNodeModules(join(root, 'apps', `blog-${framework}`, 'node_modules'), join(projectRoot, 'node_modules'))
     return { directory, projectRoot }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })

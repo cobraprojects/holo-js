@@ -1,15 +1,14 @@
-import { json } from '@sveltejs/kit'
 import { resetPassword } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
-import { resetPasswordForm } from '$lib/schemas/auth'
+import { resetPasswordForm } from '#lib/schemas/auth.js'
 
 export async function POST({ request }: { request: Request }) {
   const input = await validate(request, resetPasswordForm)
 
   await resetPassword(input)
 
-  return json({
+  return Response.json({
     ok: true,
     status: 200,
     data: {
