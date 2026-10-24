@@ -39,7 +39,8 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.type-tests.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "benchmark": "HOLO_REALTIME_BENCHMARK=1 vitest --run tests/realtime.benchmark.test.ts --testTimeout 0 --silent=false"
   },
   "dependencies": {
     "@holo-js/broadcast": "workspace:*",

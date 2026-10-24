@@ -176,6 +176,7 @@
     "test:smoke:published-packages": "node scripts/validate-published-package-smoke.mjs",
     "test:acceptance": "node scripts/build-libraries.mjs && node scripts/validate-published-package-smoke.mjs --skip-build && node scripts/validate-scaffold-user-journey-smoke.mjs --skip-build && node scripts/validate-browser-bundle.mjs --skip-build",
     "test:coverage": "node scripts/run-coverage.mjs",
+    "benchmark:realtime": "bun run --cwd packages/realtime benchmark",
     "migrate": "holo migrate",
     "migrate:fresh": "holo migrate:fresh",
     "migrate:rollback": "holo migrate:rollback",

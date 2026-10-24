@@ -223,3 +223,33 @@ test('honours an audit exception for a catalog floor', async () => {
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`)
   assert.match(result.stdout, /EXCEPT framework@1\.3\.8 \(critical\) catalog floor/)
 })
+
+async function runWithFakeBun(exitCode, stdout) {
+  const checkout = await mkdtemp(join(tmpdir(), 'holo-audit-bun-'))
+  try {
+    await mkdir(join(checkout, 'packages'), { recursive: true })
+    await mkdir(join(checkout, 'bin'))
+    await writeFile(join(checkout, 'bun.lock'), '{"lockfileVersion":1,"packages":{}}')
+    await writeFile(join(checkout, 'stdout.txt'), stdout)
+    await writeFile(join(checkout, 'bin', 'bun'), `#!/bin/sh\ncat "${join(checkout, 'stdout.txt')}"\necho 'registry request failed' >&2\nexit ${exitCode}\n`, { mode: 0o755 })
+    return await execFileAsync(process.execPath, [script], { cwd: checkout, env: { ...process.env, PATH: `${join(checkout, 'bin')}:${process.env.PATH}` } })
+      .then(value => ({ ...value, code: 0 }), error => error)
+  } finally {
+    await rm(checkout, { recursive: true, force: true })
+  }
+}
+
+for (const [name, exitCode, stdout, message] of [
+  ['empty bun audit output fails with the exit code and stderr', 1, '', /bun audit --json exited with code 1 without a JSON report\.\nregistry request failed/],
+  ['whitespace-only bun audit output fails with the exit code', 0, '\n', /bun audit --json exited with code 0 without a JSON report/],
+  ['truncated bun audit output fails as an unreadable report', 1, '{"parser":[', /bun audit --json printed an unreadable JSON report \(exit code 1\)/],
+  ['an unexpected bun audit exit code fails even with a JSON report', 2, '{}', /bun audit --json exited with code 2\.\nregistry request failed/],
+  ['a bun audit failure exit without advisories fails instead of passing as clean', 1, '{}', /bun audit --json exited with code 1 but reported no advisories\.\nregistry request failed/],
+]) {
+  test(name, async () => {
+    const result = await runWithFakeBun(exitCode, stdout)
+    assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`)
+    assert.match(result.stderr, message)
+    assert.doesNotMatch(result.stderr, /Unexpected end of JSON input/)
+  })
+}

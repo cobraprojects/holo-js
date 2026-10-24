@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { createWriteStream } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createExampleAppFixture } from '../tests/support/example-app-fixture.mjs'
-import { stopExampleAppProcess } from '../tests/example-app-process.mjs'
+import { closeWriteStream, exampleAppRunVariable, listTaggedProcesses, stopExampleAppProcess, stopTaggedProcesses } from '../tests/example-app-process.mjs'
 
 test('app source edits and generated files stay inside each journey fixture', async context => {
   const root = await mkdtemp(join(tmpdir(), 'holo-app-fixture-test-'))
@@ -43,4 +44,47 @@ test('stops remaining descendants after the process group leader exits', { skip:
   await once(child, 'close')
   await stopExampleAppProcess(child)
   assert.equal(await readFile(stoppedPath, 'utf8'), 'stopped')
+})
+
+test('stops a detached descendant that outlives the journey before its directory is removed', { skip: process.platform === 'win32' }, async context => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-process-tag-'))
+  const runId = `test-${process.pid}-${Date.now()}`
+  context.after(async () => {
+    await stopTaggedProcesses(runId)
+    await rm(root, { recursive: true, force: true })
+  })
+  const storage = join(root, 'storage')
+  await mkdir(storage)
+  const writer = "const {writeFileSync} = require('node:fs'); let n = 0; setInterval(() => writeFileSync(`${process.argv[1]}/${n++}.log`, 'x'), 5); process.send('ready')"
+  const leader = `import { spawn } from 'node:child_process'; const child = spawn(process.execPath, ['-e', ${JSON.stringify(writer)}, ${JSON.stringify(storage)}], { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }); child.once('message', () => { child.disconnect(); child.unref(); process.exit(0) })`
+  const child = spawn(process.execPath, ['--input-type=module', '-e', leader], {
+    detached: true,
+    env: { ...process.env, [exampleAppRunVariable]: runId },
+    stdio: 'ignore',
+  })
+  await once(child, 'close')
+  assert.equal((await listTaggedProcesses(runId)).length, 1)
+  const stopped = await stopTaggedProcesses(runId)
+  assert.equal(stopped.length, 1)
+  assert.match(stopped[0].command, /writeFileSync/)
+  assert.deepEqual(await listTaggedProcesses(runId), [])
+  await rm(storage, { recursive: true })
+  await assert.rejects(readFile(join(storage, '0.log')), { code: 'ENOENT' })
+})
+
+test('closing a log stream settles when the stream was already destroyed', async context => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-log-close-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const destroyed = createWriteStream(join(root, 'destroyed.log'))
+  destroyed.destroy()
+  await once(destroyed, 'close')
+  await closeWriteStream(destroyed)
+  const failed = createWriteStream(join(root, 'missing', 'failed.log'))
+  failed.on('error', () => {})
+  await new Promise(resolve => failed.once('close', resolve))
+  await assert.rejects(closeWriteStream(failed), { code: 'ENOENT' })
+  const open = createWriteStream(join(root, 'open.log'))
+  open.write('line\n')
+  await closeWriteStream(open)
+  assert.equal(await readFile(join(root, 'open.log'), 'utf8'), 'line\n')
 })

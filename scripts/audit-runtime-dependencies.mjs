@@ -18,11 +18,25 @@ async function readAdvisories() {
     return JSON.parse(await readFile(reportArgs[1], 'utf8'))
   }
   const result = await execFileAsync('bun', ['audit', '--json'], { maxBuffer: 16 * 1024 * 1024 })
-    .catch(error => {
-      if (error.code !== 1) throw error
+    .then(value => ({ ...value, code: 0 }), error => {
+      if (typeof error.code !== 'number') throw error
       return error
     })
-  return JSON.parse(result.stdout)
+  const stderr = result.stderr.trim()
+  const describe = message => [message, stderr].filter(Boolean).join('\n')
+  // bun audit exits 1 when it finds advisories and 0 when it finds none; anything else is a failed audit.
+  if (result.code !== 0 && result.code !== 1) throw new Error(describe(`bun audit --json exited with code ${result.code}.`))
+  if (result.stdout.trim() === '') throw new Error(describe(`bun audit --json exited with code ${result.code} without a JSON report.`))
+  let report
+  try {
+    report = JSON.parse(result.stdout)
+  } catch {
+    throw new Error(describe(`bun audit --json printed an unreadable JSON report (exit code ${result.code}).`))
+  }
+  if (result.code === 1 && Object.keys(report ?? {}).length === 0) {
+    throw new Error(describe('bun audit --json exited with code 1 but reported no advisories.'))
+  }
+  return report
 }
 
 async function readCatalogFloors() {

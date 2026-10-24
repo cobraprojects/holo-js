@@ -204,10 +204,15 @@ type BenchmarkWidePostRow = BenchmarkPostRow & {
 
 const connectionName = 'main'
 const tableName = 'posts'
+// The pass/fail suite checks every behaviour below on a small fixed workload, so no result depends on how
+// fast the machine is. `bun run benchmark` reruns this file at full size and prints the timings instead.
+const benchmarkMode = process.env.HOLO_REALTIME_BENCHMARK === '1'
 const subscriptionCount = 10
 const distinctArgumentCount = 5
-const patchRowCount = 1_000
-const longBenchmarkTimeoutMs = 20_000
+const patchRowCount = benchmarkMode ? 1_000 : 200
+const middleRowId = patchRowCount / 2
+const pageSize = patchRowCount / 10
+const aggregateScoreSum = 10_000 * patchRowCount + patchRowCount * (patchRowCount + 1) / 2
 
 const benchmarkModelDialect: Dialect = {
   name: 'sqlite',
@@ -1007,7 +1012,7 @@ function createDuplicateRelationExtremeBenchmarkTables(): {
   tables: { authors: BenchmarkAuthorRow[], posts: BenchmarkPostRow[] }
 } {
   const tables = createRelationAggregateBenchmarkTables()
-  const row = tables.posts[50]
+  const row = tables.posts[pageSize / 2]
   if (!row || typeof row.author_id !== 'number' || typeof row.score !== 'number') {
     throw new Error('Expected benchmark relation aggregate duplicate row to exist.')
   }
@@ -2328,7 +2333,7 @@ function createOffsetOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, row
     access: 'public',
     handler: async () => {
       counters.queryExecutions += 1
-      const result = rows.slice(100, 200).map(row => ({
+      const result = rows.slice(pageSize, pageSize * 2).map(row => ({
         id: row.id,
         title: row.title,
         user_id: row.user_id,
@@ -2341,8 +2346,8 @@ function createOffsetOrderedPatchBenchmarkQuery(counters: BenchmarkCounters, row
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: 100,
-        offset: 100,
+        limit: pageSize,
+        offset: pageSize,
         orderBy: [{ column: 'id', direction: 'asc' }],
         patchable: true,
         predicates: [{
@@ -2366,7 +2371,7 @@ function createPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
     access: 'public',
     handler: async (): Promise<BenchmarkPaginatedRows> => {
       counters.queryExecutions += 1
-      const result = rows.slice(0, 100).map(row => ({
+      const result = rows.slice(0, pageSize).map(row => ({
         id: row.id,
         title: row.title,
         user_id: row.user_id,
@@ -2389,7 +2394,7 @@ function createPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, rows: r
       recordDatabaseQueryObservation({
         connectionName,
         dependencies,
-        limit: 100,
+        limit: pageSize,
         offset: 0,
         orderBy: [{ column: 'id', direction: 'asc' }],
         patchable: true,
@@ -2438,7 +2443,7 @@ function createPaginationMetaPredicateOnlyBenchmarkQuery(counters: BenchmarkCoun
     access: 'public',
     handler: async (): Promise<{ readonly meta: BenchmarkPaginatedRows['meta'] }> => {
       counters.queryExecutions += 1
-      const perPage = 100
+      const perPage = pageSize
       const meta = {
         currentPage: 1,
         from: totalRows === 0 ? null : 1,
@@ -2489,7 +2494,7 @@ function createPaginatedOffsetPatchBenchmarkQuery(counters: BenchmarkCounters, r
     access: 'public',
     handler: async (): Promise<BenchmarkPaginatedRows> => {
       counters.queryExecutions += 1
-      const perPage = 100
+      const perPage = pageSize
       const currentPage = 2
       const offset = perPage
       const result = rows.slice(offset, offset + perPage).map(row => ({
@@ -2574,12 +2579,12 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
       readonly prevCursor: string | null
     }> => {
       counters.queryExecutions += 1
-      const observedRows = rows.slice(0, 101).map(row => ({
+      const observedRows = rows.slice(0, pageSize + 1).map(row => ({
         id: row.id,
         title: row.title,
         user_id: row.user_id,
       }))
-      const result = observedRows.slice(0, 100)
+      const result = observedRows.slice(0, pageSize)
       const nextCursor = rows.length > result.length
         ? encodeBenchmarkCursor([result.at(-1)?.id])
         : null
@@ -2593,7 +2598,7 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
         cursorRowCount: rows.length,
         cursorRows: observedRows,
         dependencies,
-        limit: 100,
+        limit: pageSize,
         offset: undefined,
         orderBy: [{ column: 'id', direction: 'asc' }],
         patchable: true,
@@ -2616,7 +2621,7 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
           hasMorePages: nextCursor !== null,
           kind: 'cursor',
           nextCursor,
-          perPage: 100,
+          perPage: pageSize,
           prevCursor: null,
           rows: observedRows,
           rowCount: rows.length,
@@ -2637,7 +2642,7 @@ function createCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters, r
         cursorName: 'cursor',
         data: result,
         nextCursor,
-        perPage: 100,
+        perPage: pageSize,
         prevCursor: null,
       }
     },
@@ -2650,7 +2655,7 @@ function createCursorPaginationPredicateOnlyBenchmarkQuery(counters: BenchmarkCo
     access: 'public',
     handler: async (): Promise<string | null> => {
       counters.queryExecutions += 1
-      const perPage = 100
+      const perPage = pageSize
       const observedRows = rows.slice(0, perPage + 1).map(row => ({
         id: row.id,
         priority: row.priority,
@@ -2710,7 +2715,7 @@ function createModelPaginatedJsonPatchBenchmarkQuery(counters: BenchmarkCounters
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .paginateJson(100, 1) as BenchmarkPaginatedRows
+        .paginateJson(pageSize, 1) as BenchmarkPaginatedRows
     },
   })
 }
@@ -2728,7 +2733,7 @@ function createModelPaginatedOffsetJsonPatchBenchmarkQuery(counters: BenchmarkCo
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .paginateJson(100, 2) as BenchmarkPaginatedRows
+        .paginateJson(pageSize, 2) as BenchmarkPaginatedRows
     },
   })
 }
@@ -2746,7 +2751,7 @@ function createModelSimplePaginatedJsonPatchBenchmarkQuery(counters: BenchmarkCo
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .simplePaginateJson(100, 1) as BenchmarkSimplePaginatedRows
+        .simplePaginateJson(pageSize, 1) as BenchmarkSimplePaginatedRows
     },
   })
 }
@@ -2764,7 +2769,7 @@ function createModelSimplePaginatedOffsetJsonPatchBenchmarkQuery(counters: Bench
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .simplePaginateJson(100, 2) as BenchmarkSimplePaginatedRows
+        .simplePaginateJson(pageSize, 2) as BenchmarkSimplePaginatedRows
     },
   })
 }
@@ -2782,7 +2787,7 @@ function createModelCursorPaginatedJsonPatchBenchmarkQuery(counters: BenchmarkCo
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .cursorPaginateJson(100) as BenchmarkCursorPaginatedRows
+        .cursorPaginateJson(pageSize) as BenchmarkCursorPaginatedRows
     },
   })
 }
@@ -2800,7 +2805,7 @@ function createModelPaginatedPatchBenchmarkQuery(counters: BenchmarkCounters) {
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .paginate(100, 1)
+        .paginate(pageSize, 1)
     },
   })
 }
@@ -3074,7 +3079,7 @@ function createModelCursorPaginatedPatchBenchmarkQuery(counters: BenchmarkCounte
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .cursorPaginate(100)
+        .cursorPaginate(pageSize)
     },
   })
 }
@@ -3092,7 +3097,7 @@ function createModelPaginatedOffsetPatchBenchmarkQuery(counters: BenchmarkCounte
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .paginate(100, 2)
+        .paginate(pageSize, 2)
     },
   })
 }
@@ -3110,7 +3115,7 @@ function createModelSimplePaginatedOffsetPatchBenchmarkQuery(counters: Benchmark
         .query()
         .where('user_id', 1)
         .orderBy('id', 'asc')
-        .simplePaginate(100, 2)
+        .simplePaginate(pageSize, 2)
     },
   })
 }
@@ -3404,7 +3409,7 @@ function createModelPaginatedRelationAggregatePatchBenchmarkQuery(counters: Benc
         .withMin('posts', 'score')
         .withMax('posts', 'score')
         .orderBy('id', 'asc')
-        .paginateJson(100, 1) as BenchmarkPaginatedAuthorAggregates
+        .paginateJson(pageSize, 1) as BenchmarkPaginatedAuthorAggregates
     },
   })
 }
@@ -3422,7 +3427,7 @@ function createModelPaginatedRelationExtremeAggregatePatchBenchmarkQuery(counter
         .query()
         .withMax('posts', 'score')
         .orderBy('id', 'asc')
-        .paginateJson(100, 1) as BenchmarkPaginatedAuthorAggregates
+        .paginateJson(pageSize, 1) as BenchmarkPaginatedAuthorAggregates
     },
   })
 }
@@ -3510,7 +3515,7 @@ function createModelInHasManyRelationPatchBenchmarkQuery(counters: BenchmarkCoun
       return await context
         .model(Author)
         .query()
-        .with('posts', relationQuery => relationQuery.whereIn('title', ['Post 500', 'Featured']).orderBy('id'))
+        .with('posts', relationQuery => relationQuery.whereIn('title', [`Post ${middleRowId}`, 'Featured']).orderBy('id'))
         .orderBy('id', 'asc')
         .getJson()
     },
@@ -3638,7 +3643,7 @@ function createModelPaginatedBelongsToRelationPatchBenchmarkQuery(counters: Benc
         .query()
         .with('author')
         .orderBy('id', 'asc')
-        .paginateJson(100, 1) as unknown as BenchmarkPaginatedRows
+        .paginateJson(pageSize, 1) as unknown as BenchmarkPaginatedRows
     },
   })
 }
@@ -3656,7 +3661,7 @@ function createModelPaginatedOffsetBelongsToRelationPatchBenchmarkQuery(counters
         .query()
         .with('author')
         .orderBy('id', 'asc')
-        .paginateJson(100, 2) as unknown as BenchmarkPaginatedRows
+        .paginateJson(pageSize, 2) as unknown as BenchmarkPaginatedRows
     },
   })
 }
@@ -3674,7 +3679,7 @@ function createModelSimplePaginatedBelongsToRelationPatchBenchmarkQuery(counters
         .query()
         .with('author')
         .orderBy('id', 'asc')
-        .simplePaginateJson(100, 1) as unknown as BenchmarkSimplePaginatedRows
+        .simplePaginateJson(pageSize, 1) as unknown as BenchmarkSimplePaginatedRows
     },
   })
 }
@@ -3692,7 +3697,7 @@ function createModelCursorPaginatedBelongsToRelationPatchBenchmarkQuery(counters
         .query()
         .with('author')
         .orderBy('id', 'asc')
-        .cursorPaginateJson(100) as unknown as BenchmarkCursorPaginatedRows
+        .cursorPaginateJson(pageSize) as unknown as BenchmarkCursorPaginatedRows
     },
   })
 }
@@ -4110,6 +4115,10 @@ async function createBenchmarkSubscriptions(
   }))
 }
 
+function reportBenchmark(result: { readonly benchmark: string, readonly metrics: unknown }): void {
+  if (benchmarkMode) console.info(JSON.stringify(result))
+}
+
 afterEach(() => {
   resetRealtimeClientRuntime()
   resetRealtimeRuntime()
@@ -4117,7 +4126,7 @@ afterEach(() => {
   resetDB()
 })
 
-describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTimeoutMs }, () => {
+describe('@holo-js/realtime invalidation benchmark', () => {
   it('measures client canonical query store fanout without duplicate transport subscriptions', () => {
     let transportQueries = 0
     let transportSubscriptions = 0
@@ -4191,7 +4200,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       unsubscribe()
     }
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client canonical query store fanout',
       metrics: {
         emittedSnapshots,
@@ -4201,7 +4210,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         transportQueries,
         transportSubscriptions,
       },
-    }))
+    })
   })
 
   it('measures client runtime reset cleanup for a shared live query store', () => {
@@ -4280,7 +4289,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedSnapshots).toBe(listenerCount)
     expect(realtimeClientInternals.getRealtimeClientState().stores.size).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client reset shared store cleanup',
       metrics: {
         emittedSnapshots,
@@ -4291,7 +4300,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         transportSubscriptions,
         transportUnsubscriptions,
       },
-    }))
+    })
   })
 
   it('measures client compact merge patch application with structural sharing', () => {
@@ -4306,7 +4315,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       dependencies: [],
       version: 1,
     }
-    const previousRow = snapshot.data[499]
+    const previousRow = snapshot.data[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark patch row to exist.')
     }
@@ -4315,7 +4324,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const noopPatched = realtimeClientInternals.applyWireSnapshotPatch(snapshot, {
       operations: [{
         op: 'merge',
-        path: [499],
+        path: [middleRowId - 1],
         fields: {
           id: previousRow.id,
           title: previousRow.title,
@@ -4330,9 +4339,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patched = realtimeClientInternals.applyWireSnapshotPatch(noopPatched, {
       operations: [{
         op: 'merge',
-        path: [499],
+        path: [middleRowId - 1],
         fields: {
-          title: 'Updated 500',
+          title: `Updated ${middleRowId}`,
         },
       }],
       version: 3,
@@ -4342,26 +4351,26 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(noopPatched.data).toBe(snapshot.data)
     expect(noopPatched.version).toBe(2)
     expect(patched.data).not.toBe(noopPatched.data)
-    expect(patched.data[498]).toBe(noopPatched.data[498])
-    expect(patched.data[499]).not.toBe(noopPatched.data[499])
-    expect(patched.data[500]).toBe(noopPatched.data[500])
-    expect(patched.data[499]).toEqual({
-      id: 500,
-      title: 'Updated 500',
+    expect(patched.data[middleRowId - 2]).toBe(noopPatched.data[middleRowId - 2])
+    expect(patched.data[middleRowId - 1]).not.toBe(noopPatched.data[middleRowId - 1])
+    expect(patched.data[middleRowId]).toBe(noopPatched.data[middleRowId])
+    expect(patched.data[middleRowId - 1]).toEqual({
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     })
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client compact merge patch',
       metrics: {
         noopPatchDurationMs,
         patchDurationMs,
         patchRows: patchRowCount,
-        preservedNextRow: patched.data[500] === noopPatched.data[500],
-        preservedPreviousRow: patched.data[498] === noopPatched.data[498],
+        preservedNextRow: patched.data[middleRowId] === noopPatched.data[middleRowId],
+        preservedPreviousRow: patched.data[middleRowId - 2] === noopPatched.data[middleRowId - 2],
         reusedNoopData: noopPatched.data === snapshot.data,
       },
-    }))
+    })
   })
 
   it('measures client compact splice patch application with structural sharing', () => {
@@ -4376,7 +4385,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       dependencies: [],
       version: 1,
     }
-    const previousRow = snapshot.data[499]
+    const previousRow = snapshot.data[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark splice patch row to exist.')
     }
@@ -4386,7 +4395,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       operations: [{
         op: 'splice',
         path: [],
-        index: 499,
+        index: middleRowId - 1,
         deleteCount: 1,
         values: [{
           id: previousRow.id,
@@ -4403,7 +4412,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       operations: [{
         op: 'splice',
         path: [],
-        index: 499,
+        index: middleRowId - 1,
         deleteCount: 1,
         values: [
           {
@@ -4426,28 +4435,28 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(noopPatched.version).toBe(2)
     expect(patched.data).not.toBe(noopPatched.data)
     expect(patched.data).toHaveLength(noopPatched.data.length + 1)
-    expect(patched.data[498]).toBe(noopPatched.data[498])
-    expect(patched.data[499]).toBe(noopPatched.data[499])
-    expect(patched.data[500]).toEqual({
+    expect(patched.data[middleRowId - 2]).toBe(noopPatched.data[middleRowId - 2])
+    expect(patched.data[middleRowId - 1]).toBe(noopPatched.data[middleRowId - 1])
+    expect(patched.data[middleRowId]).toEqual({
       id: 10_001,
       title: 'Inserted by client splice',
       user_id: 1,
     })
-    expect(patched.data[501]).toBe(noopPatched.data[500])
+    expect(patched.data[middleRowId + 1]).toBe(noopPatched.data[middleRowId])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client compact splice patch',
       metrics: {
         insertedRows: 1,
         noopPatchDurationMs,
         patchDurationMs,
         patchRows: patchRowCount,
-        preservedEquivalentReplacement: patched.data[499] === noopPatched.data[499],
-        preservedNextRow: patched.data[501] === noopPatched.data[500],
-        preservedPreviousRow: patched.data[498] === noopPatched.data[498],
+        preservedEquivalentReplacement: patched.data[middleRowId - 1] === noopPatched.data[middleRowId - 1],
+        preservedNextRow: patched.data[middleRowId + 1] === noopPatched.data[middleRowId],
+        preservedPreviousRow: patched.data[middleRowId - 2] === noopPatched.data[middleRowId - 2],
         reusedNoopData: noopPatched.data === snapshot.data,
       },
-    }))
+    })
   })
 
   it('measures client metadata-only patch updates without listener fanout', () => {
@@ -4510,7 +4519,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       unsubscribe()
     }
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client metadata-only patch',
       metrics: {
         emittedSnapshots,
@@ -4519,7 +4528,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchOperations: 0,
         preservedData: store.snapshot?.data === currentData,
       },
-    }))
+    })
   })
 
   it('measures invalidation work across many filtered subscriptions', async () => {
@@ -4579,7 +4588,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount + (subscriptionCount / distinctArgumentCount) * (1 + burstUserIds.length))
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime invalidation',
       metrics: [
         setupMetrics,
@@ -4587,7 +4596,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         matchingMetrics,
         burstMetrics,
       ],
-    }))
+    })
   })
 
   it('measures concurrent same-query subscription fanout with independent initial executions', async () => {
@@ -4637,7 +4646,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(subscriptionCount)
     expect(realtimeRuntimeInternals.getRuntimeState().dependencySubscribers.get(tableDependency())?.size).toBe(subscriptionCount)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime concurrent same-query subscription fanout',
       metrics: {
         emittedSnapshots: counters.emittedSnapshots,
@@ -4646,7 +4655,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('keeps broad table subscriptions eligible for exact predicate invalidations', async () => {
@@ -4754,7 +4763,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime not-equal exact invalidation filtering',
       metrics: {
         contradictedDurationMs,
@@ -4762,7 +4771,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         queryExecutions: counters.queryExecutions,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('does not coalesce request-scoped initial subscriptions', async () => {
@@ -4868,7 +4877,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       handler: async ({ db: context }) => {
         counters.queryExecutions += 1
 
-        return await context.table('posts').where('user_id', 1).orderBy('id').limit(100).get()
+        return await context.table('posts').where('user_id', 1).orderBy('id').limit(pageSize).get()
       },
     })
     const mutation = defineRealtimeMutation({
@@ -4915,7 +4924,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime listener cleanup normal write path',
       metrics: {
         cleanupDurationMs,
@@ -4926,7 +4935,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
       },
-    }))
+    })
   })
 
   it('measures patch delivery across many identical subscriptions without rerunning the query', async () => {
@@ -4948,7 +4957,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       const subscription = await subscribeRealtimeQuery(query, {}, {
         onData: snapshot => {
           counters.emittedSnapshots += 1
-          const row = snapshot.data[499]
+          const row = snapshot.data[middleRowId - 1]
           if (row) {
             observedTitle = String(row.title)
           }
@@ -4960,15 +4969,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
-      ...createPatchUpdateInvalidation(patchedRow, 'Post 500'),
+      ...createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`),
       dependencies: [
-        idRowDependency(500),
+        idRowDependency(middleRowId),
         tableDependency(),
       ],
     })
@@ -4976,17 +4985,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
-    expect(observedTitle).toBe('Updated 500')
-    expect(subscriptions[0]?.current.data[499]?.title).toBe('Updated 500')
-    expect(subscriptions[subscriptionCount - 1]?.current.data[499]?.title).toBe('Updated 500')
+    expect(observedTitle).toBe(`Updated ${middleRowId}`)
+    expect(subscriptions[0]?.current.data[middleRowId - 1]?.title).toBe(`Updated ${middleRowId}`)
+    expect(subscriptions[subscriptionCount - 1]?.current.data[middleRowId - 1]?.title).toBe(`Updated ${middleRowId}`)
 
     const unsubscribeStartedAt = performance.now()
     subscriptions[0]?.unsubscribe()
     const unsubscribeDurationMs = Number((performance.now() - unsubscribeStartedAt).toFixed(3))
 
-    expect(subscriptions[0]?.current.data[499]?.title).toBe('Updated 500')
+    expect(subscriptions[0]?.current.data[middleRowId - 1]?.title).toBe(`Updated ${middleRowId}`)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime snapshot fallback patch delivery',
       metrics: {
         patchDurationMs,
@@ -4997,7 +5006,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         unsubscribeDurationMs,
       },
-    }))
+    })
   })
 
   it('records representative sync execution modes with independent subscriptions', async () => {
@@ -5037,15 +5046,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
 
     const patchedRow = {
-      id: 500,
-      title: 'Representative updated 500',
+      id: middleRowId,
+      title: `Representative updated ${middleRowId}`,
       user_id: 1,
     }
-    patchRows[499] = patchedRow
+    patchRows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
-      ...createPatchUpdateInvalidation(patchedRow, 'Post 500'),
+      ...createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`),
       dependencies: [
-        idRowDependency(500),
+        idRowDependency(middleRowId),
         tableDependency(),
       ],
     })
@@ -5086,14 +5095,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
 
     const projectedPatchedRow = {
-      id: 500,
-      title: 'Representative projected updated 500',
+      id: middleRowId,
+      title: `Representative projected updated ${middleRowId}`,
       user_id: 1,
     }
-    projectedRows[499] = projectedPatchedRow
+    projectedRows[middleRowId - 1] = projectedPatchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPreviousRowValueInvalidation(
       projectedPatchedRow,
-      'Post 500',
+      `Post ${middleRowId}`,
     ))
     expect(projectedCounters.queryExecutions).toBe(representativeSubscriptions)
     expect(projectedCounters.emittedSnapshots).toBe(representativeSubscriptions)
@@ -5132,9 +5141,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
 
     const insertedAggregateRow = {
-      id: 1001,
-      score: 11_001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      score: 10_000 + patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
     aggregateRows.push(insertedAggregateRow)
@@ -5210,12 +5219,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
 
     const fallbackPatchedRow = {
-      id: 500,
-      title: 'Representative fallback updated 500',
+      id: middleRowId,
+      title: `Representative fallback updated ${middleRowId}`,
       user_id: 1,
     }
-    fallbackRows[499] = fallbackPatchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(fallbackPatchedRow, 'Post 500'))
+    fallbackRows[middleRowId - 1] = fallbackPatchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(fallbackPatchedRow, `Post ${middleRowId}`))
     expect(fallbackCounters.queryExecutions).toBe(representativeSubscriptions * 2)
     expect(fallbackCounters.emittedSnapshots).toBe(representativeSubscriptions * 2)
     expect(fallbackPatches).toBe(0)
@@ -5263,10 +5272,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime representative sync execution matrix',
       metrics: matrix,
-    }))
+    })
   })
 
   it('measures grouped exact detail row backfills for batched unknown updates', async () => {
@@ -5289,8 +5298,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         return await context.table(tableName).where('id', id).first()
       },
     })
-    const firstQuery = createDetailQuery(50)
-    const secondQuery = createDetailQuery(150)
+    const firstQuery = createDetailQuery(pageSize / 2)
+    const secondQuery = createDetailQuery(pageSize * 1.5)
     let emittedPatches = 0
     const patchOptions = {
       onData() {
@@ -5313,15 +5322,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const setupQueryCount = adapter.queries.length
     const firstPatchedRow = {
-      ...rows[49]!,
-      title: 'Updated detail 50',
+      ...rows[pageSize / 2 - 1]!,
+      title: `Updated detail ${pageSize / 2}`,
     }
     const secondPatchedRow = {
-      ...rows[149]!,
-      title: 'Updated detail 150',
+      ...rows[pageSize * 1.5 - 1]!,
+      title: `Updated detail ${pageSize * 1.5}`,
     }
-    rows[49] = firstPatchedRow
-    rows[149] = secondPatchedRow
+    rows[pageSize / 2 - 1] = firstPatchedRow
+    rows[pageSize * 1.5 - 1] = secondPatchedRow
 
     const patchStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -5330,28 +5339,28 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }, [
       {
         connectionName,
-        dependencies: [idRowDependency(50)],
+        dependencies: [idRowDependency(pageSize / 2)],
         mutations: [{
           connectionName,
           kind: 'update',
           predicates: [{
             column: 'id',
             operator: '=',
-            value: 50,
+            value: pageSize / 2,
           }],
           tableName,
         }],
       },
       {
         connectionName,
-        dependencies: [idRowDependency(150)],
+        dependencies: [idRowDependency(pageSize * 1.5)],
         mutations: [{
           connectionName,
           kind: 'update',
           predicates: [{
             column: 'id',
             operator: '=',
-            value: 150,
+            value: pageSize * 1.5,
           }],
           tableName,
         }],
@@ -5368,7 +5377,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(groupedRowBackfillQueries).toBe(1)
     expect(singleRowBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped exact detail row backfill',
       metrics: {
         emittedPatches,
@@ -5379,7 +5388,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleRowBackfillQueries,
         subscriptions: subscriptionCount * 2,
       },
-    }))
+    })
   })
 
   it('measures independent safe fallback for unpatchable queries across many subscribers', async () => {
@@ -5432,7 +5441,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const fallbackOptions = {
       onData(snapshot: { readonly data: { readonly rows: readonly BenchmarkPostRow[] } }) {
         counters.emittedSnapshots += 1
-        const row = snapshot.data.rows[499]
+        const row = snapshot.data.rows[middleRowId - 1]
         if (row) {
           observedTitle = row.title
         }
@@ -5450,20 +5459,20 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const fallbackStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`))
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
-    expect(observedTitle).toBe('Updated 500')
+    expect(observedTitle).toBe(`Updated ${middleRowId}`)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime unpatchable shared fallback',
       metrics: {
         emittedPatches,
@@ -5473,7 +5482,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures batched independent fallback for unpatchable queries without per-event reruns', async () => {
@@ -5527,8 +5536,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const fallbackOptions = {
       onData(snapshot: { readonly data: { readonly rows: readonly BenchmarkPostRow[] } }) {
         counters.emittedSnapshots += 1
-        observedFirstTitle = snapshot.data.rows[499]?.title ?? observedFirstTitle
-        observedSecondTitle = snapshot.data.rows[500]?.title ?? observedSecondTitle
+        observedFirstTitle = snapshot.data.rows[middleRowId - 1]?.title ?? observedFirstTitle
+        observedSecondTitle = snapshot.data.rows[middleRowId]?.title ?? observedSecondTitle
       },
       onPatch() {
         emittedPatches += 1
@@ -5543,25 +5552,25 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const fallbackStartedAt = performance.now()
     const firstPatchedRow = {
-      id: 500,
-      score: 10_500,
-      title: 'Updated 500',
+      id: middleRowId,
+      score: 10_000 + middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
     const secondPatchedRow = {
-      id: 501,
-      score: 10_501,
-      title: 'Updated 501',
+      id: middleRowId + 1,
+      score: 10_000 + middleRowId + 1,
+      title: `Updated ${middleRowId + 1}`,
       user_id: 1,
     }
-    rows[499] = firstPatchedRow
-    rows[500] = secondPatchedRow
+    rows[middleRowId - 1] = firstPatchedRow
+    rows[middleRowId] = secondPatchedRow
     await Promise.all([
       realtimeRuntimeInternals.handleBatchedDatabaseInvalidation(
-        createPatchUpdateInvalidation(firstPatchedRow, 'Post 500'),
+        createPatchUpdateInvalidation(firstPatchedRow, `Post ${middleRowId}`),
       ),
       realtimeRuntimeInternals.handleBatchedDatabaseInvalidation(
-        createPatchUpdateInvalidation(secondPatchedRow, 'Post 501'),
+        createPatchUpdateInvalidation(secondPatchedRow, `Post ${middleRowId + 1}`),
       ),
     ])
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
@@ -5569,10 +5578,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
-    expect(observedFirstTitle).toBe('Updated 500')
-    expect(observedSecondTitle).toBe('Updated 501')
+    expect(observedFirstTitle).toBe(`Updated ${middleRowId}`)
+    expect(observedSecondTitle).toBe(`Updated ${middleRowId + 1}`)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime batched unpatchable shared fallback',
       metrics: {
         emittedPatches,
@@ -5582,7 +5591,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model independent safe fallback for unsupported distinct queries across many subscribers', async () => {
@@ -5602,7 +5611,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const fallbackOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        const row = snapshot.data[499]
+        const row = snapshot.data[middleRowId - 1]
         if (row) {
           observedTitle = String(row.title)
         }
@@ -5618,22 +5627,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
 
     const fallbackStartedAt = performance.now()
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`))
     const fallbackDurationMs = Number((performance.now() - fallbackStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(0)
-    expect(observedTitle).toBe('Updated 500')
+    expect(observedTitle).toBe(`Updated ${middleRowId}`)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model unsupported distinct shared fallback',
       metrics: {
         emittedPatches,
@@ -5644,7 +5653,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table having grouped count patch transport without rerunning the query', async () => {
@@ -5699,7 +5708,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 1, total: patchRowCount + 1 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table having grouped count patch transport',
       metrics: {
         emittedPatches,
@@ -5710,7 +5719,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table redundant having grouped count patch transport without rerunning the query', async () => {
@@ -5766,7 +5775,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, total: 1 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table redundant having grouped count patch transport',
       metrics: {
         emittedPatches,
@@ -5777,7 +5786,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table grouped count patch transport without rerunning the query', async () => {
@@ -5833,7 +5842,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, total: 1 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table grouped count patch transport',
       metrics: {
         emittedPatches,
@@ -5844,7 +5853,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table grouped sum patch transport without rerunning the query', async () => {
@@ -5904,7 +5913,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, score_total: 11 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table grouped sum patch transport',
       metrics: {
         emittedPatches,
@@ -5915,7 +5924,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table having grouped sum patch transport without rerunning or backfilling', async () => {
@@ -5991,7 +6000,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, score_total: 24 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table having grouped sum patch transport without backfill',
       metrics: {
         aggregateBackfillQueries,
@@ -6003,7 +6012,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table having grouped average patch transport without rerunning or backfilling', async () => {
@@ -6079,7 +6088,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, average_score: 8.5 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table having grouped average patch transport without backfill',
       metrics: {
         aggregateBackfillQueries,
@@ -6091,7 +6100,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures observed table having grouped average patch transport without aggregate backfill', async () => {
@@ -6130,7 +6139,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const queryCountAfterSetup = adapter.queries.length
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow || typeof previousRow.score !== 'number') {
       throw new Error('Expected benchmark patch row to exist.')
     }
@@ -6141,7 +6150,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       score: previousScore + 100,
     }
     const patchStartedAt = performance.now()
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchScoreUpdateInvalidation(patchedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const expectedInitialAverage = createAggregatePatchBenchmarkRows()
@@ -6161,7 +6170,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 1, average_score: expectedPatchedAverage },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime observed table having grouped average patch transport',
       metrics: {
         aggregateBackfillQueries,
@@ -6173,7 +6182,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table having grouped min and max patch transport without rerunning or backfilling', async () => {
@@ -6253,12 +6262,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount * 2)
     expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
     expect(emittedPatches).toBe(subscriptionCount * 2)
-    expect(observedMax).toBe(11_000)
+    expect(observedMax).toBe(10_000 + patchRowCount)
     expect(observedMin).toBe(10_001)
     expect(maxBackfillQueries).toBe(0)
     expect(minBackfillQueries).toBe(0)
     expect(maxSubscriptions[0]?.current.data).toEqual([
-      { user_id: 1, best_score: 11_000 },
+      { user_id: 1, best_score: 10_000 + patchRowCount },
       { user_id: 2, best_score: 11 },
     ])
     expect(minSubscriptions[0]?.current.data).toEqual([
@@ -6266,7 +6275,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       { user_id: 2, lowest_score: 6 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table having grouped min and max patch transport without backfill',
       metrics: {
         emittedPatches,
@@ -6279,7 +6288,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount * 2,
       },
-    }))
+    })
   })
 
   it('measures table having grouped max runner-up patch transport without rerunning or backfilling', async () => {
@@ -6335,13 +6344,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedMax).toBe(11_000)
+    expect(observedMax).toBe(10_000 + patchRowCount)
     expect(maxBackfillQueries).toBe(0)
     expect(subscriptions[0]?.current.data).toEqual([
-      { user_id: 1, best_score: 10_999 },
+      { user_id: 1, best_score: 10_000 + patchRowCount - 1 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table having grouped max runner-up patch transport without backfill',
       metrics: {
         emittedPatches,
@@ -6353,7 +6362,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table grouped max patch transport without rerunning the query', async () => {
@@ -6386,26 +6395,26 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       subscriptions[index] = await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[499]!
+    const previousRow = rows[middleRowId - 1]!
     const patchedRow = {
       ...previousRow,
       score: 20_000,
     }
 
     const patchStartedAt = performance.now()
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchScoreUpdateInvalidation(patchedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedBestScore).toBe(11_000)
+    expect(observedBestScore).toBe(10_000 + patchRowCount)
     expect(subscriptions[0]?.current.data).toEqual([
       { user_id: 1, best_score: 20_000 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table grouped max patch transport',
       metrics: {
         emittedPatches,
@@ -6416,7 +6425,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table grouped max backfill transport without rerunning the query', async () => {
@@ -6468,12 +6477,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(subscriptionCount)
     expect(groupedBackfillQueries).toBe(1)
     expect(groupedValueCountQueries).toBe(1)
-    expect(observedBestScore).toBe(11_000)
+    expect(observedBestScore).toBe(10_000 + patchRowCount)
     expect(subscriptions[0]?.current.data).toEqual([
-      { user_id: 1, best_score: 10_999 },
+      { user_id: 1, best_score: 10_000 + patchRowCount - 1 },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table grouped max backfill transport',
       metrics: {
         emittedPatches,
@@ -6486,7 +6495,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact patch transport across many identical subscriptions', async () => {
@@ -6519,12 +6528,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -6532,12 +6541,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Updated ${middleRowId}`,
     }])
     expect(observedPatch?.dependencies).toBeUndefined()
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact patch transport',
       metrics: {
         emittedPatches,
@@ -6549,7 +6558,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact merge patch transport for wide row updates across many identical subscriptions', async () => {
@@ -6580,7 +6589,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark wide patch row to exist.')
     }
@@ -6598,7 +6607,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       field_8: 'updated-field-8',
       field_9: 'updated-field-9',
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createWidePatchUpdateInvalidation(
       patchedRow,
       previousRow,
@@ -6611,7 +6620,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'merge',
-        path: [499],
+        path: [middleRowId - 1],
         fields: {
           field_1: 'updated-field-1',
           field_2: 'updated-field-2',
@@ -6626,7 +6635,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact merge patch transport',
       metrics: {
         emittedPatches,
@@ -6638,7 +6647,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         updatedFields: 9,
       },
-    }))
+    })
   })
 
   it('measures bounded row backfill for unknown updates without rerunning the query', async () => {
@@ -6685,11 +6694,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -6699,11 +6708,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(adapter.queries).toHaveLength(subscriptionCount + 1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime bounded row backfill for unknown update',
       metrics: {
         backfillQueries: adapter.queries.length - subscriptionCount,
@@ -6715,7 +6724,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures selected bounded row backfill for unknown updates without leaking unselected fields', async () => {
@@ -6750,7 +6759,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[499]?.user_id
+        observedInitialUserId = snapshot.data[middleRowId - 1]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -6765,11 +6774,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -6780,11 +6789,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBeUndefined()
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime selected bounded row backfill for unknown update',
       metrics: {
         backfillQueries: adapter.queries.length - subscriptionCount,
@@ -6797,7 +6806,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures selected row patch transport across many identical subscriptions without leaking unselected fields', async () => {
@@ -6817,7 +6826,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[499]?.user_id
+        observedInitialUserId = snapshot.data[middleRowId - 1]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -6833,12 +6842,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -6847,11 +6856,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBeUndefined()
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime selected patch transport',
       metrics: {
         emittedPatches,
@@ -6863,7 +6872,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures selected row partial-row patch transport without rerunning the query', async () => {
@@ -6883,7 +6892,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[499]?.user_id
+        observedInitialUserId = snapshot.data[middleRowId - 1]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -6899,12 +6908,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Partial selected updated 500',
+      id: middleRowId,
+      title: `Partial selected updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPartialRowValueInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPartialRowValueInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -6913,11 +6922,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBeUndefined()
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Partial selected updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Partial selected updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime selected partial-row patch transport',
       metrics: {
         emittedPatches,
@@ -6929,7 +6938,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures selected previous-row value patch transport without returned rows or rerunning the query', async () => {
@@ -6949,7 +6958,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[499]?.user_id
+        observedInitialUserId = snapshot.data[middleRowId - 1]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -6965,14 +6974,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Previous-row selected updated 500',
+      id: middleRowId,
+      title: `Previous-row selected updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPreviousRowValueInvalidation(
       patchedRow,
-      'Post 500',
+      `Post ${middleRowId}`,
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -6982,11 +6991,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBeUndefined()
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'title'],
-      value: 'Previous-row selected updated 500',
+      path: [middleRowId - 1, 'title'],
+      value: `Previous-row selected updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime selected previous-row value patch transport',
       metrics: {
         emittedPatches,
@@ -6998,7 +7007,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures predicate-only existing row patch transport without returned rows or rerunning the query', async () => {
@@ -7018,7 +7027,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[499]?.user_id
+        observedInitialUserId = snapshot.data[middleRowId - 1]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -7032,7 +7041,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark predicate-only row to exist.')
     }
@@ -7042,7 +7051,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...previousRow,
       user_id: 2,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchPredicateOnlyUserUpdateInvalidation(
       patchedRow,
       previousRow.user_id,
@@ -7055,11 +7064,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'user_id'],
+      path: [middleRowId - 1, 'user_id'],
       value: 2,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime predicate-only existing row patch transport',
       metrics: {
         emittedPatches,
@@ -7070,7 +7079,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures exact selected record patch transport without selected identity or reruns', async () => {
@@ -7088,11 +7097,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       access: 'public',
       handler: async () => {
         counters.queryExecutions += 1
-        const row = rows[499]
+        const row = rows[middleRowId - 1]
         const result = row ? { title: row.title } : undefined
         const dependencies = [
           tableDependency(),
-          idRowDependency(500),
+          idRowDependency(middleRowId),
         ]
         recordDatabaseQueryDependencies(dependencies)
         recordDatabaseQueryObservation({
@@ -7104,7 +7113,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           predicates: [{
             column: 'id',
             operator: '=',
-            value: 500,
+            value: middleRowId,
           }],
           result,
           selections: [{
@@ -7140,16 +7149,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
+    rows[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
-      ...createPatchUpdateInvalidation(patchedRow, 'Post 500'),
+      ...createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`),
       dependencies: [
         tableDependency(),
-        idRowDependency(500),
+        idRowDependency(middleRowId),
       ],
     })
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
@@ -7162,10 +7171,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
       path: ['title'],
-      value: 'Updated 500',
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime exact selected record patch transport',
       metrics: {
         emittedPatches,
@@ -7176,7 +7185,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures exact selected record delete and insert patch transport without selected identity or reruns', async () => {
@@ -7301,7 +7310,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime exact selected record delete insert patch transport',
       metrics: {
         emittedPatches,
@@ -7313,7 +7322,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact multi-row patch transport across many identical subscriptions', async () => {
@@ -7348,21 +7357,21 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchStartedAt = performance.now()
     const patchedRows = [
       {
-        id: 499,
+        id: middleRowId - 1,
         title: 'Updated',
         user_id: 1,
       },
       {
-        id: 500,
+        id: middleRowId,
         title: 'Updated',
         user_id: 1,
       },
     ]
-    rows[498] = patchedRows[0]!
-    rows[499] = patchedRows[1]!
+    rows[middleRowId - 2] = patchedRows[0]!
+    rows[middleRowId - 1] = patchedRows[1]!
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMultiUpdateInvalidation(
       patchedRows,
-      ['Post 499', 'Post 500'],
+      [`Post ${middleRowId - 1}`, `Post ${middleRowId}`],
     ))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -7372,17 +7381,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: [498, 'title'],
+        path: [middleRowId - 2, 'title'],
         value: 'Updated',
       },
       {
         op: 'replace',
-        path: [499, 'title'],
+        path: [middleRowId - 1, 'title'],
         value: 'Updated',
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact multi-row patch transport',
       metrics: {
         emittedPatches,
@@ -7394,7 +7403,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         updatedRows: patchedRows.length,
       },
-    }))
+    })
   })
 
   it('measures offset window patch transport without backfilling unchanged membership', async () => {
@@ -7428,12 +7437,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 151,
-      title: 'Updated 151',
+      id: pageSize * 1.5 + 1,
+      title: `Updated ${pageSize * 1.5 + 1}`,
       user_id: 1,
     }
-    rows[150] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 151'))
+    rows[pageSize * 1.5] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize * 1.5 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -7441,23 +7450,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [50, 'title'],
-      value: 'Updated 151',
+      path: [pageSize / 2, 'title'],
+      value: `Updated ${pageSize * 1.5 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime offset window patch transport',
       metrics: {
         emittedPatches,
-        offset: 100,
+        offset: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
-        windowRows: 100,
+        windowRows: pageSize,
       },
-    }))
+    })
   })
 
   it('measures observed selected offset-window patch transport without rerunning the query', async () => {
@@ -7482,8 +7491,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           .select('id', 'title')
           .where('user_id', 1)
           .orderBy('id')
-          .offset(100)
-          .limit(100)
+          .offset(pageSize)
+          .limit(pageSize)
           .get()
       },
     })
@@ -7493,7 +7502,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchOptions = {
       onData(snapshot: { readonly data: readonly Readonly<Record<string, unknown>>[] }) {
         counters.emittedSnapshots += 1
-        observedInitialUserId = snapshot.data[50]?.user_id
+        observedInitialUserId = snapshot.data[pageSize / 2]?.user_id
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -7510,12 +7519,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 151,
-      title: 'Updated 151',
+      id: pageSize * 1.5 + 1,
+      title: `Updated ${pageSize * 1.5 + 1}`,
       user_id: 1,
     }
-    rows[150] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 151'))
+    rows[pageSize * 1.5] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize * 1.5 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(entry?.queries[0]?.patchable).toBe(true)
@@ -7526,23 +7535,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialUserId).toBeUndefined()
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [50, 'title'],
-      value: 'Updated 151',
+      path: [pageSize / 2, 'title'],
+      value: `Updated ${pageSize * 1.5 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime observed selected offset-window patch transport',
       metrics: {
         emittedPatches,
-        offset: 100,
+        offset: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
-        windowRows: 100,
+        windowRows: pageSize,
       },
-    }))
+    })
   })
 
   it('measures paginated wrapper data patch transport without rerunning the query', async () => {
@@ -7578,12 +7587,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
+    rows[pageSize / 2] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize / 2 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -7592,15 +7601,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated wrapper patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -7608,7 +7617,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures paginated wrapper bounded backfill for unknown updates without rerunning the query', async () => {
@@ -7631,7 +7640,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         return await context
           .table(tableName)
           .orderBy('id')
-          .paginate(100, 1)
+          .paginate(pageSize, 1)
       },
     })
     let emittedPatches = 0
@@ -7655,11 +7664,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
+    rows[pageSize / 2] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -7669,23 +7678,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(adapter.queries).toHaveLength(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated wrapper bounded backfill for unknown update',
       metrics: {
         backfillQueries: adapter.queries.length,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures filtered paginated count backfill for unknown updates without rerunning the query', async () => {
@@ -7709,7 +7718,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           .table(tableName)
           .where('user_id', 1)
           .orderBy('id')
-          .paginate(100, 1)
+          .paginate(pageSize, 1)
       },
     })
     let emittedPatches = 0
@@ -7733,11 +7742,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
+    rows[pageSize / 2] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const countBackfillQueries = adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"')).length
@@ -7749,16 +7758,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(countBackfillQueries).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime filtered paginated count backfill for unknown update',
       metrics: {
         countBackfillQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -7766,7 +7775,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures pagination metadata predicate-only patch transport without count backfill or rerun', async () => {
@@ -7819,11 +7828,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       path: ['meta'],
       fields: {
         total: patchRowCount + 1,
-        lastPage: 11,
+        lastPage: Math.ceil((patchRowCount + 1) / pageSize),
       },
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime pagination metadata predicate-only patch transport',
       metrics: {
         emittedPatches,
@@ -7834,7 +7843,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures grouped exact filtered paginated count backfills for batched unknown updates', async () => {
@@ -7865,7 +7874,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           .table(tableName)
           .where('user_id', userId)
           .orderBy('id')
-          .paginate(100, 1)
+          .paginate(pageSize, 1)
       },
     })
     const firstQuery = createFilteredQuery(1)
@@ -7892,15 +7901,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const setupQueryCount = adapter.queries.length
     const firstPatchedRow = {
-      ...rows[50]!,
-      title: 'Updated user 1 row 51',
+      ...rows[pageSize / 2]!,
+      title: `Updated user 1 row ${pageSize / 2 + 1}`,
     }
     const secondPatchedRow = {
-      ...rows[patchRowCount + 50]!,
-      title: 'Updated user 2 row 51',
+      ...rows[patchRowCount + pageSize / 2]!,
+      title: `Updated user 2 row ${pageSize / 2 + 1}`,
     }
-    rows[50] = firstPatchedRow
-    rows[patchRowCount + 50] = secondPatchedRow
+    rows[pageSize / 2] = firstPatchedRow
+    rows[patchRowCount + pageSize / 2] = secondPatchedRow
 
     const patchStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -7923,13 +7932,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(groupedCountBackfillQueries).toBe(1)
     expect(singleCountBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped exact filtered paginated count backfill',
       metrics: {
         emittedPatches,
         groupedCountBackfillQueries,
         groupedWindowBackfillQueries,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         rowBackfillQueries: patchQueries.length - groupedCountBackfillQueries - groupedWindowBackfillQueries,
@@ -7937,7 +7946,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleCountBackfillQueries,
         subscriptions: subscriptionCount * 2,
       },
-    }))
+    })
   })
 
   it('measures filtered simple-paginated count backfill for unknown updates without rerunning the query', async () => {
@@ -7961,7 +7970,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           .table(tableName)
           .where('user_id', 1)
           .orderBy('id')
-          .simplePaginate(100, 1)
+          .simplePaginate(pageSize, 1)
       },
     })
     let emittedPatches = 0
@@ -7984,11 +7993,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
+    rows[pageSize / 2] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const countBackfillQueries = adapter.queries.filter(query => query.sql.startsWith('SELECT COUNT(*) AS "__holo_count"')).length
@@ -8000,16 +8009,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(countBackfillQueries).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime filtered simple-paginated count backfill for unknown update',
       metrics: {
         countBackfillQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -8017,7 +8026,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures paginated wrapper insert patch transport without rerunning the query', async () => {
@@ -8073,7 +8082,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -8081,24 +8090,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          total: 1001,
-          lastPage: 11,
+          total: patchRowCount + 1,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated wrapper insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures paginated wrapper delete patch transport without rerunning the query', async () => {
@@ -8135,7 +8144,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark paginated delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark paginated backfill row to exist.')
     }
@@ -8158,29 +8167,29 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated wrapper delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures paginated offset-window delete patch transport without rerunning the query', async () => {
@@ -8217,7 +8226,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark paginated offset delete row to exist.')
     }
-    const backfilledRow = rows[199]
+    const backfilledRow = rows[pageSize * 2 - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark paginated offset backfill row to exist.')
     }
@@ -8240,29 +8249,29 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated offset-window delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures paginated offset-window insert patch transport without rerunning the query', async () => {
@@ -8300,7 +8309,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       title: 'Inserted first',
       user_id: 1,
     }
-    const shiftedRow = rows[99]
+    const shiftedRow = rows[pageSize - 1]
     if (!shiftedRow) {
       throw new Error('Expected benchmark paginated offset shifted row to exist.')
     }
@@ -8324,7 +8333,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -8332,24 +8341,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          total: 1001,
-          lastPage: 11,
+          total: patchRowCount + 1,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime paginated offset-window insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures cursor-paginated wrapper insert patch transport without rerunning the query', async () => {
@@ -8396,7 +8405,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'splice',
@@ -8408,29 +8417,29 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([99]),
+        value: encodeBenchmarkCursor([pageSize - 1]),
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime cursor-paginated wrapper insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures cursor metadata predicate-only update patch transport without rerunning the query', async () => {
@@ -8447,7 +8456,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     let emittedPatches = 0
     let observedInitialCursor: string | null = null
     let observedPatch: BenchmarkPatch | undefined
-    const expectedCursor = encodeBenchmarkCursor([99])
+    const expectedCursor = encodeBenchmarkCursor([pageSize - 1])
     const patchOptions = {
       onData(snapshot: { readonly data: string | null }) {
         counters.emittedSnapshots += 1
@@ -8480,14 +8489,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
       path: [],
       value: expectedCursor,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime cursor metadata predicate-only patch transport',
       metrics: {
         emittedPatches,
@@ -8497,7 +8506,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures cursor-paginated wrapper delete patch transport without rerunning the query', async () => {
@@ -8535,7 +8544,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark cursor delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark cursor lookahead row to exist.')
     }
@@ -8547,7 +8556,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'splice',
@@ -8559,29 +8568,29 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([101]),
+        value: encodeBenchmarkCursor([pageSize + 1]),
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime cursor-paginated wrapper delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model cursor-paginated JSON insert patch transport without rerunning the query', async () => {
@@ -8630,12 +8639,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([99]),
+        value: encodeBenchmarkCursor([pageSize - 1]),
       },
       {
         op: 'splice',
@@ -8647,24 +8656,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated JSON insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model cursor-paginated JSON delete patch transport without rerunning the query', async () => {
@@ -8703,7 +8712,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model cursor-paginated JSON delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model cursor-paginated JSON backfill row to exist.')
     }
@@ -8715,12 +8724,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([101]),
+        value: encodeBenchmarkCursor([pageSize + 1]),
       },
       {
         op: 'splice',
@@ -8732,24 +8741,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated JSON delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model cursor-paginated entity insert patch transport without rerunning the query', async () => {
@@ -8798,12 +8807,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([99]),
+        value: encodeBenchmarkCursor([pageSize - 1]),
       },
       {
         op: 'splice',
@@ -8815,24 +8824,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated entity insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model cursor-paginated entity delete patch transport without rerunning the query', async () => {
@@ -8871,7 +8880,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model cursor-paginated entity delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model cursor-paginated entity backfill row to exist.')
     }
@@ -8883,12 +8892,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([101]),
+        value: encodeBenchmarkCursor([pageSize + 1]),
       },
       {
         op: 'splice',
@@ -8900,24 +8909,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated entity delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model paginated JSON patch transport without rerunning the query', async () => {
@@ -8954,12 +8963,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
+    rows[pageSize / 2] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize / 2 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -8968,15 +8977,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated JSON patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -8984,7 +8993,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures returning model paginated JSON patch transport without metadata refresh', async () => {
@@ -9022,16 +9031,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupQueryCount = adapter.queries.length
 
     const patchStartedAt = performance.now()
-    const previousRow = rows[50]
+    const previousRow = rows[pageSize / 2]
     if (!previousRow) {
       throw new Error('Expected benchmark returning paginated row to exist.')
     }
 
     const patchedRow = {
       ...previousRow,
-      title: 'Updated 51',
+      title: `Updated ${pageSize / 2 + 1}`,
     }
-    rows[50] = patchedRow
+    rows[pageSize / 2] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchTitleOnlyReturningUpdateInvalidation(patchedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const patchQueryCount = adapter.queries.length - setupQueryCount
@@ -9043,15 +9052,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patchQueryCount).toBe(0)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime returning model paginated JSON patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         patchQueryCount,
@@ -9060,7 +9069,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated JSON insert patch transport without rerunning the query', async () => {
@@ -9120,7 +9129,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -9128,17 +9137,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          total: 1001,
-          lastPage: 11,
+          total: patchRowCount + 1,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated JSON insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9146,7 +9155,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated JSON delete patch transport without rerunning the query', async () => {
@@ -9185,7 +9194,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model paginated JSON delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model paginated JSON backfill row to exist.')
     }
@@ -9209,22 +9218,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated JSON delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9232,7 +9241,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated JSON offset-window delete patch transport without rerunning the query', async () => {
@@ -9271,7 +9280,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model paginated JSON offset delete row to exist.')
     }
-    const backfilledRow = rows[199]
+    const backfilledRow = rows[pageSize * 2 - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model paginated JSON offset backfill row to exist.')
     }
@@ -9295,22 +9304,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated JSON offset-window delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9318,7 +9327,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated JSON offset-window insert patch transport without rerunning the query', async () => {
@@ -9358,7 +9367,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       title: 'Inserted first',
       user_id: 1,
     }
-    const shiftedRow = rows[99]
+    const shiftedRow = rows[pageSize - 1]
     if (!shiftedRow) {
       throw new Error('Expected benchmark model paginated JSON offset shifted row to exist.')
     }
@@ -9383,7 +9392,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -9391,17 +9400,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          total: 1001,
-          lastPage: 11,
+          total: patchRowCount + 1,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated JSON offset-window insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9409,7 +9418,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated JSON insert patch transport without rerunning the query', async () => {
@@ -9469,24 +9478,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated JSON insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated JSON delete patch transport without rerunning the query', async () => {
@@ -9525,7 +9534,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model simple-paginated JSON delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model simple-paginated JSON backfill row to exist.')
     }
@@ -9549,24 +9558,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated JSON delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated JSON offset-window delete patch transport without rerunning the query', async () => {
@@ -9605,7 +9614,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model simple-paginated JSON offset delete row to exist.')
     }
-    const backfilledRow = rows[199]
+    const backfilledRow = rows[pageSize * 2 - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model simple-paginated JSON offset backfill row to exist.')
     }
@@ -9629,24 +9638,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated JSON offset-window delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated JSON offset-window insert patch transport without rerunning the query', async () => {
@@ -9686,7 +9695,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       title: 'Inserted first',
       user_id: 1,
     }
-    const shiftedRow = rows[99]
+    const shiftedRow = rows[pageSize - 1]
     if (!shiftedRow) {
       throw new Error('Expected benchmark model simple-paginated JSON offset shifted row to exist.')
     }
@@ -9711,24 +9720,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated JSON offset-window insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model paginated entity patch transport without rerunning the query', async () => {
@@ -9765,12 +9774,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 51,
-      title: 'Updated 51',
+      id: pageSize / 2 + 1,
+      title: `Updated ${pageSize / 2 + 1}`,
       user_id: 1,
     }
-    rows[50] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 51'))
+    rows[pageSize / 2] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${pageSize / 2 + 1}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -9779,15 +9788,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: ['data', 50, 'title'],
-      value: 'Updated 51',
+      path: ['data', pageSize / 2, 'title'],
+      value: `Updated ${pageSize / 2 + 1}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated entity patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9795,7 +9804,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model where-in insert patch transport without rerunning the query', async () => {
@@ -9828,8 +9837,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      id: 1001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 2,
     }
 
@@ -9844,12 +9853,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
       path: [],
-      index: 1000,
+      index: patchRowCount,
       deleteCount: 0,
       values: [insertedRow],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model where-in insert patch transport',
       metrics: {
         emittedPatches,
@@ -9859,7 +9868,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model where-in unrelated insert filtering without rerunning the query', async () => {
@@ -9890,8 +9899,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      id: 1001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 3,
     }
 
@@ -9904,7 +9913,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model where-in unrelated insert filtering',
       metrics: {
         emittedPatches,
@@ -9913,7 +9922,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model paginated entity delete patch transport without rerunning the query', async () => {
@@ -9952,7 +9961,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model paginated delete row to exist.')
     }
-    const backfilledRow = rows[99]
+    const backfilledRow = rows[pageSize - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model paginated backfill row to exist.')
     }
@@ -9976,22 +9985,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated entity delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -9999,7 +10008,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated offset-window entity delete patch transport without rerunning the query', async () => {
@@ -10038,7 +10047,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model paginated offset delete row to exist.')
     }
-    const backfilledRow = rows[199]
+    const backfilledRow = rows[pageSize * 2 - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model paginated offset backfill row to exist.')
     }
@@ -10062,22 +10071,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
       {
         op: 'replace',
         path: ['meta', 'total'],
-        value: 999,
+        value: patchRowCount - 1,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated offset-window entity delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -10085,7 +10094,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated offset-window entity insert patch transport without rerunning the query', async () => {
@@ -10125,7 +10134,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       title: 'Inserted first',
       user_id: 1,
     }
-    const shiftedRow = rows[99]
+    const shiftedRow = rows[pageSize - 1]
     if (!shiftedRow) {
       throw new Error('Expected benchmark model paginated offset shifted row to exist.')
     }
@@ -10150,7 +10159,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -10158,17 +10167,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          total: 1001,
-          lastPage: 11,
+          total: patchRowCount + 1,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated offset-window entity insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -10176,7 +10185,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated offset-window entity delete patch transport without rerunning the query', async () => {
@@ -10215,7 +10224,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     if (!deletedRow) {
       throw new Error('Expected benchmark model simple-paginated offset delete row to exist.')
     }
-    const backfilledRow = rows[199]
+    const backfilledRow = rows[pageSize * 2 - 1]
     if (!backfilledRow) {
       throw new Error('Expected benchmark model simple-paginated offset backfill row to exist.')
     }
@@ -10239,24 +10248,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [backfilledRow],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated offset-window entity delete patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model simple-paginated offset-window entity insert patch transport without rerunning the query', async () => {
@@ -10296,7 +10305,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       title: 'Inserted first',
       user_id: 1,
     }
-    const shiftedRow = rows[99]
+    const shiftedRow = rows[pageSize - 1]
     if (!shiftedRow) {
       throw new Error('Expected benchmark model simple-paginated offset shifted row to exist.')
     }
@@ -10321,24 +10330,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated offset-window entity insert patch transport',
       metrics: {
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table sole record patch transport without rerunning the query', async () => {
@@ -10393,7 +10402,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table sole record patch transport',
       metrics: {
         emittedPatches,
@@ -10403,7 +10412,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table first record patch transport without rerunning the query', async () => {
@@ -10458,7 +10467,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table first record patch transport',
       metrics: {
         emittedPatches,
@@ -10468,7 +10477,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table first record partial-row patch transport without rerunning the query', async () => {
@@ -10523,7 +10532,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Partial first updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table first record partial-row patch transport',
       metrics: {
         emittedPatches,
@@ -10533,7 +10542,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures constrained table first record predicate move patch transport without rerunning the query', async () => {
@@ -10596,7 +10605,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       valueKind: 'undefined',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained table first predicate move patch transport',
       metrics: {
         emittedPatches,
@@ -10606,7 +10615,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table scalar value patch transport without rerunning the query', async () => {
@@ -10661,7 +10670,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table scalar value patch transport',
       metrics: {
         emittedPatches,
@@ -10671,7 +10680,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table scalar value patch transport from partial mutation rows without rerunning the query', async () => {
@@ -10726,7 +10735,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Partial row updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table scalar value partial-row patch transport',
       metrics: {
         emittedPatches,
@@ -10736,7 +10745,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table scalar value irrelevant update silence without rerunning the query', async () => {
@@ -10782,7 +10791,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table scalar value irrelevant update silence',
       metrics: {
         emittedPatches,
@@ -10791,7 +10800,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures constrained table scalar value predicate move patch transport without rerunning the query', async () => {
@@ -10854,7 +10863,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       valueKind: 'undefined',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained table scalar predicate move patch transport',
       metrics: {
         emittedPatches,
@@ -10864,7 +10873,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures constrained table scalar predicate-only move patch transport without rerunning the query', async () => {
@@ -10926,7 +10935,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       valueKind: 'undefined',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained table scalar predicate-only move patch transport',
       metrics: {
         emittedPatches,
@@ -10936,7 +10945,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table scalar value delete patch transport without rerunning the query', async () => {
@@ -10990,7 +10999,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       valueKind: 'undefined',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table scalar value delete patch transport',
       metrics: {
         emittedPatches,
@@ -11000,7 +11009,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model scalar value patch transport without rerunning the query', async () => {
@@ -11055,7 +11064,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model scalar value patch transport',
       metrics: {
         emittedPatches,
@@ -11065,7 +11074,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table pluck scalar-list patch transport without rerunning the query', async () => {
@@ -11102,25 +11111,25 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTitles[499]).toBe('Post 500')
+    expect(observedInitialTitles[middleRowId - 1]).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499],
-      value: 'Updated 500',
+      path: [middleRowId - 1],
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table pluck scalar-list patch transport',
       metrics: {
         emittedPatches,
@@ -11130,7 +11139,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table pluck scalar-list irrelevant update silence without rerunning the query', async () => {
@@ -11162,7 +11171,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
     const patchStartedAt = performance.now()
-    const row = rows[499]
+    const row = rows[middleRowId - 1]
     if (!row) {
       throw new Error('Expected benchmark pluck row to exist.')
     }
@@ -11173,7 +11182,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table pluck scalar-list irrelevant update silence',
       metrics: {
         emittedPatches,
@@ -11182,7 +11191,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table pluck scalar-list splice transport without rerunning the query', async () => {
@@ -11216,8 +11225,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
     const insertedRow = {
-      id: 1001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
     const patchStartedAt = performance.now()
@@ -11230,13 +11239,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
       deleteCount: 0,
-      index: 1000,
+      index: patchRowCount,
       op: 'splice',
       path: [],
-      values: ['Post 1001'],
+      values: [`Post ${patchRowCount + 1}`],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table pluck scalar-list splice transport',
       metrics: {
         emittedPatches,
@@ -11246,7 +11255,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model pluck scalar-list patch transport without rerunning the query', async () => {
@@ -11283,25 +11292,25 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateIdInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTitles[499]).toBe('Post 500')
+    expect(observedInitialTitles[middleRowId - 1]).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499],
-      value: 'Updated 500',
+      path: [middleRowId - 1],
+      value: `Updated ${middleRowId}`,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model pluck scalar-list patch transport',
       metrics: {
         emittedPatches,
@@ -11311,7 +11320,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model pluck scalar-list irrelevant update silence without rerunning the query', async () => {
@@ -11343,7 +11352,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
     const patchStartedAt = performance.now()
-    const row = rows[499]
+    const row = rows[middleRowId - 1]
     if (!row) {
       throw new Error('Expected benchmark model pluck row to exist.')
     }
@@ -11354,7 +11363,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model pluck scalar-list irrelevant update silence',
       metrics: {
         emittedPatches,
@@ -11363,7 +11372,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model pluck scalar-list splice transport without rerunning the query', async () => {
@@ -11397,8 +11406,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
     const insertedRow = {
-      id: 1001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
     const patchStartedAt = performance.now()
@@ -11411,13 +11420,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
       deleteCount: 0,
-      index: 1000,
+      index: patchRowCount,
       op: 'splice',
       path: [],
-      values: ['Post 1001'],
+      values: [`Post ${patchRowCount + 1}`],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model pluck scalar-list splice transport',
       metrics: {
         emittedPatches,
@@ -11427,7 +11436,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table exists patch transport without rerunning the query', async () => {
@@ -11482,7 +11491,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: true,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table exists patch transport',
       metrics: {
         emittedPatches,
@@ -11492,7 +11501,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table exists metadata updates without redundant patch fanout', async () => {
@@ -11556,7 +11565,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: false,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table exists metadata update silence',
       metrics: {
         emittedPatches,
@@ -11566,7 +11575,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table doesntExist patch transport without rerunning the query', async () => {
@@ -11621,7 +11630,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: false,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table doesntExist patch transport',
       metrics: {
         emittedPatches,
@@ -11631,7 +11640,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures table doesntExist metadata updates without redundant patch fanout', async () => {
@@ -11695,7 +11704,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: true,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime table doesntExist metadata update silence',
       metrics: {
         emittedPatches,
@@ -11705,7 +11714,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model exists patch transport without rerunning the query', async () => {
@@ -11760,7 +11769,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: true,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model exists patch transport',
       metrics: {
         emittedPatches,
@@ -11770,7 +11779,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model exists metadata updates without redundant patch fanout', async () => {
@@ -11834,7 +11843,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: false,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model exists metadata update silence',
       metrics: {
         emittedPatches,
@@ -11844,7 +11853,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model doesntExist patch transport without rerunning the query', async () => {
@@ -11899,7 +11908,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: false,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model doesntExist patch transport',
       metrics: {
         emittedPatches,
@@ -11909,7 +11918,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model doesntExist metadata updates without redundant patch fanout', async () => {
@@ -11973,7 +11982,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: true,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model doesntExist metadata update silence',
       metrics: {
         emittedPatches,
@@ -11983,7 +11992,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model first record patch transport without rerunning the query', async () => {
@@ -12038,7 +12047,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model first record patch transport',
       metrics: {
         emittedPatches,
@@ -12048,7 +12057,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model firstJson record patch transport without rerunning the query', async () => {
@@ -12103,7 +12112,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model firstJson record patch transport',
       metrics: {
         emittedPatches,
@@ -12113,7 +12122,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model sole record patch transport without rerunning the query', async () => {
@@ -12168,7 +12177,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model sole record patch transport',
       metrics: {
         emittedPatches,
@@ -12178,7 +12187,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model soleJson record patch transport without rerunning the query', async () => {
@@ -12233,7 +12242,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       value: 'Updated 1',
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model soleJson record patch transport',
       metrics: {
         emittedPatches,
@@ -12243,7 +12252,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact splice transport for ordered list churn across many identical subscriptions', async () => {
@@ -12275,13 +12284,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    const deletedRow = rows[499]
+    const deletedRow = rows[middleRowId - 1]
     if (!deletedRow) {
       throw new Error('Expected benchmark delete row to exist.')
     }
 
     const deleteStartedAt = performance.now()
-    rows.splice(499, 1)
+    rows.splice(middleRowId - 1, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
     const deletePatchDurationMs = Number((performance.now() - deleteStartedAt).toFixed(3))
 
@@ -12291,13 +12300,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patches[0]?.operations).toEqual([{
       op: 'splice',
       path: [],
-      index: 499,
+      index: middleRowId - 1,
       deleteCount: 1,
       values: [],
     }])
 
     const insertStartedAt = performance.now()
-    rows.splice(499, 0, deletedRow)
+    rows.splice(middleRowId - 1, 0, deletedRow)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchInsertInvalidation(deletedRow))
     const insertPatchDurationMs = Number((performance.now() - insertStartedAt).toFixed(3))
 
@@ -12307,16 +12316,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patches[subscriptionCount]?.operations).toEqual([{
       op: 'splice',
       path: [],
-      index: 499,
+      index: middleRowId - 1,
       deleteCount: 0,
       values: [{
-        id: 500,
-        title: 'Post 500',
+        id: middleRowId,
+        title: `Post ${middleRowId}`,
         user_id: 1,
       }],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact splice transport',
       metrics: {
         deletePatchDurationMs,
@@ -12327,7 +12336,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact move transport for ordered updates across many identical subscriptions', async () => {
@@ -12358,7 +12367,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const movedRow = rows[499]
+    const movedRow = rows[middleRowId - 1]
     if (!movedRow) {
       throw new Error('Expected benchmark move row to exist.')
     }
@@ -12368,9 +12377,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...movedRow,
       priority: 0,
     }
-    rows.splice(499, 1)
+    rows.splice(middleRowId - 1, 1)
     rows.unshift(nextMovedRow)
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, middleRowId))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -12380,7 +12389,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'move',
         path: [],
-        from: 499,
+        from: middleRowId - 1,
         to: 0,
       },
       {
@@ -12390,7 +12399,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact move patch transport',
       metrics: {
         emittedPatches,
@@ -12401,7 +12410,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model compact move transport for ordered row updates across many identical subscriptions', async () => {
@@ -12433,7 +12442,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const movedRow = rows[499]
+    const movedRow = rows[middleRowId - 1]
     if (!movedRow) {
       throw new Error('Expected benchmark model move row to exist.')
     }
@@ -12443,9 +12452,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...movedRow,
       priority: 0,
     }
-    rows.splice(499, 1)
+    rows.splice(middleRowId - 1, 1)
     rows.unshift(nextMovedRow)
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, middleRowId))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
@@ -12455,7 +12464,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'move',
         path: [],
-        from: 499,
+        from: middleRowId - 1,
         to: 0,
       },
       {
@@ -12465,7 +12474,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model compact move patch transport',
       metrics: {
         emittedPatches,
@@ -12476,7 +12485,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures compact move transport for ordered pluck scalar-lists across many identical subscriptions', async () => {
@@ -12509,7 +12518,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    const movedRow = rows[499]
+    const movedRow = rows[middleRowId - 1]
     if (!movedRow) {
       throw new Error('Expected benchmark scalar-list move row to exist.')
     }
@@ -12519,22 +12528,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       priority: 0,
     }
     const patchStartedAt = performance.now()
-    rows.splice(499, 1)
+    rows.splice(middleRowId - 1, 1)
     rows.unshift(nextMovedRow)
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, middleRowId))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
-      from: 499,
+      from: middleRowId - 1,
       op: 'move',
       path: [],
       to: 0,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime compact scalar-list move patch transport',
       metrics: {
         emittedPatches,
@@ -12544,7 +12553,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model compact move transport for ordered pluck scalar-lists across many identical subscriptions', async () => {
@@ -12577,7 +12586,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
 
-    const movedRow = rows[499]
+    const movedRow = rows[middleRowId - 1]
     if (!movedRow) {
       throw new Error('Expected benchmark model scalar-list move row to exist.')
     }
@@ -12587,22 +12596,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       priority: 0,
     }
     const patchStartedAt = performance.now()
-    rows.splice(499, 1)
+    rows.splice(middleRowId - 1, 1)
     rows.unshift(nextMovedRow)
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, 500))
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveInvalidation(nextMovedRow, middleRowId))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
     expect(observedPatch?.operations).toEqual([{
-      from: 499,
+      from: middleRowId - 1,
       op: 'move',
       path: [],
       to: 0,
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model compact scalar-list move patch transport',
       metrics: {
         emittedPatches,
@@ -12612,7 +12621,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures top-level wrapper patch delivery without building a generic replacement plan', async () => {
@@ -12640,9 +12649,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         }
       }) {
         counters.emittedSnapshots += 1
-        const primaryRow = snapshot.data.primary[499]
-        const secondaryRow = snapshot.data.secondary[499]
-        const tertiaryRow = snapshot.data.tertiary[499]
+        const primaryRow = snapshot.data.primary[middleRowId - 1]
+        const secondaryRow = snapshot.data.secondary[middleRowId - 1]
+        const tertiaryRow = snapshot.data.tertiary[middleRowId - 1]
         if (primaryRow && secondaryRow && tertiaryRow) {
           observedPrimaryTitle = String(primaryRow.title)
           observedSecondaryTitle = String(secondaryRow.title)
@@ -12675,39 +12684,39 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const patchStartedAt = performance.now()
     const patchedRow = {
-      id: 500,
-      title: 'Updated 500',
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 1,
     }
-    rows[499] = patchedRow
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, 'Post 500'))
+    rows[middleRowId - 1] = patchedRow
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpdateInvalidation(patchedRow, `Post ${middleRowId}`))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedPrimaryTitle).toBe('Post 500')
-    expect(observedSecondaryTitle).toBe('Post 500')
-    expect(observedTertiaryTitle).toBe('Post 500')
+    expect(observedPrimaryTitle).toBe(`Post ${middleRowId}`)
+    expect(observedSecondaryTitle).toBe(`Post ${middleRowId}`)
+    expect(observedTertiaryTitle).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: ['primary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['primary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['secondary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['secondary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['tertiary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['tertiary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime wrapper patch delivery',
       metrics: {
         emittedPatches,
@@ -12719,8 +12728,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         wrapperPaths: 3,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures stable wrapper upsert patch delivery without rerunning the query', async () => {
     configureRealtimeRuntime({
@@ -12750,18 +12759,18 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark wrapper upsert row to exist.')
     }
 
     const upsertedRow = {
       ...previousRow,
-      title: 'Updated 500',
+      title: `Updated ${middleRowId}`,
     }
 
     const patchStartedAt = performance.now()
-    rows[499] = upsertedRow
+    rows[middleRowId - 1] = upsertedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpsertInvalidation(upsertedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -12771,22 +12780,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: ['primary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['primary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['secondary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['secondary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['tertiary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['tertiary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime stable wrapper upsert patch delivery',
       metrics: {
         emittedPatches,
@@ -12798,8 +12807,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         wrapperPaths: 3,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures multi-row stable wrapper upsert patch delivery without rerunning the query', async () => {
     configureRealtimeRuntime({
@@ -12829,8 +12838,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousFirstRow = rows[499]
-    const previousSecondRow = rows[500]
+    const previousFirstRow = rows[middleRowId - 1]
+    const previousSecondRow = rows[middleRowId]
     if (!previousFirstRow || !previousSecondRow) {
       throw new Error('Expected benchmark wrapper upsert rows to exist.')
     }
@@ -12838,11 +12847,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const previousRows = [previousFirstRow, previousSecondRow]
     const upsertedFirstRow = {
       ...previousFirstRow,
-      title: 'Updated 500',
+      title: `Updated ${middleRowId}`,
     }
     const upsertedSecondRow = {
       ...previousSecondRow,
-      title: 'Updated 501',
+      title: `Updated ${middleRowId + 1}`,
     }
     const upsertedRows = [
       upsertedFirstRow,
@@ -12850,8 +12859,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     ]
 
     const patchStartedAt = performance.now()
-    rows[499] = upsertedFirstRow
-    rows[500] = upsertedSecondRow
+    rows[middleRowId - 1] = upsertedFirstRow
+    rows[middleRowId] = upsertedSecondRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMultiUpsertInvalidation(upsertedRows, previousRows))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
@@ -12861,37 +12870,37 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: ['primary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['primary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['primary', 500, 'title'],
-        value: 'Updated 501',
+        path: ['primary', middleRowId, 'title'],
+        value: `Updated ${middleRowId + 1}`,
       },
       {
         op: 'replace',
-        path: ['secondary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['secondary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['secondary', 500, 'title'],
-        value: 'Updated 501',
+        path: ['secondary', middleRowId, 'title'],
+        value: `Updated ${middleRowId + 1}`,
       },
       {
         op: 'replace',
-        path: ['tertiary', 499, 'title'],
-        value: 'Updated 500',
+        path: ['tertiary', middleRowId - 1, 'title'],
+        value: `Updated ${middleRowId}`,
       },
       {
         op: 'replace',
-        path: ['tertiary', 500, 'title'],
-        value: 'Updated 501',
+        path: ['tertiary', middleRowId, 'title'],
+        value: `Updated ${middleRowId + 1}`,
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime multi-row stable wrapper upsert patch delivery',
       metrics: {
         emittedPatches,
@@ -12904,8 +12913,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         upsertedRows: upsertedRows.length,
         wrapperPaths: 3,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures aggregate merge patch transport across many identical subscriptions', async () => {
     configureRealtimeRuntime({
@@ -12936,9 +12945,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      id: 1001,
-      score: 11_001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      score: 10_000 + patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
 
@@ -12955,15 +12964,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          count: 1001,
-          scoreAverage: 10_501,
-          scoreMaximum: 11_001,
-          scoreSum: 10_511_501,
+          count: patchRowCount + 1,
+          scoreAverage: 10_000 + middleRowId + 1,
+          scoreMaximum: 10_000 + patchRowCount + 1,
+          scoreSum: aggregateScoreSum + 10_000 + patchRowCount + 1,
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime aggregate merge patch transport',
       metrics: {
         emittedPatches,
@@ -12973,7 +12982,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures constrained aggregate predicate move patch transport without rerunning the query', async () => {
@@ -13004,7 +13013,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[500]
+    const previousRow = rows[middleRowId]
     if (!previousRow) {
       throw new Error('Expected aggregate predicate move benchmark row to exist.')
     }
@@ -13014,7 +13023,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       user_id: 2,
     }
     const patchStartedAt = performance.now()
-    rows[500] = movedRow
+    rows[middleRowId] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchMoveAggregateUserValueInvalidation(
       movedRow,
       1,
@@ -13029,14 +13038,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          count: 999,
-          scoreAverage: 10_500.4994994995,
-          scoreSum: 10_489_999,
+          count: patchRowCount - 1,
+          scoreAverage: (aggregateScoreSum - (10_000 + middleRowId + 1)) / (patchRowCount - 1),
+          scoreSum: aggregateScoreSum - (10_000 + middleRowId + 1),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained aggregate predicate move patch transport',
       metrics: {
         emittedPatches,
@@ -13046,7 +13055,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures ambiguous aggregate merge patch transport across many identical subscriptions', async () => {
@@ -13079,7 +13088,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
       id: patchRowCount + 1,
-      score: 11_001,
+      score: 10_000 + patchRowCount + 1,
       title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
@@ -13103,7 +13112,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime ambiguous aggregate merge patch transport',
       metrics: {
         emittedPatches,
@@ -13113,7 +13122,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model aggregate merge patch transport across many identical subscriptions', async () => {
@@ -13146,9 +13155,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      id: 1001,
-      score: 11_001,
-      title: 'Post 1001',
+      id: patchRowCount + 1,
+      score: 10_000 + patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
 
@@ -13165,15 +13174,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          count: 1001,
-          scoreAverage: 10_501,
-          scoreMaximum: 11_001,
-          scoreSum: 10_511_501,
+          count: patchRowCount + 1,
+          scoreAverage: 10_000 + middleRowId + 1,
+          scoreMaximum: 10_000 + patchRowCount + 1,
+          scoreSum: aggregateScoreSum + 10_000 + patchRowCount + 1,
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model aggregate merge patch transport',
       metrics: {
         emittedPatches,
@@ -13183,7 +13192,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model aggregate upsert patch transport without aggregate backfill', async () => {
@@ -13216,7 +13225,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[999]
+    const previousRow = rows[patchRowCount - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark upsert row to exist.')
     }
@@ -13228,7 +13237,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
-    rows[999] = upsertedRow
+    rows[patchRowCount - 1] = upsertedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUpsertInvalidation(upsertedRow, previousRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
@@ -13242,14 +13251,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          scoreAverage: 10_501.5,
+          scoreAverage: (aggregateScoreSum - (10_000 + patchRowCount) + 12_000) / patchRowCount,
           scoreMaximum: 12_000,
-          scoreSum: 10_501_500,
+          scoreSum: aggregateScoreSum - (10_000 + patchRowCount) + 12_000,
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model aggregate upsert patch transport',
       metrics: {
         aggregateBackfillQueries,
@@ -13260,7 +13269,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model aggregate irrelevant update silence without aggregate backfill', async () => {
@@ -13291,19 +13300,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark aggregate update row to exist.')
     }
 
     const updatedRow = {
       ...previousRow,
-      title: 'Renamed post 500',
+      title: `Renamed post ${middleRowId}`,
     }
 
     const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
-    rows[499] = updatedRow
+    rows[middleRowId - 1] = updatedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchTitleOnlyReturningUpdateInvalidation(updatedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
@@ -13313,7 +13322,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model aggregate irrelevant update silence',
       metrics: {
         aggregateBackfillQueries,
@@ -13323,7 +13332,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model aggregate unknown update shared backfill without rerunning the query', async () => {
@@ -13356,7 +13365,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = rows[499]
+    const previousRow = rows[middleRowId - 1]
     if (!previousRow) {
       throw new Error('Expected benchmark aggregate update row to exist.')
     }
@@ -13368,7 +13377,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const queriesBeforePatch = adapter.queries.length
     const patchStartedAt = performance.now()
-    rows[499] = updatedRow
+    rows[middleRowId - 1] = updatedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(updatedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const aggregateBackfillQueries = adapter.queries.slice(queriesBeforePatch).filter(query => query.sql.includes('__holo_count')).length
@@ -13382,14 +13391,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          scoreAverage: 10_502,
+          scoreAverage: (aggregateScoreSum - (10_000 + middleRowId) + 12_000) / patchRowCount,
           scoreMaximum: 12_000,
-          scoreSum: 10_502_000,
+          scoreSum: aggregateScoreSum - (10_000 + middleRowId) + 12_000,
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model aggregate unknown update shared backfill',
       metrics: {
         aggregateBackfillQueries,
@@ -13400,21 +13409,21 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures grouped count-only aggregate backfills for batched unknown inserts', async () => {
     const rows: BenchmarkPostRow[] = [
-      ...Array.from({ length: 500 }, (_, index) => ({
+      ...Array.from({ length: middleRowId }, (_, index) => ({
         id: index + 1,
         score: 10_000 + index + 1,
         title: `Post ${index + 1}`,
         user_id: 1,
       })),
-      ...Array.from({ length: 500 }, (_, index) => ({
-        id: 500 + index + 1,
+      ...Array.from({ length: middleRowId }, (_, index) => ({
+        id: middleRowId + index + 1,
         score: 20_000 + index + 1,
-        title: `Post ${500 + index + 1}`,
+        title: `Post ${middleRowId + index + 1}`,
         user_id: 2,
       })),
     ]
@@ -13451,15 +13460,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchStartedAt = performance.now()
     rows.push(
       {
-        id: 1_001,
+        id: patchRowCount + 1,
         score: 30_001,
-        title: 'Post 1001',
+        title: `Post ${patchRowCount + 1}`,
         user_id: 1,
       },
       {
-        id: 1_002,
+        id: patchRowCount + 2,
         score: 30_002,
-        title: 'Post 1002',
+        title: `Post ${patchRowCount + 2}`,
         user_id: 2,
       },
     )
@@ -13486,10 +13495,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         && operation?.op === 'replace'
         && 'value' in operation
         && operation.path.length === 0
-        && operation.value === 501
+        && operation.value === middleRowId + 1
     })).toBe(true)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped count-only aggregate backfill',
       metrics: {
         emittedPatches,
@@ -13500,7 +13509,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleCountBackfillQueries,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model aggregate extreme runner-up patch transport without rerunning or backfilling', async () => {
@@ -13553,15 +13562,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: [],
         fields: {
-          count: 999,
-          scoreAverage: 10_500,
-          scoreMaximum: 10_999,
-          scoreSum: 10_489_500,
+          count: patchRowCount - 1,
+          scoreAverage: 10_000 + middleRowId,
+          scoreMaximum: 10_000 + patchRowCount - 1,
+          scoreSum: aggregateScoreSum - (10_000 + patchRowCount),
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model aggregate extreme runner-up patch transport',
       metrics: {
         aggregateBackfillQueries,
@@ -13572,14 +13581,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures duplicate extreme aggregate silence after aggregate backfill metadata rebuild', async () => {
     const rows = createAggregatePatchBenchmarkRows()
     const duplicateMaximum = rows.at(-1)
     const previousMaximum = rows.at(-2)
-    const unknownUpdateRow = rows[499]
+    const unknownUpdateRow = rows[middleRowId - 1]
     if (!duplicateMaximum || !previousMaximum || !unknownUpdateRow || typeof duplicateMaximum.score !== 'number') {
       throw new Error('Expected benchmark duplicate aggregate backfill rows to exist.')
     }
@@ -13622,13 +13631,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    rows[499] = {
+    rows[middleRowId - 1] = {
       ...unknownUpdateRow,
-      title: 'Unknown update 500',
+      title: `Unknown update ${middleRowId}`,
     }
 
     const backfillStartedAt = performance.now()
-    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(rows[499]!))
+    await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchUnknownUpdateInvalidation(rows[middleRowId - 1]!))
     const backfillDurationMs = Number((performance.now() - backfillStartedAt).toFixed(3))
     const backfillAggregateQueries = adapter.queries.filter(query => query.sql.includes('__holo_count')).length
     const backfillExtremeValueWindowQueries = adapter.queries.filter(query => query.sql.includes('__holo_value_count')).length
@@ -13649,7 +13658,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(backfillExtremeValueWindowQueries).toBe(1)
     expect(totalAggregateBackfillQueries).toBe(1)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime duplicate extreme aggregate post-backfill metadata silence',
       metrics: {
         backfillAggregateQueries,
@@ -13662,7 +13671,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalAggregateBackfillQueries,
       },
-    }))
+    })
   })
 
   it('measures duplicate extreme aggregate metadata silence without aggregate backfill', async () => {
@@ -13725,7 +13734,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime duplicate extreme aggregate metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -13735,7 +13744,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures patched duplicate extreme aggregate metadata silence without aggregate backfill', async () => {
@@ -13776,15 +13785,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const firstMinimum = {
-      id: 1001,
+      id: patchRowCount + 1,
       score: 9_000,
-      title: 'Post 1001',
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
     const duplicateMinimum = {
-      id: 1002,
+      id: patchRowCount + 2,
       score: 9_000,
-      title: 'Post 1002',
+      title: `Post ${patchRowCount + 2}`,
       user_id: 1,
     }
 
@@ -13815,7 +13824,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime patched duplicate extreme aggregate metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -13826,7 +13835,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures duplicate extreme aggregate update metadata silence without aggregate backfill', async () => {
@@ -13893,7 +13902,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime duplicate extreme aggregate update metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -13903,7 +13912,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures duplicate extreme aggregate upsert metadata silence without aggregate backfill', async () => {
@@ -13970,7 +13979,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime duplicate extreme aggregate upsert metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -13980,7 +13989,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model duplicate extreme aggregate metadata silence without aggregate backfill', async () => {
@@ -14044,7 +14053,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model duplicate extreme aggregate metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -14054,7 +14063,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model duplicate extreme aggregate update metadata silence without aggregate backfill', async () => {
@@ -14122,7 +14131,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model duplicate extreme aggregate update metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -14132,7 +14141,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model duplicate extreme aggregate upsert metadata silence without aggregate backfill', async () => {
@@ -14200,7 +14209,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model duplicate extreme aggregate upsert metadata silence',
       metrics: {
         aggregateBackfillQueries,
@@ -14210,7 +14219,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures model paginated relation aggregate merge patch transport across many identical subscriptions', async () => {
@@ -14253,10 +14262,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     adapter.queries.length = 0
     const insertedRow = {
-      author_id: 51,
-      id: 1001,
-      score: 11_001,
-      title: 'Post 1001',
+      author_id: pageSize / 2 + 1,
+      id: patchRowCount + 1,
+      score: 10_000 + patchRowCount + 1,
+      title: `Post ${patchRowCount + 1}`,
       user_id: 1,
     }
 
@@ -14274,21 +14283,21 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'merge',
-        path: ['data', 50],
+        path: ['data', pageSize / 2],
         fields: {
-          posts_avg_score: 10_526,
-          posts_max_score: 11_001,
-          posts_sum_score: 21_052,
+          posts_avg_score: (10_000 + pageSize / 2 + 1 + 10_000 + patchRowCount + 1) / 2,
+          posts_max_score: 10_000 + patchRowCount + 1,
+          posts_sum_score: 10_000 + pageSize / 2 + 1 + 10_000 + patchRowCount + 1,
         },
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated relation aggregate merge patch transport',
       metrics: {
         emittedPatches,
         aggregateBackfillQueries,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -14296,7 +14305,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model relation duplicate extreme aggregate update silence without aggregate backfill', async () => {
@@ -14355,19 +14364,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model relation duplicate extreme aggregate update silence',
       metrics: {
         aggregateBackfillQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures returned-row relation aggregate target filtering before patching', () => {
@@ -14409,7 +14418,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(relevantTargets[1]?.target.query.predicates[0]?.value).toBe(51)
     expect(relevantTargets[1]?.mutations).toEqual([authorFiftyOneMutation])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime returned-row relation aggregate target filtering',
       metrics: {
         durationMs,
@@ -14418,12 +14427,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         retainedMutations,
         targetCount,
       },
-    }))
+    })
   })
 
   it('measures model relation duplicate extreme aggregate silence after aggregate backfill metadata rebuild', async () => {
     const { duplicateRow, tables } = createDuplicateRelationExtremeBenchmarkTables()
-    const unknownUpdateRow = tables.posts[50]
+    const unknownUpdateRow = tables.posts[pageSize / 2]
     if (!unknownUpdateRow || typeof unknownUpdateRow.author_id !== 'number') {
       throw new Error('Expected benchmark relation aggregate unknown update row to exist.')
     }
@@ -14465,9 +14474,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     adapter.queries.length = 0
     const renamedRow = {
       ...unknownUpdateRow,
-      title: 'Unknown relation update 51',
+      title: `Unknown relation update ${pageSize / 2 + 1}`,
     }
-    tables.posts[50] = renamedRow
+    tables.posts[pageSize / 2] = renamedRow
 
     const backfillStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation(
@@ -14498,14 +14507,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(backfillExtremeValueWindowQueries).toBe(1)
     expect(totalAggregateBackfillQueries).toBe(1)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model relation duplicate extreme aggregate post-backfill metadata silence',
       metrics: {
         backfillAggregateQueries,
         backfillDurationMs,
         backfillExtremeValueWindowQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -14513,12 +14522,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         totalAggregateBackfillQueries,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures batched model relation aggregate exact target fanout after metadata rebuild', async () => {
     const { duplicateRow, tables } = createDuplicateRelationExtremeBenchmarkTables()
-    const secondUnknownUpdateRow = tables.posts[51]
+    const secondUnknownUpdateRow = tables.posts[pageSize / 2 + 1]
     if (!secondUnknownUpdateRow || typeof secondUnknownUpdateRow.author_id !== 'number' || typeof secondUnknownUpdateRow.score !== 'number') {
       throw new Error('Expected benchmark relation aggregate second duplicate row to exist.')
     }
@@ -14531,7 +14540,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       user_id: secondUnknownUpdateRow.user_id,
     }
     tables.posts.push(secondDuplicateRow)
-    const unknownUpdateRow = tables.posts[50]
+    const unknownUpdateRow = tables.posts[pageSize / 2]
     if (!unknownUpdateRow || typeof unknownUpdateRow.author_id !== 'number') {
       throw new Error('Expected benchmark relation aggregate unknown update row to exist.')
     }
@@ -14573,14 +14582,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     adapter.queries.length = 0
     const renamedFirstRow = {
       ...unknownUpdateRow,
-      title: 'Unknown relation update 51',
+      title: `Unknown relation update ${pageSize / 2 + 1}`,
     }
     const renamedSecondRow = {
       ...secondUnknownUpdateRow,
-      title: 'Unknown relation update 52',
+      title: `Unknown relation update ${pageSize / 2 + 2}`,
     }
-    tables.posts[50] = renamedFirstRow
-    tables.posts[51] = renamedSecondRow
+    tables.posts[pageSize / 2] = renamedFirstRow
+    tables.posts[pageSize / 2 + 1] = renamedSecondRow
 
     const backfillStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -14622,7 +14631,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(backfillExtremeCountQueries).toBe(1)
     expect(totalAggregateBackfillQueries).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime batched model relation aggregate exact target fanout',
       metrics: {
         backfillAggregateQueries,
@@ -14630,7 +14639,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         backfillExtremeCountQueries,
         emittedPatches,
         invalidatedAuthors: 2,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -14638,12 +14647,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         totalAggregateBackfillQueries,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures mixed batched model relation aggregate mutation fanout after metadata rebuild', async () => {
     const { duplicateRow, tables } = createDuplicateRelationExtremeBenchmarkTables()
-    const secondUnknownUpdateRow = tables.posts[51]
+    const secondUnknownUpdateRow = tables.posts[pageSize / 2 + 1]
     if (!secondUnknownUpdateRow || typeof secondUnknownUpdateRow.author_id !== 'number' || typeof secondUnknownUpdateRow.score !== 'number') {
       throw new Error('Expected benchmark relation aggregate second duplicate row to exist.')
     }
@@ -14702,10 +14711,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
 
     const renamedSecondRow = {
       ...secondUnknownUpdateRow,
-      title: 'Unknown relation update 52',
+      title: `Unknown relation update ${pageSize / 2 + 2}`,
     }
     tables.posts[firstDuplicateIndex] = updatedFirstDuplicate
-    tables.posts[51] = renamedSecondRow
+    tables.posts[pageSize / 2 + 1] = renamedSecondRow
 
     const backfillStartedAt = performance.now()
     await realtimeRuntimeInternals.handleDatabaseInvalidation({
@@ -14740,7 +14749,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(backfillExtremeValueWindowQueries).toBe(1)
     expect(totalAggregateBackfillQueries).toBe(1)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime mixed batched model relation aggregate mutation fanout',
       metrics: {
         backfillAggregateQueries,
@@ -14748,7 +14757,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         backfillExtremeValueWindowQueries,
         emittedPatches,
         invalidatedAuthors: 2,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -14756,7 +14765,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         totalAggregateBackfillQueries,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model relation duplicate extreme aggregate delete silence without aggregate backfill', async () => {
@@ -14814,19 +14823,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model relation duplicate extreme aggregate delete silence',
       metrics: {
         aggregateBackfillQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model relation duplicate extreme aggregate upsert silence without aggregate backfill', async () => {
@@ -14885,19 +14894,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialTotal).toBe(patchRowCount)
     expect(aggregateBackfillQueries).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model relation duplicate extreme aggregate upsert silence',
       metrics: {
         aggregateBackfillQueries,
         emittedPatches,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model paginated relation aggregate delete patch transport without rerunning or backfilling', async () => {
@@ -14939,13 +14948,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     adapter.queries.length = 0
-    const deletedRow = tables.posts[50]
+    const deletedRow = tables.posts[pageSize / 2]
     if (!deletedRow?.author_id) {
       throw new Error('Expected benchmark relation aggregate backfill row to exist.')
     }
 
     const patchStartedAt = performance.now()
-    tables.posts.splice(50, 1)
+    tables.posts.splice(pageSize / 2, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateDeleteInvalidation(
       deletedRow as BenchmarkPostRow & { readonly author_id: number },
     ))
@@ -14960,7 +14969,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'merge',
-        path: ['data', 50],
+        path: ['data', pageSize / 2],
         fields: {
           posts_avg_score: null,
           posts_max_score: null,
@@ -14970,12 +14979,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated relation aggregate delete patch transport',
       metrics: {
         emittedPatches,
         aggregateBackfillQueries,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
@@ -14983,7 +14992,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
+    })
   })
 
   it('measures model has-many relation patch transport without rerunning the query', async () => {
@@ -15015,7 +15024,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTitle = readNestedPostTitle(snapshot.data[499])
+        observedInitialTitle = readNestedPostTitle(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15028,7 +15037,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark has-many relation row to exist.')
     }
@@ -15037,27 +15046,27 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchedRow = {
       ...previousRow,
       author_id: previousRow.author_id,
-      title: 'Updated 500',
+      title: `Updated ${middleRowId}`,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = patchedRow
+    tables.posts[middleRowId - 1] = patchedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationUpdateInvalidation(patchedRow, previousTitle))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTitle).toBe('Post 500')
+    expect(observedInitialTitle).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'posts', 0, 'title'],
-      value: 'Updated 500',
+      path: [middleRowId - 1, 'posts', 0, 'title'],
+      value: `Updated ${middleRowId}`,
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-many relation patch transport',
       metrics: {
         emittedPatches,
@@ -15069,8 +15078,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-many relation delete patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15101,7 +15110,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTitle = readNestedPostTitle(snapshot.data[499])
+        observedInitialTitle = readNestedPostTitle(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15114,7 +15123,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const deletedRow = tables.posts[499]
+    const deletedRow = tables.posts[middleRowId - 1]
     if (!deletedRow || typeof deletedRow.author_id !== 'number') {
       throw new Error('Expected benchmark has-many relation row to exist.')
     }
@@ -15124,17 +15133,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }
 
     const patchStartedAt = performance.now()
-    tables.posts.splice(499, 1)
+    tables.posts.splice(middleRowId - 1, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateDeleteInvalidation(relationDeletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTitle).toBe('Post 500')
+    expect(observedInitialTitle).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'posts'],
+      path: [middleRowId - 1, 'posts'],
       index: 0,
       deleteCount: 1,
       values: [],
@@ -15142,7 +15151,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-many relation delete patch transport',
       metrics: {
         emittedPatches,
@@ -15154,8 +15163,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-one relation delete patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15186,7 +15195,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTitle = readNestedFeaturedPostTitle(snapshot.data[499])
+        observedInitialTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15199,7 +15208,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const deletedRow = tables.posts[499]
+    const deletedRow = tables.posts[middleRowId - 1]
     if (!deletedRow || typeof deletedRow.author_id !== 'number') {
       throw new Error('Expected benchmark has-one relation row to exist.')
     }
@@ -15209,23 +15218,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }
 
     const patchStartedAt = performance.now()
-    tables.posts.splice(499, 1)
+    tables.posts.splice(middleRowId - 1, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationAggregateDeleteInvalidation(relationDeletedRow))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTitle).toBe('Post 500')
+    expect(observedInitialTitle).toBe(`Post ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'featuredPost'],
+      path: [middleRowId - 1, 'featuredPost'],
       value: null,
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-one relation delete patch transport',
       metrics: {
         emittedPatches,
@@ -15237,12 +15246,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-one relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    tables.posts.splice(500, 1)
+    tables.posts.splice(middleRowId, 1)
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -15271,8 +15280,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[499])
-        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[500])
+        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId - 1])
+        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15285,17 +15294,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark has-one relation move row to exist.')
     }
     const movedRow = {
       ...previousRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       previousRow as BenchmarkPostRow & { readonly author_id: number },
@@ -15305,24 +15314,24 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialSourceTitle).toBe('Post 500')
+    expect(observedInitialSourceTitle).toBe(`Post ${middleRowId}`)
     expect(observedInitialTargetTitle).toBe('')
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: [499, 'featuredPost'],
+        path: [middleRowId - 1, 'featuredPost'],
         value: null,
       },
       {
         op: 'replace',
-        path: [500, 'featuredPost'],
+        path: [middleRowId, 'featuredPost'],
         value: movedRow,
       },
     ])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-one relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -15334,12 +15343,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark constrained has-one relation move row to exist.')
     }
@@ -15347,10 +15356,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...previousRow,
       title: 'Published',
     }
-    tables.posts[499] = publishedRow
-    const targetRow = tables.posts[500]
+    tables.posts[middleRowId - 1] = publishedRow
+    const targetRow = tables.posts[middleRowId]
     if (targetRow) {
-      tables.posts[500] = {
+      tables.posts[middleRowId] = {
         ...targetRow,
         title: 'Draft',
       }
@@ -15383,8 +15392,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[499])
-        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[500])
+        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId - 1])
+        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15399,11 +15408,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const movedRow = {
       ...publishedRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       publishedRow as BenchmarkPostRow & { readonly author_id: number },
@@ -15418,19 +15427,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: [499, 'featuredPost'],
+        path: [middleRowId - 1, 'featuredPost'],
         value: null,
       },
       {
         op: 'replace',
-        path: [500, 'featuredPost'],
+        path: [middleRowId, 'featuredPost'],
         value: movedRow,
       },
     ])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained model has-one relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -15442,12 +15451,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures range-constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark range has-one relation move row to exist.')
     }
@@ -15455,7 +15464,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...previousRow,
       score: 20_001,
     }
-    tables.posts[499] = scoredRow
+    tables.posts[middleRowId - 1] = scoredRow
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -15484,8 +15493,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[499])
-        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[500])
+        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId - 1])
+        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15500,11 +15509,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const movedRow = {
       ...scoredRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       scoredRow as BenchmarkPostRow & { readonly author_id: number },
@@ -15519,19 +15528,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: [499, 'featuredPost'],
+        path: [middleRowId - 1, 'featuredPost'],
         value: null,
       },
       {
         op: 'replace',
-        path: [500, 'featuredPost'],
+        path: [middleRowId, 'featuredPost'],
         value: movedRow,
       },
     ])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime range-constrained model has-one relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -15543,12 +15552,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures not-in constrained model has-one relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark not-in has-one relation move row to exist.')
     }
@@ -15556,10 +15565,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...previousRow,
       title: 'Published',
     }
-    tables.posts[499] = publishedRow
-    const targetRow = tables.posts[500]
+    tables.posts[middleRowId - 1] = publishedRow
+    const targetRow = tables.posts[middleRowId]
     if (targetRow) {
-      tables.posts[500] = {
+      tables.posts[middleRowId] = {
         ...targetRow,
         title: 'Draft',
       }
@@ -15592,8 +15601,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[499])
-        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[500])
+        observedInitialSourceTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId - 1])
+        observedInitialTargetTitle = readNestedFeaturedPostTitle(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -15608,11 +15617,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const movedRow = {
       ...publishedRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       publishedRow as BenchmarkPostRow & { readonly author_id: number },
@@ -15627,19 +15636,19 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
-        path: [499, 'featuredPost'],
+        path: [middleRowId - 1, 'featuredPost'],
         value: null,
       },
       {
         op: 'replace',
-        path: [500, 'featuredPost'],
+        path: [middleRowId, 'featuredPost'],
         value: movedRow,
       },
     ])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime not-in constrained model has-one relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -15651,8 +15660,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-many eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15720,7 +15729,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-many eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -15732,8 +15741,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures grouped has-many eager related hydration for batched parent inserts', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15832,7 +15841,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped has-many eager related hydration',
       metrics: {
         emittedPatches,
@@ -15844,8 +15853,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleRelatedHydrationQueries,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures projected eager relation hidden update silence without relation backfill', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15896,7 +15905,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const setupQueryCount = adapter.queries.length
-    const author = tables.authors[499]
+    const author = tables.authors[middleRowId - 1]
     if (!author) {
       throw new Error('Expected benchmark projected eager author to exist.')
     }
@@ -15911,7 +15920,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(patchQueryCount).toBe(0)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime projected eager relation hidden update silence',
       metrics: {
         emittedPatches,
@@ -15921,8 +15930,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-one eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -15990,7 +15999,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-one eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -16002,8 +16011,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures grouped has-one eager related hydration for batched parent inserts', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16102,7 +16111,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped has-one eager related hydration',
       metrics: {
         emittedPatches,
@@ -16114,8 +16123,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleRelatedHydrationQueries,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures grouped ordered has-one eager related hydration with top-one SQL', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16236,7 +16245,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ],
     }])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped ordered has-one eager related hydration top-one',
       metrics: {
         emittedPatches,
@@ -16249,8 +16258,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleRelatedHydrationQueries,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures ordered model has-many eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16333,7 +16342,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime ordered model has-many eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -16345,8 +16354,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures ordered model has-one eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16429,7 +16438,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime ordered model has-one eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -16441,8 +16450,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures constrained model has-many eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16532,7 +16541,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained model has-many eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -16544,8 +16553,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures constrained model has-one eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16635,7 +16644,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained model has-one eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -16647,8 +16656,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to relation update patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16679,7 +16688,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialAuthorName = readNestedAuthorName(snapshot.data[499])
+        observedInitialAuthorName = readNestedAuthorName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -16692,18 +16701,18 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousAuthor = tables.authors[499]
+    const previousAuthor = tables.authors[middleRowId - 1]
     if (!previousAuthor) {
       throw new Error('Expected benchmark belongs-to relation author to exist.')
     }
 
     const patchedAuthor = {
       ...previousAuthor,
-      name: 'Updated Author 500',
+      name: `Updated Author ${middleRowId}`,
     }
 
     const patchStartedAt = performance.now()
-    tables.authors[499] = patchedAuthor
+    tables.authors[middleRowId - 1] = patchedAuthor
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createAuthorUpdateInvalidation(
       patchedAuthor,
       previousAuthor.name,
@@ -16713,16 +16722,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialAuthorName).toBe('Author 500')
+    expect(observedInitialAuthorName).toBe(`Author ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'author', 'name'],
+      path: [middleRowId - 1, 'author', 'name'],
       value: patchedAuthor.name,
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to relation update patch transport',
       metrics: {
         emittedPatches,
@@ -16734,8 +16743,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to parent key swap patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16766,7 +16775,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialAuthorName = readNestedAuthorName(snapshot.data[499])
+        observedInitialAuthorName = readNestedAuthorName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -16779,18 +16788,18 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousPost = tables.posts[499]
+    const previousPost = tables.posts[middleRowId - 1]
     if (!previousPost || typeof previousPost.author_id !== 'number') {
       throw new Error('Expected benchmark belongs-to parent row to exist.')
     }
 
     const patchedPost = {
       ...previousPost,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = patchedPost
+    tables.posts[middleRowId - 1] = patchedPost
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToParentKeyUpdateInvalidation(
       patchedPost,
       previousPost as BenchmarkPostRow & { readonly author_id: number },
@@ -16800,22 +16809,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialAuthorName).toBe('Author 500')
+    expect(observedInitialAuthorName).toBe(`Author ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'merge',
-      path: [499],
+      path: [middleRowId - 1],
       fields: {
         author: {
-          id: 501,
-          name: 'Author 501',
+          id: middleRowId + 1,
+          name: `Author ${middleRowId + 1}`,
         },
-        author_id: 501,
+        author_id: middleRowId + 1,
       },
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to parent key swap patch transport',
       metrics: {
         emittedPatches,
@@ -16827,8 +16836,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to parent key null swap patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16859,7 +16868,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialAuthorName = readNestedAuthorName(snapshot.data[499])
+        observedInitialAuthorName = readNestedAuthorName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -16872,7 +16881,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousPost = tables.posts[499]
+    const previousPost = tables.posts[middleRowId - 1]
     if (!previousPost || typeof previousPost.author_id !== 'number') {
       throw new Error('Expected benchmark belongs-to nullable parent row to exist.')
     }
@@ -16883,7 +16892,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = patchedPost
+    tables.posts[middleRowId - 1] = patchedPost
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createNullableBelongsToParentKeyUpdateInvalidation(
       patchedPost,
       previousPost as BenchmarkPostRow & { readonly author_id: number },
@@ -16893,10 +16902,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialAuthorName).toBe('Author 500')
+    expect(observedInitialAuthorName).toBe(`Author ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'merge',
-      path: [499],
+      path: [middleRowId - 1],
       fields: {
         author: null,
         author_id: null,
@@ -16905,7 +16914,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to parent key null swap patch transport',
       metrics: {
         emittedPatches,
@@ -16917,8 +16926,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -16961,7 +16970,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Inserted belongs-to post',
@@ -16984,15 +16993,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       values: [{
         ...insertedRow,
         author: {
-          id: 500,
-          name: 'Author 500',
+          id: middleRowId,
+          name: `Author ${middleRowId}`,
         },
       }],
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to eager parent insert patch transport',
       metrics: {
         emittedPatches,
@@ -17004,8 +17013,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures grouped belongs-to eager parent hydration for batched inserts', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17045,14 +17054,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const setupQueryCount = adapter.queries.length
     const firstInsertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Inserted belongs-to post 1',
       user_id: 1,
     }
     const secondInsertedRow = {
-      author_id: 501,
+      author_id: middleRowId + 1,
       id: patchRowCount + 2,
       score: 20_002,
       title: 'Inserted belongs-to post 2',
@@ -17088,22 +17097,22 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
           {
             ...firstInsertedRow,
             author: {
-              id: 500,
-              name: 'Author 500',
+              id: middleRowId,
+              name: `Author ${middleRowId}`,
             },
           },
           {
             ...secondInsertedRow,
             author: {
-              id: 501,
-              name: 'Author 501',
+              id: middleRowId + 1,
+              name: `Author ${middleRowId + 1}`,
             },
           },
         ],
       },
     ])
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime grouped belongs-to eager parent hydration',
       metrics: {
         emittedPatches,
@@ -17115,8 +17124,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         singleParentHydrationQueries,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17194,7 +17203,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -17202,7 +17211,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         op: 'merge',
         path: ['meta'],
         fields: {
-          lastPage: 11,
+          lastPage: Math.ceil((patchRowCount + 1) / pageSize),
           total: patchRowCount + 1,
         },
       },
@@ -17210,12 +17219,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated belongs-to eager parent insert patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17224,8 +17233,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17270,7 +17279,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const deletedRow = tables.posts.shift()
-    const backfilledRow = tables.posts[99]
+    const backfilledRow = tables.posts[pageSize - 1]
     if (!deletedRow || !backfilledRow) {
       throw new Error('Expected benchmark paginated belongs-to delete and backfill rows to exist.')
     }
@@ -17296,13 +17305,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [{
           ...backfilledRow,
           author: {
-            id: 101,
-            name: 'Author 101',
+            id: pageSize + 1,
+            name: `Author ${pageSize + 1}`,
           },
         }],
       },
@@ -17315,12 +17324,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated belongs-to eager delete backfill patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17329,8 +17338,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model paginated offset-window belongs-to eager delete backfill patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17375,7 +17384,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const deletedRow = tables.posts.shift()
-    const backfilledRow = tables.posts[199]
+    const backfilledRow = tables.posts[pageSize * 2 - 1]
     if (!deletedRow || !backfilledRow) {
       throw new Error('Expected benchmark paginated offset belongs-to delete and backfill rows to exist.')
     }
@@ -17401,13 +17410,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [{
           ...backfilledRow,
           author: {
-            id: 201,
-            name: 'Author 201',
+            id: pageSize * 2 + 1,
+            name: `Author ${pageSize * 2 + 1}`,
           },
         }],
       },
@@ -17420,12 +17429,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model paginated offset-window belongs-to eager delete backfill patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17434,8 +17443,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         subscriptions: subscriptionCount,
         totalRows: observedInitialTotal,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model simple-paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17478,7 +17487,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const deletedRow = tables.posts.shift()
-    const backfilledRow = tables.posts[99]
+    const backfilledRow = tables.posts[pageSize - 1]
     if (!deletedRow || !backfilledRow) {
       throw new Error('Expected benchmark simple-paginated belongs-to delete and backfill rows to exist.')
     }
@@ -17503,13 +17512,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [{
           ...backfilledRow,
           author: {
-            id: 101,
-            name: 'Author 101',
+            id: pageSize + 1,
+            name: `Author ${pageSize + 1}`,
           },
         }],
       },
@@ -17517,12 +17526,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated belongs-to eager delete backfill patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17530,8 +17539,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model simple-paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17606,7 +17615,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -17614,12 +17623,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model simple-paginated belongs-to eager parent insert patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17627,8 +17636,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model cursor-paginated belongs-to eager parent insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17688,12 +17697,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([99]),
+        value: encodeBenchmarkCursor([pageSize - 1]),
       },
       {
         op: 'splice',
@@ -17711,7 +17720,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 100,
+        index: pageSize,
         deleteCount: 1,
         values: [],
       },
@@ -17719,12 +17728,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated belongs-to eager parent insert patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17732,8 +17741,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model cursor-paginated belongs-to eager delete backfill patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17778,7 +17787,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const deletedRow = tables.posts.shift()
-    const backfilledRow = tables.posts[99]
+    const backfilledRow = tables.posts[pageSize - 1]
     if (!deletedRow || !backfilledRow) {
       throw new Error('Expected benchmark cursor belongs-to delete and backfill rows to exist.')
     }
@@ -17792,12 +17801,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([100]))
+    expect(observedInitialCursor).toBe(encodeBenchmarkCursor([pageSize]))
     expect(observedPatch?.operations).toEqual([
       {
         op: 'replace',
         path: ['nextCursor'],
-        value: encodeBenchmarkCursor([101]),
+        value: encodeBenchmarkCursor([pageSize + 1]),
       },
       {
         op: 'splice',
@@ -17809,13 +17818,13 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       {
         op: 'splice',
         path: ['data'],
-        index: 99,
+        index: pageSize - 1,
         deleteCount: 0,
         values: [{
           ...backfilledRow,
           author: {
-            id: 101,
-            name: 'Author 101',
+            id: pageSize + 1,
+            name: `Author ${pageSize + 1}`,
           },
         }],
       },
@@ -17823,12 +17832,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model cursor-paginated belongs-to eager delete backfill patch transport',
       metrics: {
         emittedPatches,
         fullDataBytes,
-        pageRows: 100,
+        pageRows: pageSize,
         patchDurationMs,
         patchBytes,
         patchOperations: observedPatch?.operations.length ?? 0,
@@ -17836,8 +17845,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures ordered model has-many relation insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17868,7 +17877,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialPostCount = readNestedPostCount(snapshot.data[499])
+        observedInitialPostCount = readNestedPostCount(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -17882,7 +17891,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Inserted ordered relation post',
@@ -17900,7 +17909,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialPostCount).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'posts'],
+      path: [middleRowId - 1, 'posts'],
       index: 1,
       deleteCount: 0,
       values: [insertedRow],
@@ -17908,7 +17917,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime ordered model has-many relation insert patch transport',
       metrics: {
         emittedPatches,
@@ -17920,8 +17929,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures constrained model has-many relation insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -17952,7 +17961,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialPostCount = readNestedPostCount(snapshot.data[499])
+        observedInitialPostCount = readNestedPostCount(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -17966,7 +17975,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Published',
@@ -17984,7 +17993,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialPostCount).toBe(0)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'posts'],
+      path: [middleRowId - 1, 'posts'],
       index: 0,
       deleteCount: 0,
       values: [insertedRow],
@@ -17992,7 +18001,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained model has-many relation insert patch transport',
       metrics: {
         emittedPatches,
@@ -18004,8 +18013,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures not-equal constrained model has-many relation insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -18036,7 +18045,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialPostCount = readNestedPostCount(snapshot.data[499])
+        observedInitialPostCount = readNestedPostCount(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18050,7 +18059,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Published',
@@ -18068,7 +18077,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialPostCount).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'posts'],
+      path: [middleRowId - 1, 'posts'],
       index: 1,
       deleteCount: 0,
       values: [insertedRow],
@@ -18076,7 +18085,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime not-equal constrained model has-many relation insert patch transport',
       metrics: {
         emittedPatches,
@@ -18088,8 +18097,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures in-constrained model has-many relation insert patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -18120,7 +18129,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialPostCount = readNestedPostCount(snapshot.data[499])
+        observedInitialPostCount = readNestedPostCount(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18134,7 +18143,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Featured',
@@ -18152,7 +18161,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedInitialPostCount).toBe(1)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'posts'],
+      path: [middleRowId - 1, 'posts'],
       index: 1,
       deleteCount: 0,
       values: [insertedRow],
@@ -18160,7 +18169,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime in-constrained model has-many relation insert patch transport',
       metrics: {
         emittedPatches,
@@ -18172,12 +18181,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures ordered model has-many relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    tables.posts.splice(500, 1)
+    tables.posts.splice(middleRowId, 1)
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -18206,8 +18215,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceCount = readNestedPostCount(snapshot.data[499])
-        observedInitialTargetCount = readNestedPostCount(snapshot.data[500])
+        observedInitialSourceCount = readNestedPostCount(snapshot.data[middleRowId - 1])
+        observedInitialTargetCount = readNestedPostCount(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18220,17 +18229,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark ordered has-many relation move row to exist.')
     }
     const movedRow = {
       ...previousRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       previousRow as BenchmarkPostRow & { readonly author_id: number },
@@ -18245,14 +18254,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'splice',
-        path: [499, 'posts'],
+        path: [middleRowId - 1, 'posts'],
         index: 0,
         deleteCount: 1,
         values: [],
       },
       {
         op: 'splice',
-        path: [500, 'posts'],
+        path: [middleRowId, 'posts'],
         index: 0,
         deleteCount: 0,
         values: [movedRow],
@@ -18261,7 +18270,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime ordered model has-many relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -18273,12 +18282,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures constrained model has-many relation parent key move patch transport without rerunning the query', async () => {
     const tables = createRelationAggregateBenchmarkTables()
-    const previousRow = tables.posts[499]
+    const previousRow = tables.posts[middleRowId - 1]
     if (!previousRow || typeof previousRow.author_id !== 'number') {
       throw new Error('Expected benchmark constrained has-many relation move row to exist.')
     }
@@ -18286,7 +18295,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       ...previousRow,
       title: 'Published',
     }
-    tables.posts[499] = publishedRow
+    tables.posts[middleRowId - 1] = publishedRow
     const adapter = new BenchmarkModelAdapter(tables)
     const db = createBenchmarkRelationDatabaseContext(adapter)
     configureDB(createConnectionManager({
@@ -18315,8 +18324,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialSourceCount = readNestedPostCount(snapshot.data[499])
-        observedInitialTargetCount = readNestedPostCount(snapshot.data[500])
+        observedInitialSourceCount = readNestedPostCount(snapshot.data[middleRowId - 1])
+        observedInitialTargetCount = readNestedPostCount(snapshot.data[middleRowId])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18331,11 +18340,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const movedRow = {
       ...publishedRow,
-      author_id: 501,
+      author_id: middleRowId + 1,
     }
 
     const patchStartedAt = performance.now()
-    tables.posts[499] = movedRow
+    tables.posts[middleRowId - 1] = movedRow
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createRelationParentKeyMoveInvalidation(
       movedRow,
       publishedRow as BenchmarkPostRow & { readonly author_id: number },
@@ -18350,14 +18359,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(observedPatch?.operations).toEqual([
       {
         op: 'splice',
-        path: [499, 'posts'],
+        path: [middleRowId - 1, 'posts'],
         index: 0,
         deleteCount: 1,
         values: [],
       },
       {
         op: 'splice',
-        path: [500, 'posts'],
+        path: [middleRowId, 'posts'],
         index: 0,
         deleteCount: 0,
         values: [movedRow],
@@ -18366,7 +18375,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime constrained model has-many relation parent key move patch transport',
       metrics: {
         emittedPatches,
@@ -18378,8 +18387,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model has-many relation insert independent fallback per subscription', async () => {
     const tables = createRelationAggregateBenchmarkTables()
@@ -18409,7 +18418,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedFinalPostCount = readNestedPostCount(snapshot.data[499])
+        observedFinalPostCount = readNestedPostCount(snapshot.data[middleRowId - 1])
       },
       onPatch() {
         emittedPatches += 1
@@ -18422,7 +18431,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
     const insertedRow = {
-      author_id: 500,
+      author_id: middleRowId,
       id: patchRowCount + 1,
       score: 20_001,
       title: 'Inserted relation post',
@@ -18440,7 +18449,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(emittedPatches).toBe(0)
     expect(observedFinalPostCount).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model has-many relation insert shared fallback',
       metrics: {
         emittedPatches,
@@ -18452,8 +18461,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         snapshots: counters.emittedSnapshots,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many relation attach patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
@@ -18484,7 +18493,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18503,7 +18512,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }
     const attachedPivot: BenchmarkPostTagRow = {
       id: patchRowCount + 1,
-      postId: 500,
+      postId: middleRowId,
       tagId: attachedTag.id,
     }
 
@@ -18516,10 +18525,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'tags'],
+      path: [middleRowId - 1, 'tags'],
       index: 1,
       deleteCount: 0,
       values: [{
@@ -18535,7 +18544,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many relation attach patch transport',
       metrics: {
         emittedPatches,
@@ -18547,8 +18556,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many pivot update patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
@@ -18579,7 +18588,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18592,7 +18601,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousPivot = tables.post_tags[499]
+    const previousPivot = tables.post_tags[middleRowId - 1]
     if (!previousPivot || typeof previousPivot.weight !== 'number') {
       throw new Error('Expected benchmark belongs-to-many pivot row to exist.')
     }
@@ -18602,7 +18611,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       weight: 2_000,
     }
     const patchStartedAt = performance.now()
-    tables.post_tags[499] = patchedPivot
+    tables.post_tags[middleRowId - 1] = patchedPivot
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyPivotUpdateInvalidation(
       patchedPivot,
       previousPivot.weight,
@@ -18612,10 +18621,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'tags', 0, 'pivot'],
+      path: [middleRowId - 1, 'tags', 0, 'pivot'],
       value: {
         id: patchedPivot.id,
         postId: patchedPivot.postId,
@@ -18626,7 +18635,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many pivot update patch transport',
       metrics: {
         emittedPatches,
@@ -18638,18 +18647,18 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many pivot order update move patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
     const secondTag: BenchmarkTagRow = {
       id: patchRowCount + 1,
-      name: 'Second Tag 500',
+      name: `Second Tag ${middleRowId}`,
     }
     const secondPivot: BenchmarkPostTagRow = {
       id: patchRowCount + 1,
-      postId: 500,
+      postId: middleRowId,
       tagId: secondTag.id,
       weight: 1_500,
     }
@@ -18682,7 +18691,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18695,7 +18704,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousPivot = tables.post_tags[499]
+    const previousPivot = tables.post_tags[middleRowId - 1]
     if (!previousPivot || typeof previousPivot.weight !== 'number') {
       throw new Error('Expected benchmark belongs-to-many pivot row to exist.')
     }
@@ -18705,7 +18714,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       weight: 2_000,
     }
     const patchStartedAt = performance.now()
-    tables.post_tags[499] = patchedPivot
+    tables.post_tags[middleRowId - 1] = patchedPivot
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyPivotUpdateInvalidation(
       patchedPivot,
       previousPivot.weight,
@@ -18715,17 +18724,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([
       {
         op: 'move',
-        path: [499, 'tags'],
+        path: [middleRowId - 1, 'tags'],
         from: 0,
         to: 1,
       },
       {
         op: 'replace',
-        path: [499, 'tags', 1, 'pivot'],
+        path: [middleRowId - 1, 'tags', 1, 'pivot'],
         value: {
           id: patchedPivot.id,
           postId: patchedPivot.postId,
@@ -18737,7 +18746,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many pivot order update move patch transport',
       metrics: {
         emittedPatches,
@@ -18749,8 +18758,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many related row update patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
@@ -18781,7 +18790,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18794,17 +18803,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const previousTag = tables.tags[499]
+    const previousTag = tables.tags[middleRowId - 1]
     if (!previousTag) {
       throw new Error('Expected benchmark belongs-to-many related row to exist.')
     }
 
     const patchedTag = {
       ...previousTag,
-      name: 'Updated Tag 500',
+      name: `Updated Tag ${middleRowId}`,
     }
     const patchStartedAt = performance.now()
-    tables.tags[499] = patchedTag
+    tables.tags[middleRowId - 1] = patchedTag
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyRelatedUpdateInvalidation(
       patchedTag,
       previousTag.name,
@@ -18814,16 +18823,16 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'replace',
-      path: [499, 'tags', 0, 'name'],
+      path: [middleRowId - 1, 'tags', 0, 'name'],
       value: patchedTag.name,
     }])
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many related row update patch transport',
       metrics: {
         emittedPatches,
@@ -18835,8 +18844,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many related row delete patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
@@ -18867,7 +18876,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18880,23 +18889,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const deletedTag = tables.tags[499]
+    const deletedTag = tables.tags[middleRowId - 1]
     if (!deletedTag) {
       throw new Error('Expected benchmark belongs-to-many related row to exist.')
     }
 
     const patchStartedAt = performance.now()
-    tables.tags.splice(499, 1)
+    tables.tags.splice(middleRowId - 1, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyRelatedDeleteInvalidation(deletedTag))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'tags'],
+      path: [middleRowId - 1, 'tags'],
       index: 0,
       deleteCount: 1,
       values: [],
@@ -18904,7 +18913,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many related row delete patch transport',
       metrics: {
         emittedPatches,
@@ -18916,8 +18925,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures model belongs-to-many relation detach patch transport without rerunning the query', async () => {
     const tables = createBelongsToManyBenchmarkTables()
@@ -18948,7 +18957,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         if (fullDataBytes === 0) {
           fullDataBytes = jsonByteLength(snapshot.data)
         }
-        observedInitialTagName = readNestedTagName(snapshot.data[499])
+        observedInitialTagName = readNestedTagName(snapshot.data[middleRowId - 1])
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -18961,23 +18970,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       await subscribeRealtimeQuery(query, {}, patchOptions)
     }))
     const setupDurationMs = Number((performance.now() - setupStartedAt).toFixed(3))
-    const detachedPivot = tables.post_tags[499]
+    const detachedPivot = tables.post_tags[middleRowId - 1]
     if (!detachedPivot) {
       throw new Error('Expected benchmark belongs-to-many pivot row to exist.')
     }
 
     const patchStartedAt = performance.now()
-    tables.post_tags.splice(499, 1)
+    tables.post_tags.splice(middleRowId - 1, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createBelongsToManyDetachInvalidation(detachedPivot))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(counters.queryExecutions).toBe(subscriptionCount)
     expect(counters.emittedSnapshots).toBe(subscriptionCount)
     expect(emittedPatches).toBe(subscriptionCount)
-    expect(observedInitialTagName).toBe('Tag 500')
+    expect(observedInitialTagName).toBe(`Tag ${middleRowId}`)
     expect(observedPatch?.operations).toEqual([{
       op: 'splice',
-      path: [499, 'tags'],
+      path: [middleRowId - 1, 'tags'],
       index: 0,
       deleteCount: 1,
       values: [],
@@ -18985,7 +18994,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchBytes = jsonByteLength(observedPatch)
     expect(patchBytes).toBeLessThan(fullDataBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime model belongs-to-many relation detach patch transport',
       metrics: {
         emittedPatches,
@@ -18997,8 +19006,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         setupDurationMs,
         subscriptions: subscriptionCount,
       },
-    }))
-  }, longBenchmarkTimeoutMs)
+    })
+  })
 
   it('measures server patch operation coalescing for append bursts without expanding window slides', () => {
     const burstRows = createPatchBenchmarkRows()
@@ -19017,14 +19026,14 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       operations: compactedBurstOperations,
       version: 1,
     }
-    const slideBackfillRow = createPatchBenchmarkRows()[100]
+    const slideBackfillRow = createPatchBenchmarkRows()[pageSize]
     if (!slideBackfillRow) {
       throw new Error('Expected benchmark slide backfill row to exist.')
     }
 
     const slideOperations = [
       createSplicePatchOperation([], 0, 1, []),
-      createSplicePatchOperation([], 99, 0, [slideBackfillRow]),
+      createSplicePatchOperation([], pageSize - 1, 0, [slideBackfillRow]),
     ]
     const compactedSlideOperations = compactPatchOperations(slideOperations)
     const rawBurstBytes = jsonByteLength(rawBurstPatch)
@@ -19042,7 +19051,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(compactedSlideOperations).toEqual(slideOperations)
     expect(compactedBurstBytes).toBeLessThan(rawBurstBytes)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime server patch operation coalescing',
       metrics: {
         compactDurationMs,
@@ -19052,7 +19061,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         rawBurstOperations: burstOperations.length,
         slideOperations: compactedSlideOperations.length,
       },
-    }))
+    })
   })
 
   it('measures client store patch application with structural sharing', () => {
@@ -19078,7 +19087,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       throw new Error('Expected benchmark store snapshot to be initialized.')
     }
 
-    const operations = createClientPatchOperations(100)
+    const operations = createClientPatchOperations(pageSize)
     const changedIndexes = new Set(operations.map(operation => Number(operation.path[0])))
     const patchStartedAt = performance.now()
     store.setSnapshot(realtimeClientInternals.applyWireSnapshotPatch(store.snapshot!, {
@@ -19127,7 +19136,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(changedRows).toBe(operations.length)
     expect(preservedRows).toBe(patchRowCount - operations.length)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client structural sharing',
       metrics: {
         changedRows,
@@ -19138,7 +19147,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchRows: patchRowCount,
         preservedRows,
       },
-    }))
+    })
   })
 
   it('measures client store merge patch application with structural sharing', () => {
@@ -19168,9 +19177,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     store.setSnapshot(realtimeClientInternals.applyWireSnapshotPatch(store.snapshot!, {
       operations: [{
         op: 'merge',
-        path: [499],
+        path: [middleRowId - 1],
         fields: {
-          title: 'Updated 500',
+          title: `Updated ${middleRowId}`,
           user_id: 2,
         },
       }],
@@ -19183,18 +19192,18 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }
 
     expect(patchedRows).toHaveLength(patchRowCount)
-    expect(patchedRows[499]).not.toBe(initialRows[499])
-    expect(patchedRows[499]).toEqual({
-      id: 500,
-      title: 'Updated 500',
+    expect(patchedRows[middleRowId - 1]).not.toBe(initialRows[middleRowId - 1])
+    expect(patchedRows[middleRowId - 1]).toEqual({
+      id: middleRowId,
+      title: `Updated ${middleRowId}`,
       user_id: 2,
     })
-    expect(patchedRows[498]).toBe(initialRows[498])
-    expect(patchedRows[500]).toBe(initialRows[500])
+    expect(patchedRows[middleRowId - 2]).toBe(initialRows[middleRowId - 2])
+    expect(patchedRows[middleRowId]).toBe(initialRows[middleRowId])
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client merge structural sharing',
       metrics: {
         changedRows: 1,
@@ -19204,7 +19213,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchRows: patchRowCount,
         preservedRows: patchRowCount - 1,
       },
-    }))
+    })
   })
 
   it('measures client store nested wrapper merge patch application with structural sharing', () => {
@@ -19233,8 +19242,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         hasMorePages: true,
         lastPage: 10,
         pageName: 'page',
-        perPage: 100,
-        to: 100,
+        perPage: pageSize,
+        to: pageSize,
         total: patchRowCount,
       },
     }
@@ -19253,7 +19262,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     store.setSnapshot(realtimeClientInternals.applyWireSnapshotPatch(store.snapshot!, {
       operations: [{
         op: 'merge',
-        path: ['data', 50],
+        path: ['data', pageSize / 2],
         fields: {
           posts_avg_score: null,
           posts_max_score: null,
@@ -19273,21 +19282,21 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patchedWrapper.data).not.toBe(initialWrapper.data)
     expect(patchedWrapper.meta).toBe(initialWrapper.meta)
     expect(patchedWrapper.data).toHaveLength(patchRowCount)
-    expect(patchedWrapper.data[50]).not.toBe(initialWrapper.data[50])
-    expect(patchedWrapper.data[50]).toEqual({
-      id: 51,
-      name: 'Author 51',
+    expect(patchedWrapper.data[pageSize / 2]).not.toBe(initialWrapper.data[pageSize / 2])
+    expect(patchedWrapper.data[pageSize / 2]).toEqual({
+      id: pageSize / 2 + 1,
+      name: `Author ${pageSize / 2 + 1}`,
       posts_avg_score: null,
       posts_max_score: null,
       posts_min_score: null,
       posts_sum_score: 0,
     })
-    expect(patchedWrapper.data[49]).toBe(initialWrapper.data[49])
-    expect(patchedWrapper.data[51]).toBe(initialWrapper.data[51])
+    expect(patchedWrapper.data[pageSize / 2 - 1]).toBe(initialWrapper.data[pageSize / 2 - 1])
+    expect(patchedWrapper.data[pageSize / 2 + 1]).toBe(initialWrapper.data[pageSize / 2 + 1])
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client nested wrapper merge structural sharing',
       metrics: {
         changedRows: 1,
@@ -19298,7 +19307,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         preservedMeta: 1,
         preservedRows: patchRowCount - 1,
       },
-    }))
+    })
   })
 
   it('measures client store nested relation patch application with structural sharing', () => {
@@ -19327,7 +19336,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       version: 1,
     })
     const initialRows = store.snapshot?.data
-    const initialTargetRow = initialRows?.[499]
+    const initialTargetRow = initialRows?.[middleRowId - 1]
     const initialTargetTags = initialTargetRow?.tags
     const initialChangedTag = initialTargetTags?.[1]
     if (!initialRows || !initialTargetRow || !initialTargetTags || !initialChangedTag) {
@@ -19339,12 +19348,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       operations: [
         {
           op: 'replace',
-          path: [499, 'tags', 1, 'name'],
+          path: [middleRowId - 1, 'tags', 1, 'name'],
           value: 'Updated nested tag',
         },
         {
           op: 'replace',
-          path: [499, 'tags', 1, 'pivot', 'weight'],
+          path: [middleRowId - 1, 'tags', 1, 'pivot', 'weight'],
           value: 9_001,
         },
       ],
@@ -19352,7 +19361,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     }))
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
     const patchedRows = store.snapshot?.data
-    const patchedTargetRow = patchedRows?.[499]
+    const patchedTargetRow = patchedRows?.[middleRowId - 1]
     const patchedTargetTags = patchedTargetRow?.tags
     const patchedChangedTag = patchedTargetTags?.[1]
     if (!patchedRows || !patchedTargetRow || !patchedTargetTags || !patchedChangedTag) {
@@ -19365,7 +19374,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patchedTargetTags).not.toBe(initialTargetTags)
     expect(patchedChangedTag).not.toBe(initialChangedTag)
     expect(patchedChangedTag).toEqual({
-      id: 5_002,
+      id: middleRowId * 10 + 2,
       name: 'Updated nested tag',
       pivot: {
         weight: 9_001,
@@ -19373,12 +19382,12 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     })
     expect(patchedTargetTags[0]).toBe(initialTargetTags[0])
     expect(patchedTargetTags[2]).toBe(initialTargetTags[2])
-    expect(patchedRows[498]).toBe(initialRows[498])
-    expect(patchedRows[500]).toBe(initialRows[500])
+    expect(patchedRows[middleRowId - 2]).toBe(initialRows[middleRowId - 2])
+    expect(patchedRows[middleRowId]).toBe(initialRows[middleRowId])
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client nested relation structural sharing',
       metrics: {
         changedNestedRows: 1,
@@ -19390,7 +19399,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         preservedNestedRows: initialTargetTags.length - 1,
         preservedRows: patchRowCount - 1,
       },
-    }))
+    })
   })
 
   it('measures client store no-op patch suppression with version advancement', () => {
@@ -19421,9 +19430,9 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       store.setSnapshot(realtimeClientInternals.applyWireSnapshotPatch(store.snapshot!, {
         operations: [{
           op: 'merge',
-          path: [499],
+          path: [middleRowId - 1],
           fields: {
-            title: 'Post 500',
+            title: `Post ${middleRowId}`,
           },
         }],
         version,
@@ -19435,7 +19444,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(store.snapshot?.version).toBe(subscriptionCount + 1)
     expect(emittedSnapshots).toBe(1)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client no-op patch suppression',
       metrics: {
         emittedSnapshots,
@@ -19444,7 +19453,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchRows: patchRowCount,
         suppressedSnapshots: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures client store no-op replace patch suppression with version advancement', () => {
@@ -19475,8 +19484,8 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       store.setSnapshot(realtimeClientInternals.applyWireSnapshotPatch(store.snapshot!, {
         operations: [{
           op: 'replace',
-          path: [499, 'title'],
-          value: 'Post 500',
+          path: [middleRowId - 1, 'title'],
+          value: `Post ${middleRowId}`,
         }],
         version,
       }))
@@ -19484,11 +19493,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
 
     expect(store.snapshot?.data).toBe(initialRows)
-    expect(store.snapshot?.data[499]).toBe(initialRows[499])
+    expect(store.snapshot?.data[middleRowId - 1]).toBe(initialRows[middleRowId - 1])
     expect(store.snapshot?.version).toBe(subscriptionCount + 1)
     expect(emittedSnapshots).toBe(1)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client no-op replace patch suppression',
       metrics: {
         emittedSnapshots,
@@ -19497,7 +19506,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchRows: patchRowCount,
         suppressedSnapshots: subscriptionCount,
       },
-    }))
+    })
   })
 
   it('measures client store move patch application with structural sharing', () => {
@@ -19519,7 +19528,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       version: 1,
     })
     const initialRows = store.snapshot?.data
-    const movedRow = initialRows?.[499]
+    const movedRow = initialRows?.[middleRowId - 1]
     if (!initialRows || !movedRow) {
       throw new Error('Expected benchmark store snapshot to be initialized.')
     }
@@ -19529,7 +19538,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       operations: [{
         op: 'move',
         path: [],
-        from: 499,
+        from: middleRowId - 1,
         to: 0,
       }],
       version: 2,
@@ -19543,11 +19552,11 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patchedRows).toHaveLength(patchRowCount)
     expect(patchedRows[0]).toBe(movedRow)
     expect(patchedRows[1]).toBe(initialRows[0])
-    expect(patchedRows[500]).toBe(initialRows[500])
+    expect(patchedRows[middleRowId]).toBe(initialRows[middleRowId])
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client move structural sharing',
       metrics: {
         emittedSnapshots,
@@ -19555,7 +19564,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         patchOperations: 1,
         patchRows: patchRowCount,
       },
-    }))
+    })
   })
 
   it('measures client store limited-window slide patch application with structural sharing', () => {
@@ -19569,7 +19578,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       emittedSnapshots += 1
     })
 
-    const rows = createPatchBenchmarkRows().slice(0, 100)
+    const rows = createPatchBenchmarkRows().slice(0, pageSize)
     store.setSnapshot({
       name: 'benchmark.posts.clientSlidePatchRows',
       data: rows,
@@ -19577,7 +19586,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       version: 1,
     })
     const initialRows = store.snapshot?.data
-    const backfilledRow = createPatchBenchmarkRows()[100]
+    const backfilledRow = createPatchBenchmarkRows()[pageSize]
     if (!initialRows || !backfilledRow) {
       throw new Error('Expected benchmark store snapshot and backfill row to be initialized.')
     }
@@ -19595,7 +19604,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         {
           op: 'splice',
           path: [],
-          index: 99,
+          index: pageSize - 1,
           deleteCount: 0,
           values: [backfilledRow],
         },
@@ -19608,23 +19617,23 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       throw new Error('Expected benchmark store snapshot to remain initialized.')
     }
 
-    expect(patchedRows).toHaveLength(100)
+    expect(patchedRows).toHaveLength(pageSize)
     expect(patchedRows[0]).toBe(initialRows[1])
-    expect(patchedRows[98]).toBe(initialRows[99])
-    expect(patchedRows[99]).toBe(backfilledRow)
+    expect(patchedRows[pageSize - 2]).toBe(initialRows[pageSize - 1])
+    expect(patchedRows[pageSize - 1]).toBe(backfilledRow)
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client limited-window slide structural sharing',
       metrics: {
         emittedSnapshots,
         patchDurationMs,
         patchOperations: 2,
-        patchRows: 100,
-        preservedRows: 99,
+        patchRows: pageSize,
+        preservedRows: pageSize - 1,
       },
-    }))
+    })
   })
 
   it('measures client store paginated wrapper slide and meta patch application with structural sharing', () => {
@@ -19638,17 +19647,17 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       emittedSnapshots += 1
     })
 
-    const rows = createPatchBenchmarkRows().slice(0, 100)
+    const rows = createPatchBenchmarkRows().slice(0, pageSize)
     const wrapper: BenchmarkPaginatedRows = {
       data: rows,
       meta: {
         currentPage: 1,
         from: 1,
         hasMorePages: true,
-        lastPage: 11,
+        lastPage: Math.ceil((patchRowCount + 1) / pageSize),
         pageName: 'page',
-        perPage: 100,
-        to: 100,
+        perPage: pageSize,
+        to: pageSize,
         total: patchRowCount + 1,
       },
     }
@@ -19659,7 +19668,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
       version: 1,
     })
     const initialWrapper = store.snapshot?.data
-    const backfilledRow = createPatchBenchmarkRows()[100]
+    const backfilledRow = createPatchBenchmarkRows()[pageSize]
     if (!initialWrapper || !backfilledRow) {
       throw new Error('Expected benchmark wrapper snapshot and backfill row to be initialized.')
     }
@@ -19677,7 +19686,7 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
         {
           op: 'splice',
           path: ['data'],
-          index: 99,
+          index: pageSize - 1,
           deleteCount: 0,
           values: [backfilledRow],
         },
@@ -19700,10 +19709,10 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(patchedWrapper).not.toBe(initialWrapper)
     expect(patchedWrapper.data).not.toBe(initialWrapper.data)
     expect(patchedWrapper.meta).not.toBe(initialWrapper.meta)
-    expect(patchedWrapper.data).toHaveLength(100)
+    expect(patchedWrapper.data).toHaveLength(pageSize)
     expect(patchedWrapper.data[0]).toBe(initialWrapper.data[1])
-    expect(patchedWrapper.data[98]).toBe(initialWrapper.data[99])
-    expect(patchedWrapper.data[99]).toBe(backfilledRow)
+    expect(patchedWrapper.data[pageSize - 2]).toBe(initialWrapper.data[pageSize - 1])
+    expect(patchedWrapper.data[pageSize - 1]).toBe(backfilledRow)
     expect(patchedWrapper.meta).toEqual({
       ...initialWrapper.meta,
       total: patchRowCount,
@@ -19711,15 +19720,15 @@ describe('@holo-js/realtime invalidation benchmark', { timeout: longBenchmarkTim
     expect(store.snapshot?.version).toBe(2)
     expect(emittedSnapshots).toBe(2)
 
-    console.info(JSON.stringify({
+    reportBenchmark({
       benchmark: '@holo-js/realtime client paginated wrapper slide structural sharing',
       metrics: {
         emittedSnapshots,
         patchDurationMs,
         patchOperations: 3,
-        patchRows: 100,
-        preservedRows: 99,
+        patchRows: pageSize,
+        preservedRows: pageSize - 1,
       },
-    }))
+    })
   })
 })
