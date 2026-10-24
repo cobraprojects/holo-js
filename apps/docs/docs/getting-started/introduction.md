@@ -61,7 +61,7 @@ Only the database layer is always installed. You add the rest when you need them
 
 | | Supported |
 | --- | --- |
-| Frameworks | Next.js 16.3.8+, Nuxt 4.5.1+, SvelteKit 3.1.0+ with Svelte 5.57.1+, within each major version |
+| Frameworks | Next.js 16.4.3+, Nuxt 4.6.2+, SvelteKit 3.1.0+ with Svelte 5.57.1+, within each major version |
 | Databases | SQLite, PostgreSQL, MySQL |
 | Node.js | 22.18 or newer on the 22 line, 24, or 26 |
 | Package managers | npm, pnpm, Yarn, Bun |

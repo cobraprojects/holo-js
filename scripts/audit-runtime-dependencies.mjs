@@ -25,6 +25,33 @@ async function readAdvisories() {
   return JSON.parse(result.stdout)
 }
 
+async function readCatalogFloors() {
+  const contents = await readFile('package.json', 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '{}'
+    throw error
+  })
+  const manifest = JSON.parse(contents)
+  const catalog = manifest.workspaces?.catalog ?? manifest.catalog ?? {}
+  const floors = new Map()
+  for (const [name, range] of Object.entries(catalog)) {
+    if (!semver.validRange(range)) throw new Error(`Invalid catalog range: ${name}@${range}`)
+    floors.set(name, { range, version: semver.minVersion(range).version })
+  }
+  return floors
+}
+
+async function readFloorAdvisories(floors, advisories) {
+  if (reportArgs.length > 0) return advisories
+  const response = await fetch('https://registry.npmjs.org/-/npm/v1/security/advisories/bulk', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(Object.fromEntries([...floors].map(([name, floor]) => [name, [floor.version]]))),
+    signal: AbortSignal.timeout(60_000),
+  })
+  if (!response.ok) throw new Error(`Advisory lookup failed: ${response.status}`)
+  return response.json()
+}
+
 function isCalendarDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00Z`)
@@ -111,33 +138,45 @@ async function main() {
   const usedExceptions = new Set()
   const today = new Date().toISOString().slice(0, 10)
   const advisories = await readAdvisories()
-  if (!advisories || typeof advisories !== 'object' || Array.isArray(advisories)) throw new Error('Invalid advisory report')
+  const floors = await readCatalogFloors()
+  const floorAdvisories = await readFloorAdvisories(floors, advisories)
   let failures = 0
-  for (const [name, findings] of Object.entries(advisories)) {
-    if (!Array.isArray(findings)) throw new Error('Invalid advisory report')
-    for (const finding of findings) {
-      if (!['low', 'moderate', 'high', 'critical', 'info'].includes(finding.severity) || !semver.validRange(finding.vulnerable_versions) || typeof finding.title !== 'string' || typeof finding.url !== 'string') throw new Error('Invalid advisory report')
-      for (const version of inventory.get(name) ?? []) {
-        if (!semver.satisfies(version, finding.vulnerable_versions, { includePrerelease: true })) continue
-        const identity = `${name}@${version}`
-        const blocked = blockEveryPackage
-          ? ['moderate', 'high', 'critical'].includes(finding.severity)
-          : runtime.has(identity) && ['high', 'critical'].includes(finding.severity)
-        const exception = blocked
-          ? exceptions.find(candidate => candidate.advisory === finding.url && candidate.package === name && candidate.version === version)
-          : undefined
-        if (exception) {
-          usedExceptions.add(exception)
-          if (exception.expires >= today) {
-            console.log(`EXCEPT ${identity} (${finding.severity}): ${finding.title} ${finding.url} until ${exception.expires}`)
-            continue
-          }
-          console.log(`Expired exception for ${identity} ${finding.url} on ${exception.expires}`)
-        }
-        if (blocked) failures++
-        console.log(`${blocked ? 'BLOCK' : 'REPORT'} ${identity} (${finding.severity}): ${finding.title} ${finding.url}`)
+  function check(name, version, finding, reachable, label) {
+    if (!semver.satisfies(version, finding.vulnerable_versions, { includePrerelease: true })) return
+    const identity = `${name}@${version}`
+    const blocked = blockEveryPackage
+      ? ['moderate', 'high', 'critical'].includes(finding.severity)
+      : reachable && ['high', 'critical'].includes(finding.severity)
+    const exception = blocked
+      ? exceptions.find(candidate => candidate.advisory === finding.url && candidate.package === name && candidate.version === version)
+      : undefined
+    if (exception) {
+      usedExceptions.add(exception)
+      if (exception.expires >= today) {
+        console.log(`EXCEPT ${identity} (${finding.severity})${label}: ${finding.title} ${finding.url} until ${exception.expires}`)
+        return
       }
+      console.log(`Expired exception for ${identity} ${finding.url} on ${exception.expires}`)
     }
+    if (blocked) failures++
+    console.log(`${blocked ? 'BLOCK' : 'REPORT'} ${identity} (${finding.severity})${label}: ${finding.title} ${finding.url}`)
+  }
+  function findingsOf(report) {
+    if (!report || typeof report !== 'object' || Array.isArray(report)) throw new Error('Invalid advisory report')
+    return Object.entries(report).flatMap(([name, findings]) => {
+      if (!Array.isArray(findings)) throw new Error('Invalid advisory report')
+      return findings.map(finding => {
+        if (!['low', 'moderate', 'high', 'critical', 'info'].includes(finding.severity) || !semver.validRange(finding.vulnerable_versions) || typeof finding.title !== 'string' || typeof finding.url !== 'string') throw new Error('Invalid advisory report')
+        return [name, finding]
+      })
+    })
+  }
+  for (const [name, finding] of findingsOf(advisories)) {
+    for (const version of inventory.get(name) ?? []) check(name, version, finding, runtime.has(`${name}@${version}`), '')
+  }
+  for (const [name, finding] of findingsOf(floorAdvisories)) {
+    const floor = floors.get(name)
+    if (floor) check(name, floor.version, finding, true, ` catalog floor ${floor.range}`)
   }
   const isToolingOnly = candidate => inventory.get(candidate.package)?.has(candidate.version) && !runtime.has(`${candidate.package}@${candidate.version}`)
   const checkedExceptions = blockEveryPackage ? exceptions : exceptions.filter(candidate => !isToolingOnly(candidate))

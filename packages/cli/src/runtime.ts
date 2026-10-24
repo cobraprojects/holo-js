@@ -12,6 +12,7 @@ import {
   resolveGeneratedSchemaPath,
   CLI_RUNTIME_ROOT,
 } from './project'
+import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { fileExists } from './fs-utils'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
@@ -48,6 +49,7 @@ export async function initializeProjectRuntime(
   projectRoot: string,
   options: ProjectRuntimeInitializationOptions = {},
 ): Promise<HoloRuntime> {
+  await prepareNuxtTsconfigSnapshot(projectRoot)
   const { initializeHolo } = await import('@holo-js/core')
   return initializeHolo(projectRoot, options)
 }
