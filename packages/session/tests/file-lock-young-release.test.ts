@@ -1,29 +1,23 @@
-import type * as FsPromises from 'node:fs/promises'
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import type { PathLike } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFileSessionStore, fileSessionDriverInternals } from '../src'
+import type * as SessionModule from '../src'
+import { advanceTo, advanceUntil, finishesWithoutTheClock, useFakeClock } from './support/fake-clock'
+import { busyError, createMemoryFs, type MemoryFs } from './support/memory-fs'
 
-const tombstoneUnlinks = vi.hoisted((): { attempts: number, gate?: Promise<void> } => ({ attempts: 0 }))
+const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 
-vi.mock('node:fs/promises', async importOriginal => {
-  const actual = await importOriginal<typeof FsPromises>()
-  const { createWindowsFsModel } = await import('./support/windows-fs-model.mjs')
-  const model = createWindowsFsModel(actual, { freshFileMs: 1_000 })
-  return {
-    ...actual,
-    rename: model.rename,
-    rmdir: model.rmdir,
-    unlink: async (...args: Parameters<typeof actual.unlink>) => {
-      if (String(args[0]).endsWith('.released')) {
-        tombstoneUnlinks.attempts += 1
-        if (tombstoneUnlinks.gate) await tombstoneUnlinks.gate
-      }
-      return await model.unlink(...args)
-    },
-  }
-})
+vi.mock('node:fs/promises', async () => (await import('./support/memory-fs')).memoryFsModule(() => memory.fs))
+vi.mock('node:timers/promises', async () => (await import('./support/fake-clock')).fakeTimersPromises())
+
+const FRESH_FILE_MS = 1_000
+const TOMBSTONE_RETRY_BUDGET_MS = 5_000
+
+const root = resolve('/memory/young-release')
+const recordPath = join(root, 'session.json')
+let fs: MemoryFs
+let session: typeof SessionModule
+let tombstoneUnlinks: { attempts: number, gate?: Promise<void> }
 
 function holdTombstoneRemovals(): () => void {
   let open: () => void = () => undefined
@@ -34,101 +28,90 @@ function holdTombstoneRemovals(): () => void {
   }
 }
 
-let root: string
-let recordPath: string
-
-async function leftoverTombstones(): Promise<string[]> {
-  return (await readdir(root)).filter(name => name.endsWith('.released'))
+function leftoverTombstones(): string[] {
+  return fs.names(root).filter(name => name.endsWith('.released'))
 }
 
-async function waitForFirstRemoval(initialCount: number): Promise<void> {
-  const deadline = Date.now() + 10_000
-  while ((await leftoverTombstones()).length >= initialCount && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 50))
-  }
+async function makeDirectory(path: PathLike): Promise<undefined> {
+  await fs.promises.mkdir(String(path))
+  return undefined
 }
 
-async function settledLeftoverTombstones(): Promise<string[]> {
-  const deadline = Date.now() + 10_000
-  let current = await leftoverTombstones()
-  let unchangedReads = 0
-  while (unchangedReads < 3 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 100))
-    const next = await leftoverTombstones()
-    unchangedReads = next.length === current.length ? unchangedReads + 1 : 0
-    current = next
-  }
-  return current
+async function acquireAndRelease(): Promise<void> {
+  await (await session.fileSessionDriverInternals.acquireRecordLock(recordPath, makeDirectory))()
 }
 
 describe('releasing a freshly created lease under a Windows filesystem', () => {
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'holo-file-lock-young-'))
-    recordPath = join(root, 'session.json')
-    tombstoneUnlinks.attempts = 0
+    useFakeClock()
+    fs = createMemoryFs({ platform: 'win32' })
+    memory.fs = fs
+    tombstoneUnlinks = { attempts: 0 }
+    fs.addHook(async (operation, path) => {
+      if (operation !== 'unlink') return
+      if (path.endsWith('.released')) {
+        tombstoneUnlinks.attempts += 1
+        if (tombstoneUnlinks.gate) await tombstoneUnlinks.gate
+      }
+      const born = await fs.promises.stat(path).then(stats => stats.birthtimeMs, () => undefined)
+      if (born !== undefined && Date.now() - born < FRESH_FILE_MS) throw busyError('unlink', path)
+    })
+    await fs.promises.mkdir(root, { recursive: true })
+    vi.resetModules()
+    session = await import('../src')
   })
 
-  afterEach(async () => {
-    await rm(root, { force: true, recursive: true })
+  afterEach(() => {
+    vi.useRealTimers()
+    memory.fs = undefined
   })
 
   it('does not block the release on unlinking the young owner file', async () => {
     const openGate = holdTombstoneRemovals()
-    try {
-      const release = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-      await release()
-      expect(await leftoverTombstones()).toHaveLength(1)
-    } finally {
-      openGate()
-    }
+    await finishesWithoutTheClock(acquireAndRelease(), 'Releasing a young lease')
+    expect(leftoverTombstones()).toHaveLength(1)
+    expect(fs.names(root)).not.toContain('session.json.lock')
+    openGate()
   })
 
   it('lets the next writer acquire while the released young lease is still being unlinked', async () => {
     const openGate = holdTombstoneRemovals()
-    try {
-      await (await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir))()
-      const next = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-      expect(await leftoverTombstones()).toHaveLength(1)
-      await next()
-    } finally {
-      openGate()
-    }
+    await finishesWithoutTheClock(acquireAndRelease(), 'Releasing a young lease')
+    const next = await finishesWithoutTheClock(session.fileSessionDriverInternals.acquireRecordLock(recordPath, makeDirectory), 'The next acquisition')
+    expect(leftoverTombstones()).toHaveLength(1)
+    await next()
+    openGate()
   })
 
   it('bounds the unlink attempts for a burst of releases and removes every tombstone', async () => {
     const releases = 30
-    for (let index = 0; index < releases; index += 1) {
-      await (await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir))()
-    }
+    await finishesWithoutTheClock((async () => {
+      for (let index = 0; index < releases; index += 1) await acquireAndRelease()
+    })(), 'A burst of uncontended releases')
+    expect(leftoverTombstones()).toHaveLength(releases)
 
-    const deadline = Date.now() + 10_000
-    while ((await leftoverTombstones()).length > 0 && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 50))
-    }
-
-    expect(await leftoverTombstones()).toEqual([])
+    await advanceUntil(() => leftoverTombstones().length === 0, 'every tombstone to be removed', TOMBSTONE_RETRY_BUDGET_MS)
     expect(tombstoneUnlinks.attempts).toBeLessThanOrEqual(releases * 10)
-  }, 20_000)
+  })
 
   it('does not wait for queued tombstone removals during a sustained burst, and caps the queue, leaving the overflow for the GC sweep', async () => {
+    const releases = 300
     const openGate = holdTombstoneRemovals()
-    try {
-      for (let index = 0; index < 300; index += 1) {
-        const release = await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
-        await release()
-      }
-      expect(await leftoverTombstones()).toHaveLength(300)
-    } finally {
-      openGate()
-    }
+    await finishesWithoutTheClock((async () => {
+      for (let index = 0; index < releases; index += 1) await acquireAndRelease()
+    })(), 'A sustained burst of releases')
+    expect(leftoverTombstones()).toHaveLength(releases)
+    openGate()
 
-    await waitForFirstRemoval(300)
-    const overflow = await settledLeftoverTombstones()
+    await advanceUntil(() => leftoverTombstones().length < releases, 'the first queued tombstone removal', TOMBSTONE_RETRY_BUDGET_MS)
+    await advanceTo(Date.now() + 2 * TOMBSTONE_RETRY_BUDGET_MS)
+    const overflow = leftoverTombstones()
     expect(overflow.length).toBeGreaterThan(0)
-    expect(overflow.length).toBeLessThan(300)
+    expect(overflow.length).toBeLessThan(releases)
+    await advanceTo(Date.now() + 2 * TOMBSTONE_RETRY_BUDGET_MS)
+    expect(leftoverTombstones()).toEqual(overflow)
 
-    await new Promise(resolve => setTimeout(resolve, 1_100))
-    await createFileSessionStore(root).sweepExpired?.(new Date())
-    expect(await leftoverTombstones()).toEqual([])
-  }, 60_000)
+    await session.createFileSessionStore(root).sweepExpired?.(new Date())
+    expect(leftoverTombstones()).toEqual([])
+  })
 })
