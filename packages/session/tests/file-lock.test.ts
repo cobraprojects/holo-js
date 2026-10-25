@@ -1,4 +1,4 @@
-import { execFileSync, fork, type ChildProcess } from 'node:child_process'
+import { fork, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,13 +6,15 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createFileSessionStore, type SessionRecord } from '../src'
 
-let packageBuildRoot: string | undefined
 let root: string | undefined
 let owner: ChildProcess | undefined
 let record: SessionRecord
 
 function forkLockOwner(sessionRoot: string, sessionId: string, driverEntry: string): ChildProcess {
-  return fork(new URL('./support/file-session-worker.mjs', import.meta.url), [sessionRoot, sessionId, driverEntry], { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  return fork(new URL('./support/file-session-worker.mjs', import.meta.url), [sessionRoot, sessionId, driverEntry], {
+    execArgv: ['--conditions=@holo-js/source', '--import', new URL('./support/source-hooks.mjs', import.meta.url).href],
+    stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+  })
 }
 
 async function waitUntilLocked(child: ChildProcess): Promise<void> {
@@ -38,20 +40,17 @@ async function stopLockOwner(child: ChildProcess): Promise<void> {
 
 describe('file session locking with a real owner process', () => {
   beforeAll(async () => {
-    packageBuildRoot = await mkdtemp(resolve(import.meta.dirname, '../.tmp-file-session-build-'))
-    execFileSync('bun', ['run', 'build'], { cwd: resolve(import.meta.dirname, '..'), env: { ...process.env, HOLO_BUILD_OUT_DIR: packageBuildRoot }, stdio: 'pipe' })
     root = await mkdtemp(join(tmpdir(), 'holo-file-lock-'))
     const now = new Date()
     record = { id: randomUUID(), store: 'file', data: { userId: 42 }, createdAt: now, lastActivityAt: now, expiresAt: new Date(now.getTime() - 1_000) }
     await createFileSessionStore(root).write(record)
-    owner = forkLockOwner(root, record.id, join(packageBuildRoot, 'index.mjs'))
+    owner = forkLockOwner(root, record.id, resolve(import.meta.dirname, '../src/index.ts'))
     await waitUntilLocked(owner)
-  }, 60_000)
+  })
 
   afterAll(async () => {
     if (owner) await stopLockOwner(owner)
     if (root) await rm(root, { force: true, recursive: true })
-    if (packageBuildRoot) await rm(packageBuildRoot, { force: true, recursive: true })
   })
 
   it('keeps the lock of a live owner process with old timestamps, and reclaims it once that process exits', async () => {

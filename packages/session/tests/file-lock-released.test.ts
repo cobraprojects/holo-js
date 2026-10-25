@@ -1,42 +1,38 @@
-import type * as FsPromises from 'node:fs/promises'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { hostname, tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { setTimeout as delay } from 'node:timers/promises'
+import { mkdir } from 'node:fs/promises'
+import { hostname } from 'node:os'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
-import type { WindowsFsState } from './support/windows-fs'
+import { advanceUntil, finishesWithoutTheClock, track, useFakeClock } from '../../../tests/support/fake-clock'
+import { busyError, createMemoryFs, ioError, type MemoryFs } from '../../../tests/support/memory-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), renameAttempts: new Map(), writeAttempts: new Map() }))
-const tornLeaseReads = vi.hoisted(() => ({ armed: false, ownerReads: 0 }))
+const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 
-vi.mock('node:fs/promises', async importOriginal => {
-  const actual = await importOriginal<typeof FsPromises>()
-  const { windowsFsOverrides } = await import('./support/windows-fs')
-  return {
-    ...actual,
-    ...windowsFsOverrides(actual, windowsFs),
-    readFile: async (...args: Parameters<typeof actual.readFile>) => {
-      const contents = await actual.readFile(...args)
-      if (!String(args[0]).includes('owner.')) return contents
-      tornLeaseReads.ownerReads += 1
-      if (!tornLeaseReads.armed || !String(contents).includes('"released":true')) return contents
-      tornLeaseReads.armed = false
-      return String(contents).replace(/[^\n]/g, ' ')
-    },
-  }
-})
+vi.mock('node:fs/promises', async () => (await import('../../../tests/support/memory-fs')).memoryFsModule(() => memory.fs))
+vi.mock('node:timers/promises', async () => (await import('../../../tests/support/fake-clock')).fakeTimersPromises())
 
 type SessionApi = typeof SessionModule
 type AtomicStore = Omit<SessionModule.SessionStore, 'flash' | 'take'> & Required<Pick<SessionModule.SessionStore, 'flash' | 'take'>>
 
-const WAIT_TIMEOUT_MS = 4_000
+const STALL_MS = 5_000
+const POLL_MS = 5
+const RELEASE_RETRY_FIRST_MS = 5
+const RELEASE_RETRY_BUDGET_MS = 1_000
 
-let root: string
-let recordPath: string
-let lockPath: string
+const root = resolve('/memory/released')
+const recordPath = join(root, 'session.json')
+const lockPath = `${recordPath}.lock`
 const reports: unknown[] = []
+const faults = {
+  blockedRenamePrefixes: new Set<string>(),
+  blockedWritePrefixes: new Set<string>(),
+  ioErrorOpenPrefixes: new Set<string>(),
+  ioErrorRenamePrefixes: new Set<string>(),
+}
+let fs: MemoryFs
+let publishedReleases: Set<string>
+let tornLeaseReads: { armed: boolean, ownerReads: number }
 
 function leasePrefix(path: string): string {
   return join(path, 'owner.')
@@ -49,6 +45,15 @@ function lockPathFor(sessionId: string): string {
 function sessionRecord(id: string): SessionModule.SessionRecord {
   const now = new Date()
   return { id, store: 'file', data: {}, createdAt: now, lastActivityAt: now, expiresAt: new Date(now.getTime() + 60_000) }
+}
+
+function startsWithAny(path: string, prefixes: Set<string>): boolean {
+  for (const prefix of prefixes) if (path.startsWith(prefix)) return true
+  return false
+}
+
+function clearFilesystemFaults(): void {
+  for (const prefixes of Object.values(faults)) prefixes.clear()
 }
 
 async function loadProcess(): Promise<SessionApi> {
@@ -66,57 +71,58 @@ async function openStore(session: SessionApi): Promise<AtomicStore> {
   return { ...store, flash, take }
 }
 
-function isMissing(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === 'ENOENT'
+function isAbsent(path: string): boolean {
+  return !fs.names(root).includes(path.slice(root.length + 1))
 }
 
-async function isAbsent(path: string): Promise<boolean> {
-  return await readdir(path).then(() => false, isMissing)
-}
-
-async function publishedAsReleased(lock: string): Promise<boolean> {
-  const leaseName = (await readdir(lock).catch((): string[] => [])).find(name => name.startsWith('owner.'))
-  return leaseName !== undefined && (await readFile(join(lock, leaseName), 'utf8')).includes('"released":true')
-}
-
-async function waitFor(description: string, condition: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS
-  while (!(await condition())) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`)
-    await delay(5)
+function interceptLeaseContents(): void {
+  const { readFile, writeFile } = fs.promises
+  fs.promises.readFile = async (path: string) => {
+    const contents = await readFile(path)
+    if (!path.includes('owner.')) return contents
+    tornLeaseReads.ownerReads += 1
+    if (!tornLeaseReads.armed || !contents.includes('"released":true')) return contents
+    tornLeaseReads.armed = false
+    return contents.replace(/[^\n]/g, ' ')
+  }
+  fs.promises.writeFile = async (path: string, data: string, options?: { readonly flag?: string }) => {
+    await writeFile(path, data, options)
+    if (data.includes('"released":true')) publishedReleases.add(resolve(path))
   }
 }
 
-function clearFilesystemFaults(): void {
-  windowsFs.blockedRenamePrefixes.clear()
-  windowsFs.blockedUnlinkPrefixes.clear()
-  windowsFs.blockedWritePrefixes.clear()
-  windowsFs.ioErrorOpenPrefixes.clear()
-  windowsFs.ioErrorRenamePrefixes.clear()
-  windowsFs.ioErrorUnlinkPrefixes.clear()
-}
-
-describe('released file locks across processes', () => {
+describe.each(['posix', 'win32'] as const)('released file locks across processes on a %s filesystem', platform => {
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'holo-file-lock-released-'))
-    recordPath = join(root, 'session.json')
-    lockPath = `${recordPath}.lock`
+    useFakeClock()
+    fs = createMemoryFs({ platform })
+    memory.fs = fs
     reports.length = 0
-    tornLeaseReads.armed = false
-    tornLeaseReads.ownerReads = 0
+    publishedReleases = new Set()
+    tornLeaseReads = { armed: false, ownerReads: 0 }
+    fs.addHook((operation, path) => {
+      if (operation === 'open' && startsWithAny(path, faults.ioErrorOpenPrefixes)) throw ioError('open', path)
+      if (operation === 'writeFile' && startsWithAny(path, faults.blockedWritePrefixes)) throw busyError('write', path)
+      if (operation === 'rename' && startsWithAny(path, faults.ioErrorRenamePrefixes)) throw ioError('rename', path)
+      if (operation === 'rename' && startsWithAny(path, faults.blockedRenamePrefixes)) throw busyError('rename', path)
+    })
+    interceptLeaseContents()
+    await fs.promises.mkdir(root, { recursive: true })
   })
 
-  afterEach(async () => {
+  afterEach(() => {
     clearFilesystemFaults()
-    await rm(root, { force: true, recursive: true })
+    vi.useRealTimers()
+    memory.fs = undefined
   })
 
   it('a second store on the same root completes its flash after the first store releases the lock', async () => {
     const firstStore = await openStore(await loadProcess())
     const secondStore = await openStore(await loadProcess())
-    await firstStore.write(sessionRecord('session'))
+    await finishesWithoutTheClock(firstStore.write(sessionRecord('session')), 'Writing an uncontended session')
 
-    await Promise.all([firstStore.flash('session', 'first', 1), secondStore.flash('session', 'second', 2)])
+    const flashes = track(Promise.all([firstStore.flash('session', 'first', 1), secondStore.flash('session', 'second', 2)]))
+    await advanceUntil(flashes.settled, 'both flashes to finish', 2 * POLL_MS)
+    await flashes.result
 
     expect(await firstStore.take('session', 'first')).toEqual({ found: true, value: 1 })
     expect(await firstStore.take('session', 'second')).toEqual({ found: true, value: 2 })
@@ -125,101 +131,98 @@ describe('released file locks across processes', () => {
   it('a completed operation leaves no lock directory on disk', async () => {
     const store = await openStore(await loadProcess())
 
-    await store.write(sessionRecord('session'))
-    await expect(readdir(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    await expect(fs.promises.readdir(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
 
-    await store.flash('session', 'key', 'value')
-    await expect(readdir(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await finishesWithoutTheClock(store.flash('session', 'key', 'value'), 'Flashing a value')
+    await expect(fs.promises.readdir(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('a retry frees the lock of every record whose release could neither move the lease aside nor publish it', async () => {
     const store = await openStore(await loadProcess())
     const sessionIds = ['session-a', 'session-b', 'session-c']
-    for (const sessionId of sessionIds) await store.write(sessionRecord(sessionId))
+    for (const sessionId of sessionIds) await finishesWithoutTheClock(store.write(sessionRecord(sessionId)), `Writing ${sessionId}`)
 
     for (const sessionId of sessionIds) {
-      windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPathFor(sessionId)))
-      windowsFs.blockedWritePrefixes.add(lockPathFor(sessionId))
-      await store.flash(sessionId, 'key', sessionId)
+      faults.blockedRenamePrefixes.add(leasePrefix(lockPathFor(sessionId)))
+      faults.blockedWritePrefixes.add(lockPathFor(sessionId))
+      await finishesWithoutTheClock(store.flash(sessionId, 'key', sessionId), `Flashing ${sessionId} while its release is blocked`)
     }
-    for (const sessionId of sessionIds) expect(await readdir(lockPathFor(sessionId))).toHaveLength(1)
+    for (const sessionId of sessionIds) expect(fs.names(lockPathFor(sessionId))).toHaveLength(1)
 
     clearFilesystemFaults()
-    for (const sessionId of sessionIds) {
-      await waitFor(`the lock for ${sessionId} to be removed by its retry`, () => isAbsent(lockPathFor(sessionId)))
-    }
+    await advanceUntil(() => sessionIds.every(sessionId => isAbsent(lockPathFor(sessionId))), 'every lock to be removed by its retry', 2 * RELEASE_RETRY_FIRST_MS)
   })
 
   it('another store reclaims a lease whose release was published as released because it could not be moved aside', async () => {
     const releasingStore = await openStore(await loadProcess())
     const successor = await openStore(await loadProcess())
-    await releasingStore.write(sessionRecord('session'))
-    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
-    await releasingStore.flash('session', 'first', 1)
-    windowsFs.blockedRenamePrefixes.clear()
+    await finishesWithoutTheClock(releasingStore.write(sessionRecord('session')), 'Writing a session')
+    faults.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    await finishesWithoutTheClock(releasingStore.flash('session', 'first', 1), 'Flashing while the lease cannot move aside')
+    faults.blockedRenamePrefixes.clear()
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('the next writer will reclaim it')
 
-    await successor.flash('session', 'second', 2)
+    await finishesWithoutTheClock(successor.flash('session', 'second', 2), 'Flashing over a published release')
 
     expect(await successor.take('session', 'second')).toEqual({ found: true, value: 2 })
-    expect(await isAbsent(lockPath)).toBe(true)
+    expect(isAbsent(lockPath)).toBe(true)
   })
 
   it('the releasing store reclaims its own unpublished lease on its next operation', async () => {
     const store = await openStore(await loadProcess())
-    await store.write(sessionRecord('session'))
-    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
-    windowsFs.blockedWritePrefixes.add(lockPath)
-    await store.flash('session', 'first', 1)
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    faults.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    faults.blockedWritePrefixes.add(lockPath)
+    await finishesWithoutTheClock(store.flash('session', 'first', 1), 'Flashing while the release is blocked')
 
-    await store.flash('session', 'second', 2)
+    await finishesWithoutTheClock(store.flash('session', 'second', 2), 'Flashing over its own unpublished lease')
 
     clearFilesystemFaults()
-    await waitFor('the lock to be removed once the faults clear', () => isAbsent(lockPath))
+    await advanceUntil(() => isAbsent(lockPath), 'the lock to be removed once the faults clear', 2 * RELEASE_RETRY_FIRST_MS)
     expect(await store.take('session', 'first')).toEqual({ found: true, value: 1 })
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
   })
 
   it('reports that other processes must wait once the release retries stop publishing it', async () => {
     const store = await openStore(await loadProcess())
-    await store.write(sessionRecord('session'))
-    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
-    windowsFs.blockedWritePrefixes.add(lockPath)
-    await store.flash('session', 'key', 1)
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    faults.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    faults.blockedWritePrefixes.add(lockPath)
+    await finishesWithoutTheClock(store.flash('session', 'key', 1), 'Flashing while the release is blocked')
 
-    await waitFor('the release retries to give up and report', async () => reports.length > 0)
+    await advanceUntil(() => reports.length > 0, 'the release retries to give up and report', RELEASE_RETRY_BUDGET_MS)
     expect(reports).toHaveLength(1)
     expect((reports[0] as Error).message).toContain('other processes may wait until this process reclaims the lease or exits')
-    expect(await readdir(lockPath)).toHaveLength(1)
+    expect(fs.names(lockPath)).toHaveLength(1)
     expect((reports[0] as Error).cause).toMatchObject({ code: 'EPERM' })
   })
 
   it('an I/O error while moving the lease aside rejects the release and the next operation recovers', async () => {
     const store = await openStore(await loadProcess())
-    await store.write(sessionRecord('session'))
-    windowsFs.ioErrorRenamePrefixes.add(leasePrefix(lockPath))
-    windowsFs.blockedWritePrefixes.add(lockPath)
-    await expect(store.flash('session', 'first', 1)).rejects.toMatchObject({ code: 'EIO' })
-    await waitFor('the scheduled release retry to report its failure', async () => reports.length > 0)
-    windowsFs.ioErrorRenamePrefixes.clear()
-    windowsFs.blockedWritePrefixes.clear()
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    faults.ioErrorRenamePrefixes.add(leasePrefix(lockPath))
+    faults.blockedWritePrefixes.add(lockPath)
+    await expect(finishesWithoutTheClock(store.flash('session', 'first', 1), 'Flashing while the lease rename fails')).rejects.toMatchObject({ code: 'EIO' })
+    await advanceUntil(() => reports.length > 0, 'the scheduled release retry to report its failure', 2 * RELEASE_RETRY_FIRST_MS)
+    clearFilesystemFaults()
 
-    await store.flash('session', 'second', 2)
+    await finishesWithoutTheClock(store.flash('session', 'second', 2), 'Flashing after the faults clear')
 
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
-    expect(await isAbsent(lockPath)).toBe(true)
+    expect(isAbsent(lockPath)).toBe(true)
   })
 
   it('an I/O error during acquisition leaves no pending lock directory and the next operation recovers', async () => {
     const store = await openStore(await loadProcess())
-    await store.write(sessionRecord('session'))
-    windowsFs.ioErrorOpenPrefixes.add(root)
-    await expect(store.flash('session', 'first', 1)).rejects.toMatchObject({ code: 'EIO' })
-    expect((await readdir(root)).filter(name => name.endsWith('.pending'))).toEqual([])
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    faults.ioErrorOpenPrefixes.add(root)
+    await expect(finishesWithoutTheClock(store.flash('session', 'first', 1), 'Flashing while opening the lease fails')).rejects.toMatchObject({ code: 'EIO' })
+    expect(fs.names(root).filter(name => name.endsWith('.pending'))).toEqual([])
 
-    windowsFs.ioErrorOpenPrefixes.clear()
-    await store.flash('session', 'second', 2)
+    clearFilesystemFaults()
+    await finishesWithoutTheClock(store.flash('session', 'second', 2), 'Flashing after the faults clear')
 
     expect(await store.take('session', 'second')).toEqual({ found: true, value: 2 })
   })
@@ -227,33 +230,34 @@ describe('released file locks across processes', () => {
   it('lets another store proceed once a scheduled retry publishes the release', async () => {
     const releasingStore = await openStore(await loadProcess())
     const successor = await openStore(await loadProcess())
-    await releasingStore.write(sessionRecord('session'))
-    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
-    windowsFs.blockedWritePrefixes.add(lockPath)
-    await releasingStore.flash('session', 'first', 1)
+    await finishesWithoutTheClock(releasingStore.write(sessionRecord('session')), 'Writing a session')
+    faults.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    faults.blockedWritePrefixes.add(lockPath)
+    await finishesWithoutTheClock(releasingStore.flash('session', 'first', 1), 'Flashing while the release is blocked')
 
-    windowsFs.blockedWritePrefixes.clear()
-    await waitFor('the retry to publish the released marker', () => publishedAsReleased(lockPath))
-    windowsFs.blockedRenamePrefixes.clear()
-    await successor.flash('session', 'second', 2)
+    faults.blockedWritePrefixes.clear()
+    await advanceUntil(() => publishedReleases.size > 0, 'the retry to publish the released marker', 2 * RELEASE_RETRY_FIRST_MS)
+    faults.blockedRenamePrefixes.clear()
+    await finishesWithoutTheClock(successor.flash('session', 'second', 2), 'Flashing over the published release')
 
     expect(await successor.take('session', 'second')).toEqual({ found: true, value: 2 })
-    expect(await isAbsent(lockPath)).toBe(true)
+    expect(isAbsent(lockPath)).toBe(true)
   })
 
   it('takes over when a waiter first reads a torn released lease', async () => {
     const holderProcess = await loadProcess()
-    await (await openStore(holderProcess)).write(sessionRecord('session'))
-    const holder = await holderProcess.fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
+    await finishesWithoutTheClock((await openStore(holderProcess)).write(sessionRecord('session')), 'Writing a session')
+    const holder = await finishesWithoutTheClock(holderProcess.fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir), 'Acquiring the free lock')
     const waiter = await openStore(await loadProcess())
-    const waiting = waiter.flash('session', 'key', 1)
-    await waitFor('the waiter to read the held lease', async () => tornLeaseReads.ownerReads > 0)
+    const waiting = track(waiter.flash('session', 'key', 1))
+    await advanceUntil(() => tornLeaseReads.ownerReads > 0, 'the waiter to read the held lease', POLL_MS)
     tornLeaseReads.armed = true
-    windowsFs.blockedRenamePrefixes.add(leasePrefix(lockPath))
-    await holder()
-    windowsFs.blockedRenamePrefixes.clear()
+    faults.blockedRenamePrefixes.add(leasePrefix(lockPath))
+    await finishesWithoutTheClock(holder(), 'Releasing the held lock')
+    faults.blockedRenamePrefixes.clear()
 
-    await waiting
+    await advanceUntil(waiting.settled, 'the waiter to take over the released lease', 4 * POLL_MS)
+    await waiting.result
     expect(tornLeaseReads.armed).toBe(false)
     expect(await waiter.take('session', 'key')).toEqual({ found: true, value: 1 })
   })
@@ -261,22 +265,26 @@ describe('released file locks across processes', () => {
   it('does not reclaim a lease its own process still holds', async () => {
     const session = await loadProcess()
     const store = await openStore(session)
-    await store.write(sessionRecord('session'))
-    const holder = await session.fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)
+    await finishesWithoutTheClock(store.write(sessionRecord('session')), 'Writing a session')
+    const holder = await finishesWithoutTheClock(session.fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir), 'Acquiring the free lock')
 
-    await expect(store.flash('session', 'key', 1)).rejects.toThrow('Timed out acquiring file session lock')
-    await holder()
-    await store.flash('session', 'key', 1)
+    const blocked = track(store.flash('session', 'key', 1))
+    await advanceUntil(blocked.settled, 'the flash to give up on the held lock', STALL_MS + 2 * POLL_MS)
+    await expect(blocked.result).rejects.toThrow('Timed out acquiring file session lock')
+    await finishesWithoutTheClock(holder(), 'Releasing the held lock')
+    await finishesWithoutTheClock(store.flash('session', 'key', 1), 'Flashing after the release')
 
     expect(await store.take('session', 'key')).toEqual({ found: true, value: 1 })
-  }, 15_000)
+  })
 
   it('does not mistake a live lease from another instance with the same PID for its own', async () => {
     const store = await openStore(await loadProcess())
     const token = randomUUID()
-    await mkdir(lockPath)
-    await writeFile(join(lockPath, `owner.${token}.json`), JSON.stringify({ host: hostname(), pid: process.pid, processToken: randomUUID(), token }))
+    await fs.promises.mkdir(lockPath)
+    await fs.promises.writeFile(join(lockPath, `owner.${token}.json`), JSON.stringify({ host: hostname(), pid: process.pid, processToken: randomUUID(), token }))
 
-    await expect(store.write(sessionRecord('session'))).rejects.toThrow('Timed out acquiring file session lock')
-  }, 15_000)
+    const blocked = track(store.write(sessionRecord('session')))
+    await advanceUntil(blocked.settled, 'the write to give up on the live lease', STALL_MS + 2 * POLL_MS)
+    await expect(blocked.result).rejects.toThrow('Timed out acquiring file session lock')
+  })
 })

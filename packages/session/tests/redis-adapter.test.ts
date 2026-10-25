@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { setTimeout } from 'node:timers/promises'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from './support/redis'
 import type { SessionRecord, SessionStoreTakeResult } from '../src/contracts'
 import { createSessionRedisAdapter } from '../src/drivers/redis-adapter'
 
-async function createStore(options: { cluster?: boolean; socket?: boolean; url?: boolean; tls?: boolean } = {}) {
-  const service = await startRedisService(options)
+type StoreOptions = { cluster?: boolean; socket?: boolean; url?: boolean; tls?: boolean }
+type RedisService = Awaited<ReturnType<typeof startRedisService>>
+
+async function createStore(options: StoreOptions = {}, running?: RedisService) {
+  const service = running ?? await startRedisService(options)
   const port = service.ports[0]
   if (!port) throw new Error('Expected Redis service port')
   const prefix = `holo:session:${randomUUID()}:`
@@ -35,6 +37,20 @@ async function createStore(options: { cluster?: boolean; socket?: boolean; url?:
   return { adapter, record, service, prefix }
 }
 
+type RedisStore = Awaited<ReturnType<typeof createStore>>
+
+async function expectRotationKeepsFlashData({ adapter, record }: RedisStore): Promise<void> {
+  const rotated = { ...record, id: randomUUID() }
+  await adapter.set(record)
+  await adapter.flash(record.id, 'notice', 'preserved')
+  await adapter.rotate(record.id, rotated)
+  await expect(adapter.get(record.id)).resolves.toBeNull()
+  await expect(adapter.get(rotated.id)).resolves.toEqual(rotated)
+  await expect(adapter.take(rotated.id, 'notice')).resolves.toEqual({ found: true, value: 'preserved' })
+  await adapter.rotate(rotated.id, { ...rotated, data: { refreshed: true } })
+  await expect(adapter.get(rotated.id)).resolves.toMatchObject({ data: { refreshed: true } })
+}
+
 describe('session Redis behavior', () => {
   it.each([{ url: true }, { socket: true }, {}])('round trips exact JSON and deletes sessions using %j', async options => {
     const { adapter, record } = await createStore(options)
@@ -48,13 +64,27 @@ describe('session Redis behavior', () => {
   })
 
   it('expires sessions on the real Redis clock without flash extending their lifetime', async () => {
-    const { adapter, record } = await createStore()
-    await adapter.set({ ...record, expiresAt: new Date(Date.now() + 150) })
+    const { adapter, record, service, prefix } = await createStore()
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected Redis client')
+    const key = `${prefix}holo:session:${record.id}`
+    await adapter.set(record)
+    const expiresAtMs = await client.pexpiretime(key)
+    expect(expiresAtMs).toBeGreaterThan(0)
     await adapter.flash(record.id, 'notice', 'Saved')
+    await adapter.flash(record.id, 'pending', 'Unread')
+    expect(await client.pexpiretime(key)).toBe(expiresAtMs)
     await expect(adapter.take(record.id, 'notice')).resolves.toEqual({ found: true, value: 'Saved' })
-    await setTimeout(200)
+    expect(await client.pexpiretime(key)).toBe(expiresAtMs)
+
+    await adapter.set({ ...record, expiresAt: new Date(Date.now() - 1_000) })
+    const expiringMs = await client.pttl(key)
+    expect(expiringMs).not.toBe(-1)
+    expect(expiringMs).toBeLessThanOrEqual(1)
+    let present = await client.exists(key)
+    while (present === 1) present = await client.exists(key)
     await expect(adapter.get(record.id)).resolves.toBeNull()
-    await expect(adapter.take(record.id, 'notice')).resolves.toEqual({ found: false })
+    await expect(adapter.take(record.id, 'pending')).resolves.toEqual({ found: false })
   })
 
   it('preserves pending flashes when the session is rewritten and atomically consumes each value once', async () => {
@@ -68,17 +98,8 @@ describe('session Redis behavior', () => {
     await expect(adapter.get(record.id)).resolves.toMatchObject({ data: { refreshed: true } })
   })
 
-  it.each([{ cluster: false }, { cluster: true }, { cluster: false, tls: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
-    const { adapter, record } = await createStore(options)
-    const rotated = { ...record, id: randomUUID() }
-    await adapter.set(record)
-    await adapter.flash(record.id, 'notice', 'preserved')
-    await adapter.rotate(record.id, rotated)
-    await expect(adapter.get(record.id)).resolves.toBeNull()
-    await expect(adapter.get(rotated.id)).resolves.toEqual(rotated)
-    await expect(adapter.take(rotated.id, 'notice')).resolves.toEqual({ found: true, value: 'preserved' })
-    await adapter.rotate(rotated.id, { ...rotated, data: { refreshed: true } })
-    await expect(adapter.get(rotated.id)).resolves.toMatchObject({ data: { refreshed: true } })
+  it.each([{ cluster: false }, { cluster: false, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
+    await expectRotationKeepsFlashData(await createStore(options))
   }, 30_000)
 
   it('consumes a flash value exactly once when it is taken while its session rotates', async () => {
@@ -184,5 +205,23 @@ describe('session Redis behavior', () => {
     { clusters: [{ url: 'redis:///', host: '127.0.0.1', port: 6379 }], message: 'missing hostname' },
   ])('rejects unsupported cluster configuration: $message', options => {
     expect(() => createSessionRedisAdapter({ name: 'redis', driver: 'redis', connection: 'default', host: '127.0.0.1', port: 6379, db: 0, prefix: '', ...options })).toThrow(options.message)
+  })
+})
+
+describe.each([{ cluster: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('session Redis cluster behavior through %j', options => {
+  let cluster: RedisService | undefined
+  const stops: Array<() => Promise<void>> = []
+
+  beforeAll(async () => {
+    cluster = await startRedisService(options, stop => { stops.push(stop) })
+  }, 30_000)
+
+  afterAll(async () => {
+    for (const stop of stops) await stop()
+  })
+
+  it(`moves a session and its private flash data to a new id and invalidates the old id through ${JSON.stringify(options)}`, async () => {
+    if (!cluster) throw new Error(`Expected a running Redis cluster for ${JSON.stringify(options)}`)
+    await expectRotationKeepsFlashData(await createStore(options, cluster))
   })
 })

@@ -468,9 +468,7 @@ describe('@holo-js/session package surface', () => {
     const record = createRecord('file-session')
 
     await store.write(record)
-    await Promise.all(Array.from({ length: 8 }, (_, index) => store.write(createRecord('file-session', {
-      data: { index },
-    }))))
+    await store.write(createRecord('file-session', { data: { index: 1 } }))
     const reloaded = await store.read('file-session')
     expect(reloaded?.id).toBe(record.id)
     expect(typeof reloaded?.data.index).toBe('number')

@@ -69,7 +69,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await store.delete(sessionId)
       await adapter.close()
     }
-  }, 30_000)
+  })
   it('merges a data key into the current Redis record only while that session still exists', async () => {
     const prefix = `holo:session:${randomUUID()}:`
     const adapter = createSessionRedisAdapter({
@@ -112,7 +112,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await store.delete(replacementId)
       await adapter.close()
     }
-  }, 30_000)
+  })
   it('stores each session under its own Redis key with no hash tag, and sets a Redis expiry on it', async () => {
     const prefix = `holo:session:${randomUUID()}:`
     const adapter = createSessionRedisAdapter({
@@ -149,7 +149,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await raw.quit()
       await adapter.close()
     }
-  }, 30_000)
+  })
   it('stores a session with the default empty prefix under the holo:session: namespace, never as a bare id', async () => {
     const adapter = createSessionRedisAdapter({
       name: 'redis',
@@ -183,7 +183,7 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await raw.quit()
       await adapter.close()
     }
-  }, 30_000)
+  })
   it('lets exactly one of several concurrent rotations claim a replacement id on a Redis store', async () => {
     const sourceDirectory = await mkdtemp(join(tmpdir(), 'session-redis-rotation-'))
     const prefix = `holo:session:${randomUUID()}:`
@@ -222,5 +222,5 @@ describeRealRedis('@holo-js/session real Redis usage', () => {
       await adapter.close()
       await rm(sourceDirectory, { recursive: true, force: true })
     }
-  }, 30_000)
+  })
 })

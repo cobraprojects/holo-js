@@ -350,11 +350,20 @@ function acquireTimeoutError(recordPath: string, cause: unknown): Error {
   return new Error(`[@holo-js/session] Timed out acquiring file session lock for "${recordPath}".`, cause === undefined ? undefined : { cause })
 }
 
+type RecordLockWaitLimits = { readonly stallMs: number, readonly hardCapMs: number }
+
+const RECORD_LOCK_WAIT_LIMITS: RecordLockWaitLimits = { stallMs: RECORD_LOCK_ACQUIRE_STALL_MS, hardCapMs: RECORD_LOCK_ACQUIRE_MAX_MS }
+
 async function acquireRecordLock(recordPath: string, makeDirectory: MakeDirectory): Promise<() => Promise<void>> {
+  return await acquireRecordLockWithLimits(recordPath, makeDirectory, RECORD_LOCK_WAIT_LIMITS)
+}
+
+export async function acquireRecordLockWithLimits(recordPath: string, makeDirectory: MakeDirectory, limits: RecordLockWaitLimits): Promise<() => Promise<void>> {
   const started = Date.now()
   const release = await acquireRecordLockBefore(recordPath, makeDirectory, {
-    deadline: started + RECORD_LOCK_ACQUIRE_STALL_MS,
-    hardDeadline: started + RECORD_LOCK_ACQUIRE_MAX_MS,
+    deadline: started + limits.stallMs,
+    hardDeadline: started + limits.hardCapMs,
+    stallMs: limits.stallMs,
   })
   if (!release) throw acquireTimeoutError(recordPath, undefined)
   return release
@@ -367,7 +376,7 @@ async function hasRecordLock(lockPath: string): Promise<boolean> {
 async function acquireRecordLockBefore(
   recordPath: string,
   makeDirectory: MakeDirectory,
-  wait: { readonly deadline: number, readonly hardDeadline: number } | undefined,
+  wait: { readonly deadline: number, readonly hardDeadline: number, readonly stallMs: number } | undefined,
 ): Promise<(() => Promise<void>) | undefined> {
   let deadline = wait?.deadline ?? 0
   let observedOwner: string | undefined
@@ -407,7 +416,7 @@ async function acquireRecordLockBefore(
           observedLease = identity
           if (wait && identity?.owner && identity.owner.token !== observedOwner) {
             observedOwner = identity.owner.token
-            deadline = Math.min(Date.now() + RECORD_LOCK_ACQUIRE_STALL_MS, wait.hardDeadline)
+            deadline = Math.min(Date.now() + wait.stallMs, wait.hardDeadline)
           }
           const reclaimable = await reclaimableRecordLock(lockPath, identity)
           if (reclaimable && await reclaimStaleLock(lockPath, reclaimable)) continue

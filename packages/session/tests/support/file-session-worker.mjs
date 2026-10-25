@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const [root, sessionId, driverEntry] = process.argv.slice(2)
-if (!driverEntry) throw new Error('Expected the current session package build')
+if (!driverEntry) throw new Error('Expected the session driver entry')
 const { fileSessionDriverInternals } = await import(pathToFileURL(driverEntry).href)
 const recordPath = fileSessionDriverInternals.getRecordPath(root, sessionId)
 await fileSessionDriverInternals.acquireRecordLock(recordPath, mkdir)

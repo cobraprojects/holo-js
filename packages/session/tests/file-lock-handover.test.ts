@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as ErrorReporting from '@holo-js/kernel/error-reporting'
 import type * as SessionModule from '../src'
+import type * as FileDriverModule from '../src/drivers/file'
 import { advanceTo, advanceUntil, finishesWithoutTheClock, settle, useFakeClock } from '../../../tests/support/fake-clock'
 import { busyError, createMemoryFs, type MemoryFs } from '../../../tests/support/memory-fs'
 
@@ -11,10 +12,13 @@ const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 vi.mock('node:fs/promises', async () => (await import('../../../tests/support/memory-fs')).memoryFsModule(() => memory.fs))
 vi.mock('node:timers/promises', async () => (await import('../../../tests/support/fake-clock')).fakeTimersPromises())
 
-const STALL_MS = 5_000
-const HARD_CAP_MS = 30_000
+const STALL_MS = 150
+const HARD_CAP_MS = 300
 const POLL_MS = 5
-const HANDOVER_MS = 4_000
+const HANDOVER_MS = 80
+const RECLAIM_LEAD_MS = 50
+const PRODUCTION_HARD_CAP_MS = 30_000
+const PRODUCTION_HANDOVER_MS = 4_000
 
 type Acquisition = {
   readonly label: string
@@ -30,6 +34,7 @@ const recordPath = join(root, 'session.json')
 const lockPath = `${recordPath}.lock`
 let fs: MemoryFs
 let session: typeof SessionModule
+let fileDriver: typeof FileDriverModule
 let configureReporting: typeof ErrorReporting.errorReportingInternals.configure
 let pendingPaths: Map<string, string>
 let acquisitions: Acquisition[]
@@ -44,7 +49,17 @@ function startsWithAny(path: string, prefixes: Set<string>): boolean {
   return false
 }
 
-function startAcquisition(label: string): Acquisition {
+type Acquire = (path: string, makeDirectory: (path: PathLike) => Promise<undefined>) => Promise<() => Promise<void>>
+
+function withTestLimits(): Acquire {
+  return (path, makeDirectory) => fileDriver.acquireRecordLockWithLimits(path, makeDirectory, { stallMs: STALL_MS, hardCapMs: HARD_CAP_MS })
+}
+
+function withProductionLimits(): Acquire {
+  return (path, makeDirectory) => session.fileSessionDriverInternals.acquireRecordLock(path, makeDirectory)
+}
+
+function startAcquisition(label: string, acquire: Acquire = withTestLimits()): Acquisition {
   const acquisition: Acquisition = { label, settled: false, released: false }
   acquisitions.push(acquisition)
   const makeDirectory = async (path: PathLike): Promise<undefined> => {
@@ -52,7 +67,7 @@ function startAcquisition(label: string): Acquisition {
     await fs.promises.mkdir(String(path))
     return undefined
   }
-  session.fileSessionDriverInternals.acquireRecordLock(recordPath, makeDirectory).then(
+  acquire(recordPath, makeDirectory).then(
     release => { Object.assign(acquisition, { settled: true, settledAt: Date.now(), release }) },
     (error: Error) => { Object.assign(acquisition, { settled: true, settledAt: Date.now(), error }) },
   )
@@ -66,8 +81,8 @@ async function acquireHolder(label: string): Promise<Acquisition> {
   return holder
 }
 
-async function startWaiter(blocked: boolean): Promise<Acquisition> {
-  const waiter = startAcquisition('waiter')
+async function startWaiter(blocked: boolean, acquire?: Acquire): Promise<Acquisition> {
+  const waiter = startAcquisition('waiter', acquire)
   if (blocked) blockedRenameSources.add(pendingPathOf('waiter'))
   await settle()
   if (waiter.settled) throw new Error(`The waiter should be polling, but it settled: ${waiter.error?.message ?? 'acquired'}`)
@@ -141,6 +156,7 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     await fs.promises.mkdir(root, { recursive: true })
     vi.resetModules()
     session = await import('../src')
+    fileDriver = await import('../src/drivers/file')
     configureReporting = (await import('@holo-js/kernel/error-reporting')).errorReportingInternals.configure
     configureReporting({ report: () => undefined })
   })
@@ -191,7 +207,7 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     const waiter = await startWaiter(false)
     const attemptsWhileHeld = renameAttemptsOf('waiter')
 
-    await advanceTo(Date.now() + 500)
+    await advanceTo(Date.now() + STALL_MS / 2)
     expect(renameAttemptsOf('waiter')).toBe(attemptsWhileHeld)
     expect(waiter.settled).toBe(false)
 
@@ -210,7 +226,7 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     const waiter = await startWaiter(true)
 
     const second = await handOverUntil(waiter, startedAt, HANDOVER_MS)
-    await advanceTo(startedAt + STALL_MS + 2_000)
+    await advanceTo(startedAt + STALL_MS + HANDOVER_MS / 2)
     expect(waiter.settled).toBe(false)
 
     await releaseAcquisition(second)
@@ -251,7 +267,7 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     const waiter = await startWaiter(true)
     const last = await handOverUntil(waiter, startedAt, HARD_CAP_MS - 1)
 
-    await advanceTo(startedAt + HARD_CAP_MS - 500)
+    await advanceTo(startedAt + HARD_CAP_MS - RECLAIM_LEAD_MS)
     blockedRenamePrefixes.add(join(lockPath, 'owner.'))
     const openUnlinks = pauseUnlinks(join(lockPath, 'owner.'))
     await releaseAcquisition(last)
@@ -259,7 +275,7 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     blockedRenameSources.clear()
     await advanceUntil(() => unlinkGate!.paused > 0, 'the waiter to start reclaiming the released lease', 2 * POLL_MS)
 
-    await advanceTo(startedAt + HARD_CAP_MS + 200)
+    await advanceTo(startedAt + HARD_CAP_MS + RECLAIM_LEAD_MS)
     expect(waiter.settled).toBe(false)
     openUnlinks()
     await settle()
@@ -269,5 +285,28 @@ describe.each(['posix', 'win32'] as const)('file session lock handover under a f
     expect(waiter.release).toBeUndefined()
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
+  })
+
+  it('gives up at the production thirty second hard cap while the lock keeps changing hands', async () => {
+    let holder = await acquireHolder('holder-0')
+    const startedAt = Date.now()
+    const waiter = await startWaiter(true, withProductionLimits())
+
+    for (let cycle = 1; cycle * PRODUCTION_HANDOVER_MS < PRODUCTION_HARD_CAP_MS; cycle += 1) {
+      vi.setSystemTime(startedAt + cycle * PRODUCTION_HANDOVER_MS)
+      await advanceTo(Date.now() + POLL_MS)
+      expect(waiter.settled).toBe(false)
+      await releaseAcquisition(holder)
+      holder = await acquireHolder(`holder-${cycle}`)
+      await advanceTo(Date.now() + POLL_MS)
+    }
+    vi.setSystemTime(startedAt + PRODUCTION_HARD_CAP_MS - 2 * POLL_MS)
+    await advanceTo(startedAt + PRODUCTION_HARD_CAP_MS - 1)
+    expect(waiter.settled).toBe(false)
+
+    await advanceUntil(() => waiter.settled, 'the waiter to give up at the production hard cap', 2 * POLL_MS)
+    expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
+    expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(PRODUCTION_HARD_CAP_MS)
+    expect(waiter.settledAt! - startedAt).toBeLessThanOrEqual(PRODUCTION_HARD_CAP_MS + POLL_MS)
   })
 })

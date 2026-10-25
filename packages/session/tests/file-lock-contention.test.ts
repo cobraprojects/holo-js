@@ -3,7 +3,7 @@ import { hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
-import { advanceTo, advanceUntil, finishesWithoutTheClock, useFakeClock } from '../../../tests/support/fake-clock'
+import { advanceTo, advanceUntil, finishesWithoutTheClock, track, useFakeClock } from '../../../tests/support/fake-clock'
 import { createMemoryFs, type MemoryFs } from '../../../tests/support/memory-fs'
 
 const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
@@ -20,6 +20,7 @@ const STALE_LEASE_AGE_MS = 20_000
 const WRITERS_PER_PROCESS = 2
 const PROCESSES = 4
 const FLASHES_PER_WRITER = 5
+const CONCURRENT_FLASHES = 24
 
 const root = resolve('/memory/contention')
 let fs: MemoryFs
@@ -70,13 +71,6 @@ async function writeForeignLease(lockPath: string, owner: ForeignOwner): Promise
 async function releaseForeignLease(lockPath: string, owner: ForeignOwner): Promise<void> {
   await fs.promises.rename(ownerFile(lockPath, owner), `${lockPath}.${owner.token}.released`)
   await fs.promises.rmdir(lockPath)
-}
-
-function track<T>(operation: Promise<T>): { readonly settled: () => boolean, readonly result: Promise<T> } {
-  let settled = false
-  const result = operation.finally(() => { settled = true })
-  result.catch(() => undefined)
-  return { settled: () => settled, result }
 }
 
 describe.each(['posix', 'win32'] as const)('file session lock contention on a %s filesystem', platform => {
@@ -191,6 +185,35 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
     await finishesWithoutTheClock(store.flash(record.id, 'notice', 'Saved'), 'Flashing over a stale lease')
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
+  })
+
+  it('keeps one complete record and no leftover files when concurrent writes race on a session', async () => {
+    const store = openStore(await startProcess())
+    const { record } = await createSession(store)
+
+    const writes = track(Promise.all(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => store.write({ ...record, data: { index } }))))
+    await advanceUntil(writes.settled, 'every concurrent write to finish', STALL_MS)
+    await writes.result
+
+    const reloaded = await store.read(record.id)
+    expect(reloaded?.id).toBe(record.id)
+    expect(reloaded?.data.index).toBeTypeOf('number')
+    expect(JSON.parse(await fs.promises.readFile(join(root, `${record.id}.json`)))).toMatchObject({ id: record.id, data: reloaded?.data })
+    expect(fs.names(root).filter(name => name.endsWith('.tmp') || name.endsWith('.lock'))).toEqual([])
+  })
+
+  it('serializes concurrent file flashes under the session lock without losing keys', async () => {
+    const store = openStore(await startProcess())
+    const { record } = await createSession(store)
+
+    const flashes = track(Promise.all(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => store.flash(record.id, `key.${index}`, index))))
+    await advanceUntil(flashes.settled, 'every concurrent flash to finish', STALL_MS)
+    await flashes.result
+
+    const takes = track(Promise.all(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => store.take(record.id, `key.${index}`))))
+    await advanceUntil(takes.settled, 'every concurrent take to finish', STALL_MS)
+    expect((await takes.result).map(value => value.found && value.value)).toEqual(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => index))
+    expect(await store.take(record.id, 'key.0')).toEqual({ found: false })
   })
 
   it.each([false, true])('preserves every concurrent writer across processes while replacing an orphaned lease=%s', async orphaned => {
