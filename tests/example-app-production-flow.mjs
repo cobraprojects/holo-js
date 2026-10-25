@@ -180,15 +180,21 @@ async function expectPageText(page, expectedText) {
   assert.match(body, new RegExp(expectedText))
 }
 
-async function assertFailedProductionInitialization(cwd, baseUrl, env, portArguments) {
+export async function assertFailedProductionInitialization(cwd, baseUrl, env, portArguments) {
   await clearExampleAppRateLimitBuckets(cwd)
+  // The server's own output must name the error; the response it sent is kept only to explain a failure.
   let output = ''
+  let response500 = ''
+  const report = () => `${output}${response500 ? `\nResponse: ${response500}` : ''}`
   const child = spawn('bun', ['run', 'start', ...portArguments], {
     cwd,
     detached: true,
     env: { ...process.env, ...env, DB_DRIVER: 'invalid' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  // Only `close` means the output is complete: the exit code can be set while piped output is still arriving.
+  let closed = false
+  child.once('close', () => { closed = true })
   child.stdout.on('data', chunk => output += String(chunk))
   child.stderr.on('data', chunk => output += String(chunk))
   try {
@@ -196,7 +202,7 @@ async function assertFailedProductionInitialization(cwd, baseUrl, env, portArgum
     let failed = false
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
-        assert.notEqual(child.exitCode, 0, output)
+        assert.notEqual(child.exitCode, 0, report())
         failed = true
         break
       }
@@ -205,14 +211,37 @@ async function assertFailedProductionInitialization(cwd, baseUrl, env, portArgum
         const body = await response.text()
         assert.equal(response.status, 500, body)
         const payload = response.headers.get('content-type')?.includes('application/json') ? JSON.parse(body) : undefined
-        output += typeof payload?.message === 'string' ? payload.message : body
+        response500 = typeof payload?.message === 'string' ? payload.message : body
         failed = true
         break
       }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
-    assert.ok(failed, `The production app must reject requests when database initialization fails.\n${output}`)
-    assert.match(output, /Unsupported Holo database driver "invalid"/)
+    assert.ok(failed, `The production app must reject requests when database initialization fails.\n${report()}`)
+    // The server logs the error on its own output, which can arrive after the 500 response it sent.
+    await new Promise((resolve, reject) => {
+      const expected = /Unsupported Holo database driver "invalid"/
+      const timer = setTimeout(() => settle(), Math.max(0, deadline - Date.now()))
+      const settle = () => {
+        clearTimeout(timer)
+        child.stdout.off('data', check)
+        child.stderr.off('data', check)
+        child.off('close', settle)
+        if (expected.test(output)) resolve()
+        else reject(new assert.AssertionError({ message: `The production app must log why database initialization failed.\n${report()}` }))
+      }
+      const check = () => {
+        if (expected.test(output)) settle()
+      }
+      if (closed) {
+        settle()
+        return
+      }
+      child.stdout.on('data', check)
+      child.stderr.on('data', check)
+      child.once('close', settle)
+      check()
+    })
   } finally {
     await stopProductionServer(child, 'SIGINT')
   }

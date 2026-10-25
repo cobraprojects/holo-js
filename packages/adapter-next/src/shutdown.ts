@@ -56,6 +56,14 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
 
   state.installed = true
   const exit = process.exit
+  // Node removes a once listener before calling it, so a listener removed while the signal is emitted still handles it.
+  const removedDuringEmit = new Map<TerminationSignal, number>()
+  const onRemoveListener = (event: string | symbol) => {
+    const signal = TERMINATION_SIGNALS.find(candidate => candidate === event)
+    if (!signal) return
+    if (removedDuringEmit.size === 0) queueMicrotask(() => removedDuringEmit.clear())
+    removedDuringEmit.set(signal, (removedDuringEmit.get(signal) ?? 0) + 1)
+  }
   const onSignal = (signal: TerminationSignal) => {
     if (state.signal) return
     state.signal = signal
@@ -63,7 +71,12 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
     process.exitCode = code
     const deadline = setTimeout(() => exit.call(process, code), SHUTDOWN_DEADLINE_MS)
     deadline.unref()
-    setImmediate(() => void closeCurrent())
+    // Without another handler the signal's default action ends the process, so Holo ends it once closed
+    // instead of waiting for handles it does not own, such as Next's static export worker timers.
+    const ownsTermination = process.listenerCount(signal) + (removedDuringEmit.get(signal) ?? 0) === 1
+    setImmediate(() => void closeCurrent().then(() => {
+      if (ownsTermination) exit.call(process, code)
+    }))
   }
   const listeners = TERMINATION_SIGNALS.map(signal => [signal, () => onSignal(signal)] as const)
   const patchedExit = ((code?: ExitCode) => {
@@ -72,10 +85,12 @@ export function installNextShutdown(options: NextShutdownOptions): () => void {
   }) as typeof process.exit
 
   process.exit = patchedExit
+  process.on('removeListener', onRemoveListener)
   for (const [signal, listener] of listeners) process.prependListener(signal, listener)
 
   function uninstall(): void {
     if (process.exit === patchedExit) process.exit = exit
+    process.removeListener('removeListener', onRemoveListener)
     for (const [signal, listener] of listeners) process.removeListener(signal, listener)
     state.installed = false
     state.signal = undefined

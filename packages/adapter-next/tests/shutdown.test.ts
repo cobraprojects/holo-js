@@ -220,6 +220,7 @@ describe('Next termination shutdown', () => {
   it('restores process.exit and signal listeners when uninstalled', () => {
     const originalExit = process.exit
     const sigtermListeners = process.listenerCount('SIGTERM')
+    const removeListeners = process.listenerCount('removeListener')
     const uninstall = installNextShutdown({ close: async () => {}, report: () => {} })
 
     expect(process.exit).not.toBe(originalExit)
@@ -228,6 +229,7 @@ describe('Next termination shutdown', () => {
 
     expect(process.exit).toBe(originalExit)
     expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners)
+    expect(process.listenerCount('removeListener')).toBe(removeListeners)
   })
 
   it('closes Holo resources after the server drains and before the process exits', async () => {
@@ -295,6 +297,78 @@ describe('Next termination shutdown', () => {
     expect(result.code).toBe(143)
     expect(result.durationMs).toBeLessThan(10_000)
   })
+
+  it.each([
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)('exits with 128 + the signal on %s after closing when no other handler is installed, even while foreign handles stay open', async (signal, code) => {
+    // Next's static export worker leaves page timeout timers running and relies on SIGINT's default action to end it.
+    const result = await runChild(`
+      ${prelude}
+      holdOpen()
+      installNextShutdown({
+        close: async () => {
+          console.log('close:done')
+        },
+        report: error => console.log('reported', error),
+      })
+      process.on('exit', () => console.log('exit'))
+      console.log('ready')
+    `, { signalAfterReady: signal })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done', 'exit'])
+    expect(result.code).toBe(code)
+  }, 20_000)
+
+  it.each(['SIGINT', 'SIGTERM'] as const)('does not exit on %s when the app has its own handler', async (signal) => {
+    const result = await runChild(`
+      ${prelude}
+      holdOpen()
+      let closed
+      const holoClosed = new Promise(resolve => { closed = resolve })
+      installNextShutdown({
+        close: async () => {
+          console.log('close:done')
+          closed()
+        },
+        report: error => console.log('reported', error),
+      })
+      process.on(${JSON.stringify(signal)}, async () => {
+        await holoClosed
+        // Every step Holo would take to exit after closing runs before this macrotask.
+        await new Promise(resolve => setImmediate(resolve))
+        console.log('app:still-running')
+        process.exit(0)
+      })
+      console.log('ready')
+    `, { signalAfterReady: signal })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done', 'app:still-running'])
+    expect(result.code).toBe(0)
+  }, 20_000)
+
+  it('leaves termination to a once listener the signal already removed before Holo ran', async () => {
+    const result = await runChild(`
+      ${prelude}
+      holdOpen()
+      installNextShutdown({
+        close: async () => {
+          console.log('close:done')
+        },
+        report: error => console.log('reported', error),
+      })
+      process.prependOnceListener('SIGTERM', async () => {
+        console.log('host:drain')
+        await delay(100)
+        console.log('host:drained')
+        process.exit(143)
+      })
+      console.log('ready')
+    `, { signalAfterReady: 'SIGTERM' })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'host:drain', 'close:done', 'host:drained'])
+    expect(result.code).toBe(143)
+  }, 20_000)
 
   it('reports a failed close through the injected reporter and still exits', async () => {
     const result = await runChild(`

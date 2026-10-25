@@ -499,19 +499,21 @@ try {
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
-  await startBroadcastWorker(`http://localhost:${port}`)
+  await startBroadcastWorker(`http://127.0.0.1:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
   database = await openExampleAppDatabase(cwd)
   await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
 
+  // The port was reserved on 127.0.0.1. With HOST=localhost Nuxt listens on ::1 only, so another process could
+  // take 127.0.0.1 on the same port and answer this journey's requests to localhost.
   child = spawn('bun', ['run', 'dev'], {
     cwd,
     detached: true,
     env: createChildEnv({
       PORT: port,
-      HOST: 'localhost',
-      NITRO_HOST: 'localhost',
-      APP_URL: `http://localhost:${port}`,
+      HOST: '127.0.0.1',
+      NITRO_HOST: '127.0.0.1',
+      APP_URL: `http://127.0.0.1:${port}`,
       MAIL_MAILER: 'log',
       MAIL_LOG_BODIES: 'true',
     }),
@@ -520,18 +522,18 @@ try {
   pipeOutput(child.stdout, process.stdout)
   pipeOutput(child.stderr, process.stderr)
 
-  await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
-  await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://localhost:${port}` })
-  await assertExampleAppFormsBrowserFlow({ baseUrl: `http://localhost:${port}`, framework: 'nuxt' })
-  await assertSuperAdminLoginUsesVerificationRedirect(`http://localhost:${port}`)
-  await startBroadcastWorker(`http://localhost:${port}`)
-  await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
-  await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://localhost:${port}` })
-  await assertExampleAppStorageRuntime({ baseUrl: `http://localhost:${port}` })
-  await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
-  await assertAdminApiRequiresAuthentication(`http://localhost:${port}`)
+  await waitForText(`http://127.0.0.1:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  await assertExampleAppDevelopmentReload({ cwd, baseUrl: `http://127.0.0.1:${port}` })
+  await assertExampleAppFormsBrowserFlow({ baseUrl: `http://127.0.0.1:${port}`, framework: 'nuxt' })
+  await assertSuperAdminLoginUsesVerificationRedirect(`http://127.0.0.1:${port}`)
+  await startBroadcastWorker(`http://127.0.0.1:${port}`)
+  await assertCacheBackedHttpBehavior(`http://127.0.0.1:${port}`)
+  await assertExampleAppRequestSecurity({ cwd, baseUrl: `http://127.0.0.1:${port}` })
+  await assertExampleAppStorageRuntime({ baseUrl: `http://127.0.0.1:${port}` })
+  await waitForRedirect(`http://127.0.0.1:${port}/admin/posts`, '/login')
+  await assertAdminApiRequiresAuthentication(`http://127.0.0.1:${port}`)
   await assertExampleAppAuthFlow({
-    baseUrl: `http://localhost:${port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     getOutput: () => capturedOutput,
     appName: 'blog-nuxt',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
@@ -539,12 +541,12 @@ try {
     afterAuthenticated: assertAuthenticatedAdminPostFlows,
   })
   await assertExampleAppTokenAuthFlow({
-    baseUrl: `http://localhost:${port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     expectedTitle: 'Shipping a Real Holo Blog on Nuxt',
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: 'blog-nuxt-updated'"))
-  await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  await waitForText(`http://127.0.0.1:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
 
   await stopProcessTree(child)
   child = null
@@ -555,15 +557,15 @@ try {
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
-  await startBroadcastWorker(`http://localhost:${port}`)
+  await startBroadcastWorker(`http://127.0.0.1:${port}`)
   await assertExampleAppProductionFlow({
     cwd,
-    baseUrl: `http://localhost:${port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     env: createChildEnv({
       PORT: port,
-      HOST: 'localhost',
-      NITRO_HOST: 'localhost',
-      APP_URL: `http://localhost:${port}`,
+      HOST: '127.0.0.1',
+      NITRO_HOST: '127.0.0.1',
+      APP_URL: `http://127.0.0.1:${port}`,
       MAIL_MAILER: 'log',
       MAIL_LOG_BODIES: 'true',
     }),
