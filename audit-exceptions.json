@@ -4,6 +4,6 @@
     "package": "node-forge",
     "version": "1.4.0",
     "expires": "2026-12-17",
-    "reason": "No patched node-forge release exists (1.4.0 is the latest). Reachable only through Nuxt/Nitro dev tooling: nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge; listhen 1.10.1 (latest) and nitropack 2.13.5 (latest) still depend on it. listhen imports node-forge at load time and uses it only for development HTTPS: generating a self-signed certificate when https is enabled without a supplied key and cert, and reading a supplied pfx keystore. listhen never calls RSA signature verification, and the nitropack runtime and holo-js sources do not import listhen. Remove when listhen drops node-forge or a patched node-forge is released."
+    "reason": "No patched node-forge release exists (1.4.0 is the latest). Reachable only through Nuxt/Nitro dev tooling: nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge; listhen 1.10.1 (latest) and nitropack 2.13.5 (latest) still depend on it. listhen imports node-forge at load time and uses it only for development HTTPS: generating a local CA and certificate when https is enabled without a supplied key and cert, and reading a supplied pfx keystore. listhen never calls RSA signature verification, and the nitropack runtime and holo-js sources do not import listhen. Remove when listhen drops node-forge or a patched node-forge is released."
   }
 ]
