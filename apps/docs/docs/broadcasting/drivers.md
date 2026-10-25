@@ -93,7 +93,7 @@ The self-hosted driver. Your app server signs each event and posts it to the wor
 | --- | --- |
 | `appId`, `key`, `secret` | Required. |
 | `options.host` | Worker host. Defaults to `127.0.0.1`. |
-| `options.port` | Worker port. The worker listens on this port too, unless `worker.port` is set. |
+| `options.port` | Worker port, from 1 to 65535. The worker listens on this port too, unless `worker.port` is set. |
 | `options.scheme` | `http` or `https`. |
 | `options.useTLS` | Defaults to `true` when the scheme is `https`. |
 | `clientOptions.authEndpoint` | URL Flux uses to authorize private and presence channels. Only the path is sent to the browser. |
@@ -168,10 +168,10 @@ The `worker` section configures `npx holo broadcast:work`. You only need it to c
 | Option | Default | Description |
 | --- | --- | --- |
 | `host` | `0.0.0.0` | Interface the worker listens on. |
-| `port` | The default `holo` connection's port, else `8080` | Port the worker listens on. `0` picks a free port, which the worker prints when it starts. |
+| `port` | The default `holo` connection's port, else `8080` | Port the worker listens on, from 0 to 65535. `0` picks a free port, which the worker prints when it starts. |
 | `path` | `/app` | WebSocket path prefix. Browsers connect to `<path>/<key>`. |
 | `publicHost` | none | Host browsers connect to, when it differs from `options.host`. |
-| `publicPort` | none | Port browsers connect to, used with `publicHost`. |
+| `publicPort` | none | Port browsers connect to, from 1 to 65535, used with `publicHost`. |
 | `publicScheme` | The connection's scheme | `http` or `https` for browser connections. |
 | `allowedOrigins` | The public origin | Browser origins allowed to open a WebSocket. Use exact origins such as `https://example.com`. `['*']` allows any origin. |
 | `maxRequestBytes` | `1048576` (1 MB) | Largest publish request the worker accepts. Larger requests get `413`. |
