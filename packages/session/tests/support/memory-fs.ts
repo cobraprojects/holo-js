@@ -26,7 +26,7 @@ function toMilliseconds(time: Date | number | string): number {
 
 export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }) {
   const nodes = new Map<string, MemoryNode>()
-  const entries = new Map<string, Set<string>>()
+  const childrenByDirectory = new Map<string, Set<string>>()
   const hooks: MemoryFsHook[] = []
   let nextInode = 1
 
@@ -34,14 +34,14 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
     nodes.set(path, node)
     const parent = dirname(path)
     if (parent === path) return
-    const siblings = entries.get(parent) ?? new Set<string>()
+    const siblings = childrenByDirectory.get(parent) ?? new Set<string>()
     siblings.add(path)
-    entries.set(parent, siblings)
+    childrenByDirectory.set(parent, siblings)
   }
 
   function remove(path: string): void {
     nodes.delete(path)
-    entries.get(dirname(path))?.delete(path)
+    childrenByDirectory.get(dirname(path))?.delete(path)
   }
 
   function create(path: string, kind: MemoryNode['kind'], data = ''): void {
@@ -50,12 +50,13 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
   }
 
   function children(path: string): string[] {
-    return [...entries.get(path) ?? []].sort()
+    return [...childrenByDirectory.get(path) ?? []].sort()
   }
 
-  function subtree(path: string): string[] {
-    if (!nodes.has(path)) return []
-    return [path, ...children(path).flatMap(subtree)]
+  function listSubtree(path: string): Array<readonly [string, MemoryNode]> {
+    const node = nodes.get(path)
+    if (!node) return []
+    return [[path, node], ...children(path).flatMap(listSubtree)]
   }
 
   function existing(path: string, operation: string): MemoryNode {
@@ -106,11 +107,11 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
   }
 
   function removeTree(path: string): void {
-    for (const candidate of subtree(path)) remove(candidate)
+    for (const [candidate] of listSubtree(path)) remove(candidate)
   }
 
   function moveTree(source: string, target: string): void {
-    const moved = subtree(source).map(candidate => [candidate, nodes.get(candidate) as MemoryNode] as const)
+    const moved = listSubtree(source)
     for (const [candidate] of moved) remove(candidate)
     for (const [candidate, node] of moved) place(`${target}${candidate.slice(source.length)}`, node)
   }
@@ -167,9 +168,10 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
     async opendir(path: string) {
       const entries = await promises.readdir(path)
       const target = resolve(path)
+      let position = 0
       return {
         read: async () => {
-          const name = entries.shift()
+          const name = entries[position++]
           if (name === undefined) return null
           const kind = nodes.get(resolve(target, name))?.kind
           return { name, isFile: () => kind === 'file', isDirectory: () => kind === 'directory' }

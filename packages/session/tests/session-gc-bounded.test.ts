@@ -27,6 +27,10 @@ function record(id: string, expiresAt: Date): SessionModule.SessionRecord {
   return { id, store: 'file', data: { userId: 42 }, createdAt: now, lastActivityAt: now, expiresAt }
 }
 
+function recordId(index: number): string {
+  return `session-${String(index).padStart(4, '0')}`
+}
+
 function recordNames(): string[] {
   return fs.names(root).filter(name => name.endsWith('.json'))
 }
@@ -37,7 +41,7 @@ function createStore(): SessionModule.SessionStore {
 
 async function writeRecords(store: SessionModule.SessionStore, count: number, expiresAt: Date): Promise<void> {
   for (let index = 0; index < count; index += 1) {
-    await store.write(record(`session-${String(index).padStart(4, '0')}`, expiresAt))
+    await store.write(record(recordId(index), expiresAt))
   }
   await awaitTombstonesDrained()
 }
@@ -93,7 +97,7 @@ describe('bounded file session garbage collection', () => {
     const { getRecordPath, serializeRecord } = session.fileSessionDriverInternals
     const expiresAt = new Date(Date.now() - 1_000)
     for (let index = 0; index <= DEFAULT_SWEEP_ENTRY_LIMIT; index += 1) {
-      const id = `session-${String(index).padStart(4, '0')}`
+      const id = recordId(index)
       await fs.promises.writeFile(getRecordPath(root, id), serializeRecord(record(id, expiresAt)))
     }
 
@@ -124,7 +128,7 @@ describe('bounded file session garbage collection', () => {
     await fs.promises.writeFile(join(root, tombstone), '')
 
     await expect(sweep(new Date())).resolves.toBe(SWEEP_ENTRY_LIMIT - 1)
-    expect(recordNames()).toEqual([`session-${String(SWEEP_ENTRY_LIMIT - 1).padStart(4, '0')}.json`])
+    expect(recordNames()).toEqual([`${recordId(SWEEP_ENTRY_LIMIT - 1)}.json`])
     expect(fs.names(root)).not.toContain(tombstone)
     await expect(sweep(new Date())).resolves.toBe(1)
     expect(recordNames()).toEqual([])
