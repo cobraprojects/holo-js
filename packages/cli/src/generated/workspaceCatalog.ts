@@ -99,7 +99,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "uuid": "^14.0.3",
   "valibot": "^1.5.0",
   "vite": "^8.3.5",
-  "vitepress": "^1.6.3",
+  "vitepress": "^2.0.0-alpha.20",
   "vitest": "^5.0.5",
   "vue": "^3.5.13",
   "vue-router": "^5.0.4",
