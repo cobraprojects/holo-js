@@ -4,8 +4,8 @@ import { hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
-import { advanceUntil, finishesWithoutTheClock, useFakeClock } from '../../../tests/support/fake-clock'
-import { busyError, createMemoryFs, type MemoryFs } from '../../../tests/support/memory-fs'
+import { advanceUntil, finishesWithoutTheClock, track, useFakeClock } from '../../../tests/support/fake-clock'
+import { busyError, createMemoryFs, ioError, type MemoryFs } from '../../../tests/support/memory-fs'
 
 const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 
@@ -52,10 +52,6 @@ function startsWithAny(path: string, prefixes: Set<string>): boolean {
   return false
 }
 
-function ioError(operation: string, path: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(`EIO: i/o error, ${operation} '${path}'`), { code: 'EIO', path })
-}
-
 function clearFilesystemFaults(): void {
   for (const prefixes of Object.values(faults)) prefixes.clear()
 }
@@ -77,13 +73,6 @@ async function openStore(session: SessionApi): Promise<AtomicStore> {
 
 function isAbsent(path: string): boolean {
   return !fs.names(root).includes(path.slice(root.length + 1))
-}
-
-function track<T>(operation: Promise<T>): { readonly settled: () => boolean, readonly result: Promise<T> } {
-  let settled = false
-  const result = operation.finally(() => { settled = true })
-  result.catch(() => undefined)
-  return { settled: () => settled, result }
 }
 
 function interceptLeaseContents(): void {

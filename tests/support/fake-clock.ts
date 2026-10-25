@@ -37,3 +37,10 @@ export async function finishesWithoutTheClock<T>(operation: Promise<T>, descript
   if (!done) throw new Error(`${description} should finish without waiting on the clock`)
   return await running
 }
+
+export function track<T>(operation: Promise<T>): { readonly settled: () => boolean, readonly result: Promise<T> } {
+  let settled = false
+  const result = operation.finally(() => { settled = true })
+  result.catch(() => undefined)
+  return { settled: () => settled, result }
+}

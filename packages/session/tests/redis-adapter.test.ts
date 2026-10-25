@@ -37,7 +37,9 @@ async function createStore(options: StoreOptions = {}, running?: RedisService) {
   return { adapter, record, service, prefix }
 }
 
-async function rotatesWithFlashData({ adapter, record }: Awaited<ReturnType<typeof createStore>>): Promise<void> {
+type RedisStore = Awaited<ReturnType<typeof createStore>>
+
+async function expectRotationKeepsFlashData({ adapter, record }: RedisStore): Promise<void> {
   const rotated = { ...record, id: randomUUID() }
   await adapter.set(record)
   await adapter.flash(record.id, 'notice', 'preserved')
@@ -97,7 +99,7 @@ describe('session Redis behavior', () => {
   })
 
   it.each([{ cluster: false }, { cluster: false, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
-    await rotatesWithFlashData(await createStore(options))
+    await expectRotationKeepsFlashData(await createStore(options))
   })
 
   it('consumes a flash value exactly once when it is taken while its session rotates', async () => {
@@ -222,6 +224,6 @@ describe('session Redis cluster behavior', () => {
   it.each(variants)('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
     const cluster = clusters.get(options)
     if (!cluster) throw new Error(`Expected a running Redis cluster for ${JSON.stringify(options)}`)
-    await rotatesWithFlashData(await createStore(options, cluster))
+    await expectRotationKeepsFlashData(await createStore(options, cluster))
   })
 })

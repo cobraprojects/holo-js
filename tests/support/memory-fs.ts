@@ -258,6 +258,10 @@ export function busyError(operation: string, path: string): NodeJS.ErrnoExceptio
   return fsError('EPERM', operation, path)
 }
 
+export function ioError(operation: string, path: string): NodeJS.ErrnoException {
+  return fsError('EIO', operation, path)
+}
+
 export function memoryFsModule(current: () => MemoryFs | undefined): MemoryFs['promises'] {
   const installed = (): MemoryFs['promises'] => {
     const fs = current()
