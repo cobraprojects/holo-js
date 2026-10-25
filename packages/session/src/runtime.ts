@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { cookieEncryptionInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { DEFAULT_SESSION_REMEMBER_ME_LIFETIME } from './config'
+import { disposeSessionStore } from './store-disposal'
 import type {
   CookieSerializeOptions,
   CreateSessionInput,
@@ -504,8 +505,18 @@ export function rememberMeCookie(value: string, options?: CookieSerializeOptions
   })
 }
 
+function disposeReplacedStores(previous: SessionRuntimeBindings | undefined, next: SessionRuntimeBindings | undefined): void {
+  if (!previous) return
+  const kept = new Set(Object.values(next?.stores ?? {}))
+  for (const store of new Set(Object.values(previous.stores))) {
+    if (!kept.has(store)) disposeSessionStore(store)
+  }
+}
+
 export function configureSessionRuntime(bindings?: SessionRuntimeBindings): void {
-  getSessionRuntimeState().bindings = bindings
+  const state = getSessionRuntimeState()
+  disposeReplacedStores(state.bindings, bindings)
+  state.bindings = bindings
 }
 
 export function getSessionRuntime(): SessionRuntimeFacade {
@@ -528,7 +539,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
 }
 
 export function resetSessionRuntime(): void {
-  getSessionRuntimeState().bindings = undefined
+  configureSessionRuntime(undefined)
 }
 
 export const sessionRuntimeInternals = {

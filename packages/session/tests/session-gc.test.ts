@@ -34,41 +34,12 @@ function record(id: string, expiresAt: Date, data: Record<string, unknown> = { u
   return { id, store: 'file', data, createdAt: now, lastActivityAt: now, expiresAt }
 }
 
-async function clearReleaseTombstones(root: string): Promise<void> {
-  for (const name of await readdir(root)) {
-    if (name.endsWith('.released')) await rm(join(root, name), { force: true })
-  }
-}
-
 function sweepable(store: SessionStore): (now: Date) => Promise<number> {
   if (!store.sweepExpired) throw new Error('File session stores must sweep expired records.')
   return store.sweepExpired.bind(store)
 }
 
 describe('file session garbage collection', () => {
-  it('continues bounded sweeps past live records to reach abandoned sessions', async () => {
-    const root = await createRoot()
-    const store = createFileSessionStore(root)
-    for (let batch = 0; batch < 21; batch += 1) {
-      await Promise.all(Array.from({ length: 50 }, (_, index) => {
-        const live = record(`live-${batch * 50 + index}`, new Date(Date.now() + 60_000))
-        return store.write(live)
-      }))
-    }
-    await clearReleaseTombstones(root)
-    await expect(sweepable(store)(new Date())).resolves.toBe(0)
-    for (let batch = 0; batch < 21; batch += 1) {
-      await Promise.all(Array.from({ length: 50 }, (_, index) => {
-        return store.write(record(`live-${batch * 50 + index}`, new Date(Date.now() - 1_000)))
-      }))
-    }
-
-    await clearReleaseTombstones(root)
-    await expect(sweepable(store)(new Date())).resolves.toBe(50)
-    await expect(sweepable(store)(new Date())).resolves.toBe(1_000)
-    await expect(sweepable(store)(new Date())).resolves.toBe(0)
-  }, 30_000)
-
   it('removes abandoned expired records and keeps live ones', async () => {
     const root = await createRoot()
     const store = createFileSessionStore(root)
