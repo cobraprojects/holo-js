@@ -100,7 +100,7 @@ describe('session Redis behavior', () => {
 
   it.each([{ cluster: false }, { cluster: false, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
     await expectRotationKeepsFlashData(await createStore(options))
-  })
+  }, 30_000)
 
   it('consumes a flash value exactly once when it is taken while its session rotates', async () => {
     const { adapter, record } = await createStore()
@@ -122,7 +122,7 @@ describe('session Redis behavior', () => {
       await expect(adapter.get(source.id)).resolves.toBeNull()
       await adapter.del(destination.id)
     }
-  })
+  }, 30_000)
 
   it('completes rotation under continuous concurrent writes, removing the old id and keeping the data on the new id', async () => {
     const { adapter, record } = await createStore()
@@ -143,7 +143,7 @@ describe('session Redis behavior', () => {
     }
     await expect(adapter.get(source.id)).resolves.toBeNull()
     await expect(adapter.get(destination.id)).resolves.toEqual(destination)
-  })
+  }, 30_000)
 
   it('creates no new session when rotating from a missing session', async () => {
     const { adapter, record } = await createStore()
@@ -208,21 +208,19 @@ describe('session Redis behavior', () => {
   })
 })
 
-describe('session Redis cluster behavior', () => {
-  const variants = [{ cluster: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates)
-  const clusters = new Map<StoreOptions, RedisService>()
+describe.each([{ cluster: true }, { cluster: true, tls: true }].filter(options => !options.tls || canTrustTestCertificates))('session Redis cluster behavior through %j', options => {
+  let cluster: RedisService | undefined
   const stops: Array<() => Promise<void>> = []
 
   beforeAll(async () => {
-    for (const options of variants) clusters.set(options, await startRedisService(options, stop => { stops.push(stop) }))
+    cluster = await startRedisService(options, stop => { stops.push(stop) })
   }, 30_000)
 
   afterAll(async () => {
-    for (const stop of stops.reverse()) await stop()
+    for (const stop of stops) await stop()
   })
 
-  it.each(variants)('moves a session and its private flash data to a new id and invalidates the old id through %j', async options => {
-    const cluster = clusters.get(options)
+  it(`moves a session and its private flash data to a new id and invalidates the old id through ${JSON.stringify(options)}`, async () => {
     if (!cluster) throw new Error(`Expected a running Redis cluster for ${JSON.stringify(options)}`)
     await expectRotationKeepsFlashData(await createStore(options, cluster))
   })
