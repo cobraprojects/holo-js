@@ -69,13 +69,13 @@ describe('session Redis behavior', () => {
     if (!client) throw new Error('Expected Redis client')
     const key = `${prefix}holo:session:${record.id}`
     await adapter.set(record)
-    const lifetimeMs = await client.pttl(key)
+    const expiresAtMs = await client.pexpiretime(key)
+    expect(expiresAtMs).toBeGreaterThan(0)
     await adapter.flash(record.id, 'notice', 'Saved')
     await adapter.flash(record.id, 'pending', 'Unread')
-    const remainingMs = await client.pttl(key)
-    expect(remainingMs).toBeGreaterThan(0)
-    expect(remainingMs).toBeLessThanOrEqual(lifetimeMs)
+    expect(await client.pexpiretime(key)).toBe(expiresAtMs)
     await expect(adapter.take(record.id, 'notice')).resolves.toEqual({ found: true, value: 'Saved' })
+    expect(await client.pexpiretime(key)).toBe(expiresAtMs)
 
     await adapter.set({ ...record, expiresAt: new Date(Date.now() - 1_000) })
     const expiringMs = await client.pttl(key)
