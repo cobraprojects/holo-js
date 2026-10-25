@@ -79,18 +79,6 @@ describe('atomic session flash values', () => {
     await expect(session.take('session-1', 'panels.admin.effects')).resolves.toBeUndefined()
   })
 
-  it('serializes concurrent file flashes under the session lock without losing keys', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-session-flash-lock-'))
-    tempDirectories.push(root)
-    const store = createFileSessionStore(root)
-    await store.write(record('session-lock', 'file'))
-
-    await Promise.all(Array.from({ length: 24 }, (_, index) => store.flash?.('session-lock', `key.${index}`, index)))
-    const values = await Promise.all(Array.from({ length: 24 }, (_, index) => store.take?.('session-lock', `key.${index}`)))
-    expect(values.map(value => value?.value)).toEqual(Array.from({ length: 24 }, (_, index) => index))
-    await expect(store.take?.('session-lock', 'key.0')).resolves.toEqual({ found: false })
-  })
-
   it('preserves private flash values when rotating a file-backed session', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-session-flash-rotate-'))
     tempDirectories.push(root)

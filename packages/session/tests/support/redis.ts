@@ -117,7 +117,7 @@ async function startRedisNode(options: {
   }
 }
 
-export async function startRedisService(options: { cluster?: boolean; tls?: boolean } = {}): Promise<{
+export async function startRedisService(options: { cluster?: boolean; tls?: boolean } = {}, onStop: (stop: () => Promise<void>) => void = onTestFinished): Promise<{
   readonly ports: readonly number[]
   readonly socket: string
   readonly clients: readonly Redis[]
@@ -132,7 +132,7 @@ export async function startRedisService(options: { cluster?: boolean; tls?: bool
   const privateKeyPath = join(root, 'private-key.pem')
   const previousCertificates = options.tls ? tls.getCACertificates('default') : []
   let certificate: string | undefined
-  onTestFinished(async () => {
+  onStop(async () => {
     clients.forEach(client => client.disconnect())
     if (options.tls) tls.setDefaultCACertificates(previousCertificates)
     await Promise.all(processes.map(child => new Promise<void>(resolve => {

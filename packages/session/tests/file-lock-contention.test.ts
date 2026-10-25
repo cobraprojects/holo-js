@@ -20,6 +20,7 @@ const STALE_LEASE_AGE_MS = 20_000
 const WRITERS_PER_PROCESS = 2
 const PROCESSES = 4
 const FLASHES_PER_WRITER = 5
+const CONCURRENT_FLASHES = 24
 
 const root = resolve('/memory/contention')
 let fs: MemoryFs
@@ -191,6 +192,20 @@ describe.each(['posix', 'win32'] as const)('file session lock contention on a %s
     await finishesWithoutTheClock(store.flash(record.id, 'notice', 'Saved'), 'Flashing over a stale lease')
     expect(await store.take(record.id, 'notice')).toEqual({ found: true, value: 'Saved' })
     expect(await store.read(record.id)).toEqual(record)
+  })
+
+  it('serializes concurrent file flashes under the session lock without losing keys', async () => {
+    const store = openStore(await startProcess())
+    const { record } = await createSession(store)
+
+    const flashes = track(Promise.all(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => store.flash(record.id, `key.${index}`, index))))
+    await advanceUntil(flashes.settled, 'every concurrent flash to finish', STALL_MS)
+    await flashes.result
+
+    const takes = track(Promise.all(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => store.take(record.id, `key.${index}`))))
+    await advanceUntil(takes.settled, 'every concurrent take to finish', STALL_MS)
+    expect((await takes.result).map(value => value.found && value.value)).toEqual(Array.from({ length: CONCURRENT_FLASHES }, (_, index) => index))
+    expect(await store.take(record.id, 'key.0')).toEqual({ found: false })
   })
 
   it.each([false, true])('preserves every concurrent writer across processes while replacing an orphaned lease=%s', async orphaned => {
