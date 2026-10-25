@@ -19,8 +19,8 @@ export async function assertExampleAppDevelopmentReload({ cwd, baseUrl }) {
     return (await response.json()).name
   }
   const written = new Set()
-  // Only a restarting server (a refused or dropped connection, 503 while it starts) or one still serving a name
-  // written earlier means the reload is pending; every other answer or request error is the failure itself.
+  // Only a restarting server (a refused or dropped connection, 504 while it stops, 503 while it starts) or one
+  // still serving a name written earlier means the reload is pending; every other answer or error is the failure.
   const readReloadState = async name => {
     let response
     let body
@@ -33,7 +33,9 @@ export async function assertExampleAppDevelopmentReload({ cwd, baseUrl }) {
       throw new Error(`Request to ${url} failed while waiting for the name ${name}: ${reason}`, { cause: error })
     }
     if (response.status === 503) return 'answered 503 while starting'
-    assert.equal(response.status, 200, `${url} answered ${response.status} while waiting for the name ${name}:\n${body}`)
+    // A stopping Nuxt server still accepts requests after its Vite server closed, and Vite answers them this way.
+    if (response.status === 504 && response.statusText === 'Outdated Request') return 'answered 504 Outdated Request while stopping'
+    assert.equal(response.status, 200, `${url} answered ${response.status} ${response.statusText} while waiting for the name ${name}:\n${body}`)
     let observed
     try {
       observed = JSON.parse(body).name

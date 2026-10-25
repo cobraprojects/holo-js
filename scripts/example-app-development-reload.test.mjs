@@ -35,11 +35,12 @@ async function startFakeDevelopmentApp(context, respond = () => undefined) {
 }
 
 test('a development reload passes through restart answers and names written earlier', async context => {
-  const requests = new Map([['fake-app', 4]])
+  const requests = new Map([['fake-app', 5]])
   let served = 'fake-app'
   const app = await startFakeDevelopmentApp(context, (name, request, response) => {
     // Each new name is first answered by the server still running the previous one, which then drops a request
-    // as it stops, before and after sending headers, and then by a starting server.
+    // as it stops, before and after sending headers, answers 504 once its Vite server has closed, and then by a
+    // starting server.
     const count = (requests.get(name) ?? 0) + 1
     requests.set(name, count)
     if (count === 1) {
@@ -57,6 +58,11 @@ test('a development reload passes through restart answers and names written earl
       return 'handled'
     }
     if (count === 4) {
+      response.writeHead(504, 'Outdated Request')
+      response.end()
+      return 'handled'
+    }
+    if (count === 5) {
       response.statusCode = 503
       response.end('<title>Starting Nuxt... | Nuxt</title>')
       return 'handled'
