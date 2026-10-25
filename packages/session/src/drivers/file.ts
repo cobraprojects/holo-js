@@ -552,6 +552,7 @@ async function readRecordWithoutFollowingLinks(recordPath: string): Promise<Sess
 
 function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): (now: Date) => Promise<number> {
   let directory: Dir | undefined
+  let passPosition = 0
   let sweeping = false
   let idleTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -561,22 +562,38 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
     await current?.close()
   }
 
+  async function reopenAtPassPosition(): Promise<Dir> {
+    const reopened = await opendir(root)
+    try {
+      for (let skipped = 0; skipped < passPosition; skipped += 1) {
+        if (!(await reopened.read())) break
+      }
+    } catch (error) {
+      await reopened.close()
+      throw error
+    }
+    return reopened
+  }
+
   return async (now) => {
     if (sweeping) return 0
     sweeping = true
     clearTimeout(idleTimer)
     try {
-      directory ??= await opendir(root)
+      directory ??= await reopenAtPassPosition()
       let removed = 0
       for (let inspected = 0; inspected < SWEEP_ENTRY_LIMIT; inspected += 1) {
         const entry = await directory.read()
         if (!entry) {
+          passPosition = 0
           await closeDirectory()
           break
         }
+        passPosition += 1
         if (!entry.isFile()) continue
         if (entry.name.endsWith(RECORD_LOCK_TOMBSTONE_SUFFIX)) {
           await removeLeftoverTombstone(join(root, entry.name))
+          passPosition -= 1
           continue
         }
         if (!entry.name.endsWith('.json')) continue
@@ -593,6 +610,7 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
             if (current && current.expiresAt.getTime() <= now.getTime()) {
               await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
               removed += 1
+              passPosition -= 1
             }
           } finally {
             await release()
@@ -604,8 +622,9 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
       return removed
     } catch (error) {
       await closeDirectory()
-      if (isMissingFileError(error)) return 0
-      throw error
+      if (!isMissingFileError(error)) throw error
+      passPosition = 0
+      return 0
     } finally {
       sweeping = false
       if (directory) {
