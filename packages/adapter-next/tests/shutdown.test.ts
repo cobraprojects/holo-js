@@ -298,7 +298,10 @@ describe('Next termination shutdown', () => {
     expect(result.durationMs).toBeLessThan(10_000)
   })
 
-  it('terminates after closing when no other handler is installed, even while foreign handles stay open', async () => {
+  it.each([
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)('exits with 128 + the signal on %s after closing when no other handler is installed, even while foreign handles stay open', async (signal, code) => {
     // Next's static export worker leaves page timeout timers running and relies on SIGINT's default action to end it.
     const result = await runChild(`
       ${prelude}
@@ -311,10 +314,37 @@ describe('Next termination shutdown', () => {
       })
       process.on('exit', () => console.log('exit'))
       console.log('ready')
-    `, { signalAfterReady: 'SIGINT' })
+    `, { signalAfterReady: signal })
 
     expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done', 'exit'])
-    expect(result.code).toBe(130)
+    expect(result.code).toBe(code)
+  }, 20_000)
+
+  it.each(['SIGINT', 'SIGTERM'] as const)('does not exit on %s when the app has its own handler', async (signal) => {
+    const result = await runChild(`
+      ${prelude}
+      holdOpen()
+      let closed
+      const holoClosed = new Promise(resolve => { closed = resolve })
+      installNextShutdown({
+        close: async () => {
+          console.log('close:done')
+          closed()
+        },
+        report: error => console.log('reported', error),
+      })
+      process.on(${JSON.stringify(signal)}, async () => {
+        await holoClosed
+        // Every step Holo would take to exit after closing runs before this macrotask.
+        await new Promise(resolve => setImmediate(resolve))
+        console.log('app:still-running')
+        process.exit(0)
+      })
+      console.log('ready')
+    `, { signalAfterReady: signal })
+
+    expect(result.stdout.trim().split('\n')).toEqual(['ready', 'close:done', 'app:still-running'])
+    expect(result.code).toBe(0)
   }, 20_000)
 
   it('leaves termination to a once listener the signal already removed before Holo ran', async () => {
