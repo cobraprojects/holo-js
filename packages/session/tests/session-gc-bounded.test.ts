@@ -13,7 +13,7 @@ vi.mock('node:timers/promises', async () => (await import('./support/fake-clock'
 const SWEEP_ENTRY_LIMIT = 1_000
 const RECORD_COUNT = 1_050
 const RELEASE_SETTLE_MS = 1_000
-const SWEEP_IDLE_CLOSE_MS = 60_000
+const IDLE_GAP_MS = 60_000
 
 const root = resolve('/memory/session-gc')
 let fs: MemoryFs
@@ -37,6 +37,26 @@ async function writeRecords(store: SessionModule.SessionStore, count: number, ex
 
 async function awaitTombstonesDrained(): Promise<void> {
   await advanceUntil(() => !fs.names(root).some(name => name.endsWith('.released')), 'the release tombstones to be unlinked', RELEASE_SETTLE_MS)
+}
+
+function trackDirectoryHandles(): { reads: number, open: number } {
+  const handles = { reads: 0, open: 0 }
+  const opendir = fs.promises.opendir
+  fs.promises.opendir = async (path: string) => {
+    const directory = await opendir(path)
+    handles.open += 1
+    return {
+      read: async () => {
+        handles.reads += 1
+        return await directory.read()
+      },
+      close: async () => {
+        handles.open -= 1
+        await directory.close()
+      },
+    }
+  }
+  return handles
 }
 
 function sweepable(store: SessionModule.SessionStore): (now: Date) => Promise<number> {
@@ -87,21 +107,21 @@ describe('bounded file session garbage collection', () => {
     expect(recordNames()).toEqual([])
   })
 
-  it('resumes the sweep where it stopped after the idle directory handle is closed', async () => {
+  it('resumes the sweep where it stopped after a minute idle', async () => {
     const store = session.createFileSessionStore(root)
     const sweep = sweepable(store)
-    await writeRecords(store, SWEEP_ENTRY_LIMIT, new Date(Date.now() + 10 * SWEEP_IDLE_CLOSE_MS))
+    await writeRecords(store, SWEEP_ENTRY_LIMIT, new Date(Date.now() + 10 * IDLE_GAP_MS))
     await store.write(record('stale', new Date(Date.now() - 1_000)))
     await awaitTombstonesDrained()
 
     await expect(sweep(new Date())).resolves.toBe(0)
-    await advanceTo(Date.now() + SWEEP_IDLE_CLOSE_MS)
+    await advanceTo(Date.now() + IDLE_GAP_MS)
 
     await expect(sweep(new Date())).resolves.toBe(1)
     expect(recordNames()).not.toContain('stale.json')
   })
 
-  it('resumes after the idle close without skipping past the sessions it removed', async () => {
+  it('resumes after a minute idle without skipping past the sessions it removed', async () => {
     const store = session.createFileSessionStore(root)
     const sweep = sweepable(store)
     await writeRecords(store, SWEEP_ENTRY_LIMIT, new Date(Date.now() - 1_000))
@@ -109,9 +129,70 @@ describe('bounded file session garbage collection', () => {
     await awaitTombstonesDrained()
 
     await expect(sweep(new Date())).resolves.toBe(SWEEP_ENTRY_LIMIT)
-    await advanceTo(Date.now() + SWEEP_IDLE_CLOSE_MS)
+    await advanceTo(Date.now() + IDLE_GAP_MS)
 
     await expect(sweep(new Date())).resolves.toBe(1)
     expect(recordNames()).toEqual([])
+  })
+
+  it('reads at most the entry budget per sweep however far the pass has gone', async () => {
+    const store = session.createFileSessionStore(root)
+    const sweep = sweepable(store)
+    const passLength = 5
+    await writeRecords(store, passLength * SWEEP_ENTRY_LIMIT, new Date(Date.now() + 10 * passLength * IDLE_GAP_MS))
+    await store.write(record('stale', new Date(Date.now() - 1_000)))
+    await awaitTombstonesDrained()
+    const handles = trackDirectoryHandles()
+
+    const removed: number[] = []
+    for (let sweeps = 0; sweeps <= passLength; sweeps += 1) {
+      handles.reads = 0
+      removed.push(await sweep(new Date()))
+      expect(handles.reads).toBeLessThanOrEqual(SWEEP_ENTRY_LIMIT)
+      await advanceTo(Date.now() + IDLE_GAP_MS)
+    }
+
+    expect(removed).toEqual([0, 0, 0, 0, 0, 1])
+    expect(handles.open).toBe(0)
+  })
+
+  it('closes the open sweep handle when the session runtime is reset or rebound', async () => {
+    const store = session.createFileSessionStore(root)
+    const sweep = sweepable(store)
+    await writeRecords(store, SWEEP_ENTRY_LIMIT + 1, new Date(Date.now() + IDLE_GAP_MS))
+    const handles = trackDirectoryHandles()
+    const bindings = {
+      config: session.normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: root } } }),
+      stores: { file: store },
+    }
+
+    session.configureSessionRuntime(bindings)
+    await sweep(new Date())
+    expect(handles.open).toBe(1)
+    session.resetSessionRuntime()
+    await advanceUntil(() => handles.open === 0, 'the sweep handle to close on reset', RELEASE_SETTLE_MS)
+
+    session.configureSessionRuntime(bindings)
+    await sweep(new Date())
+    expect(handles.open).toBe(1)
+    session.configureSessionRuntime(undefined)
+    await advanceUntil(() => handles.open === 0, 'the sweep handle to close on rebind', RELEASE_SETTLE_MS)
+  })
+
+  it('closes the sweep handle after a sweep that was running when the runtime was reset', async () => {
+    const store = session.createFileSessionStore(root)
+    const sweep = sweepable(store)
+    await writeRecords(store, SWEEP_ENTRY_LIMIT + 1, new Date(Date.now() + IDLE_GAP_MS))
+    const handles = trackDirectoryHandles()
+    session.configureSessionRuntime({
+      config: session.normalizeSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: root } } }),
+      stores: { file: store },
+    })
+
+    const running = sweep(new Date())
+    session.resetSessionRuntime()
+    await expect(running).resolves.toBe(0)
+
+    expect(handles.open).toBe(0)
   })
 })

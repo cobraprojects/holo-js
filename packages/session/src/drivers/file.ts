@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import type { SessionRecord, SessionStore } from '../contracts'
+import { SESSION_STORE_DISPOSE_SYMBOL, type DisposableSessionStore } from '../store-disposal'
 
 const RECORD_LOCK_STALE_MS = 10_000
 const RECORD_LOCK_ACQUIRE_STALL_MS = 5_000
@@ -550,11 +551,15 @@ async function readRecordWithoutFollowingLinks(recordPath: string): Promise<Sess
   }
 }
 
-function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): (now: Date) => Promise<number> {
+type ExpiredSessionSweeper = {
+  readonly sweep: (now: Date) => Promise<number>
+  readonly releaseDirectory: () => Promise<void>
+}
+
+function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): ExpiredSessionSweeper {
   let directory: Dir | undefined
-  let passPosition = 0
   let sweeping = false
-  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let releaseRequested = false
 
   async function closeDirectory(): Promise<void> {
     const current = directory
@@ -562,38 +567,29 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
     await current?.close()
   }
 
-  async function reopenAtPassPosition(): Promise<Dir> {
-    const reopened = await opendir(root)
-    try {
-      for (let skipped = 0; skipped < passPosition; skipped += 1) {
-        if (!(await reopened.read())) break
-      }
-    } catch (error) {
-      await reopened.close()
-      throw error
+  async function releaseDirectory(): Promise<void> {
+    if (sweeping) {
+      releaseRequested = true
+      return
     }
-    return reopened
+    await closeDirectory()
   }
 
-  return async (now) => {
+  async function sweep(now: Date): Promise<number> {
     if (sweeping) return 0
     sweeping = true
-    clearTimeout(idleTimer)
     try {
-      directory ??= await reopenAtPassPosition()
+      directory ??= await opendir(root)
       let removed = 0
       for (let inspected = 0; inspected < SWEEP_ENTRY_LIMIT; inspected += 1) {
         const entry = await directory.read()
         if (!entry) {
-          passPosition = 0
           await closeDirectory()
           break
         }
-        passPosition += 1
         if (!entry.isFile()) continue
         if (entry.name.endsWith(RECORD_LOCK_TOMBSTONE_SUFFIX)) {
           await removeLeftoverTombstone(join(root, entry.name))
-          passPosition -= 1
           continue
         }
         if (!entry.name.endsWith('.json')) continue
@@ -610,7 +606,6 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
             if (current && current.expiresAt.getTime() <= now.getTime()) {
               await Promise.all([rm(recordPath, { force: true }), rm(getFlashPath(recordPath), { force: true })])
               removed += 1
-              passPosition -= 1
             }
           } finally {
             await release()
@@ -622,24 +617,24 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
       return removed
     } catch (error) {
       await closeDirectory()
-      if (!isMissingFileError(error)) throw error
-      passPosition = 0
-      return 0
+      if (isMissingFileError(error)) return 0
+      throw error
     } finally {
       sweeping = false
-      if (directory) {
-        idleTimer = setTimeout(() => {
-          void closeDirectory().catch(error => reportError(error, { capability: 'session', operation: 'file.closeDirectory' }))
-        }, 60_000)
-        idleTimer.unref()
+      if (releaseRequested) {
+        releaseRequested = false
+        await closeDirectory().catch(error => reportError(error, { capability: 'session', operation: 'file.closeDirectory' }))
       }
     }
   }
+
+  return { sweep, releaseDirectory }
 }
 
 function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: MakeDirectory): SessionStore {
-  const sweepExpired = createExpiredSessionSweeper(root, makeDirectory)
-  return {
+  const sweeper = createExpiredSessionSweeper(root, makeDirectory)
+  const store: DisposableSessionStore = {
+    [SESSION_STORE_DISPOSE_SYMBOL]: sweeper.releaseDirectory,
     async read(sessionId) {
       try {
         return deserializeRecord(await readFileSettled(getRecordPath(root, sessionId)))
@@ -745,7 +740,7 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
         await release()
       }
     },
-    sweepExpired,
+    sweepExpired: sweeper.sweep,
     async take(sessionId, key) {
       await makeDirectory(root, { recursive: true, mode: 0o700 })
       const recordPath = getRecordPath(root, sessionId)
@@ -770,6 +765,7 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
       }
     },
   }
+  return store
 }
 
 export function createFileSessionStore(root: string): SessionStore {
