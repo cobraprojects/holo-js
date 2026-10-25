@@ -168,7 +168,7 @@ The `worker` section configures `npx holo broadcast:work`. You only need it to c
 | Option | Default | Description |
 | --- | --- | --- |
 | `host` | `0.0.0.0` | Interface the worker listens on. |
-| `port` | The default `holo` connection's port, else `8080` | Port the worker listens on, from 0 to 65535. `0` picks a free port, which the worker prints when it starts. |
+| `port` | The default `holo` connection's port, else `8080` | Port the worker listens on, from 0 to 65535. `0` picks a free port and prints it when the worker starts. Your app still publishes to `options.port`, and browsers connect to `publicPort` or `options.port`. Neither learns the port the worker picked, so `0` is only for tests and tools that read it from the `broadcast:work` output. In production, set `worker.port` and `options.port` to the same fixed port. |
 | `path` | `/app` | WebSocket path prefix. Browsers connect to `<path>/<key>`. |
 | `publicHost` | none | Host browsers connect to, when it differs from `options.host`. |
 | `publicPort` | none | Port browsers connect to, from 1 to 65535, used with `publicHost`. |
