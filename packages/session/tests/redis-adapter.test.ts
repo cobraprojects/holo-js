@@ -212,9 +212,7 @@ describe('session Redis cluster behavior', () => {
   const stops: Array<() => Promise<void>> = []
 
   beforeAll(async () => {
-    await Promise.all(variants.map(async options => {
-      clusters.set(options, await startRedisService(options, stop => { stops.push(stop) }))
-    }))
+    for (const options of variants) clusters.set(options, await startRedisService(options, stop => { stops.push(stop) }))
   }, 30_000)
 
   afterAll(async () => {
