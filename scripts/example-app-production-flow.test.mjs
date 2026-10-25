@@ -48,3 +48,24 @@ test('a failed production initialization fails when only the 500 response names 
 
   await assert.rejects(assertFailedProductionInitialization(app.cwd, app.baseUrl, {}, app.portArguments), /must log why database initialization failed/)
 })
+
+test('a failed production initialization passes when the server logs the error just before it exits', { timeout: 10000 }, async context => {
+  const cwd = await mkdtemp(join(tmpdir(), 'holo-production-init-'))
+  context.after(() => rm(cwd, { recursive: true, force: true }))
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs' } }))
+  // The server never listens: it logs why initialization failed and exits, which can finish before its output drains.
+  await writeFile(join(cwd, 'server.mjs'), `process.stderr.write(${JSON.stringify(`[holo] ${driverError}\n`)}, () => process.exit(1))\n`)
+  const port = await availablePort()
+
+  await assertFailedProductionInitialization(cwd, `http://127.0.0.1:${port}`, {}, [`--port=${port}`])
+})
+
+test('a failed production initialization fails at once when the server exits without logging the error', { timeout: 10000 }, async context => {
+  const cwd = await mkdtemp(join(tmpdir(), 'holo-production-init-'))
+  context.after(() => rm(cwd, { recursive: true, force: true }))
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs' } }))
+  await writeFile(join(cwd, 'server.mjs'), 'process.exit(1)\n')
+  const port = await availablePort()
+
+  await assert.rejects(assertFailedProductionInitialization(cwd, `http://127.0.0.1:${port}`, {}, [`--port=${port}`]), /must log why database initialization failed/)
+})

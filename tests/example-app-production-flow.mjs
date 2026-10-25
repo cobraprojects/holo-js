@@ -192,6 +192,9 @@ export async function assertFailedProductionInitialization(cwd, baseUrl, env, po
     env: { ...process.env, ...env, DB_DRIVER: 'invalid' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  // Only `close` means the output is complete: the exit code can be set while piped output is still arriving.
+  let closed = false
+  child.once('close', () => { closed = true })
   child.stdout.on('data', chunk => output += String(chunk))
   child.stderr.on('data', chunk => output += String(chunk))
   try {
@@ -229,6 +232,10 @@ export async function assertFailedProductionInitialization(cwd, baseUrl, env, po
       }
       const check = () => {
         if (expected.test(output)) settle()
+      }
+      if (closed) {
+        settle()
+        return
       }
       child.stdout.on('data', check)
       child.stderr.on('data', check)
