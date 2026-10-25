@@ -556,7 +556,7 @@ type ExpiredSessionSweeper = {
   readonly releaseDirectory: () => Promise<void>
 }
 
-function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory): ExpiredSessionSweeper {
+function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory, sweepEntryLimit: number): ExpiredSessionSweeper {
   let directory: Dir | undefined
   let sweeping = false
   let releaseRequested = false
@@ -581,7 +581,7 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
     try {
       directory ??= await opendir(root)
       let removed = 0
-      for (let inspected = 0; inspected < SWEEP_ENTRY_LIMIT; inspected += 1) {
+      for (let inspected = 0; inspected < sweepEntryLimit; inspected += 1) {
         const entry = await directory.read()
         if (!entry) {
           await closeDirectory()
@@ -632,7 +632,11 @@ function createExpiredSessionSweeper(root: string, makeDirectory: MakeDirectory)
 }
 
 function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: MakeDirectory): SessionStore {
-  const sweeper = createExpiredSessionSweeper(root, makeDirectory)
+  return createConfiguredFileSessionStore(root, makeDirectory, SWEEP_ENTRY_LIMIT)
+}
+
+function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirectory, sweepEntryLimit: number): SessionStore {
+  const sweeper = createExpiredSessionSweeper(root, makeDirectory, sweepEntryLimit)
   const store: DisposableSessionStore = {
     [SESSION_STORE_DISPOSE_SYMBOL]: sweeper.releaseDirectory,
     async read(sessionId) {
@@ -770,6 +774,10 @@ function createFileSessionStoreWithMakeDirectory(root: string, makeDirectory: Ma
 
 export function createFileSessionStore(root: string): SessionStore {
   return createFileSessionStoreWithMakeDirectory(root, defaultMkdir)
+}
+
+export function createFileSessionStoreWithSweepEntryLimit(root: string, sweepEntryLimit: number): SessionStore {
+  return createConfiguredFileSessionStore(root, defaultMkdir, sweepEntryLimit)
 }
 
 export const fileSessionDriverInternals = {
