@@ -1,28 +1,23 @@
-import type * as FsPromises from 'node:fs/promises'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import type { PathLike } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fileSessionDriverInternals } from '../src'
-import type { WindowsFsState } from './support/windows-fs'
+import type * as ErrorReporting from '@holo-js/kernel/error-reporting'
+import type * as SessionModule from '../src'
+import { advanceTo, advanceUntil, finishesWithoutTheClock, settle, useFakeClock } from './support/fake-clock'
+import { busyError, createMemoryFs, type MemoryFs } from './support/memory-fs'
 
-const windowsFs = vi.hoisted((): WindowsFsState & { readonly pausedRenameSources: Map<string, Promise<void>> } => ({ blockedRenamePrefixes: new Set(), blockedRenameSources: new Set(), blockedUnlinkPrefixes: new Set(), blockedWritePrefixes: new Set(), ioErrorOpenPrefixes: new Set(), ioErrorRenamePrefixes: new Set(), ioErrorUnlinkPrefixes: new Set(), pausedRenameSources: new Map(), renameAttempts: new Map() }))
+const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 
-vi.mock('node:fs/promises', async importOriginal => {
-  const actual = await importOriginal<typeof FsPromises>()
-  const { windowsFsOverrides } = await import('./support/windows-fs')
-  return { ...actual, ...windowsFsOverrides(actual, windowsFs) }
-})
+vi.mock('node:fs/promises', async () => (await import('./support/memory-fs')).memoryFsModule(() => memory.fs))
+vi.mock('node:timers/promises', async () => (await import('./support/fake-clock')).fakeTimersPromises())
 
 const STALL_MS = 5_000
 const HARD_CAP_MS = 30_000
-const STEP_MS = 50
-const COARSE_STEP_MS = 500
-const MAX_TICKS_PER_CONDITION = 20
+const POLL_MS = 5
+const HANDOVER_MS = 4_000
 
 type Acquisition = {
   readonly label: string
-  readonly ready: Promise<void>
   settled: boolean
   settledAt?: number
   error?: Error
@@ -30,221 +25,197 @@ type Acquisition = {
   released: boolean
 }
 
-let root: string
-let recordPath: string
-let lockPath: string
+const root = resolve('/memory/handover')
+const recordPath = join(root, 'session.json')
+const lockPath = `${recordPath}.lock`
+let fs: MemoryFs
+let session: typeof SessionModule
+let configureReporting: typeof ErrorReporting.errorReportingInternals.configure
 let pendingPaths: Map<string, string>
 let acquisitions: Acquisition[]
-let sleepListeners: Array<() => void>
+let blockedRenameSources: Set<string>
+let blockedRenamePrefixes: Set<string>
+let blockedUnlinkPrefixes: Set<string>
+let renameAttempts: Map<string, number>
+let unlinkGate: { readonly prefix: string, readonly opened: Promise<void>, paused: number } | undefined
 
-function labelledMakeDirectory(label: string) {
-  return (async (path: string) => {
-    pendingPaths.set(label, path)
-    return await mkdir(path)
-  }) as typeof mkdir
+function startsWithAny(path: string, prefixes: Set<string>): boolean {
+  for (const prefix of prefixes) if (path.startsWith(prefix)) return true
+  return false
 }
 
 function startAcquisition(label: string): Acquisition {
-  let markSettled = (): void => undefined
-  const ready = new Promise<void>(resolve => { markSettled = resolve })
-  const acquisition: Acquisition = { label, ready, settled: false, released: false }
+  const acquisition: Acquisition = { label, settled: false, released: false }
   acquisitions.push(acquisition)
-  fileSessionDriverInternals.acquireRecordLock(recordPath, labelledMakeDirectory(label)).then(
-    release => {
-      Object.assign(acquisition, { settled: true, settledAt: Date.now(), release })
-      markSettled()
-    },
-    (error: Error) => {
-      Object.assign(acquisition, { settled: true, settledAt: Date.now(), error })
-      markSettled()
-    },
+  const makeDirectory = async (path: PathLike): Promise<undefined> => {
+    pendingPaths.set(label, String(path))
+    await fs.promises.mkdir(String(path))
+    return undefined
+  }
+  session.fileSessionDriverInternals.acquireRecordLock(recordPath, makeDirectory).then(
+    release => { Object.assign(acquisition, { settled: true, settledAt: Date.now(), release }) },
+    (error: Error) => { Object.assign(acquisition, { settled: true, settledAt: Date.now(), error }) },
   )
   return acquisition
 }
 
-function nextSleep(): Promise<void> {
-  return new Promise(resolve => sleepListeners.push(resolve))
+async function acquireHolder(label: string): Promise<Acquisition> {
+  const holder = startAcquisition(label)
+  await settle()
+  if (!holder.release) throw new Error(`${label} should acquire the free lock without waiting: ${holder.error?.message ?? 'still pending'}`)
+  return holder
+}
+
+async function startWaiter(blocked: boolean): Promise<Acquisition> {
+  const waiter = startAcquisition('waiter')
+  if (blocked) blockedRenameSources.add(pendingPathOf('waiter'))
+  await settle()
+  if (waiter.settled) throw new Error(`The waiter should be polling, but it settled: ${waiter.error?.message ?? 'acquired'}`)
+  return waiter
 }
 
 async function releaseAcquisition(acquisition: Acquisition): Promise<void> {
   const release = acquisition.release
   if (!release || acquisition.released) throw new Error(`${acquisition.label} does not hold the lock`)
   acquisition.released = true
-  await settleHolderOperation(release())
+  await finishesWithoutTheClock(release(), `Releasing ${acquisition.label}`)
 }
 
-function blockRenames(label: string): void {
+function pendingPathOf(label: string): string {
   const pendingPath = pendingPaths.get(label)
   if (!pendingPath) throw new Error(`${label} has not created its pending lease`)
-  windowsFs.blockedRenameSources.add(pendingPath)
+  return pendingPath
 }
 
-function unblockRenames(label: string): void {
-  const pendingPath = pendingPaths.get(label)
-  if (pendingPath) windowsFs.blockedRenameSources.delete(pendingPath)
+function renameAttemptsOf(label: string): number {
+  return renameAttempts.get(pendingPathOf(label)) ?? 0
 }
 
-function renameAttempts(label: string): number {
-  const pendingPath = pendingPaths.get(label)
-  return pendingPath ? (windowsFs.renameAttempts.get(pendingPath) ?? 0) : 0
-}
-
-function liveHolders(): number {
-  return acquisitions.filter(acquisition => acquisition.release && !acquisition.released).length
-}
-
-async function tick(waiter: Acquisition, ms: number): Promise<void> {
-  await vi.advanceTimersByTimeAsync(ms)
-  while (!waiter.settled && vi.getTimerCount() === liveHolders()) {
-    await Promise.race([nextSleep(), waiter.ready])
-  }
-  if (!waiter.settled && vi.getTimerCount() !== liveHolders() + 1) {
-    throw new Error(`expected ${liveHolders() + 1} pending timers, found ${vi.getTimerCount()}`)
+function pauseUnlinks(prefix: string): () => void {
+  let open = (): void => undefined
+  unlinkGate = { prefix, opened: new Promise<void>(resolve => { open = resolve }), paused: 0 }
+  return () => {
+    unlinkGate = undefined
+    open()
   }
 }
 
-async function tickUntil(waiter: Acquisition, done: () => boolean): Promise<void> {
-  for (let ticks = 0; !done() && ticks < MAX_TICKS_PER_CONDITION; ticks += 1) await tick(waiter, STEP_MS)
-}
-
-async function advanceTo(waiter: Acquisition, time: number, step = STEP_MS): Promise<void> {
-  while (Date.now() < time) await tick(waiter, Math.min(step, time - Date.now()))
-}
-
-async function advanceUntilSettled<T>(operation: Promise<T>): Promise<T> {
-  let done = false
-  const finished = operation.finally(() => { done = true })
-  let sleeping = nextSleep()
-  while (!done) {
-    await Promise.race([sleeping, finished])
-    if (done) break
-    sleeping = nextSleep()
-    await vi.advanceTimersByTimeAsync(STEP_MS)
+async function handOverUntil(waiter: Acquisition, startedAt: number, lastHandover: number): Promise<Acquisition> {
+  let holder = acquisitions.find(acquisition => acquisition.release && !acquisition.released)
+  if (!holder) throw new Error('Expected a holder to hand the lock over from')
+  for (let cycle = 1; cycle * HANDOVER_MS <= lastHandover; cycle += 1) {
+    await advanceTo(startedAt + cycle * HANDOVER_MS)
+    expect(waiter.settled).toBe(false)
+    await releaseAcquisition(holder)
+    holder = await acquireHolder(`holder-${cycle}`)
   }
-  return await finished
+  return holder
 }
 
-async function settleHolderOperation<T>(operation: Promise<T>): Promise<T> {
-  const waiterPath = pendingPaths.get('waiter')
-  if (!waiterPath) return await advanceUntilSettled(operation)
-  let resume = (): void => undefined
-  windowsFs.pausedRenameSources.set(waiterPath, new Promise<void>(resolve => { resume = () => resolve() }))
-  try {
-    return await advanceUntilSettled(operation)
-  } finally {
-    windowsFs.pausedRenameSources.delete(waiterPath)
-    resume()
-  }
-}
-
-describe('file session lock handover under a fake clock', () => {
+describe.each(['posix', 'win32'] as const)('file session lock handover under a fake clock on %s', platform => {
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'holo-file-lock-handover-'))
-    recordPath = join(root, 'session.json')
-    lockPath = `${recordPath}.lock`
+    useFakeClock()
+    fs = createMemoryFs({ platform })
+    memory.fs = fs
     pendingPaths = new Map()
     acquisitions = []
-    sleepListeners = []
-    windowsFs.blockedRenameSources.clear()
-    windowsFs.pausedRenameSources.clear()
-    windowsFs.renameAttempts.clear()
-    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-    const scheduleTimeout = globalThis.setTimeout
-    globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
-      for (const listener of sleepListeners.splice(0)) listener()
-      return scheduleTimeout(...args)
-    }) as typeof setTimeout
+    blockedRenameSources = new Set()
+    blockedRenamePrefixes = new Set()
+    blockedUnlinkPrefixes = new Set()
+    renameAttempts = new Map()
+    unlinkGate = undefined
+    fs.addHook(async (operation, path) => {
+      if (operation === 'rename') {
+        renameAttempts.set(path, (renameAttempts.get(path) ?? 0) + 1)
+        if (blockedRenameSources.has(path) || startsWithAny(path, blockedRenamePrefixes)) throw busyError('rename', path)
+      }
+      if (operation === 'unlink') {
+        if (startsWithAny(path, blockedUnlinkPrefixes)) throw busyError('unlink', path)
+        const gate = unlinkGate
+        if (gate && path.startsWith(gate.prefix)) {
+          gate.paused += 1
+          await gate.opened
+        }
+      }
+    })
+    await fs.promises.mkdir(root, { recursive: true })
+    vi.resetModules()
+    session = await import('../src')
+    configureReporting = (await import('@holo-js/kernel/error-reporting')).errorReportingInternals.configure
+    configureReporting({ report: () => undefined })
   })
 
   afterEach(async () => {
+    blockedRenameSources.clear()
+    blockedRenamePrefixes.clear()
+    blockedUnlinkPrefixes.clear()
     for (const acquisition of acquisitions) {
       if (acquisition.release && !acquisition.released) await releaseAcquisition(acquisition)
     }
+    configureReporting(undefined)
     vi.useRealTimers()
-    await rm(root, { force: true, recursive: true })
+    memory.fs = undefined
   })
 
   it('times out a stuck holder after the stall deadline', async () => {
-    const holder = startAcquisition('holder')
-    await settleHolderOperation(holder.ready)
-    const asleep = nextSleep()
-    const waiter = startAcquisition('waiter')
-    await asleep
+    const holder = await acquireHolder('holder')
     const startedAt = Date.now()
+    const waiter = await startWaiter(false)
 
-    await advanceTo(waiter, startedAt + STALL_MS - STEP_MS)
+    await advanceTo(startedAt + STALL_MS - 1)
     expect(waiter.settled).toBe(false)
 
-    await advanceTo(waiter, startedAt + STALL_MS + STEP_MS)
-    expect(waiter.settled).toBe(true)
+    await advanceUntil(() => waiter.settled, 'the waiter to give up', 2 * POLL_MS)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(STALL_MS)
-    expect(waiter.settledAt! - startedAt).toBeLessThan(STALL_MS + 2 * STEP_MS)
+    expect(waiter.settledAt! - startedAt).toBeLessThanOrEqual(STALL_MS + POLL_MS)
     expect(waiter.error?.cause).toBeUndefined()
 
     await releaseAcquisition(holder)
   })
 
   it('reports the filesystem error when every rename fails without contention', async () => {
-    const asleep = nextSleep()
-    const waiter = startAcquisition('solo')
-    blockRenames('solo')
-    await asleep
     const startedAt = Date.now()
+    const waiter = await startWaiter(true)
 
-    await advanceTo(waiter, startedAt + STALL_MS + STEP_MS)
-    expect(waiter.settled).toBe(true)
+    await advanceUntil(() => waiter.settled, 'the solo acquisition to give up', STALL_MS + 2 * POLL_MS)
+    expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(STALL_MS)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.error?.cause).toEqual(expect.objectContaining({ code: 'EPERM' }))
     expect(waiter.release).toBeUndefined()
+    expect(fs.names(root)).toEqual([])
   })
 
   it('polls a visibly held lock without retrying the rename', async () => {
-    const holder = startAcquisition('holder')
-    await settleHolderOperation(holder.ready)
-    const asleep = nextSleep()
-    const waiter = startAcquisition('waiter')
-    await asleep
-    const attemptsWhileHeld = renameAttempts('waiter')
+    const holder = await acquireHolder('holder')
+    const waiter = await startWaiter(false)
+    const attemptsWhileHeld = renameAttemptsOf('waiter')
 
-    await advanceTo(waiter, Date.now() + COARSE_STEP_MS)
-    expect(renameAttempts('waiter')).toBe(attemptsWhileHeld)
+    await advanceTo(Date.now() + 500)
+    expect(renameAttemptsOf('waiter')).toBe(attemptsWhileHeld)
     expect(waiter.settled).toBe(false)
 
     await releaseAcquisition(holder)
-    await tickUntil(waiter, () => waiter.settled)
+    await advanceUntil(() => waiter.settled, 'the waiter to acquire the released lock', 2 * POLL_MS)
     expect(waiter.error).toBeUndefined()
     expect(waiter.release).toBeDefined()
-    expect(renameAttempts('waiter')).toBeGreaterThan(attemptsWhileHeld)
+    expect(renameAttemptsOf('waiter')).toBeGreaterThan(attemptsWhileHeld)
 
     await releaseAcquisition(waiter)
   })
 
   it('restarts the stall deadline when the lock changes hands', async () => {
-    const first = startAcquisition('first')
-    await settleHolderOperation(first.ready)
-    const asleep = nextSleep()
-    const waiter = startAcquisition('waiter')
-    blockRenames('waiter')
-    await asleep
+    await acquireHolder('holder-0')
     const startedAt = Date.now()
+    const waiter = await startWaiter(true)
 
-    await advanceTo(waiter, startedAt + 4_000)
-    expect(waiter.settled).toBe(false)
-
-    await releaseAcquisition(first)
-    const second = startAcquisition('second')
-    await settleHolderOperation(second.ready)
-    await advanceTo(waiter, Date.now() + COARSE_STEP_MS)
-    expect(waiter.settled).toBe(false)
-
-    await advanceTo(waiter, startedAt + 7_000)
+    const second = await handOverUntil(waiter, startedAt, HANDOVER_MS)
+    await advanceTo(startedAt + STALL_MS + 2_000)
     expect(waiter.settled).toBe(false)
 
     await releaseAcquisition(second)
-    unblockRenames('waiter')
-    await tickUntil(waiter, () => waiter.settled)
-    expect(waiter.settled).toBe(true)
+    blockedRenameSources.clear()
+    await advanceUntil(() => waiter.settled, 'the waiter to acquire after the second holder leaves', 2 * POLL_MS)
     expect(waiter.error).toBeUndefined()
     expect(waiter.release).toBeDefined()
 
@@ -252,68 +223,48 @@ describe('file session lock handover under a fake clock', () => {
   })
 
   async function giveUpAtHardCap(): Promise<void> {
-    let holder = startAcquisition('holder-0')
-    await settleHolderOperation(holder.ready)
-    const asleep = nextSleep()
-    const waiter = startAcquisition('waiter')
-    blockRenames('waiter')
-    await asleep
+    await acquireHolder('holder-0')
     const startedAt = Date.now()
+    const waiter = await startWaiter(true)
 
-    for (let cycle = 1; cycle * 4_000 < HARD_CAP_MS; cycle += 1) {
-      await advanceTo(waiter, startedAt + cycle * 4_000, COARSE_STEP_MS)
-      expect(waiter.settled).toBe(false)
-      await releaseAcquisition(holder)
-      holder = startAcquisition(`holder-${cycle}`)
-      await settleHolderOperation(holder.ready)
-    }
+    await handOverUntil(waiter, startedAt, HARD_CAP_MS - 1)
+    await advanceTo(startedAt + HARD_CAP_MS - 1)
+    expect(waiter.settled).toBe(false)
 
-    await advanceTo(waiter, startedAt + HARD_CAP_MS + COARSE_STEP_MS, COARSE_STEP_MS)
-    expect(waiter.settled).toBe(true)
+    await advanceUntil(() => waiter.settled, 'the waiter to give up at the hard cap', 2 * POLL_MS)
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
     expect(waiter.settledAt! - startedAt).toBeGreaterThanOrEqual(HARD_CAP_MS)
-    expect(waiter.settledAt! - startedAt).toBeLessThan(HARD_CAP_MS + 2 * COARSE_STEP_MS)
+    expect(waiter.settledAt! - startedAt).toBeLessThanOrEqual(HARD_CAP_MS + POLL_MS)
   }
 
   it('gives up at the hard cap while the lock keeps changing hands', giveUpAtHardCap)
 
   it('gives up at the hard cap while tombstone removals wait on busy unlinks', async () => {
-    windowsFs.blockedUnlinkPrefixes.add(lockPath)
-    try {
-      await giveUpAtHardCap()
-    } finally {
-      windowsFs.blockedUnlinkPrefixes.clear()
-    }
+    blockedUnlinkPrefixes.add(lockPath)
+    await giveUpAtHardCap()
+    expect(fs.names(root).filter(name => name.endsWith('.released')).length).toBeGreaterThan(0)
   })
 
   it('times out instead of acquiring when a reclaim finishes past the hard cap', async () => {
-    let holder = startAcquisition('holder-0')
-    await settleHolderOperation(holder.ready)
-    const asleep = nextSleep()
-    const waiter = startAcquisition('waiter')
-    blockRenames('waiter')
-    await asleep
+    await acquireHolder('holder-0')
     const startedAt = Date.now()
+    const waiter = await startWaiter(true)
+    const last = await handOverUntil(waiter, startedAt, HARD_CAP_MS - 1)
 
-    for (let cycle = 1; cycle <= 7; cycle += 1) {
-      await advanceTo(waiter, startedAt + cycle * 4_000, COARSE_STEP_MS)
-      expect(waiter.settled).toBe(false)
-      await releaseAcquisition(holder)
-      holder = startAcquisition(`holder-${cycle}`)
-      await settleHolderOperation(holder.ready)
-    }
+    await advanceTo(startedAt + HARD_CAP_MS - 500)
+    blockedRenamePrefixes.add(join(lockPath, 'owner.'))
+    const openUnlinks = pauseUnlinks(join(lockPath, 'owner.'))
+    await releaseAcquisition(last)
+    blockedRenamePrefixes.clear()
+    blockedRenameSources.clear()
+    await advanceUntil(() => unlinkGate!.paused > 0, 'the waiter to start reclaiming the released lease', 2 * POLL_MS)
 
-    await advanceTo(waiter, startedAt + 28_500, COARSE_STEP_MS)
-    windowsFs.blockedRenamePrefixes.add(join(lockPath, 'owner.'))
-    windowsFs.blockedUnlinkPrefixes.add(join(lockPath, 'owner.'))
-    await releaseAcquisition(holder)
+    await advanceTo(startedAt + HARD_CAP_MS + 200)
+    expect(waiter.settled).toBe(false)
+    openUnlinks()
+    await settle()
 
-    await advanceTo(waiter, startedAt + HARD_CAP_MS + 200, COARSE_STEP_MS)
-    windowsFs.blockedRenamePrefixes.clear()
-    windowsFs.blockedUnlinkPrefixes.clear()
-    unblockRenames('waiter')
-    await tickUntil(waiter, () => waiter.settled)
-
+    expect(fs.names(root)).not.toContain('session.json.lock')
     expect(waiter.settled).toBe(true)
     expect(waiter.release).toBeUndefined()
     expect(waiter.error?.message).toContain('Timed out acquiring file session lock')
