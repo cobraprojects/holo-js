@@ -3,13 +3,13 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as SessionModule from '../src'
 import type * as FileDriverModule from '../src/drivers/file'
-import { advanceTo, advanceUntil, useFakeClock } from './support/fake-clock'
-import { createMemoryFs, type MemoryFs } from './support/memory-fs'
+import { advanceTo, advanceUntil, useFakeClock } from '../../../tests/support/fake-clock'
+import { createMemoryFs, type MemoryFs } from '../../../tests/support/memory-fs'
 
 const memory = vi.hoisted((): { fs?: MemoryFs } => ({}))
 
-vi.mock('node:fs/promises', async () => (await import('./support/memory-fs')).memoryFsModule(() => memory.fs))
-vi.mock('node:timers/promises', async () => (await import('./support/fake-clock')).fakeTimersPromises())
+vi.mock('node:fs/promises', async () => (await import('../../../tests/support/memory-fs')).memoryFsModule(() => memory.fs))
+vi.mock('node:timers/promises', async () => (await import('../../../tests/support/fake-clock')).fakeTimersPromises())
 
 const DEFAULT_SWEEP_ENTRY_LIMIT = 1_000
 const SWEEP_ENTRY_LIMIT = 10

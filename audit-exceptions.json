@@ -4,62 +4,6 @@
     "package": "node-forge",
     "version": "1.4.0",
     "expires": "2026-12-17",
-    "reason": "No patched node-forge release exists. Reachable only through Nuxt/Nitro dev tooling: nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge. listhen imports node-forge at load time and uses it only to create a self-signed development HTTPS certificate when https is enabled without a supplied key and cert. listhen never calls signature verification, and the nitropack runtime and holo-js sources do not import listhen. Remove when listhen drops node-forge."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-67mh-4wv8-2f99",
-    "package": "esbuild",
-    "version": "0.21.5",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vite@5.4.21 under vitepress@1.6.4 (apps/docs, never published). No patched esbuild 0.21 release exists. Remove with the vite 5 entries when vitepress 2 is stable."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-v6wh-96g9-6wx3",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-4w7w-66w2-5vf9",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-fx2h-pf6j-xcff",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-rq7h-c2jc-7f22",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
-  },
-  {
-    "advisory": "https://github.com/advisories/GHSA-587h-7wmj-h5pm",
-    "package": "vite",
-    "version": "5.4.21",
-    "expires": "2026-12-17",
-    "reason": "Docs-only: pinned by vitepress@1.6.4 (apps/docs, never published). vitepress 1.x requires vite 5 and no patched vite 5 release exists. Advisories concern the dev server. Keep until vitepress 2 is stable, then move the docs app and delete these entries."
+    "reason": "No patched node-forge release exists (1.4.0 is the latest). Reachable only through Nuxt/Nitro dev tooling: nuxt -> @nuxt/nitro-server -> nitropack -> listhen -> node-forge; listhen 1.10.1 (latest) and nitropack 2.13.5 (latest) still depend on it. listhen imports node-forge at load time and uses it only for development HTTPS: generating a local CA and certificate when https is enabled without a supplied key and cert, and reading a supplied pfx keystore. listhen never calls RSA signature verification, and the nitropack runtime and holo-js sources do not import listhen. Remove when listhen drops node-forge or a patched node-forge is released."
   }
 ]

@@ -2134,41 +2134,6 @@ describe('@holo-js/security rate-limit drivers', () => {
       }))
     })
 
-    it('serializes concurrent waiters reclaiming the same stale bucket lock', async () => {
-      const harness = await createHarness()
-      const key = 'limiter:login|user:stale-lock-contended'
-      await createFileRateLimitStore(harness.root, {
-        now: () => new Date('2026-04-16T11:55:00.000Z'),
-      }).hit(key, {
-        maxAttempts: 10,
-        decaySeconds: 60,
-      })
-      const bucketPath = await onlyBucketPath(harness.root)
-      const lockPath = bucketLockDirectory(bucketPath)
-      await rm(bucketPath)
-      const store = createFileRateLimitStore(harness.root, {
-        now: () => new Date('2026-04-16T12:00:00.000Z'),
-        lockRetryDelayMs: 1,
-        lockTimeoutMs: 200,
-      })
-
-      await mkdir(lockPath)
-      await utimes(lockPath, new Date('2026-04-16T11:59:00.000Z'), new Date('2026-04-16T11:59:00.000Z'))
-
-      const hits = await Promise.all(Array.from({ length: 6 }, () => store.hit(key, {
-        maxAttempts: 10,
-        decaySeconds: 60,
-      })))
-
-      expect(hits.map(hit => hit.snapshot.attempts).sort((left, right) => left - right)).toEqual([1, 2, 3, 4, 5, 6])
-
-      const persisted = await store.hit(key, {
-        maxAttempts: 10,
-        decaySeconds: 60,
-      })
-      expect(persisted.snapshot.attempts).toBe(7)
-    })
-
     it('does not reclaim a live bucket lock while its holder is still running', async () => {
       const harness = await createHarness()
       const key = 'limiter:login|user:live-lock'

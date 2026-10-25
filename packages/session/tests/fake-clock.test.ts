@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { finishesWithoutTheClock, useFakeClock } from './support/fake-clock'
+import { finishesWithoutTheClock, useFakeClock } from '../../../tests/support/fake-clock'
 
 describe('finishesWithoutTheClock', () => {
   const unhandled: unknown[] = []
