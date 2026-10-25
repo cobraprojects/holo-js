@@ -32,8 +32,11 @@ async function writeRecords(store: SessionModule.SessionStore, count: number, ex
   for (let index = 0; index < count; index += 1) {
     await store.write(record(`session-${String(index).padStart(4, '0')}`, expiresAt))
   }
-  // Once every lease release has unlinked its tombstone, only the record files remain.
-  await advanceUntil(() => fs.names(root).length === count, 'the background lease releases to finish', RELEASE_SETTLE_MS)
+  await awaitTombstonesDrained()
+}
+
+async function awaitTombstonesDrained(): Promise<void> {
+  await advanceUntil(() => !fs.names(root).some(name => name.endsWith('.released')), 'the release tombstones to be unlinked', RELEASE_SETTLE_MS)
 }
 
 function sweepable(store: SessionModule.SessionStore): (now: Date) => Promise<number> {
@@ -89,7 +92,7 @@ describe('bounded file session garbage collection', () => {
     const sweep = sweepable(store)
     await writeRecords(store, SWEEP_ENTRY_LIMIT, new Date(Date.now() + 10 * SWEEP_IDLE_CLOSE_MS))
     await store.write(record('stale', new Date(Date.now() - 1_000)))
-    await advanceUntil(() => fs.names(root).length === SWEEP_ENTRY_LIMIT + 1, 'the background lease releases to finish', RELEASE_SETTLE_MS)
+    await awaitTombstonesDrained()
 
     await expect(sweep(new Date())).resolves.toBe(0)
     await advanceTo(Date.now() + SWEEP_IDLE_CLOSE_MS)
@@ -103,7 +106,7 @@ describe('bounded file session garbage collection', () => {
     const sweep = sweepable(store)
     await writeRecords(store, SWEEP_ENTRY_LIMIT, new Date(Date.now() - 1_000))
     await store.write(record('stale', new Date(Date.now() - 1_000)))
-    await advanceUntil(() => fs.names(root).length === SWEEP_ENTRY_LIMIT + 1, 'the background lease releases to finish', RELEASE_SETTLE_MS)
+    await awaitTombstonesDrained()
 
     await expect(sweep(new Date())).resolves.toBe(SWEEP_ENTRY_LIMIT)
     await advanceTo(Date.now() + SWEEP_IDLE_CLOSE_MS)
