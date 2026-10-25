@@ -212,7 +212,26 @@ async function assertFailedProductionInitialization(cwd, baseUrl, env, portArgum
       await new Promise(resolve => setTimeout(resolve, 100))
     }
     assert.ok(failed, `The production app must reject requests when database initialization fails.\n${output}`)
-    assert.match(output, /Unsupported Holo database driver "invalid"/)
+    // The server logs the error on its own output, which can arrive after the 500 response it sent.
+    await new Promise((resolve, reject) => {
+      const expected = /Unsupported Holo database driver "invalid"/
+      const timer = setTimeout(() => settle(), Math.max(0, deadline - Date.now()))
+      const settle = () => {
+        clearTimeout(timer)
+        child.stdout.off('data', check)
+        child.stderr.off('data', check)
+        child.off('close', settle)
+        if (expected.test(output)) resolve()
+        else reject(new assert.AssertionError({ message: `The production app must log why database initialization failed.\n${output}` }))
+      }
+      const check = () => {
+        if (expected.test(output)) settle()
+      }
+      child.stdout.on('data', check)
+      child.stderr.on('data', check)
+      child.once('close', settle)
+      check()
+    })
   } finally {
     await stopProductionServer(child, 'SIGINT')
   }
