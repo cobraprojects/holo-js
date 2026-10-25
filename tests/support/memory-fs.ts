@@ -9,6 +9,8 @@ type MemoryNode = {
   data: string
 }
 
+type MemoryDirent = { readonly name: string, isFile(): boolean, isDirectory(): boolean }
+
 type MemoryFsOperation = 'mkdir' | 'open' | 'readFile' | 'readdir' | 'rename' | 'rm' | 'rmdir' | 'stat' | 'unlink' | 'utimes' | 'writeFile'
 
 type MemoryFsHook = (operation: MemoryFsOperation, path: string) => void | Promise<void>
@@ -63,6 +65,11 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
       isFile: () => node.kind === 'file',
       isDirectory: () => node.kind === 'directory',
     }
+  }
+
+  function direntFor(directory: string, name: string): MemoryDirent {
+    const kind = nodes.get(resolve(directory, name))?.kind
+    return { name, isFile: () => kind === 'file', isDirectory: () => kind === 'directory' }
   }
 
   function readNode(path: string, operation: string): string {
@@ -142,11 +149,15 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
       await run('writeFile', target)
       writeNode(target, data, writeOptions?.flag ?? 'w', 'open')
     },
-    async readdir(path: string): Promise<string[]> {
+    readdir: (async (path: string, readdirOptions?: { readonly withFileTypes?: boolean }) => {
       const target = resolve(path)
       await run('readdir', target)
       if (existing(target, 'scandir').kind !== 'directory') throw fsError('ENOTDIR', 'scandir', target)
-      return children(target).map(child => basename(child))
+      const names = children(target).map(child => basename(child))
+      return readdirOptions?.withFileTypes ? names.map(name => direntFor(target, name)) : names
+    }) as {
+      (path: string, readdirOptions: { readonly withFileTypes: true }): Promise<MemoryDirent[]>
+      (path: string, readdirOptions?: { readonly withFileTypes?: false }): Promise<string[]>
     },
     async opendir(path: string) {
       const entries = await promises.readdir(path)
@@ -154,9 +165,7 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
       return {
         read: async () => {
           const name = entries.shift()
-          if (name === undefined) return null
-          const kind = nodes.get(resolve(target, name))?.kind
-          return { name, isFile: () => kind === 'file', isDirectory: () => kind === 'directory' }
+          return name === undefined ? null : direntFor(target, name)
         },
         close: async () => undefined,
       }
