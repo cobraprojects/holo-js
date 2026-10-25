@@ -26,16 +26,36 @@ function toMilliseconds(time: Date | number | string): number {
 
 export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }) {
   const nodes = new Map<string, MemoryNode>()
+  const entries = new Map<string, Set<string>>()
   const hooks: MemoryFsHook[] = []
   let nextInode = 1
 
+  function place(path: string, node: MemoryNode): void {
+    nodes.set(path, node)
+    const parent = dirname(path)
+    if (parent === path) return
+    const siblings = entries.get(parent) ?? new Set<string>()
+    siblings.add(path)
+    entries.set(parent, siblings)
+  }
+
+  function remove(path: string): void {
+    nodes.delete(path)
+    entries.get(dirname(path))?.delete(path)
+  }
+
   function create(path: string, kind: MemoryNode['kind'], data = ''): void {
     const now = Date.now()
-    nodes.set(path, { kind, ino: nextInode++, birthtimeMs: now, mtimeMs: now, data })
+    place(path, { kind, ino: nextInode++, birthtimeMs: now, mtimeMs: now, data })
   }
 
   function children(path: string): string[] {
-    return [...nodes.keys()].filter(candidate => candidate !== path && dirname(candidate) === path).sort()
+    return [...entries.get(path) ?? []].sort()
+  }
+
+  function subtree(path: string): string[] {
+    if (!nodes.has(path)) return []
+    return [path, ...children(path).flatMap(subtree)]
   }
 
   function existing(path: string, operation: string): MemoryNode {
@@ -86,17 +106,13 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
   }
 
   function removeTree(path: string): void {
-    for (const candidate of [...nodes.keys()]) {
-      if (candidate === path || candidate.startsWith(`${path}/`) || candidate.startsWith(`${path}\\`)) nodes.delete(candidate)
-    }
+    for (const candidate of subtree(path)) remove(candidate)
   }
 
   function moveTree(source: string, target: string): void {
-    for (const [candidate, node] of [...nodes]) {
-      if (candidate !== source && !candidate.startsWith(`${source}/`) && !candidate.startsWith(`${source}\\`)) continue
-      nodes.delete(candidate)
-      nodes.set(`${target}${candidate.slice(source.length)}`, node)
-    }
+    const moved = subtree(source).map(candidate => [candidate, nodes.get(candidate) as MemoryNode] as const)
+    for (const [candidate] of moved) remove(candidate)
+    for (const [candidate, node] of moved) place(`${target}${candidate.slice(source.length)}`, node)
   }
 
   const promises = {
@@ -206,13 +222,13 @@ export function createMemoryFs(options: { readonly platform: 'posix' | 'win32' }
       await run('rmdir', target)
       if (existing(target, 'rmdir').kind !== 'directory') throw fsError('ENOTDIR', 'rmdir', target)
       if (children(target).length > 0) throw fsError('ENOTEMPTY', 'rmdir', target)
-      nodes.delete(target)
+      remove(target)
     },
     async unlink(path: string): Promise<void> {
       const target = resolve(path)
       await run('unlink', target)
       if (existing(target, 'unlink').kind === 'directory') throw fsError(options.platform === 'win32' ? 'EPERM' : 'EISDIR', 'unlink', target)
-      nodes.delete(target)
+      remove(target)
     },
   }
 
