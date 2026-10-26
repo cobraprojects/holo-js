@@ -1,6 +1,7 @@
 import {
   createNuxtAuthRequestAccessors,
   configureHoloRuntimeConfig,
+  configureNuxtRuntime,
 } from '../composables'
 import { createNuxtAuthorizationError } from '../authorization-error'
 import { connectionAddress } from '../server/connection-address'
@@ -23,6 +24,7 @@ type NitroApp = {
 
 export default defineNitroPlugin((nitroApp: NitroApp) => {
   const config = useRuntimeConfig()
+  configureNuxtRuntime({ useEvent, createAuthorizationError: createNuxtAuthorizationError })
   configureHoloRuntimeConfig(config)
   requestUrlInternals.provideConnectionAddress(() => connectionAddress(useEvent().node.req.socket))
 

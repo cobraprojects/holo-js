@@ -10,11 +10,13 @@ import { Storage } from '@holo-js/storage/runtime'
 import { configureHoloRuntimeConfig, holo, resetHoloRuntimeConfig } from '../src/runtime/composables'
 import storageHandler from '../src/runtime/server/routes/storage'
 import { serve } from './support/http'
+import { configureTestNuxtRuntime } from './support/nuxt'
 import { configureSecurityRuntime, resetSecurityRuntime } from '../../security/src'
 
 const roots = new Set<string>()
 
 async function project() {
+  configureTestNuxtRuntime()
   const root = await mkdtemp(join(tmpdir(), 'holo-nuxt-storage-'))
   roots.add(root)
   await mkdir(join(root, 'config'))

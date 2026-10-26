@@ -33,6 +33,14 @@ export declare function configureHoloRuntimeConfig(config: {
   }
 }): void
 export declare function resetHoloRuntimeConfig(): void
+export type NuxtRuntime = {
+  readonly useEvent: () => NuxtAuthRequestEvent | undefined
+  readonly createAuthorizationError: (decision: {
+    readonly message?: string
+    readonly status: 200 | 403 | 404
+  }) => Error
+}
+export declare function configureNuxtRuntime(runtime: NuxtRuntime): void
 export type NuxtAuthRequestEvent = {
   readonly headers?: Pick<Headers, 'get'>
   readonly request?: {

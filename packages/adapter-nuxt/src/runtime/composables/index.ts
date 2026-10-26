@@ -7,6 +7,9 @@ import {
   type CreateHoloOptions,
 } from '@holo-js/core'
 import { createCookieWriteUnavailableError } from '@holo-js/kernel'
+import { getNuxtRuntime } from '../nitro-runtime'
+
+export { configureNuxtRuntime, type NuxtRuntime } from '../nitro-runtime'
 
 type RuntimeConfigShape = {
   holo: {
@@ -72,11 +75,6 @@ function resolveRuntimeProjectRoot(config: RuntimeConfigShape): string {
   return config.holo.projectRoot?.trim() || process.cwd()
 }
 
-async function resolveNitroEvent(): Promise<NuxtAuthRequestEvent | undefined> {
-  const { useEvent } = await import('#imports')
-  return useEvent()
-}
-
 export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEvent) {
   function safeDecode(value: string): string | undefined {
     try {
@@ -87,7 +85,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function readHeader(name: string): Promise<string | undefined> {
-    const event = requestEvent ?? (await resolveNitroEvent())
+    const event = requestEvent ?? getNuxtRuntime().useEvent()
 
     if (!event) {
       return undefined
@@ -142,7 +140,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   async function resolveResponse() {
-    const event = requestEvent ?? (await resolveNitroEvent())
+    const event = requestEvent ?? getNuxtRuntime().useEvent()
     return event?.node?.res
   }
 
@@ -183,7 +181,7 @@ export function createNuxtAuthRequestAccessors(requestEvent?: NuxtAuthRequestEve
   }
 
   const redirectResponse: NonNullable<CreateHoloOptions['authRequest']>['redirectResponse'] = async (url, status) => {
-    const event = requestEvent ?? (await resolveNitroEvent())
+    const event = requestEvent ?? getNuxtRuntime().useEvent()
     const response = event?.node?.res
     if (!response) {
       throw new TypeError('Holo Nuxt auth redirect requires an active Nitro event.')
@@ -213,12 +211,11 @@ export async function runWithNuxtRequest<TValue>(event: NuxtAuthRequestEvent, ca
 export const holo = createHoloProjectAccessors(async () => {
   const config = getRuntimeConfig()
   const authRequest = createNuxtAuthRequestAccessors()
-  const { createNuxtAuthorizationError } = await import('../authorization-error')
   const project = await initializeHoloAdapterProject(resolveRuntimeProjectRoot(config), {
     processEnv: process.env,
     authRequest,
     authorizationError: {
-      createError: createNuxtAuthorizationError,
+      createError: getNuxtRuntime().createAuthorizationError,
     },
   })
   const runtimeGlobals = globalThis as RuntimeGlobals

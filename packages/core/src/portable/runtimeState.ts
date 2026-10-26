@@ -16,6 +16,10 @@ export interface HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisCon
   securityRateLimitStore?: object
   databaseInvalidationSenders?: TDatabaseInvalidationSenders
   databaseInvalidationUnsubscribe?: () => void
+  cacheRuntimeConfiguration?: {
+    readonly config: object
+    readonly bindings?: object
+  }
   sessionRuntimeBindings?: object
   sessionRedisConnections?: TSessionRedisConnections
   optionalSubsystemsTurn?: Promise<void>
@@ -108,6 +112,7 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessi
       runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
     }
 
+    state.cacheRuntimeConfiguration = undefined
     state.sessionRedisConnections = undefined
     state.sessionRuntimeBindings = undefined
     state.securityRateLimitStore = undefined

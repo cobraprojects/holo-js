@@ -1,5 +1,6 @@
 import type { ModuleOptions } from '../src/module'
 import type { TSReference, ViteConfig } from 'nuxt/schema'
+import { buildNuxt } from '@nuxt/kit'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
@@ -312,13 +313,31 @@ describe('@holo-js/adapter-nuxt module setup', () => {
   it('publishes a runtime declaration that type-checks under NodeNext resolution', async () => {
     const build = await runAdapterStub()
 
-    const tempDir = await mkdtemp(join(tmpdir(), 'holo-storage-types-'))
-    const entryPath = join(tempDir, 'runtime-import.ts')
+    const tempDir = await mkdtemp(join(tmpdir(), 'holo-runtime-types-'))
+    const entryPath = join(tempDir, 'runtime-import.mts')
 
     try {
+      await symlinkPackageDependency(join(tempDir, 'node_modules'), '@holo-js/adapter-nuxt', dirname(build.adapterOutDir))
       await writeFile(
         entryPath,
-        `import { Storage } from ${JSON.stringify(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))}\nvoid Storage\n`,
+        `import { configureNuxtRuntime, type NuxtRuntime } from '@holo-js/adapter-nuxt/runtime'
+import { Storage } from '@holo-js/adapter-nuxt/storage'
+type Equal<TLeft, TRight> = (<TValue>() => TValue extends TLeft ? 1 : 2) extends (<TValue>() => TValue extends TRight ? 1 : 2) ? true : false
+const bindings: NuxtRuntime = {
+  useEvent: () => undefined,
+  createAuthorizationError: decision => {
+    const preciseStatus: Equal<typeof decision.status, 200 | 403 | 404> = true
+    const preciseMessage: Equal<typeof decision.message, string | undefined> = true
+    void preciseStatus
+    void preciseMessage
+    return new Error(decision.message)
+  },
+}
+const preciseBindings: Equal<Parameters<typeof configureNuxtRuntime>[0], NuxtRuntime> = true
+configureNuxtRuntime(bindings)
+void preciseBindings
+void Storage
+`,
       )
 
       expect(() => execFileSync(
@@ -326,7 +345,8 @@ describe('@holo-js/adapter-nuxt module setup', () => {
         [
           '--ignoreConfig',
           '--strict',
-          'false',
+          'true',
+          '--skipLibCheck',
           '--types',
           'node',
           '--module',
@@ -429,6 +449,114 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(output).toContain('function')
     expect(output).toContain('Storage runtime is not configured')
   }, 60000)
+
+  it.each(['nitro', 'h3'] as const)('serves external public-runtime consumers with isolated cookies and native authorization errors in %s', async host => {
+    const build = await runAdapterStub()
+    const root = resolve(build.adapterOutDir, `../../nuxt-production-app-${host}`)
+    await symlinkPackageDependency(join(root, 'node_modules'), '@holo-js/adapter-nuxt', dirname(build.adapterOutDir))
+    await mkdir(join(root, 'config'), { recursive: true })
+    await writeFile(join(root, 'config/app.mjs'), `export default {
+      key: 'nuxt-production-runtime-test-key-1234567890',
+      paths: { generatedSchema: '.holo-js/generated/schema.generated.ts' },
+    }`)
+    await writeFile(join(root, 'config/auth.mjs'), 'export default {}')
+    await mkdir(join(root, 'server/models'), { recursive: true })
+    await writeFile(join(root, 'server/models/User.mjs'), `import { defineModel } from '@holo-js/db'
+      export default defineModel('users')
+    `)
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), `
+      import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+      const users = defineGeneratedTable('users', { id: column.id(), email: column.string(), password: column.string() })
+      registerGeneratedTables({ users })
+    `)
+    await writeFile(join(root, 'config/database.mjs'), `export default {
+      defaultConnection: 'main',
+      connections: { main: { driver: 'sqlite', url: ':memory:' } },
+    }`)
+    await mkdir(join(root, 'server/api'), { recursive: true })
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+    await writeFile(join(root, 'nuxt.config.ts'), `export default {
+      ssr: false,
+      devtools: { enabled: false },
+      nitro: { preset: 'node-listener', externals: { external: ['nuxt-runtime-consumer'] } },
+    }`)
+    const consumerRoot = join(root, 'node_modules/nuxt-runtime-consumer')
+    await mkdir(consumerRoot, { recursive: true })
+    await writeFile(join(consumerRoot, 'package.json'), JSON.stringify({ name: 'nuxt-runtime-consumer', type: 'module', exports: './index.mjs' }))
+    await writeFile(join(consumerRoot, 'index.mjs'), `
+      import { createNuxtAuthRequestAccessors, holo, runWithNuxtRequest } from '@holo-js/adapter-nuxt/runtime'
+      import { defineAbility, deny, denyAsNotFound, forUser } from '@holo-js/authorization'
+      export const handleRequest = event => runWithNuxtRequest(event, async () => {
+        await holo.getAuth()
+        const request = createNuxtAuthRequestAccessors()
+        const identity = await request.getCookie('identity')
+        if (identity === 'denied' || identity === 'hidden') {
+          const name = 'nuxt.' + identity
+          defineAbility(name, () => identity === 'hidden' ? denyAsNotFound('Hidden') : deny('Denied'))
+          await forUser({ id: 'user' }).ability(name).authorize({})
+        }
+        await request.appendResponseCookie('observed=' + identity + '; Path=/')
+        return { identity }
+      })
+    `)
+    await writeFile(join(root, 'server/api/request.ts'), `
+      import { handleRequest } from 'nuxt-runtime-consumer'
+      export default defineEventHandler(handleRequest)
+    `)
+    if (host === 'nitro') {
+      const nuxt = await createNativeNuxt(root)
+      nativeNuxtInstances.push(nuxt)
+      nuxt.options.modules.push('@holo-js/adapter-nuxt')
+      await nuxt.ready()
+      await buildNuxt(nuxt)
+      await nuxt.close()
+      nativeNuxtInstances.splice(nativeNuxtInstances.indexOf(nuxt), 1)
+    }
+
+    const listenerSetup = host === 'nitro'
+      ? `import { listener } from ${JSON.stringify(join(root, '.output/server/index.mjs'))}`
+      : `
+        import { AsyncLocalStorage } from 'node:async_hooks'
+        import { createApp, createError, defineEventHandler, toNodeListener } from 'h3'
+        import { configureHoloRuntimeConfig, configureNuxtRuntime } from '@holo-js/adapter-nuxt/runtime'
+        import { handleRequest } from 'nuxt-runtime-consumer'
+        const events = new AsyncLocalStorage()
+        configureNuxtRuntime({
+          useEvent: () => events.getStore(),
+          createAuthorizationError: decision => createError({ statusCode: decision.status, statusMessage: decision.message }),
+        })
+        configureHoloRuntimeConfig({ holo: { projectRoot: process.cwd() } })
+        const app = createApp()
+        app.use(defineEventHandler(event => events.run(event, () => handleRequest(event))))
+        const listener = toNodeListener(app)
+      `
+
+    const output = execFileSync('node', ['--input-type=module', '--eval', `
+      import { createServer } from 'node:http'
+      ${listenerSetup}
+      const server = createServer(listener)
+      await new Promise(done => server.listen(0, '127.0.0.1', done))
+      try {
+        const results = await Promise.all(['first', 'second', 'denied', 'hidden'].map(async identity => {
+          const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/request', {
+            headers: { cookie: 'identity=' + identity },
+          })
+          return { status: response.status, cookie: response.headers.get('set-cookie'), body: await response.json() }
+        }))
+        console.log(JSON.stringify(results))
+      } finally {
+        server.closeAllConnections()
+        await new Promise(done => server.close(done))
+      }
+    `], { cwd: root, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'inherit'] })
+    expect(JSON.parse(output.trim().split('\n').at(-1) ?? '')).toMatchObject([
+      { status: 200, cookie: 'observed=first; Path=/', body: { identity: 'first' } },
+      { status: 200, cookie: 'observed=second; Path=/', body: { identity: 'second' } },
+      { status: 403, cookie: null, body: { statusCode: 403, statusMessage: 'Denied' } },
+      { status: 404, cookie: null, body: { statusCode: 404, statusMessage: 'Hidden' } },
+    ])
+  }, 120_000)
 
   it('redirects a supplied request event from the published runtime in plain Node', async () => {
     const build = await runAdapterStub()

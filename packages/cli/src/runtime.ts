@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -331,7 +331,7 @@ async function readRuntimeDependencyReferenceCount(refPath: string): Promise<num
 export async function ensureRuntimeDependencyLink(projectRoot: string): Promise<string> {
   return await withRuntimeDependencyLock(projectRoot, async () => {
     const runtimeRoot = join(projectRoot, CLI_RUNTIME_ROOT)
-    const packageRoot = await resolvePackageRootFromSpecifier('@holo-js/db')
+    const packageRoot = await realpath(await resolvePackageRootFromSpecifier('@holo-js/db'))
     const nodeModulesDir = join(runtimeRoot, 'node_modules')
     const namespaceDir = join(nodeModulesDir, '@holo-js')
     const targetPath = join(namespaceDir, 'db')
@@ -339,7 +339,7 @@ export async function ensureRuntimeDependencyLink(projectRoot: string): Promise<
     const references = await readRuntimeDependencyReferenceCount(refPath)
 
     await mkdir(namespaceDir, { recursive: true })
-    if (references === 0) {
+    if (references === 0 || await realpath(targetPath).catch(() => undefined) !== packageRoot) {
       await rm(targetPath, { recursive: true, force: true })
       await symlink(packageRoot, targetPath, 'junction')
     }

@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -107,11 +107,12 @@ async function createProjectWithPackedPlugin(tarballPath: string): Promise<strin
   await declareAndLinkHoloPackage(projectRoot, '@holo-js/kernel', 'kernel')
   await declareAndLinkHoloPackage(projectRoot, '@holo-js/adapter-next', 'adapter-next')
   const frameworkRoot = join(projectRoot, '.holo-js/framework')
-  const binaryRoot = join(projectRoot, 'node_modules/.bin')
+  const packageRoot = join(projectRoot, 'node_modules/next')
   await mkdir(frameworkRoot, { recursive: true })
-  await mkdir(binaryRoot, { recursive: true })
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: 'next', type: 'module', bin: { next: 'cli.mjs' } }))
   await writeFile(join(frameworkRoot, 'project.json'), '{"framework":"next"}\n')
-  const fakeFrameworkModule = join(projectRoot, 'node_modules/holo-fake-next.mjs')
+  const fakeFrameworkModule = join(packageRoot, 'cli.mjs')
   await writeFile(fakeFrameworkModule, `import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -119,15 +120,6 @@ const outputRoot = join(process.cwd(), '.generic-project-fixture')
 await mkdir(outputRoot, { recursive: true })
 await writeFile(join(outputRoot, 'framework.json'), JSON.stringify({ mode: process.argv[2] }))
 `)
-  if (process.platform === 'win32') {
-    await writeFile(join(binaryRoot, 'next.cmd'), '@node "%~dp0\\..\\holo-fake-next.mjs" %*\r\n')
-  } else {
-    const binaryPath = join(binaryRoot, 'next')
-    await writeFile(binaryPath, `#!/usr/bin/env node
-import '../holo-fake-next.mjs'
-`)
-    await chmod(binaryPath, 0o755)
-  }
   await writeFile(join(projectRoot, 'config/app.mjs'), `export default {
   plugins: [],
 }\n`)

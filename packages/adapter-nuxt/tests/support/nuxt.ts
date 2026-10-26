@@ -2,6 +2,12 @@ import type {} from '@nuxt/nitro-server'
 import { mkdir, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { loadNuxt } from '@nuxt/kit'
+import { createNuxtAuthorizationError } from '../../src/runtime/authorization-error'
+import { configureNuxtRuntime } from '../../src/runtime/composables'
+
+export function configureTestNuxtRuntime(): void {
+  configureNuxtRuntime({ useEvent: () => undefined, createAuthorizationError: createNuxtAuthorizationError })
+}
 
 export async function createNativeNuxt(rootDir: string, runtimeConfig: Record<string, unknown> = {}) {
   await mkdir(join(rootDir, 'node_modules'), { recursive: true })

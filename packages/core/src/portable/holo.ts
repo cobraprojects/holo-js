@@ -199,6 +199,7 @@ type QueueRedisModule = Pick<typeof QueueRedisFeature,
 
 type CacheModule = Pick<typeof CacheFeature,
   | 'configureCacheRuntime'
+  | 'getCacheRuntimeBindings'
   | 'loadConfiguredCachePluginDriverContracts'
   | 'resetCacheRuntime'
 > & Partial<Pick<typeof CacheFeature,
@@ -1575,7 +1576,11 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
   const cacheModule = await loadCacheModule(cacheConfigured, projectRoot)
   const cacheConfig = loadedConfig.cache
-  if (cacheModule && cacheConfig) {
+  const cacheRuntimeConfiguration = getRuntimeState().cacheRuntimeConfiguration
+  if (cacheModule && cacheConfig && (
+    cacheRuntimeConfiguration?.config !== loadedConfig
+    || cacheRuntimeConfiguration.bindings !== cacheModule.getCacheRuntimeBindings()
+  )) {
     await loadConfiguredCacheDrivers(projectRoot, cacheConfig)
     const configuredPluginDrivers = Object.entries(cacheConfig.drivers).flatMap(([name, driver]) => {
       if (driver.driver === 'memory' || driver.driver === 'file' || driver.driver === 'redis' || driver.driver === 'database') return []
@@ -1593,6 +1598,10 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
       redisConfig: loadedConfig.redis,
       ...(cachePluginDrivers.size > 0 ? { drivers: cachePluginDrivers } : {}),
     })
+    getRuntimeState().cacheRuntimeConfiguration = {
+      config: loadedConfig,
+      bindings: cacheModule.getCacheRuntimeBindings(),
+    }
   }
 
   const queueConfigured = hasLoadedConfigFile(loadedConfig, 'queue')
@@ -1975,6 +1984,7 @@ async function disposeOptionalHoloSubsystems(): Promise<void> {
       }
     },
     async () => {
+      getRuntimeState().cacheRuntimeConfiguration = undefined
       const cacheModule = await loadCacheModule(false, projectRoot)
       if (cacheModule) cacheModule.resetCacheRuntime()
       else resetCacheRuntimeGlobalsFallback()

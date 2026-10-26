@@ -373,8 +373,13 @@ function resolveProjectPackageTraceEntry(
 }
 
 function isProjectPackageLinked(rootDir: string, packageRootName: string): boolean {
-  const projectPackageRoot = resolve(rootDir, 'node_modules', packageRootName)
-  return lstatSync(projectPackageRoot, { throwIfNoEntry: false })?.isSymbolicLink() === true
+  const projectRequire = createRequire(resolve(rootDir, 'package.json'))
+  for (const nodeModulesPath of projectRequire.resolve.paths(packageRootName) ?? []) {
+    const packageStats = lstatSync(resolve(nodeModulesPath, packageRootName), { throwIfNoEntry: false })
+    if (packageStats) return packageStats.isSymbolicLink()
+  }
+
+  return false
 }
 
 function addNitroRuntimeTraceIncludes(

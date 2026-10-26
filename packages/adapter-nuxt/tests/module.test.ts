@@ -2,11 +2,11 @@ import type { ModuleOptions } from '../src/module'
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import type { loadNuxt } from '@nuxt/kit'
 import { createApp, defineEventHandler } from 'h3'
 import { serve } from './support/http'
-import { createNativeNuxt, registeredServerPlugins } from './support/nuxt'
+import { configureTestNuxtRuntime, createNativeNuxt, registeredServerPlugins } from './support/nuxt'
 import { writeConfigCache } from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 
@@ -17,6 +17,8 @@ const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/
 const tempDirs: string[] = []
 
 const nativeNuxtInstances: Awaited<ReturnType<typeof loadNuxt>>[] = []
+
+beforeEach(configureTestNuxtRuntime)
 
 async function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}) {
   const nuxt = await createNativeNuxt(rootDir, runtimeConfig)
@@ -499,12 +501,14 @@ export default defineAppConfig({
     ])
   })
 
-  it('leaves workspace-linked runtime packages available without Nitro tracing', async () => {
-    const root = await createProject()
-    const workspacePackage = join(root, 'workspace-core')
-    const installedPackage = join(root, 'node_modules/@holo-js/core')
+  it.each(['local', 'hoisted'])('leaves %s workspace-linked runtime packages available without Nitro tracing', async (layout) => {
+    const workspaceRoot = await createProject()
+    const root = layout === 'hoisted' ? join(workspaceRoot, 'apps/example') : workspaceRoot
+    await mkdir(root, { recursive: true })
+    const workspacePackage = join(workspaceRoot, 'workspace-core')
+    const installedPackage = join(workspaceRoot, 'node_modules/@holo-js/core')
     await mkdir(workspacePackage, { recursive: true })
-    await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+    await mkdir(dirname(installedPackage), { recursive: true })
     await symlink(workspacePackage, installedPackage, 'dir')
     const { module, moduleInternals } = await loadAdapterModule()
     const nuxt = await createNuxtHarness(root)
