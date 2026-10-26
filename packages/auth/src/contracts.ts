@@ -350,7 +350,7 @@ export interface AuthMultiFactorFacade {
   regenerateRecoveryCodes(input: AuthMultiFactorVerificationInput): Promise<AuthMultiFactorRecoveryCodes>
 }
 
-export interface AuthGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {}
+export type AuthGuardFacade = AuthSessionGuardFacade | AuthTokenGuardFacade
 
 export interface AuthSessionGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {
   login<TCredentials extends AuthCredentials>(
@@ -370,7 +370,7 @@ export interface AuthTokenGuardFacade extends AuthBaseGuardFacade {
   ): Promise<PersonalAccessTokenResult>
 }
 
-export interface AuthFacade extends AuthGuardFacade {
+export interface AuthFacade extends AuthSessionGuardFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
   ): Promise<AuthEstablishedSession>
