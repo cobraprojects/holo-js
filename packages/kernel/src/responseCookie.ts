@@ -30,7 +30,7 @@ function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
     return null
   }
 
-  const options: ResponseCookieOptions = { path: '/', secure: false }
+  const options: ResponseCookieOptions = { path: '/', secure: false, httpOnly: false }
   for (const rawAttribute of attributes) {
     const attribute = rawAttribute.trim()
     if (!attribute) {
