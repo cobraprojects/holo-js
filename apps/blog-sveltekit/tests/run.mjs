@@ -317,17 +317,16 @@ async function fetchJson(url, options = {}) {
 async function fetchCsrfField(baseUrl, path = '/login') {
   const response = await fetch(`${baseUrl}${path}`)
   const html = await response.text()
-  const setCookie = response.headers.get('set-cookie') ?? ''
-  const csrfCookie = setCookie.split(';', 1)[0]
+  const cookieHeader = response.headers.getSetCookie().map(cookie => cookie.split(';', 1)[0]).join('; ')
   const csrfName = html.match(/<input[^>]+name="([^"]+)"[^>]+value="([^"]+)"/)?.[1]
   const csrfValue = html.match(/<input[^>]+name="([^"]+)"[^>]+value="([^"]+)"/)?.[2]
 
-  assert.ok(csrfCookie, 'Expected CSRF middleware to issue a cookie.')
+  assert.ok(cookieHeader, 'Expected CSRF middleware to issue cookies.')
   assert.ok(csrfName, `Expected CSRF input name to be rendered. ${html}`)
   assert.ok(csrfValue, 'Expected CSRF input value to be rendered.')
 
   return {
-    cookie: csrfCookie,
+    cookie: cookieHeader,
     name: csrfName,
     value: csrfValue,
   }

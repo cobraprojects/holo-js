@@ -13,7 +13,7 @@ import {
   validationInternals,
 } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
-import { cookieEncryptionInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
+import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 export {
   holoSvelteKitTransport,
@@ -23,14 +23,6 @@ export {
 export type SvelteKitHoloOptions = HoloFrameworkOptions
 
 export type SvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap> = HoloAdapterProject<TCustom>
-
-type SvelteKitCookieOptions = Parameters<SvelteKitRequestEvent['cookies']['set']>[2]
-
-type ParsedResponseCookie = {
-  readonly name: string
-  readonly value: string
-  readonly options: SvelteKitCookieOptions
-}
 
 type SvelteKitActionResult = {
   readonly type?: unknown
@@ -512,77 +504,6 @@ function registerValidationExceptionThrower(): void {
   })
 }
 
-function safeDecodeCookieSegment(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
-  const [nameValue = '', ...attributes] = cookie.split(';')
-  const separator = nameValue.indexOf('=')
-  if (!nameValue || separator <= 0) {
-    return null
-  }
-
-  const options: SvelteKitCookieOptions = { path: '/', secure: false }
-  for (const rawAttribute of attributes) {
-    const attribute = rawAttribute.trim()
-    if (!attribute) {
-      continue
-    }
-
-    const attributeSeparator = attribute.indexOf('=')
-    const key = (attributeSeparator === -1 ? attribute : attribute.slice(0, attributeSeparator)).trim().toLowerCase()
-    const value = attributeSeparator === -1 ? '' : attribute.slice(attributeSeparator + 1).trim()
-
-    switch (key) {
-      case 'path':
-        options.path = value || '/'
-        break
-      case 'domain':
-        options.domain = value
-        break
-      case 'max-age': {
-        const maxAge = Number(value)
-        if (Number.isFinite(maxAge)) {
-          options.maxAge = maxAge
-        }
-        break
-      }
-      case 'expires': {
-        const expires = new Date(value)
-        if (!Number.isNaN(expires.getTime())) {
-          options.expires = expires
-        }
-        break
-      }
-      case 'secure':
-        options.secure = true
-        break
-      case 'httponly':
-        options.httpOnly = true
-        break
-      case 'samesite':
-        if (value.toLowerCase() === 'lax' || value.toLowerCase() === 'strict' || value.toLowerCase() === 'none') {
-          options.sameSite = value.toLowerCase() as SvelteKitCookieOptions['sameSite']
-        }
-        break
-      case 'partitioned':
-        options.partitioned = value ? value.toLowerCase() === 'true' : true
-        break
-    }
-  }
-
-  return {
-    name: safeDecodeCookieSegment(nameValue.slice(0, separator)),
-    value: safeDecodeCookieSegment(nameValue.slice(separator + 1)),
-    options,
-  }
-}
-
 function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOptions['authRequest']> {
   return {
     async getCookie(name: string) {
@@ -601,7 +522,7 @@ function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOption
       if (!event) {
         throw createCookieWriteUnavailableError('Authentication cookies cannot be set outside an active SvelteKit request.')
       }
-      const parsed = parseResponseCookie(cookie)
+      const parsed = responseCookieInternals.parseResponseCookie(cookie)
       if (!parsed) {
         throw new Error('[@holo-js/adapter-sveltekit] An authentication cookie could not be parsed.')
       }

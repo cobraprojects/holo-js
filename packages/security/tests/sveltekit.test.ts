@@ -75,7 +75,7 @@ afterEach(() => {
 })
 
 describe('@holo-js/security SvelteKit csrf middleware', () => {
-  it.each([
+  it.each<Readonly<Record<string, string>>>([
     { 'x-forwarded-port': 'abc' },
     { 'x-forwarded-host': 'a b' },
   ])('answers malformed trusted proxy headers %j with a bad request', async (headers) => {
@@ -119,7 +119,7 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
     expect(response.status).toBe(200)
     expect(resolve).toHaveBeenCalledOnce()
     expect(sessions.tokens.get('guest-1')).toBe(input.value)
-    expect(response.headers.getSetCookie()).toEqual(['browser=guest-1; Path=/; HttpOnly; SameSite=Lax'])
+    expect(response.headers.getSetCookie()).toEqual([])
     expect(writes).toEqual([
       {
         name: 'XSRF-TOKEN',
@@ -146,6 +146,11 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
           sameSite: 'lax',
           secure: true,
         },
+      },
+      {
+        name: 'browser',
+        value: 'guest-1',
+        options: { path: '/', secure: false, httpOnly: true, sameSite: 'lax' },
       },
     ])
     expect(writes[0]?.value).not.toBe(input.value)
@@ -196,9 +201,10 @@ describe('@holo-js/security SvelteKit csrf middleware', () => {
 
     expect(response.status).toBe(200)
     expect(resolve).toHaveBeenCalledOnce()
-    expect(writes).toHaveLength(2)
+    expect(writes).toHaveLength(3)
+    expect(writes[2]?.name).toBe('browser')
     expect(csrfInternals.decryptCsrfToken(writes[0]?.value ?? '')).toBe(sessions.tokens.get('guest-1'))
-    expect(response.headers.getSetCookie()).toEqual(['browser=guest-1; Path=/; HttpOnly; SameSite=Lax'])
+    expect(response.headers.getSetCookie()).toEqual([])
   })
 
   it('refreshes invalid csrf cookies on safe requests', async () => {

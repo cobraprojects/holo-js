@@ -56,26 +56,3 @@ export async function prepareCsrfCookies(
   }
   return { token, cookies, sessionCookies }
 }
-
-export function appendSetCookies(response: Response, setCookies: readonly string[]): Response {
-  if (setCookies.length === 0) {
-    return response
-  }
-
-  const headers = new Headers()
-  for (const setCookie of setCookies) {
-    headers.append('Set-Cookie', setCookie)
-  }
-  response.headers.forEach((value, name) => {
-    if (name !== 'set-cookie') headers.append(name, value)
-  })
-  for (const setCookie of response.headers.getSetCookie()) {
-    headers.append('Set-Cookie', setCookie)
-  }
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
-}

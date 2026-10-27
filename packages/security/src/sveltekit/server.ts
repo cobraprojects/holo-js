@@ -1,6 +1,7 @@
+import { responseCookieInternals } from '@holo-js/kernel'
 import { protect } from '../index'
 import { cors } from '../cors'
-import { appendSetCookies, prepareCsrfCookies } from '../cookie-issuance'
+import { prepareCsrfCookies } from '../cookie-issuance'
 import { createSecurityRejectionResponse, isSecurityRejection } from '../rejection-response'
 
 type SvelteKitCookieOptions = {
@@ -40,12 +41,16 @@ export type SvelteKitCsrfHandle = <TEvent extends SvelteKitCsrfEvent>(
   input: SvelteKitCsrfHandleInput<TEvent>,
 ) => Response | Promise<Response>
 
-async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<readonly string[]> {
+async function issueCsrfCookie(event: SvelteKitCsrfEvent): Promise<void> {
   const { cookies, sessionCookies } = await prepareCsrfCookies(event.request, name => event.cookies.get(name))
   for (const cookie of cookies) {
     event.cookies.set(cookie.name, cookie.value, cookie.options)
   }
-  return sessionCookies
+  for (const sessionCookie of sessionCookies) {
+    const parsed = responseCookieInternals.parseResponseCookie(sessionCookie)
+    if (!parsed) throw new Error('[@holo-js/security] The CSRF session cookie could not be parsed.')
+    event.cookies.set(parsed.name, parsed.value, parsed.options)
+  }
 }
 
 export function csrfProtection(): SvelteKitCsrfHandle {
@@ -60,10 +65,9 @@ export function csrfProtection(): SvelteKitCsrfHandle {
       })
     }
 
-    let sessionCookies: readonly string[]
     try {
       await protect(event.request)
-      sessionCookies = await issueCsrfCookie(event)
+      await issueCsrfCookie(event)
     } catch (error) {
       if (isSecurityRejection(error)) {
         return cors.apply(event.request, createSecurityRejectionResponse(error))
@@ -72,7 +76,7 @@ export function csrfProtection(): SvelteKitCsrfHandle {
       throw error
     }
 
-    return appendSetCookies(cors.apply(event.request, await resolve(event)), sessionCookies)
+    return cors.apply(event.request, await resolve(event))
   }
 }
 
