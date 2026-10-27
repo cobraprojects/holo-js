@@ -90,7 +90,7 @@ import {
   resolveGeneratedProjectRegistryPath,
   holoRuntimeInternals,
 } from '../src/portable'
-import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader } from '@holo-js/session'
+import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader, serializeCookie } from '@holo-js/session'
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig } from '@holo-js/auth'
 import { useStorage } from '@holo-js/storage/runtime'
 import * as sessionModule from '@holo-js/session'
@@ -2983,10 +2983,16 @@ export default defineSecurityConfig({
     await writeBaseConfig(root)
     await writeSecurityConfig(root)
     await reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root, { preferCache: false, processEnv: process.env }))
-    const visit = async (request: Request) => await svelteKitCsrfProtection()({
-      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
-      resolve: () => new Response('page'),
-    })
+    const visit = async (request: Request) => {
+      const headers = new Headers()
+      return await svelteKitCsrfProtection()({
+        event: { url: new URL(request.url), request, cookies: {
+          get: () => undefined,
+          set: (name, value, options) => headers.append('Set-Cookie', serializeCookie(name, value, options)),
+        } },
+        resolve: () => new Response('page', { headers }),
+      })
+    }
 
     const firstVisit = new Request('https://runtime.test/form')
     const firstResponse = await visit(firstVisit)
@@ -3038,12 +3044,16 @@ export default defineSessionConfig({
     const remembered = await sessions.create({ data: { 'auth.web': 'user-2' } })
     const rememberCookie = sessions.rememberMeCookie(remembered.id).split(';', 1)[0]!
     const rememberedRequest = new Request('https://runtime.test/form', { headers: { cookie: rememberCookie } })
-    const rememberedResponse = await svelteKitCsrfProtection()({
-      event: { url: new URL(rememberedRequest.url), request: rememberedRequest, cookies: { get: () => undefined, set: () => undefined } },
+    const rememberedCookies: string[] = []
+    await svelteKitCsrfProtection()({
+      event: { url: new URL(rememberedRequest.url), request: rememberedRequest, cookies: {
+        get: () => undefined,
+        set: name => { rememberedCookies.push(name) },
+      } },
       resolve: () => new Response('page'),
     })
 
-    expect(rememberedResponse.headers.getSetCookie().some(cookie => cookie.startsWith('holo_session='))).toBe(true)
+    expect(rememberedCookies).toContain('holo_session')
     expect((await sessions.read(remembered.id))?.data._token).toBeUndefined()
   })
 

@@ -53,8 +53,9 @@ describe('session-stored CSRF token', () => {
     const request = new Request('https://app.test/profile')
     let renderedToken: string | undefined
 
+    const cookies = new Map<string, string>()
     const response = await csrfProtection()({
-      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
+      event: { url: new URL(request.url), request, cookies: { get: name => cookies.get(name), set: (name, value) => { cookies.set(name, value) } } },
       resolve: async () => {
         renderedToken = await csrf.token(request)
         return new Response('page')
@@ -62,25 +63,31 @@ describe('session-stored CSRF token', () => {
     })
 
     expect(sessions.tokens.get('guest-1')).toBe(renderedToken)
-    expect(response.headers.getSetCookie()).toContain('browser=guest-1; Path=/; HttpOnly; SameSite=Lax')
+    expect(response.status).toBe(200)
+    expect(cookies.get('browser')).toBe('guest-1')
     await expect(csrf.token(new Request('https://app.test/next', { headers: { cookie: 'browser=guest-1' } }))).resolves.toBe(renderedToken)
     expect(sessions.writes).toEqual(['guest-1'])
   })
 
-  it('lets a session cookie set by the page override the new guest session cookie', async () => {
-    const sessions = memorySessions()
-    configure(sessions)
+  it('lets a session cookie set by the page replace the new guest session cookie', async () => {
+    configure(memorySessions())
     const request = new Request('https://app.test/auth/callback')
+    const cookies = new Map<string, string>()
+    const event = {
+      url: new URL(request.url), request,
+      cookies: {
+        get: (name: string) => cookies.get(name),
+        set: (name: string, value: string) => { cookies.set(name, value) },
+      },
+    }
 
-    const response = await csrfProtection()({
-      event: { url: new URL(request.url), request, cookies: { get: () => undefined, set: () => undefined } },
-      resolve: () => new Response('signed in', { headers: { 'Set-Cookie': 'browser=signed-in; Path=/; HttpOnly' } }),
-    })
+    await csrfProtection()({ event, resolve: () => {
+      expect(event.cookies.get('browser')).toBe('guest-1')
+      event.cookies.set('browser', 'signed-in')
+      return new Response('signed in')
+    } })
 
-    expect(response.headers.getSetCookie().filter(cookie => cookie.startsWith('browser='))).toEqual([
-      'browser=guest-1; Path=/; HttpOnly; SameSite=Lax',
-      'browser=signed-in; Path=/; HttpOnly',
-    ])
+    expect(cookies.get('browser')).toBe('signed-in')
   })
 
   it('stores a token read before the middleware ran instead of skipping the session write', async () => {
