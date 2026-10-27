@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthEmailVerificationSendOptions, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
+import auth, { AuthError, isAuthError, type AuthenticatedAuthUser, type AuthAuthorizationSubject, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthEmailVerificationSendOptions, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthSessionGuardFacade, type AuthTokenGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthTokenFacade, type AuthTokenStore, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type PasswordResetTokenStore, type PasswordResetTokenRecord, type EmailVerificationTokenStore, type EmailVerificationTokenRecord, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
 import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
@@ -50,6 +50,25 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<Web['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
     expectTypeOf<Admin['logoutOtherDevices']>().toEqualTypeOf<() => Promise<void>>()
     expectTypeOf<'logoutOtherDevices' extends keyof Api ? true : false>().toEqualTypeOf<false>()
+  })
+
+  it('narrows dynamic guards by session capability without losing actor or login types', () => {
+    function selectSessionGuard(name: string) {
+      const guard = auth.guard(name)
+      if (!('multiFactor' in guard)) {
+        expectTypeOf(guard).toEqualTypeOf<AuthTokenGuardFacade>()
+        return null
+      }
+      expectTypeOf(guard).toEqualTypeOf<AuthSessionGuardFacade>()
+      return guard
+    }
+
+    expectTypeOf<ReturnType<typeof auth.guard<string>>>().toEqualTypeOf<AuthSessionGuardFacade | AuthTokenGuardFacade>()
+    expectTypeOf<ReturnType<typeof selectSessionGuard>>().toEqualTypeOf<AuthSessionGuardFacade | null>()
+    expectTypeOf<AuthSessionGuardFacade['user']>().returns.toEqualTypeOf<Promise<AuthenticatedAuthUser | null>>()
+    expectTypeOf<AuthSessionGuardFacade['register']>().returns.toEqualTypeOf<Promise<AuthenticatedAuthUser>>()
+    expectTypeOf<typeof auth.login>().returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
+    expectTypeOf<typeof auth.multiFactor>().toEqualTypeOf<AuthSessionGuardFacade['multiFactor']>()
   })
 
   it('retains concrete token revocation options and counts', () => {
@@ -132,14 +151,14 @@ describe('@holo-js/auth typing', () => {
     }
     type WebGuardTake = Awaited<ReturnType<typeof takeWebString>>
     type DynamicGuard = ReturnType<typeof auth.guard<string>>
-    type DynamicGuardTrustedSession = Awaited<ReturnType<DynamicGuard['loginUsing']>>
+    type DynamicGuardTrustedSession = Awaited<ReturnType<Extract<DynamicGuard, AuthSessionGuardFacade>['loginUsing']>>
     type GuardLogin = Awaited<ReturnType<AuthGuardFacade['login']>>
     type GuardRegister = Awaited<ReturnType<AuthGuardFacade['register']>>
-    type TrustedSession = Awaited<ReturnType<AuthGuardFacade['loginUsing']>>
-    type TrustedIdSession = Awaited<ReturnType<AuthGuardFacade['loginUsingId']>>
-    type ImpersonatedSession = Awaited<ReturnType<AuthGuardFacade['impersonate']>>
-    type GuardImpersonation = Awaited<ReturnType<AuthGuardFacade['impersonation']>>
-    type StopImpersonation = Awaited<ReturnType<AuthGuardFacade['stopImpersonating']>>
+    type TrustedSession = Awaited<ReturnType<AuthSessionGuardFacade['loginUsing']>>
+    type TrustedIdSession = Awaited<ReturnType<AuthSessionGuardFacade['loginUsingId']>>
+    type ImpersonatedSession = Awaited<ReturnType<AuthSessionGuardFacade['impersonate']>>
+    type GuardImpersonation = Awaited<ReturnType<AuthSessionGuardFacade['impersonation']>>
+    type StopImpersonation = Awaited<ReturnType<AuthSessionGuardFacade['stopImpersonating']>>
     type GuardLogout = Awaited<ReturnType<AuthGuardFacade['logout']>>
     type RuntimeLogoutAll = Awaited<ReturnType<ReturnType<typeof getAuthRuntime>['logoutAll']>>
 

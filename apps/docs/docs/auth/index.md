@@ -490,7 +490,7 @@ Returns `true` when the stored digest was made with older settings and should be
 
 **Multi-factor**
 
-These methods work on the default session guard (or `auth.guard(name).multiFactor`). The setup and options are in [Multi-Factor Auth](/auth/multi-factor).
+These methods work on the default session guard (or `auth.guard('admin').multiFactor` for a configured session guard). The setup and options are in [Multi-Factor Auth](/auth/multi-factor).
 
 ### multiFactor.status()
 
@@ -862,7 +862,7 @@ Starts the login with the named provider. It returns a `302` to the provider's s
 
 `callback(provider: string, request: Request): Promise<SocialCallbackResult>`
 
-Finishes the login. It checks the state, exchanges the code, and finds or creates the local user. It returns `{ ok: true, guard, authProvider, provider, user }` on success, or `{ ok: false, status: 400, message }` when the state or code is missing or expired. Provider errors are thrown. If the provider's verified email matches a local user whose email isn't verified, it throws a `SocialAuthConflictError` instead of linking. See [Link an existing account](/auth/social-login#link-an-existing-account). Sign the user in with `auth.guard(result.guard).loginUsing(result.user)`.
+Finishes the login. It checks the state, exchanges the code, and finds or creates the local user. It returns `{ ok: true, guard, authProvider, provider, user }` on success, or `{ ok: false, status: 400, message }` when the state or code is missing or expired. Provider errors are thrown. If the provider's verified email matches a local user whose email isn't verified, it throws a `SocialAuthConflictError` instead of linking. See [Link an existing account](/auth/social-login#link-an-existing-account). Select `const guard = auth.guard(result.guard)`, require `'multiFactor' in guard` to confirm it supports browser sessions, then sign the user in with `guard.loginUsing(result.user)`. See the [callback route examples](/auth/social-login#callback-route).
 
 ### socialAuth
 

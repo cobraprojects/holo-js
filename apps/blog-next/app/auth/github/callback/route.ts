@@ -21,6 +21,8 @@ async function handleCallback(request: Request): Promise<Response> {
     })
   }
 
-  await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  await guard.loginUsing(result.user)
   redirect('/admin')
 }

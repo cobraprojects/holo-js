@@ -487,7 +487,9 @@ describe('@holo-js/auth-social', () => {
       throw new Error('Expected successful social callback.')
     }
 
-    const session = await auth.guard(response.guard).loginUsing(response.user)
+    const guard = auth.guard(response.guard)
+    if (!('multiFactor' in guard)) throw new Error('Expected a session guard for social login')
+    const session = await guard.loginUsing(response.user)
     expect(session.cookies.join('; ')).toContain('holo_session=')
     expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
   })
@@ -986,7 +988,9 @@ describe('@holo-js/auth-social', () => {
       throw new Error('Expected successful social callback.')
     }
 
-    const session = await auth.guard(response.guard).loginUsing(response.user)
+    const guard = auth.guard(response.guard)
+    if (!('multiFactor' in guard)) throw new Error('Expected a session guard for social login')
+    const session = await guard.loginUsing(response.user)
     expect(runtime.context.getSessionId('admin')).toBeTypeOf('string')
     expect(session.cookies.join('; ')).toContain('holo_session=')
     expect(Boolean(await runtime.adminsProvider.findByCredentials({ email: 'admin@example.com' }))).toBe(true)

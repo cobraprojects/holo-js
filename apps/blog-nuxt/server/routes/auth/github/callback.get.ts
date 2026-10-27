@@ -13,6 +13,8 @@ export default defineEventHandler(async (event) => {
     return { message: result.message }
   }
 
-  await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  await guard.loginUsing(result.user)
   return sendRedirect(event, '/admin', 303)
 })

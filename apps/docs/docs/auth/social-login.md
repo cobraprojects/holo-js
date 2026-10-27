@@ -94,7 +94,9 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ message: result.message }, { status: result.status })
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   redirect(session.multiFactorChallenge?.route ?? '/dashboard')
 }
@@ -112,7 +114,9 @@ export default defineEventHandler(async (event) => {
     return { message: result.message }
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   return sendRedirect(event, session.multiFactorChallenge?.route ?? '/dashboard', 303)
 })
@@ -131,7 +135,9 @@ export const GET: RequestHandler = async ({ request }) => {
     return Response.json({ message: result.message }, { status: result.status })
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   redirect(303, session.multiFactorChallenge?.route ?? '/dashboard')
 }
@@ -224,7 +230,9 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ message: result.message }, { status: result.status })
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   redirect(session.multiFactorChallenge?.route ?? '/dashboard')
 }
@@ -247,7 +255,9 @@ export default defineEventHandler(async (event) => {
     return { message: result.message }
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   return sendRedirect(event, session.multiFactorChallenge?.route ?? '/dashboard', 303)
 })
@@ -271,7 +281,9 @@ export const GET: RequestHandler = async ({ request }) => {
     return Response.json({ message: result.message }, { status: result.status })
   }
 
-  const session = await auth.guard(result.guard).loginUsing(result.user)
+  const guard = auth.guard(result.guard)
+  if (!('multiFactor' in guard)) throw new Error('Social login requires a session guard')
+  const session = await guard.loginUsing(result.user)
 
   redirect(303, session.multiFactorChallenge?.route ?? '/dashboard')
 }
