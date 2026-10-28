@@ -45,6 +45,7 @@ export type {
   SessionStore,
   SessionStoreSetDataResult,
   SessionStoreTakeResult,
+  SessionStoreTouchOptions,
   TouchSessionOptions,
 } from './contracts'
 import type {

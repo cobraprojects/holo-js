@@ -24,6 +24,7 @@ export interface CoreSessionStoreSetDataResult {
 }
 
 export interface CoreDatabaseSessionAdapter {
+  touch(sessionId: string, options: { readonly now: Date; readonly idleTimeout: number; readonly absoluteLifetime: number }): Promise<CoreSessionRecord | null>
   read(sessionId: string): Promise<CoreSessionRecord | null>
   write(record: CoreSessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
@@ -124,6 +125,28 @@ export function createCoreDatabaseSessionAdapter(tableName: string, connectionNa
 
       const stored = splitStoredSessionData(row.data)
       return normalizeSessionRecordFromRow({ ...row, data: stored.publicData })
+    },
+    async touch(sessionId: string, options: Parameters<CoreDatabaseSessionAdapter['touch']>[1]): Promise<CoreSessionRecord | null> {
+      return inSessionWriteTransaction(connectionName, async (transaction) => {
+        const row = await createSessionQuery(transaction, tableName, sessionId, true)
+          .first<Record<string, unknown>>()
+        if (!row) return null
+        const stored = splitStoredSessionData(row.data)
+        const record = normalizeSessionRecordFromRow({ ...row, data: stored.publicData })
+        if (record.expiresAt.getTime() <= Math.max(options.now.getTime(), Date.now())) return null
+        const activity = Math.max(options.now.getTime(), record.lastActivityAt.getTime())
+        const touched = Object.freeze({
+          ...record,
+          lastActivityAt: new Date(activity),
+          expiresAt: new Date(Math.min(activity + options.idleTimeout * 60_000, record.createdAt.getTime() + options.absoluteLifetime * 60_000)),
+        })
+        const dialect = transaction.getDialect().name
+        await new TableQueryBuilder(tableName, transaction).where('id', sessionId).update({
+          last_activity_at: serializeAuthTimestamp(touched.lastActivityAt, dialect),
+          expires_at: serializeAuthTimestamp(touched.expiresAt, dialect),
+        })
+        return touched
+      })
     },
     async write(record: CoreSessionRecord): Promise<void> {
       await inSessionWriteTransaction(connectionName, async (transaction) => {

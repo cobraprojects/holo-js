@@ -1,6 +1,7 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult } from '../contracts'
+import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
 
 export interface SessionDatabaseDriverAdapter {
+  touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
@@ -12,6 +13,7 @@ export interface SessionDatabaseDriverAdapter {
 }
 
 export function createDatabaseSessionStore(adapter: SessionDatabaseDriverAdapter): SessionStore {
+  const touch = adapter.touch?.bind(adapter)
   const rotate = adapter.rotate?.bind(adapter)
   const flash = adapter.flash?.bind(adapter)
   const take = adapter.take?.bind(adapter)
@@ -28,6 +30,7 @@ export function createDatabaseSessionStore(adapter: SessionDatabaseDriverAdapter
     delete(sessionId) {
       return adapter.delete(sessionId)
     },
+    ...(touch ? { touch } : {}),
     ...(rotate ? { rotate } : {}),
     ...(flash ? { flash } : {}),
     ...(take ? { take } : {}),

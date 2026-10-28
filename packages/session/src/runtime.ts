@@ -346,20 +346,13 @@ export async function readSession(sessionId: string, options?: ReadSessionOption
 }
 
 export async function touchSession(sessionId: string, options?: TouchSessionOptions): Promise<SessionRecord | null> {
-  const record = await readRecord(sessionId, options)
-  if (!record) {
-    return null
-  }
-
-  const { store, config } = getStore(options?.store ?? record.store)
-  const idleExpiry = createExpiryDate(config.idleTimeout)
-  const absoluteExpiry = new Date(record.createdAt.getTime() + (config.absoluteLifetime * 60_000))
-  const touched: SessionRecord = Object.freeze({
-    ...record,
-    lastActivityAt: now(),
-    expiresAt: idleExpiry.getTime() < absoluteExpiry.getTime() ? idleExpiry : absoluteExpiry,
+  const { name, store, config } = getStore(options?.store)
+  if (!store.touch) throw new Error(`[@holo-js/session] Session store "${name}" does not support atomic lifetime refresh.`)
+  const touched = await store.touch(sessionId, {
+    now: now(),
+    idleTimeout: config.idleTimeout,
+    absoluteLifetime: config.absoluteLifetime,
   })
-  await store.write(touched)
   await collectExpiredSessions(store)
   return touched
 }

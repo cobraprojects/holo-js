@@ -87,6 +87,23 @@ describe('session Redis behavior', () => {
     await expect(adapter.take(record.id, 'pending')).resolves.toEqual({ found: false })
   })
 
+  it('refreshes Redis expiry to the capped lifetime without changing another store sharing the same session id', async () => {
+    const { adapter, record, service, prefix } = await createStore()
+    const other = await createStore({}, service)
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected Redis client')
+    await adapter.set(record)
+    await other.adapter.set({ ...record, data: { userId: 99 } })
+    const now = new Date()
+    const touched = await adapter.touch(record.id, { now, idleTimeout: 15, absoluteLifetime: 10 })
+    expect(touched?.expiresAt.getTime()).toBe(record.createdAt.getTime() + 10 * 60_000)
+    expect(await client.pexpiretime(`${prefix}holo:session:${record.id}`)).toBe(touched?.expiresAt.getTime())
+    await expect(other.adapter.get(record.id)).resolves.toEqual({ ...record, data: { userId: 99 } })
+    await adapter.del(record.id)
+    await expect(adapter.touch(record.id, { now, idleTimeout: 15, absoluteLifetime: 10 })).resolves.toBeNull()
+    expect(await client.exists(`${prefix}holo:session:${record.id}`)).toBe(0)
+  })
+
   it('preserves pending flashes when the session is rewritten and atomically consumes each value once', async () => {
     const { adapter, record } = await createStore()
     await adapter.set(record)

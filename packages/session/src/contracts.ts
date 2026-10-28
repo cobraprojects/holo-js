@@ -59,9 +59,16 @@ export interface CookieSerializeOptions {
   readonly expires?: Date
 }
 
+export interface SessionStoreTouchOptions {
+  readonly now: Date
+  readonly idleTimeout: number
+  readonly absoluteLifetime: number
+}
+
 export interface SessionStore {
   read(sessionId: string): Promise<SessionRecord | null>
   write(record: SessionRecord): Promise<void>
+  touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   writeIfAbsent?(record: SessionRecord): Promise<boolean>
   delete(sessionId: string): Promise<void>
   rotate?(previousSessionId: string, record: SessionRecord): Promise<void>

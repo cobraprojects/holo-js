@@ -656,6 +656,25 @@ function createConfiguredFileSessionStore(root: string, makeDirectory: MakeDirec
         throw error
       }
     },
+    async touch(sessionId, options) {
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
+      const recordPath = getRecordPath(root, sessionId)
+      const release = await acquireRecordLock(recordPath, makeDirectory)
+      try {
+        const record = await readActiveRecord(recordPath)
+        if (!record || record.expiresAt.getTime() <= options.now.getTime()) return null
+        const activity = Math.max(options.now.getTime(), record.lastActivityAt.getTime())
+        const touched = Object.freeze({
+          ...record,
+          lastActivityAt: new Date(activity),
+          expiresAt: new Date(Math.min(activity + options.idleTimeout * 60_000, record.createdAt.getTime() + options.absoluteLifetime * 60_000)),
+        })
+        await writePathAtomically(recordPath, serializeRecord(touched))
+        return touched
+      } finally {
+        await release()
+      }
+    },
     async write(record) {
       await writeRecordAtomically(root, record, makeDirectory)
     },

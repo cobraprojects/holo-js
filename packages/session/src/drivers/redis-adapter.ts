@@ -2,7 +2,7 @@ import type {
   NormalizedSessionRedisStoreConfig,
 } from '../config'
 import Redis from 'ioredis'
-import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult } from '../contracts'
+import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
 import type { SessionRedisDriverAdapter } from './redis'
 
 export interface SessionRedisAdapterOptions {
@@ -44,6 +44,19 @@ const WRITE_SESSION_SCRIPT = `
 local nextRecord = ARGV[1]
 redis.call('HSET', KEYS[1], 'record', nextRecord)
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`
+
+const TOUCH_SESSION_SCRIPT = `
+local current = redis.call('HGET', KEYS[1], 'record')
+if not current then
+  return 0
+end
+if current ~= ARGV[1] then
+  return -1
+end
+redis.call('HSET', KEYS[1], 'record', ARGV[2])
+redis.call('PEXPIREAT', KEYS[1], ARGV[3])
 return 1
 `
 
@@ -365,6 +378,26 @@ export class RedisSessionAdapter implements SessionRedisDriverAdapter {
   async get(sessionId: string): Promise<SessionRecord | null> {
     const encoded = await this.client.eval(READ_SESSION_SCRIPT, 1, this.qualifyKey(sessionId))
     return typeof encoded === 'string' ? deserializeSessionRecord(encoded) : null
+  }
+
+  async touch(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null> {
+    const redisKey = this.qualifyKey(sessionId)
+    for (;;) {
+      const encoded = await this.client.eval(READ_SESSION_SCRIPT, 1, redisKey)
+      if (typeof encoded !== 'string') return null
+      const record = deserializeSessionRecord(encoded)
+      if (!record || record.expiresAt.getTime() <= Math.max(options.now.getTime(), this.now().getTime())) return null
+      const activity = Math.max(options.now.getTime(), record.lastActivityAt.getTime())
+      const touched = Object.freeze({
+        ...record,
+        lastActivityAt: new Date(activity),
+        expiresAt: new Date(Math.min(activity + options.idleTimeout * 60_000, record.createdAt.getTime() + options.absoluteLifetime * 60_000)),
+      })
+      if (touched.lastActivityAt.getTime() === record.lastActivityAt.getTime() && touched.expiresAt.getTime() === record.expiresAt.getTime()) return record
+      const result = await this.client.eval(TOUCH_SESSION_SCRIPT, 1, redisKey, encoded, serializeSessionRecord(touched), touched.expiresAt.getTime())
+      if (result === 1) return touched
+      if (result === 0) return null
+    }
   }
 
   async set(record: SessionRecord): Promise<void> {

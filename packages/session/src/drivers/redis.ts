@@ -1,6 +1,7 @@
-import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult } from '../contracts'
+import type { SessionRecord, SessionStore, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
 
 export interface SessionRedisDriverAdapter {
+  touch?(sessionId: string, options: SessionStoreTouchOptions): Promise<SessionRecord | null>
   get(sessionId: string): Promise<SessionRecord | null>
   set(record: SessionRecord): Promise<void>
   del(sessionId: string): Promise<void>
@@ -13,6 +14,7 @@ export interface SessionRedisDriverAdapter {
 
 export function createRedisSessionStore(adapter: SessionRedisDriverAdapter): SessionStore {
   const writeIfAbsent = adapter.writeIfAbsent?.bind(adapter)
+  const touch = adapter.touch?.bind(adapter)
   const rotate = adapter.rotate?.bind(adapter)
   const flash = adapter.flash?.bind(adapter)
   const take = adapter.take?.bind(adapter)
@@ -29,6 +31,7 @@ export function createRedisSessionStore(adapter: SessionRedisDriverAdapter): Ses
       return adapter.del(sessionId)
     },
     ...(writeIfAbsent ? { writeIfAbsent } : {}),
+    ...(touch ? { touch } : {}),
     ...(rotate ? { rotate } : {}),
     ...(flash ? { flash } : {}),
     ...(take ? { take } : {}),
