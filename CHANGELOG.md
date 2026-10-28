@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- On PostgreSQL, `belongsToMany`, `morphToMany` and `morphedByMany` relations keyed by `id()` and `foreignId()` columns load, count and filter their related rows again. Pivot keys are read with the parent and related models' key types, so the `bigint` text PostgreSQL returns matches the model ids.
+- `DB.table()` with a table definition reads `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as numbers on every driver, as its row types and models already do, including columns of definitions passed to `join()`. Values above `Number.MAX_SAFE_INTEGER` throw a `HydrationError`. See [Typed results](apps/docs/docs/database/query-builder/index.md#typed-results).
+
+### Compatibility and upgrade requirements
+
+- On PostgreSQL, `DB.table()` rows from a table definition hold numbers instead of strings such as `"1"` for these columns. Code that compared them with strings must compare numbers. Queries started with a table name and raw SQL keep the driver's values.
+
 ## 0.4.0 - 2026-10-24
 
 0.4.0 is a breaking release. Read the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-03x-to-040) before upgrading. [Realtime](apps/docs/docs/realtime/index.md) and [Broadcast](apps/docs/docs/broadcasting/index.md) are **Experimental** in this release.

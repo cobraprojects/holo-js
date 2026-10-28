@@ -58,6 +58,7 @@ export type QuerySelection
 export interface QueryJoinClause {
   readonly type: QueryJoinType
   readonly table?: string
+  readonly definition?: TableDefinition
   readonly subquery?: SelectQueryPlan
   readonly alias?: string
   readonly lateral?: boolean

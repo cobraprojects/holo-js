@@ -327,6 +327,8 @@ const rows = await DB.table(posts)
 
 With a table definition, `select()`, `where()`, `orderBy()`, `groupBy()`, `pluck()`, and `value()` only accept real column names, and `select('title as heading')` renames the key in the result type.
 
+A table definition also sets how integer columns are read. `id()`, `integer()`, `bigInteger()`, and `foreignId()` columns come back as numbers on every driver, the same values a [model](/orm/) returns, including columns of a definition you pass to `join()`. PostgreSQL sends `bigint` columns as text, so with a table name you get strings such as `"1"` there. A value above `Number.MAX_SAFE_INTEGER` throws a `HydrationError`. Raw SQL selections keep the driver's values.
+
 **Or annotate the row type.** `get()`, `first()`, and `sole()` accept a row type:
 
 ```ts
