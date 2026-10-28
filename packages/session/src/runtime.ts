@@ -540,7 +540,7 @@ export const sessionRuntimeInternals = {
     sessionLotteryRandom = random ?? Math.random
   },
   createSessionId,
-  getSessionRuntimeBindings,
+  getSessionRuntimeBindings: () => getSessionRuntimeState().bindings,
   isExpired,
   normalizeFlashKey,
   normalizeFlashValue,

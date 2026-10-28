@@ -20,7 +20,10 @@ export interface HoloRuntimeState<TRuntime, TSecurityResources, TSessionRedisCon
     readonly config: object
     readonly bindings?: object
   }
-  sessionRuntimeBindings?: object
+  sessionRuntimeConfiguration?: {
+    readonly config: object
+    readonly bindings: object
+  }
   sessionRedisConnections?: TSessionRedisConnections
   optionalSubsystemsTurn?: Promise<void>
 }
@@ -68,7 +71,7 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessi
       '__holoJsAuthWorkosRuntime', '__holoJsAuthClerkRuntime', '__holoAuthSocialBindings__',
       '__holoStorageRuntimeBindings__',
     ]) {
-      const value = key === '__holoSessionRuntime__' && sessionState?.bindings === state.sessionRuntimeBindings
+      const value = key === '__holoSessionRuntime__' && sessionState?.bindings === state.sessionRuntimeConfiguration?.bindings
         ? undefined
         : host[key]
       liveBindings.set(key, value && typeof value === 'object' ? { ...value } : value)
@@ -114,7 +117,7 @@ export function createRuntimeStateAccessors<TRuntime, TSecurityResources, TSessi
 
     state.cacheRuntimeConfiguration = undefined
     state.sessionRedisConnections = undefined
-    state.sessionRuntimeBindings = undefined
+    state.sessionRuntimeConfiguration = undefined
     state.securityRateLimitStore = undefined
 
     if (bindings.security || runtime.__holoSecurityRuntime__) {

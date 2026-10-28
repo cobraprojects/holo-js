@@ -228,6 +228,7 @@ type SessionModule = Pick<typeof SessionFeature,
   | 'createFileSessionStore'
   | 'createRedisSessionStore'
   | 'getSessionRuntime'
+  | 'sessionRuntimeInternals'
   | 'parseCookieHeader'
   | 'resetSessionRuntime'
 >
@@ -1820,17 +1821,22 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
 
   const sessionRedisConnections = getSessionRedisConnections()
 
-  if (sessionModule) {
+  const sessionBindings = sessionModule?.sessionRuntimeInternals.getSessionRuntimeBindings()
+  const sessionRuntimeConfiguration = getRuntimeState().sessionRuntimeConfiguration
+  if (sessionModule && (
+    sessionRuntimeConfiguration?.config !== loadedConfig
+    || sessionRuntimeConfiguration?.bindings !== sessionBindings
+  )) {
     try {
       const sessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule, sessionRedisConnections)
       const sessionBindings = { config: loadedConfig.session, stores: sessionStores, appKey: loadedConfig.app.key }
       sessionModule.configureSessionRuntime(sessionBindings)
-      getRuntimeState().sessionRuntimeBindings = sessionBindings
+      getRuntimeState().sessionRuntimeConfiguration = { config: loadedConfig, bindings: sessionBindings }
       await sessionRedisConnections.commit()
     } catch (error) {
       await rethrowAfterCleanup(error, () => sessionRedisConnections.discard(), 'Session configuration and cleanup failed.')
     }
-  } else {
+  } else if (!sessionModule) {
     await sessionRedisConnections.commit()
   }
 
@@ -1944,7 +1950,7 @@ async function disposeOptionalHoloSubsystems(): Promise<void> {
       const state = getRuntimeState()
       const connections = state.sessionRedisConnections
       state.sessionRedisConnections = undefined
-      state.sessionRuntimeBindings = undefined
+      state.sessionRuntimeConfiguration = undefined
       try {
         await connections?.dispose()
       } finally {

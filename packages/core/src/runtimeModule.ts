@@ -2,10 +2,11 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
+import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
-import type { Diagnostic } from 'typescript'
+import type { Diagnostic, ExtendedConfigCacheEntry } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
 import * as holoKernelModule from '@holo-js/kernel'
@@ -322,28 +323,36 @@ function tsconfigError(projectRoot: string, message: string): Error {
   return new Error(`[@holo-js/core] Cannot load ${join(projectRoot, 'tsconfig.json')} for bundling: ${message}`)
 }
 
-async function parseProjectTsconfigPaths(projectRoot: string): Promise<{ readonly paths: JsonObject, readonly baseUrl?: string }> {
+async function parseProjectTsconfigPaths(projectRoot: string): Promise<{
+  readonly paths: JsonObject
+  readonly baseUrl?: string
+  readonly extends: readonly string[]
+}> {
   const ts = await import('typescript')
   const nuxtDirectory = join(projectRoot, NUXT_BUILD_DIRECTORY)
   const insideNuxt = (path: string) => isInside(resolve(path), nuxtDirectory)
   const describe = (diagnostic: Diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-  const parsed = ts.getParsedCommandLineOfConfigFile(join(projectRoot, 'tsconfig.json'), {}, {
+  const extendedConfigCache = new Map<string, ExtendedConfigCacheEntry>()
+  const parsed = ts.parseJsonConfigFileContent({ extends: './tsconfig.json' }, {
     useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
-    getCurrentDirectory: () => projectRoot,
     fileExists: path => insideNuxt(path) || ts.sys.fileExists(path),
     readFile: path => insideNuxt(path) ? '{}' : ts.sys.readFile(path),
     readDirectory: () => [],
-    onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-      throw tsconfigError(projectRoot, describe(diagnostic))
-    },
-  })
-  const error = parsed?.errors.find(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error && diagnostic.code !== NO_INPUTS_FOUND_DIAGNOSTIC)
+  }, projectRoot, undefined, undefined, undefined, undefined, extendedConfigCache)
+  const error = parsed.errors.find(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error && diagnostic.code !== NO_INPUTS_FOUND_DIAGNOSTIC)
   if (error) throw tsconfigError(projectRoot, describe(error))
 
-  const options = parsed?.options ?? {}
+  const projectTsconfigPath = join(projectRoot, 'tsconfig.json').replaceAll('\\', '/')
+  const configKey = ts.sys.useCaseSensitiveFileNames ? projectTsconfigPath : projectTsconfigPath.toLowerCase()
+  const extendedConfigPath = extendedConfigCache.get(configKey)?.extendedConfig?.extendedConfigPath
+  const options = parsed.options
   const pathsBase = options.baseUrl ?? (typeof options.pathsBasePath === 'string' ? options.pathsBasePath : projectRoot)
   const paths = options.paths ? absoluteCompilerOptions({ paths: options.paths }, pathsBase).paths : {}
-  return { paths: isRecord(paths) ? paths : {}, baseUrl: options.baseUrl }
+  return {
+    paths: isRecord(paths) ? paths : {},
+    baseUrl: options.baseUrl,
+    extends: typeof extendedConfigPath === 'string' ? [extendedConfigPath] : extendedConfigPath ?? [],
+  }
 }
 
 async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {
@@ -355,10 +364,11 @@ async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undef
 }
 
 async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snapshotPath: string | undefined): Promise<JsonObject> {
+  const user = await parseProjectTsconfigPaths(projectRoot)
   const entries = extendsEntries(config)
-  const extendsTargets = entries.flatMap(entry => {
+  const extendsTargets = user.extends.flatMap(entry => {
     if (isNuxtBuildPath(projectRoot, entry)) return snapshotPath ? [snapshotPath] : []
-    return [entry.startsWith('.') ? resolve(projectRoot, entry) : entry]
+    return [entry]
   })
   const derived: JsonObject = { ...config }
   if (referencePaths(config).some(entry => isNuxtBuildPath(projectRoot, entry))) {
@@ -372,7 +382,6 @@ async function deriveLoaderConfig(projectRoot: string, config: JsonObject, snaps
     derived.extends = Array.isArray(config.extends) || extendsTargets.length > 1 ? extendsTargets : extendsTargets[0]
   }
 
-  const user = await parseProjectTsconfigPaths(projectRoot)
   const compilerOptions: JsonObject = isRecord(config.compilerOptions) ? { ...config.compilerOptions } : {}
   const baseUrl = user.baseUrl ?? (snapshotPath ? undefined : projectRoot)
   if (baseUrl) compilerOptions.baseUrl = baseUrl
@@ -409,6 +418,18 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
 
   await writeFile(tsconfigPath, `${contents}\n`, 'utf8')
   return tsconfigPath
+}
+
+async function withLoaderTsconfig<TResult>(
+  projectRoot: string,
+  load: (tsconfigPath: string) => Promise<TResult>,
+): Promise<TResult> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'holo-runtime-tsconfig-'))
+  try {
+    return await load(await writeLoaderTsconfig(projectRoot, tempDir))
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 const runtimeInstanceNamespace = 'holo-runtime-instance'
@@ -482,7 +503,6 @@ async function bundleRuntimeModule(
   const runtimeTempRoot = join(projectRoot, '.holo-js', 'runtime')
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
-  const tsconfigPath = await writeLoaderTsconfig(projectRoot, tempDir)
   const outfile = join(tempDir, `${basename(entryPath, extname(entryPath))}.mjs`)
 
   const cleanup = async () => {
@@ -490,7 +510,7 @@ async function bundleRuntimeModule(
   }
 
   try {
-    const result = await runtimeModuleInternals.runEsbuild({
+    const result = await withLoaderTsconfig(projectRoot, tsconfigPath => runtimeModuleInternals.runEsbuild({
       absWorkingDir: projectRoot,
       bundle: true,
       entryPoints: [entryPath],
@@ -504,7 +524,7 @@ async function bundleRuntimeModule(
       tsconfig: tsconfigPath,
       sourcemap: false,
       metafile,
-    })
+    }))
 
     return {
       path: outfile,
@@ -814,4 +834,5 @@ export const runtimeModuleInternals = {
   resolveOptionalImportSpecifier,
   runEsbuild,
   writeLoaderTsconfig,
+  withLoaderTsconfig,
 }

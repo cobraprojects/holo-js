@@ -19,6 +19,7 @@ import {
 } from '../src'
 import { Queue, listRegisteredQueueJobs } from '@holo-js/queue'
 import { dispatchEvent } from '@holo-js/events'
+import { sessionRuntimeInternals } from '@holo-js/session'
 import { resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -871,6 +872,47 @@ export default defineJob({
 
     expect(second).not.toBe(first)
     await expect(Queue.dispatchSync('report', {})).resolves.toBe('second')
+  })
+
+  it('preserves an in-flight authenticated session rotation when another request initializes the adapter', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const root = await createProjectRoot()
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${sessionEntry}
+export default defineSessionConfig({ driver: 'file', stores: { file: { driver: 'file', path: './storage/framework/sessions' } } })
+`)
+    const project = await adapter.initializeProject({ projectRoot: root })
+    const session = project.runtime.session
+    const store = sessionRuntimeInternals.getSessionRuntimeBindings()?.stores.file
+    if (!session || !store) throw new Error('The project must configure file sessions')
+    const original = await session.create({ data: { cart: 'book' } })
+    await session.flash(original.id, 'notice', 'welcome')
+    let signalReading = () => {}
+    let resumeReading = () => {}
+    const reading = new Promise<void>((resolve) => { signalReading = resolve })
+    const resume = new Promise<void>((resolve) => { resumeReading = resolve })
+    const read = store.read.bind(store)
+    store.read = async (sessionId) => {
+      const record = await read(sessionId)
+      signalReading()
+      await resume
+      return record
+    }
+    const rotation = session.rotate(original.id, { data: { cart: 'book', identity: 'ava' }, renewLifetime: true })
+    await reading
+    try {
+      await adapter.initializeProject({ projectRoot: root })
+    } finally {
+      resumeReading()
+      store.read = read
+    }
+    const rotated = await rotation
+    await expect(session.read(original.id)).resolves.toBeNull()
+    await expect(session.read(rotated.id)).resolves.toMatchObject({ data: { cart: 'book', identity: 'ava' } })
+    await expect(session.take(rotated.id, 'notice')).resolves.toBe('welcome')
   })
 
   it('picks up auth provider model changes in dev mode without restarting the process', async () => {

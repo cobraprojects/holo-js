@@ -10,6 +10,7 @@ const {
   readProjectTsconfig,
   usesNuxtBuildTsconfig,
   writeLoaderTsconfig,
+  withLoaderTsconfig,
 } = runtimeModuleInternals
 
 const NITRO_ROOT_ALIASES = ['~', '~/*', '@', '@/*', '~~', '~~/*', '@@', '@@/*']
@@ -63,5 +64,6 @@ export const projectTsconfigInternals = {
   missingNuxtTsconfigSnapshot,
   parseTsconfigText,
   writeLoaderTsconfig,
+  withLoaderTsconfig,
   writeNuxtTsconfigSnapshot,
 }

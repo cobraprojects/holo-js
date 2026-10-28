@@ -81,7 +81,6 @@ function getConfigName(fileName: string): ConfigFileName {
   return fileName.slice(0, fileName.length - extname(fileName).length)
 }
 
-const requireConfig = createRequire(import.meta.url)
 const importConfig = createJiti(import.meta.url, { moduleCache: false, interopDefault: false })
 let configImportNonce = 0
 
@@ -93,6 +92,7 @@ async function importConfigModule(filePath: string, importKey?: string): Promise
   }
 
   if (extension === '.js' || extension === '.cjs') {
+    const requireConfig = createRequire(filePath)
     delete requireConfig.cache[requireConfig.resolve(filePath)]
   }
 

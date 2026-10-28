@@ -222,12 +222,45 @@ describe('project tsconfig loading for bundled definitions', () => {
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'tool', util: 'util', title: 'post' })
   })
 
+  it.each([
+    { extends: ['./.nuxt/tsconfig.json', '@company/tsconfig/server'] },
+    { ...JSON.parse(nuxtReferencesTsconfig) as object, extends: '@company/tsconfig/server' },
+  ])('preserves inherited JSX compiler options when relocating a Nuxt loader config: %j', async (config) => {
+    const { projectRoot } = await createNuxtProject({ projectTsconfig: JSON.stringify(config) })
+    await writeCompanyTsconfigPackage(projectRoot)
+    await writeFile(join(projectRoot, 'node_modules/@company/tsconfig/base.json'), JSON.stringify({
+      compilerOptions: { baseUrl: '../../..', jsxFactory: 'h' },
+    }))
+    const entryPath = join(projectRoot, 'own.tsx')
+    await writeFile(entryPath, "const h = (tag: string) => tag\nexport const element = <section />\n")
+
+    expect((await importBundled(projectRoot, entryPath)).element).toBe('section')
+  })
+
   it('fails with the name of a package tsconfig that cannot be resolved', async () => {
     const { projectRoot, entryPath } = await createNuxtProject({
       projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', '@company/missing-tsconfig'] }),
     })
 
     await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow(/Cannot load .*tsconfig\.json for bundling: .*@company\/missing-tsconfig/)
+  })
+
+  it.each([
+    { manifest: { tsconfig: './base.json' }, file: 'base.json', specifier: '@company/tsconfig' },
+    { manifest: {}, file: 'tsconfig.json', specifier: '@company/tsconfig' },
+    { manifest: {}, file: 'base.json', specifier: '@company/tsconfig/base' },
+  ])('preserves TypeScript package config resolution when relocating a Nuxt loader config: %j', async ({ manifest, file, specifier }) => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ extends: ['./.nuxt/tsconfig.json', specifier] }),
+    })
+    const packageRoot = join(projectRoot, 'node_modules/@company/tsconfig')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@company/tsconfig', ...manifest }))
+    await writeFile(join(packageRoot, file), JSON.stringify({ compilerOptions: { jsxFactory: 'h' } }))
+    const entryPath = join(projectRoot, 'own.tsx')
+    await writeFile(entryPath, "const h = (tag: string) => tag\nexport const element = <section />\n")
+
+    expect((await importBundled(projectRoot, entryPath)).element).toBe('section')
   })
 
   it('resolves inherited paths against the baseUrl the project tsconfig overrides, as TypeScript does', async () => {

@@ -149,8 +149,6 @@ export async function bundleProjectModule(
   const runtimeTempRoot = join(projectRoot, CLI_RUNTIME_ROOT)
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
-  const { projectTsconfigInternals } = await import('@holo-js/core')
-  const tsconfigPath = await projectTsconfigInternals.writeLoaderTsconfig(projectRoot, tempDir)
   const outdir = join(tempDir, 'out')
   const outfile = join(outdir, `${basename(entryPath, extname(entryPath))}.mjs`)
 
@@ -159,7 +157,8 @@ export async function bundleProjectModule(
   }
 
   try {
-    await build({
+    const { projectTsconfigInternals } = await import('@holo-js/core')
+    await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
       absWorkingDir: projectRoot,
       bundle: true,
       entryPoints: [entryPath],
@@ -176,7 +175,7 @@ export async function bundleProjectModule(
         ...(options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : []),
       ],
       external: [...(options.external ?? [])],
-    })
+    }))
 
     return {
       path: outfile,
