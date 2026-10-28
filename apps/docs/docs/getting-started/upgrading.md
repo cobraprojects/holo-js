@@ -279,12 +279,12 @@ Passing `pageData` is required for flash restoration. Without the layout load an
 
 ### SvelteKit 3
 
-Holo supports SvelteKit 3 (`@sveltejs/kit` 3.1 or newer, `@sveltejs/adapter-node` 6, and Svelte 5.57.1 or newer). SvelteKit 2 is no longer supported. Follow SvelteKit's [migration guide](https://svelte.dev/docs/kit/migrating-to-sveltekit-3), starting with `npx sv migrate sveltekit-3`, then make these Holo changes:
+Holo supports SvelteKit 3 (`@sveltejs/kit` 3.1 or newer and Svelte 5.57.1 or newer). SvelteKit 2 is no longer supported. Follow SvelteKit's [migration guide](https://svelte.dev/docs/kit/migrating-to-sveltekit-3), starting with `npx sv migrate sveltekit-3`, then make these Holo changes:
 
 1. Move the options from `svelte.config.js` into the `sveltekit()` call in `vite.config.ts`, wrapped with `withHoloSvelteKit()`, and delete `svelte.config.js`. SvelteKit 3 ignores that file, and `holo prepare` stops with an error while it exists.
 
 ```ts [vite.config.ts]
-import adapter from '@sveltejs/adapter-node'
+import adapter from '@holo-js/adapter-sveltekit/node'
 import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
 import { sveltekit } from '@sveltejs/kit/vite'
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
@@ -321,7 +321,7 @@ import { loginForm } from '#lib/schemas/auth.js'
 
 5. If your `handleError` reads `status` or `message` from its input, read them from the `kind` and `error` fields instead. Holo's handler does this for you, and returns the same messages as before.
 
-6. `@sveltejs/adapter-node` 6 no longer reads `ORIGIN` when the server starts. It reads the public origin at build time, from `paths.origin`. Holo sets `paths.origin` from `APP_URL` when the build runs, so build with `APP_URL` set to your public address (for example `APP_URL=https://example.com bun run build`). Without it, the server assumes `https`, and SvelteKit rejects form posts from `http` origins with 403.
+6. For Node deployments that reuse one build across deployment URLs, use `import adapter from '@holo-js/adapter-sveltekit/node'` in `vite.config.ts`. The adapter writes to `build` by default; `adapter({ out: 'custom/build' })` selects a separate output directory within the project, started with `node custom/build/index.js`. Output must not overlap source or framework directories, or traverse symbolic links. The Holo Node adapter reads `APP_URL` when the server starts, so set it to the public deployment URL alongside `HOST` and `PORT`. `BODY_SIZE_LIMIT` retains the 512 KiB default and accepts bytes or a `K`, `M`, or `G` suffix (for example `64M`); oversized bodies are rejected while streaming. `withHoloSvelteKit()` no longer copies build-time `APP_URL` into `paths.origin`. An explicitly configured `paths.origin` remains a build-time canonical origin and requires rebuilding to change it. The native `@sveltejs/adapter-node` 6 remains supported, but it no longer reads runtime `ORIGIN`; use its documented build-time origin or trusted proxy configuration. The Holo Node adapter uses the socket address for client identity and leaves forwarded headers to Holo's trusted-proxy middleware; it does not trust them automatically.
 
 ### Update your tsconfig.json
 
@@ -490,7 +490,7 @@ Holo adapters now use your app's framework packages as peer dependencies instead
 | --- | --- |
 | `@holo-js/adapter-next` | `next` 16.4.3 or newer on the 16 line, and `react` 19.2.6 or newer on the 19 line |
 | `@holo-js/adapter-nuxt` | `nuxt` 4.6.2 or newer on the 4 line, and `vue` 3.5.13 or newer on the 3 line |
-| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.0 or newer on the 3 line, `@sveltejs/adapter-node` 6, and `svelte` 5.57.1 or newer on the 5 line. See [SvelteKit 3](#sveltekit-3). |
+| `@holo-js/adapter-sveltekit` | `@sveltejs/kit` 3.1.0 or newer on the 3 line and `svelte` 5.57.1 or newer on the 5 line. See [SvelteKit 3](#sveltekit-3). |
 
 `@holo-js/adapter-nuxt` no longer installs `h3` or `nitropack`. Its server routes and plugins use the h3 and Nitro that come with your Nuxt version. `@holo-js/adapter-sveltekit` no longer installs Svelte. It accepts any Svelte 5 release from 5.57.1 instead of one exact version.
 

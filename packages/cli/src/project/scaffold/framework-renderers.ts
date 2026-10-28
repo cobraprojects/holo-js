@@ -700,7 +700,7 @@ export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled
   ]
 
   return [
-    'import adapter from \'@sveltejs/adapter-node\'',
+    'import adapter from \'@holo-js/adapter-sveltekit/node\'',
     'import { withHoloSvelteKit } from \'@holo-js/adapter-sveltekit/config\'',
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
     ...(realtimeEnabled

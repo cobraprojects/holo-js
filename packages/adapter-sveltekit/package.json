@@ -45,6 +45,16 @@
       "types": "./dist/vite.d.ts",
       "import": "./dist/vite.mjs",
       "default": "./dist/vite.mjs"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.mjs",
+      "default": "./dist/node.mjs"
+    },
+    "./internal/node-server": {
+      "types": "./dist/node-server.d.ts",
+      "import": "./dist/node-server.mjs",
+      "default": "./dist/node-server.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -64,7 +74,8 @@
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/kernel": "catalog:",
-    "@holo-js/validation": "catalog:"
+    "@holo-js/validation": "catalog:",
+    "sirv": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/forms": "catalog:",

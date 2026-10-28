@@ -5,6 +5,8 @@ const outDir = process.env.HOLO_BUILD_OUT_DIR ?? 'dist'
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
+    node: 'src/node.ts',
+    'node-server': 'src/node-server.ts',
     config: 'src/config.ts',
     client: 'src/client.ts',
     realtime: 'src/realtime.ts',

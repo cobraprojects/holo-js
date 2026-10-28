@@ -297,6 +297,7 @@
         "@holo-js/core": "catalog:",
         "@holo-js/kernel": "catalog:",
         "@holo-js/validation": "catalog:",
+        "sirv": "catalog:",
       },
       "devDependencies": {
         "@holo-js/realtime": "catalog:",
@@ -1272,6 +1273,7 @@
     "react-test-renderer": "^19.2.6",
     "semver": "^7.7.4",
     "sharp": "^0.35.5",
+    "sirv": "^3.0.2",
     "svelte": "^5.57.1",
     "svelte-check": "^4.4.6",
     "tslib": "^2.8.1",

@@ -107,5 +107,6 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "ws": "^8.21.0",
   "yaml": "^2.8.3",
   "@nuxt/nitro-server": "^4.6.2",
-  "fallow": "3.35.0"
+  "fallow": "3.35.0",
+  "sirv": "^3.0.2"
 } as const)
