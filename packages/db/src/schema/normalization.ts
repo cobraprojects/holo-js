@@ -43,7 +43,7 @@ function coerceBoolean(value: unknown): boolean | null | undefined {
   return Boolean(value)
 }
 
-function parseInteger(value: unknown): unknown {
+export function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
@@ -200,6 +200,10 @@ function stringifyVectorValue(value: unknown): unknown {
   }
 
   return `[${parsed.join(',')}]`
+}
+
+export function readsAsInteger(column: AnyColumnDefinition): boolean {
+  return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
 
 export function normalizeDialectReadValue(

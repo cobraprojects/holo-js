@@ -42,6 +42,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches } from './traversal'
+import { readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -951,6 +952,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'inner',
       table: typeof table === 'string' ? table : table.tableName,
+      definition: typeof table === 'string' ? undefined : table,
       leftColumn,
       operator,
       rightColumn,
@@ -978,6 +980,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'left',
       table: typeof table === 'string' ? table : table.tableName,
+      definition: typeof table === 'string' ? undefined : table,
       leftColumn,
       operator,
       rightColumn,
@@ -1005,6 +1008,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'right',
       table: typeof table === 'string' ? table : table.tableName,
+      definition: typeof table === 'string' ? undefined : table,
       leftColumn,
       operator,
       rightColumn,
@@ -1094,6 +1098,7 @@ export class TableQueryBuilder<
     return this.clone(withJoin(this.plan, {
       type: 'cross',
       table: typeof table === 'string' ? table : table.tableName,
+      definition: typeof table === 'string' ? undefined : table,
     }))
   }
 
@@ -1483,10 +1488,11 @@ export class TableQueryBuilder<
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
+    const integerColumns = resolveIntegerResultColumns(this.plan, tableName => this.connection.getSchemaRegistry().get(tableName))
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
-    if (aggregates.length === 0) return rows
+    if (aggregates.length === 0 && integerColumns.length === 0) return rows
     return rows.map(row => {
-      const values: Record<string, unknown> = { ...row }
+      const values: Record<string, unknown> = readIntegerResultColumns(row, integerColumns)
       for (const selection of aggregates) {
         const value = row[selection.alias]
         if (value == null) continue

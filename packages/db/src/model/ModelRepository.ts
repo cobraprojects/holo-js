@@ -3438,6 +3438,10 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, this.resolveRelatedRepository(relation.related), constraint),
       relation.relatedKey,
       this.getPivotSelection(relation, [relation.foreignPivotKey, relation.relatedPivotKey]),
+      rows => this.readPivotKeys(rows, [
+        [relation.foreignPivotKey, this.definition.table, relation.parentKey],
+        [relation.relatedPivotKey, this.resolveRelatedRepository(relation.related).definition.table, relation.relatedKey],
+      ]),
     )
   }
 
@@ -3474,7 +3478,11 @@ export class ModelRepository<
       .select(...pivotSelection)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', chunk)
-      .get<Record<string, unknown>>())
+      .get<Record<string, unknown>>()
+      .then(rows => this.readPivotKeys(rows, [
+        [relation.morphIdColumn, this.definition.table, relation.parentKey],
+        [relation.foreignPivotKey, this.resolveRelatedRepository(relation.related).definition.table, relation.relatedKey],
+      ])))
 
     const relatedIds = distinctStoredKeys(
       pivotRows
@@ -3527,7 +3535,11 @@ export class ModelRepository<
     const pivotRows = await loadRelationKeyChunks(parentKeys, false, chunk => this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
       .select(...pivotSelection)
       .where(relation.foreignPivotKey, 'in', chunk)
-      .get<Record<string, unknown>>())
+      .get<Record<string, unknown>>()
+      .then(rows => this.readPivotKeys(rows, [
+        [relation.foreignPivotKey, this.definition.table, relation.parentKey],
+        [relation.morphIdColumn, related.definition.table, relation.relatedKey],
+      ])))
 
     const relatedIds = distinctStoredKeys(
       pivotRows
@@ -3595,6 +3607,22 @@ export class ModelRepository<
       new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable, connection), connection).where(relation.morphTypeColumn, morphClass),
       relation,
     )
+  }
+
+  private readPivotKeys(
+    rows: readonly Record<string, unknown>[],
+    keys: readonly (readonly [pivotColumn: string, ownerTable: TableDefinition, ownerColumn: string])[],
+  ): Record<string, unknown>[] {
+    const dialect = this.getConnection().getDriver() as SchemaDialectName
+    const columns = keys.flatMap(([pivotColumn, ownerTable, ownerColumn]) => {
+      const definition = ownEntry(ownerTable.columns, ownerColumn)
+      return definition ? [[pivotColumn, definition] as const] : []
+    })
+    return rows.map(row => {
+      const read = { ...row }
+      for (const [pivotColumn, definition] of columns) read[pivotColumn] = normalizeDialectReadValue(dialect, definition, row[pivotColumn])
+      return read
+    })
   }
 
   private getPivotSelection(relation: PivotRelationDefinition, keys: readonly string[]): readonly string[] {

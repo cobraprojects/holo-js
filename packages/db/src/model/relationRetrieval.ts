@@ -157,12 +157,13 @@ export async function retrievePivotRelation(
   createRelatedQuery: () => ModelQueryBuilder,
   relatedKey: string,
   pivotSelection: readonly string[],
+  readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
 ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
-  const rows = await loadRelationKeyChunks(parentKeys, false, chunk => createPivotQuery()
+  const rows = await loadRelationKeyChunks(parentKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
-    .get<Record<string, unknown>>())
+    .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
   const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey)
   return { rows, related: indexRelation(entities, relatedKey) }

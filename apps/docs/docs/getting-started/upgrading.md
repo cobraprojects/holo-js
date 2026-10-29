@@ -1079,7 +1079,43 @@ If you maintain a Holo plugin:
 
 See [Writing Plugins](/advanced/plugins) for the full package layout.
 
-### 7. Verify
+### 7. Treat integer ids as numbers (0.3.22)
+
+Since 0.3.22, models read `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as JavaScript numbers on every driver. Before, PostgreSQL returned `bigint` columns, which `id()` and `foreignId()` create, as strings such as `"1"`, so your code and your API responses received strings. A value above `Number.MAX_SAFE_INTEGER` now throws a `HydrationError` instead of losing precision.
+
+Up to 0.4.1, `DB.table()` still returned these columns as strings on PostgreSQL, so a model id (`1`) and a query-builder value (`"1"`) for the same row weren't equal. Later releases return numbers when you pass a [table definition](/database/query-builder/#typed-results) to `DB.table()`. With a table name, rows keep the driver's values.
+
+Check code that:
+
+- Compares ids with `===` against strings, such as route parameters or `DB.table()` rows from a table name. Convert one side first, for example `Number(params.id)`.
+- Uses ids as `Map` keys or `Set` values, or looks them up with `includes()`, next to ids that are still strings.
+- Sends ids to clients. JSON responses now contain `1` instead of `"1"`. Update client types, or send `String(id)` where the response must keep a string.
+- Reads ids saved before the upgrade in caches, sessions, queue payloads or JSON columns. Those still hold strings until they're rewritten.
+
+If a column can hold values above 2<sup>53</sup> − 1, use `uuid()`, `ulid()` or `snowflake()` keys, which are read as strings.
+
+### 8. Pass objects, not JSON text, to JSON columns (0.3.28)
+
+Since 0.3.28, models JSON-encode the value you assign to a `json()` column once, whatever its type, so a string is stored as a JSON string. Before, a string was stored as-is and read back as the JSON it contained. Code that called `JSON.stringify()` before saving now stores a string and reads a string back:
+
+```ts
+await post.update({ settings: JSON.stringify({ theme: 'dark' }) }) // [!code --]
+await post.update({ settings: { theme: 'dark' } }) // [!code ++]
+```
+
+`post.settings` is `{ theme: 'dark' }` after the second call, and the string `'{"theme":"dark"}'` after the first. Clients receiving the model as JSON see that string too. A `json` cast on a `json()` column already encoded once and doesn't change. `DB.table()` writes don't change either: they still store a string as the JSON it contains.
+
+Rows saved from 0.3.28 on with pre-encoded text hold a JSON string. Find them, and if every string value in the column is encoded JSON, decode them in place (here for a `settings` column on `posts`):
+
+| Database | Query |
+| --- | --- |
+| PostgreSQL (`jsonb`) | `UPDATE posts SET settings = (settings #>> '{}')::jsonb WHERE jsonb_typeof(settings) = 'string'` |
+| MySQL | `UPDATE posts SET settings = CAST(JSON_UNQUOTE(settings) AS JSON) WHERE JSON_TYPE(settings) = 'STRING'` |
+| SQLite | `UPDATE posts SET settings = settings ->> '$' WHERE json_type(settings) = 'text'` |
+
+Run the `WHERE` part as a `SELECT` first. A column that also holds real string values needs a narrower condition, because these queries decode every string.
+
+### 9. Verify
 
 Regenerate Holo's files and check that everything compiles and passes:
 
