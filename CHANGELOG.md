@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- The `preview` mail driver writes each message to a temporary file and renames it into place, so a process reading the preview folder sees each `<messageId>.json` complete or not at all. Before, a message sent while the folder was being read could be seen half-written.
 - On PostgreSQL, `belongsToMany`, `morphToMany` and `morphedByMany` relations keyed by `id()` and `foreignId()` columns load, count and filter their related rows again. Pivot keys are read with the parent and related models' key types, so the `bigint` text PostgreSQL returns matches the model ids.
 - `DB.table()` with a table definition reads `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as numbers on every driver, as its row types and models already do, including columns of definitions passed to `join()`. Values above `Number.MAX_SAFE_INTEGER` throw a `HydrationError`. See [Typed results](apps/docs/docs/database/query-builder/index.md#typed-results).
 
