@@ -85,12 +85,7 @@ it.each(bundlers)('$name preserves the Vite module graph throughout bundle creat
     server: { middlewareMode: true },
   })
   onTestFinished(() => server.close())
-  await server.transformRequest('/src/entry.ts')
-  const module = await server.environments.client.moduleGraph.getModuleByUrl('/src/entry.ts')
-  const transformed = module?.transformResult
-  expect(transformed).toBeTruthy()
-
-  const waitForFileEvent = (event: 'add' | 'unlink', suffix: string): Promise<void> => new Promise((resolve) => {
+  const waitForFileEvent = (event: 'add' | 'change' | 'unlink', suffix: string): Promise<void> => new Promise((resolve) => {
     const listener = (path: string) => {
       if (!path.replaceAll('\\', '/').endsWith(suffix)) return
       server.watcher.off(event, listener)
@@ -99,6 +94,14 @@ it.each(bundlers)('$name preserves the Vite module graph throughout bundle creat
     server.watcher.on(event, listener)
     onTestFinished(() => { server.watcher.off(event, listener) })
   })
+
+  const sourceChanged = waitForFileEvent('change', '/src/entry.ts')
+  await writeFile(entry, 'export default 2\n')
+  await sourceChanged
+  await server.transformRequest('/src/entry.ts')
+  const module = await server.environments.client.moduleGraph.getModuleByUrl('/src/entry.ts')
+  const transformed = module?.transformResult
+  expect(transformed).toBeTruthy()
 
   const added = waitForFileEvent('add', '/entry.mjs')
   const bundled = await bundle(root, entry)
