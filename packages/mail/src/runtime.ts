@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { resolveRetryBackoffSeconds } from '@holo-js/kernel'
@@ -722,11 +722,16 @@ async function persistPreviewArtifact(artifact: MailPreviewArtifact): Promise<vo
   }
 
   await mkdir(mailer.path, { recursive: true })
-  await writeFile(
-    join(mailer.path, `${artifact.messageId}.json`),
-    `${JSON.stringify(artifact, null, 2)}\n`,
-    'utf8',
-  )
+  // Readers list the folder while other requests send mail, so each message must appear complete or not
+  // at all: write a temp file that doesn't end in `.json`, then rename it into place.
+  const path = join(mailer.path, `${artifact.messageId}.json`)
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
+    await rename(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
 }
 
 function createSmtpAddress(address: MailAddress): NodemailerAddress {
