@@ -95,6 +95,7 @@ it.each(bundlers)('$name preserves the Vite module graph throughout bundle creat
     onTestFinished(() => { server.watcher.off(event, listener) })
   })
 
+  await expect.poll(() => server.watcher.getWatched()[join(server.config.root, 'src')] ?? []).toContain('entry.ts')
   const sourceChanged = waitForFileEvent('change', '/src/entry.ts')
   await writeFile(entry, 'export default 2\n')
   await sourceChanged
