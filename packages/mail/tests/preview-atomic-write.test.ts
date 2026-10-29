@@ -43,15 +43,12 @@ vi.mock('node:fs/promises', async importOriginal => {
 let previewRoot = ''
 
 function configurePreviewMailer(path: string): void {
-  const config = normalizeMailConfig()
-  const preview = config.mailers.preview!
   configureMailRuntime({
-    config: {
-      ...config,
+    config: normalizeMailConfig({
       default: 'preview',
       from: { email: 'config@example.com' },
-      mailers: { ...config.mailers, preview: { ...preview, path } },
-    },
+      mailers: { preview: { driver: 'preview', path } },
+    }),
   })
 }
 
