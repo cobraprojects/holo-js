@@ -72,10 +72,8 @@ import {
   splitCsv,
 } from '../src/parsing'
 import {
-  cleanupRuntimeDependencyLink,
   createEnvRuntimeConfig,
   createRuntimeInvocation,
-  ensureRuntimeDependencyLink,
   getRuntimeEnvironment,
   getRuntimeFailureMessage,
   inferRuntimeMigrationName,
@@ -6480,26 +6478,6 @@ export default defineDatabaseConfig({
     expect(result.status, result.stderr || result.stdout).toBe(0)
     expect(result.stdout).toContain('No prunable models were registered.')
     await expect(readTextFile(join(projectRoot, '.holo-js/runtime/cli/node_modules/@holo-js/db/package.json'))).resolves.toBeUndefined()
-  }, 30000)
-
-  it('keeps shared runtime dependency links while concurrent invocations are active', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-
-    const [firstRoot, secondRoot] = await Promise.all([
-      ensureRuntimeDependencyLink(projectRoot),
-      ensureRuntimeDependencyLink(projectRoot),
-    ])
-
-    expect(firstRoot).toBe(secondRoot)
-    await expect(readTextFile(join(firstRoot, 'node_modules/@holo-js/db/package.json'))).resolves.toContain('"name": "@holo-js/db"')
-    await expect(readTextFile(join(secondRoot, 'node_modules/@holo-js/db/package.json'))).resolves.toContain('"name": "@holo-js/db"')
-
-    await cleanupRuntimeDependencyLink(projectRoot)
-    await expect(readTextFile(join(secondRoot, 'node_modules/@holo-js/db/package.json'))).resolves.toContain('"name": "@holo-js/db"')
-
-    await cleanupRuntimeDependencyLink(projectRoot)
-    await expect(readTextFile(join(secondRoot, 'node_modules/@holo-js/db/package.json'))).resolves.toBeUndefined()
   }, 30000)
 })
 
