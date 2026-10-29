@@ -39,11 +39,8 @@ export function withHoloSvelteKit<TConfig extends Config = Config>(
     ? preprocessors
     : [...preprocessors, holoSveltePreprocess()]
 
-  const publicOrigin = config.paths?.origin ?? process.env.APP_URL
-
   return {
     ...config,
-    ...(publicOrigin ? { paths: { ...(config.paths ?? {}), origin: publicOrigin } } : {}),
     preprocess: mergedPreprocessors,
     files: {
       ...(config.files ?? {}),

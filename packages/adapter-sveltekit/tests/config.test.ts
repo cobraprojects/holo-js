@@ -49,13 +49,13 @@ describe('@holo-js/adapter-sveltekit config', () => {
     })).toThrow('Custom SvelteKit server or universal hook entrypoints are not supported')
   })
 
-  it('uses APP_URL as the public origin when the app does not set paths.origin', () => {
+  it('keeps APP_URL out of build-time paths while preserving an explicit origin', () => {
     const previous = process.env.APP_URL
     process.env.APP_URL = 'https://app.example.test'
     try {
       const defaulted: Config = withHoloSvelteKit({})
       const custom: Config = withHoloSvelteKit({ paths: { origin: 'https://custom.example.test' } })
-      expect(defaulted.paths).toEqual({ origin: 'https://app.example.test' })
+      expect(defaulted.paths).toBeUndefined()
       expect(custom.paths).toEqual({ origin: 'https://custom.example.test' })
     } finally {
       if (previous === undefined) delete process.env.APP_URL
