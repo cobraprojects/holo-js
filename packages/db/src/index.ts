@@ -4,6 +4,7 @@ import { getApplicationTimezone } from './applicationTimezone'
 import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
+import { getQueryBounds } from './query/queryBounds'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
@@ -402,6 +403,7 @@ export type {
 } from './query'
 
 export const holoRuntimeInternals = Object.freeze({
+  getQueryBounds,
   PooledTransactionClients,
   whereColumnNotExpiredByDatabaseClock,
   reportError,
