@@ -238,27 +238,31 @@ describe('transaction nesting and commit integrity', () => {
     await db.table(table).insert([{ id: 1, name: 'One' }, { id: 2, name: 'Two' }])
     const firstLocked = deferred()
     const secondLocked = deferred()
+    const firstFinished = deferred()
+    const secondFinished = deferred()
     const calls = { first: 0, second: 0 }
     const first = db.transaction(async tx => {
       calls.first += 1
       const attempt = calls.first
+      if (attempt > 1) await secondFinished.promise
       await tx.table(table).where('id', 1).update({ name: 'First' })
       if (attempt === 1) {
         firstLocked.resolve()
         await secondLocked.promise
       }
       await tx.table(table).where('id', 2).update({ name: 'First' })
-    }, { attempts: 2 })
+    }, { attempts: 2 }).finally(() => firstFinished.resolve())
     const second = db.transaction(async tx => {
       calls.second += 1
       const attempt = calls.second
+      if (attempt > 1) await firstFinished.promise
       await tx.table(table).where('id', 2).update({ name: 'Second' })
       if (attempt === 1) {
         secondLocked.resolve()
         await firstLocked.promise
       }
       await tx.table(table).where('id', 1).update({ name: 'Second' })
-    }, { attempts: 2 })
+    }, { attempts: 2 }).finally(() => secondFinished.resolve())
     const results = await Promise.allSettled([first, second])
     expect(results.map(result => result.status)).toEqual(['fulfilled', 'fulfilled'])
     expect(calls.first + calls.second).toBe(3)
