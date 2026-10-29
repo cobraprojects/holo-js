@@ -172,7 +172,7 @@ export async function bundleProjectModule(
       sourcemap: false,
       plugins: [
         createSourceModuleUrlPlugin(),
-        ...(options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : []),
+        createHoloPackageBundlerPlugin(projectRoot),
       ],
       external: [...(options.external ?? [])],
     }))
