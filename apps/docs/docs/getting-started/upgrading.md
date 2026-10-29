@@ -1,5 +1,26 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.1 to 0.4.2
+
+Update every installed `@holo-js/*` package to `0.4.2` together. Review these two behavior fixes before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#042---2026-10-29) lists the release changes.
+
+### PostgreSQL typed query results
+
+`DB.table(tableDefinition)` now reads `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as numbers on every driver, including columns from table definitions passed to `join()`. On PostgreSQL these values were previously strings, despite their inferred number types. Compare them with numbers and update any client types or cached values that depended on strings. Values above `Number.MAX_SAFE_INTEGER` throw a `HydrationError` instead of losing precision.
+
+Queries started with a table name and raw SQL keep the driver's values. See [Typed results](/database/query-builder/#typed-results).
+
+### SvelteKit Node deployment origin
+
+`withHoloSvelteKit()` no longer copies build-time `APP_URL` into `paths.origin`. If your deployment relied on that behavior, choose how to set its public origin:
+
+- To reuse a build across deployment URLs, use `import adapter from '@holo-js/adapter-sveltekit/node'` in `vite.config.ts`, pass `adapter()` to your existing SvelteKit configuration, and set `APP_URL` when starting the server. The default output starts with `node build/index.js`; `HOST` and `PORT` select its listener.
+- For a fixed origin, set `paths.origin` explicitly and rebuild when it changes. This setting takes precedence over runtime `APP_URL` in the Holo Node adapter.
+
+The Holo Node adapter accepts `adapter({ out: 'custom/build' })` for a separate output directory inside the project, started with `node custom/build/index.js`. Output must not overlap source or framework directories or traverse symbolic links. `BODY_SIZE_LIMIT` defaults to 512 KiB and accepts bytes or a `K`, `M`, or `G` suffix, such as `64M`. The adapter uses the socket address for client identity; configure [trusted proxies](/basics/security/cors-and-proxies#trusted-proxies) separately when deploying behind a proxy.
+
+The native `@sveltejs/adapter-node` 6 remains supported. It does not read runtime `ORIGIN`; use its build-time origin or trusted proxy configuration.
+
 ## Upgrading from 0.3.x to 0.4.0
 
 0.4.0 is a breaking release. Before you install it, upgrade Node.js and your framework: see [Node.js 22.18 or newer](#node-js-22-18-or-newer), [Framework peer dependencies](#framework-peer-dependencies), and [SvelteKit 3](#sveltekit-3). Then work through the sections below that apply to your app. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#040---2026-10-24) lists every change.
@@ -321,7 +342,7 @@ import { loginForm } from '#lib/schemas/auth.js'
 
 5. If your `handleError` reads `status` or `message` from its input, read them from the `kind` and `error` fields instead. Holo's handler does this for you, and returns the same messages as before.
 
-6. For Node deployments that reuse one build across deployment URLs, use `import adapter from '@holo-js/adapter-sveltekit/node'` in `vite.config.ts`. The adapter writes to `build` by default; `adapter({ out: 'custom/build' })` selects a separate output directory within the project, started with `node custom/build/index.js`. Output must not overlap source or framework directories, or traverse symbolic links. The Holo Node adapter reads `APP_URL` when the server starts, so set it to the public deployment URL alongside `HOST` and `PORT`. `BODY_SIZE_LIMIT` retains the 512 KiB default and accepts bytes or a `K`, `M`, or `G` suffix (for example `64M`); oversized bodies are rejected while streaming. `withHoloSvelteKit()` no longer copies build-time `APP_URL` into `paths.origin`. An explicitly configured `paths.origin` remains a build-time canonical origin and requires rebuilding to change it. The native `@sveltejs/adapter-node` 6 remains supported, but it no longer reads runtime `ORIGIN`; use its documented build-time origin or trusted proxy configuration. The Holo Node adapter uses the socket address for client identity and leaves forwarded headers to Holo's trusted-proxy middleware; it does not trust them automatically.
+6. Configure your Node deployment origin. When upgrading directly to 0.4.2 or newer, follow [SvelteKit Node deployment origin](#sveltekit-node-deployment-origin).
 
 ### Update your tsconfig.json
 
@@ -1083,7 +1104,7 @@ See [Writing Plugins](/advanced/plugins) for the full package layout.
 
 Since 0.3.22, models read `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as JavaScript numbers on every driver. Before, PostgreSQL returned `bigint` columns, which `id()` and `foreignId()` create, as strings such as `"1"`, so your code and your API responses received strings. A value above `Number.MAX_SAFE_INTEGER` now throws a `HydrationError` instead of losing precision.
 
-Up to 0.4.1, `DB.table()` still returned these columns as strings on PostgreSQL, so a model id (`1`) and a query-builder value (`"1"`) for the same row weren't equal. Later releases return numbers when you pass a [table definition](/database/query-builder/#typed-results) to `DB.table()`. With a table name, rows keep the driver's values.
+Up to 0.4.1, `DB.table()` still returned these columns as strings on PostgreSQL, so a model id (`1`) and a query-builder value (`"1"`) for the same row weren't equal. From 0.4.2, queries return numbers when you pass a [table definition](/database/query-builder/#typed-results) to `DB.table()`. With a table name, rows keep the driver's values.
 
 Check code that:
 

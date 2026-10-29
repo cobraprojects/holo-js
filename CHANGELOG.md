@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-10-29
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-041-to-042) for PostgreSQL typed results and SvelteKit Node deployments.
+
 ### Fixed
 
+- SvelteKit Node deployments can read `APP_URL` when the server starts through `@holo-js/adapter-sveltekit/node`, allowing one build to serve different deployment URLs. The adapter serves client and prerendered assets, enforces streaming body limits, and closes Holo resources on shutdown. `withHoloSvelteKit()` no longer freezes build-time `APP_URL` into `paths.origin`.
+- CLI project bundles resolve Holo dependencies directly from the project as file URLs. Concurrent CLI commands and Vite development reloads no longer share temporary runtime dependency links or accidentally bundle Holo package sources.
 - The `preview` mail driver writes each message to a temporary file and renames it into place, so a process reading the preview folder sees each `<messageId>.json` complete or not at all. Before, a message sent while the folder was being read could be seen half-written.
 - On PostgreSQL, `belongsToMany`, `morphToMany` and `morphedByMany` relations keyed by `id()` and `foreignId()` columns load, count and filter their related rows again. Pivot keys are read with the parent and related models' key types, so the `bigint` text PostgreSQL returns matches the model ids.
 - `DB.table()` with a table definition reads `id()`, `integer()`, `bigInteger()` and `foreignId()` columns as numbers on every driver, as its row types and models already do, including columns of definitions passed to `join()`. Values above `Number.MAX_SAFE_INTEGER` throw a `HydrationError`. See [Typed results](apps/docs/docs/database/query-builder/index.md#typed-results).
@@ -11,6 +17,7 @@
 ### Compatibility and upgrade requirements
 
 - On PostgreSQL, `DB.table()` rows from a table definition hold numbers instead of strings such as `"1"` for these columns. Code that compared them with strings must compare numbers. Queries started with a table name and raw SQL keep the driver's values.
+- SvelteKit Node deployments that relied on build-time `APP_URL` becoming `paths.origin` must configure their deployment origin explicitly. Use the Holo Node adapter for runtime `APP_URL`, or configure `paths.origin` for a fixed build-time origin.
 
 ## 0.4.0 - 2026-10-24
 
