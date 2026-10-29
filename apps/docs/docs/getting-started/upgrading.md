@@ -158,6 +158,13 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
+Because `make()` checks these rules and its model is unsaved, `make(row)` no longer turns a row you already loaded into a model: it throws a `SecurityError` for the primary key. Use [`hydrate()`](/orm/querying#hydrate), which builds a saved model from a database row without mass assignment checks, as `find()` does. Don't add the primary key to `fillable` for this.
+
+```ts
+const tenant = Tenant.make(row) // [!code --]
+const tenant = await Tenant.hydrate(row) // [!code ++]
+```
+
 ### Raw SQL conditions on `update()` and `delete()`
 
 `unsafeWhere()` and `orUnsafeWhere()` conditions on `update()` and `delete()` now need `security: { allowUnsafeRawSql: true }` on the connection, as they already did on reads. Before, the default policy let them run on writes, so a condition built from user input could match every row. Without the setting, these calls throw a `SecurityError` and change nothing. Rewrite the condition with `where()` and its related methods, or turn the setting on for that connection if you need raw SQL. Password reset and email verification links keep working with the default policy.

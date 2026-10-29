@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add `Model.hydrate(row)` to build a saved model from a row you already loaded, for example with `tx.table()` inside a transaction on another connection. It applies casts and fires the `retrieved` event as a query does, and skips `fillable` and `guarded` because the row comes from the database. The model reports `exists()` as `true` and works with relations, policies and media. Use it instead of `make(row)`, which 0.4.0 made reject the primary key. See [Models from rows you already loaded](apps/docs/docs/orm/querying.md#models-from-rows-you-already-loaded).
+
 ## 0.4.2 - 2026-10-29
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-041-to-042) for PostgreSQL typed results and SvelteKit Node deployments.

@@ -895,6 +895,9 @@ function createStaticModelApi<
     make(values: Partial<ModelRecord<TTable>> = {}) {
       return this.getRepository().make(values)
     },
+    hydrate(row: Partial<ModelRecord<TTable>>) {
+      return this.getRepository().retrieve(row)
+    },
     getRepository() {
       return ModelRepository.from(definition)
     },

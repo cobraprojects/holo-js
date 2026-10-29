@@ -231,6 +231,7 @@ export type StaticModelApi<
   saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
+  hydrate(row: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   getRepository(): ModelRepository<TTable, TScopes>
   getConnectionName(): string | undefined
   getTableName(): string

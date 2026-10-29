@@ -409,7 +409,7 @@ await Post.createManyQuietly(rows)
 
 ### make()
 
-Builds an unsaved model with the model's `pendingAttributes` applied. Mass assignment rules apply, and mutators and casts run when `save()` writes the values, not when `make()` runs. Call `save()` to insert it.
+Builds an unsaved model with the model's `pendingAttributes` applied. Mass assignment rules apply, and mutators and casts run when `save()` writes the values, not when `make()` runs. Call `save()` to insert it. To turn a row you already loaded into a saved model, use [`hydrate()`](/orm/querying#hydrate).
 
 ```ts
 const post = Post.make({ title: 'Draft', user_id: 1 })

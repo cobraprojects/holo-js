@@ -705,6 +705,29 @@ describe('@holo-js/media', () => {
     expect(items.map(item => item.fileName)).toEqual(['first.txt', 'second.txt'])
   })
 
+  it('reads media through a model hydrated from a table row', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images')],
+    })
+    const created = await Post.create({ title: 'Hydrated' })
+    await created.addMedia({
+      contents: Buffer.from('cover'),
+      fileName: 'cover.txt',
+    }).toMediaCollection('images')
+    const row = await DB.table(postsTable).where('id', created.id).first()
+    if (!row) {
+      throw new Error('Expected the post row.')
+    }
+
+    const post = await Post.hydrate(row)
+
+    expect(await post.getFirstMediaUrl('images')).toBe(await created.getFirstMediaUrl('images'))
+    expect(await post.getFirstMediaUrl('images')).toMatch(/cover\.txt$/)
+  })
+
   it('deletes attached media when its model is deleted', async () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],

@@ -19,7 +19,7 @@ Model-specific methods are described in the [method reference](#method-reference
 
 **Start a query:** [query()](#query), [newQuery()](#newquery), [newModelQuery()](#newmodelquery), [newQueryWithoutScopes()](#newquerywithoutscopes), [newQueryWithoutRelationships()](#newquerywithoutrelationships), [from()](/database/query-builder/selects-and-filters)
 
-**Retrieve models:** [all()](#all), [get()](#get), [first()](#first), [firstOrFail()](#firstorfail), [find()](#find), [findMany()](#findmany), [findOrFail()](#findorfail), [firstWhere()](#firstwhere), [sole()](#sole)
+**Retrieve models:** [all()](#all), [get()](#get), [first()](#first), [firstOrFail()](#firstorfail), [find()](#find), [findMany()](#findmany), [findOrFail()](#findorfail), [firstWhere()](#firstwhere), [sole()](#sole), [hydrate()](#hydrate)
 
 **Retrieve plain JSON:** [getJson()](#getjson), [firstJson()](#firstjson), [findOrFailJson()](#findorfailjson), [soleJson()](#solejson)
 
@@ -281,6 +281,24 @@ for await (const post of Post.lazy(500)) {
 
 See [chunking large results](/database/query-builder/chunking) for more.
 
+## Models from rows you already loaded
+
+`hydrate()` turns a row you read with the [query builder](/database/query-builder/) into a saved model, as `find()` would have returned it. Use it when the row has to come from somewhere the model can't query, such as a transaction on another connection:
+
+```ts
+await DB.transaction(async (tx) => {
+  const row = await tx.table(Tenant.definition.table).where('id', tenantId).lockForUpdate().first()
+  if (!row) {
+    return
+  }
+
+  const tenant = await Tenant.hydrate(row)
+  await actor.policy('tenants').authorize('manageTeam', tenant)
+})
+```
+
+The model reads the row the way a query does: it applies casts, fires the `retrieved` [event](/orm/observers), and reports `exists()` as `true` with no changes. Relations, policies, and media work as they do on a model from `find()`, and they run on the model's own connection. `fillable` and `guarded` don't apply, because the row comes from the database, not from a request. Pass it only rows you read from the model's table. To build a new, unsaved model, use [`make()`](/orm/writes#make).
+
 ## Plain JSON results
 
 Methods ending in `Json` return plain serialized objects instead of model instances: `getJson()`, `firstJson()`, `findOrFailJson()`, `soleJson()`, `paginateJson()`, `simplePaginateJson()`, and `cursorPaginateJson()`.
@@ -436,6 +454,14 @@ Returns the only matching model. Throws when no row matches or when more than on
 
 ```ts
 const settings = await Setting.where('key', 'site_name').sole()
+```
+
+### hydrate()
+
+Builds a saved model from a row of the model's table that you already loaded, applying casts and firing the `retrieved` event. Mass assignment rules don't apply. See [models from rows you already loaded](#models-from-rows-you-already-loaded).
+
+```ts
+const tenant = await Tenant.hydrate(row)
 ```
 
 ### getJson()
