@@ -989,7 +989,7 @@ export default defineMigration({
       HOST: '127.0.0.1',
       HOSTNAME: '127.0.0.1',
       PORT: String(journey.port),
-      ORIGIN: `http://localhost:${journey.port}`,
+      APP_URL: `http://localhost:${journey.port}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

@@ -4,17 +4,16 @@ import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
-type TableResolver = (tableName: string) => TableDefinition | undefined
 type SelectedColumn = readonly [key: string, integer: boolean]
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
   return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, readsAsInteger(column)])
 }
 
-function queryTables(plan: SelectQueryPlan, resolveTable: TableResolver): Map<string, TableDefinition | undefined> {
+function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undefined> {
   const tables = new Map([[plan.source.alias ?? plan.source.tableName, plan.source.table]])
   for (const join of plan.joins) {
-    if (join.table) tables.set(join.alias ?? join.table, join.definition ?? resolveTable(join.table))
+    if (join.table) tables.set(join.alias ?? join.table, join.definition)
   }
   return tables
 }
@@ -32,13 +31,13 @@ function selectedColumns(
   return [[selection.alias ?? name, column ? readsAsInteger(column) : false]]
 }
 
-export function resolveIntegerResultColumns(plan: SelectQueryPlan, resolveTable: TableResolver): readonly string[] {
+export function resolveIntegerResultColumns(plan: SelectQueryPlan): readonly string[] {
   const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
   if (plan.selections.length === 0) {
     return columnsOf(unqualifiedTable).filter(([, integer]) => integer).map(([key]) => key)
   }
 
-  const tables = queryTables(plan, resolveTable)
+  const tables = queryTables(plan)
   const keys = new Set<string>()
   for (const selection of plan.selections) {
     const selected: readonly SelectedColumn[] = selection.kind === 'column'

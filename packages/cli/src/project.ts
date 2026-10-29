@@ -151,7 +151,6 @@ import {
   upsertSecurityPackageDependency,
 } from './project/scaffold'
 import {
-  CLI_RUNTIME_ROOT,
   HOLO_RUNTIME_ROOT,
   isSupportedScaffoldFramework,
   isSupportedScaffoldOptionalPackage,
@@ -196,7 +195,6 @@ export function upsertProjectRegistration(
 
 export {
   bundleProjectModule,
-  CLI_RUNTIME_ROOT,
   defaultProjectConfig,
   discoverAppCommands,
   ensureGeneratedSchemaPlaceholder,

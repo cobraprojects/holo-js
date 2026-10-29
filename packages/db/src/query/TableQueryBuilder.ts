@@ -203,7 +203,7 @@ export class TableQueryBuilder<
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
-    this.plan = ownPlan ? withSource(ownPlan, this.source) : createSelectQueryPlan(this.source)
+    this.plan = ownPlan ? withSource(ownPlan, source) : createSelectQueryPlan(source)
     trustedRawWhereAppenders.set(this, (sql, bindings) => this.clone(withPredicate(this.plan, createTrustedRawPredicate({
       kind: 'raw',
       boolean: 'and',
@@ -1488,7 +1488,7 @@ export class TableQueryBuilder<
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const integerColumns = resolveIntegerResultColumns(this.plan, tableName => this.connection.getSchemaRegistry().get(tableName))
+    const integerColumns = resolveIntegerResultColumns(this.plan)
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
     if (aggregates.length === 0 && integerColumns.length === 0) return rows
     return rows.map(row => {

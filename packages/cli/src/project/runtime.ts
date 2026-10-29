@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
 import { createSourceModuleUrlPlugin } from './source-module-url'
 import type {
@@ -35,7 +35,7 @@ function createHoloPackageBundlerPlugin(projectRoot: string): Plugin {
           try {
             const resolved = resolvePackage(path)
             return {
-              path: resolved.startsWith('file:') ? fileURLToPath(resolved) : resolved,
+              path: resolved.startsWith('file:') ? resolved : pathToFileURL(resolved).href,
               external: true,
             }
           } catch {
@@ -46,7 +46,7 @@ function createHoloPackageBundlerPlugin(projectRoot: string): Plugin {
         const workspaceSpecifier = resolveWorkspacePackageImportSpecifier(path)
         if (workspaceSpecifier) {
           return {
-            path: fileURLToPath(workspaceSpecifier),
+            path: workspaceSpecifier,
             external: true,
           }
         }

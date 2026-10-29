@@ -85,7 +85,12 @@ describe('postgres bigint keys', () => {
       expect(await DB.table(memberships).pluck('member_id')).toEqual([7])
       expect(await DB.table(memberships).value('group_id')).toBe(group.id)
       expect(joined).toEqual({ groupKey: group.id, member_id: 7, name: 'g' })
+      schema.register(memberships)
       expect(await DB.table(names.memberships).first()).toEqual({ id: '1', group_id: String(group.id), member_id: '7' })
+      expect(await DB.table(names.memberships)
+        .join(names.groups, `${names.memberships}.group_id`, '=', `${names.groups}.id`)
+        .select(`${names.groups}.id as groupKey`)
+        .first()).toEqual({ groupKey: String(group.id) })
 
       await DB.table(memberships).insert({ group_id: group.id, member_id: '9007199254740993' })
       await expect(DB.table(memberships).where('id', 2).first()).rejects.toThrow(HydrationError)
