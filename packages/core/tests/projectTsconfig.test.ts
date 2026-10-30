@@ -302,6 +302,37 @@ describe('project tsconfig loading for bundled definitions', () => {
     expect((await importBundled(projectRoot, join(projectRoot, 'own.ts'))).definition).toEqual({ tool: 'old' })
   })
 
+  it('picks up edits to an extended config between bundles', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './config/tsconfig.base.json' }),
+    })
+    await mkdir(join(projectRoot, 'config'), { recursive: true })
+    const basePath = join(projectRoot, 'config/tsconfig.base.json')
+    await writeFile(basePath, JSON.stringify({ compilerOptions: { paths: { 'shared-lib/*': ['../old/*'] } } }))
+    await writeLibraryFolders(projectRoot, ['old', 'src'])
+    const ownPath = join(projectRoot, 'own.ts')
+    await writeFile(ownPath, "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
+
+    expect((await importBundled(projectRoot, ownPath)).definition).toEqual({ tool: 'old' })
+    await writeFile(basePath, JSON.stringify({ compilerOptions: { paths: { 'shared-lib/*': ['../src/*'] } } }))
+    expect((await importBundled(projectRoot, ownPath)).definition).toEqual({ tool: 'src' })
+  })
+
+  it('picks up a config created where TypeScript first looks for an extended config', async () => {
+    const { projectRoot } = await createNuxtProject({
+      projectTsconfig: JSON.stringify({ ...JSON.parse(nuxtReferencesTsconfig) as object, extends: './tsconfig.base' }),
+    })
+    await writeFile(join(projectRoot, 'tsconfig.base.json'), JSON.stringify({ compilerOptions: { paths: { 'shared-lib/*': ['./old/*'] } } }))
+    await writeLibraryFolders(projectRoot, ['old', 'src'])
+    const ownPath = join(projectRoot, 'own.ts')
+    await writeFile(ownPath, "import { tool } from 'shared-lib/tool'\nexport const definition = { tool }\n")
+
+    expect((await importBundled(projectRoot, ownPath)).definition).toEqual({ tool: 'old' })
+    await writeFile(join(projectRoot, 'tsconfig.base'), JSON.stringify({ compilerOptions: { paths: { 'shared-lib/*': ['./src/*'] } } }))
+    expect(typescriptResolvedFolder(projectRoot, 'shared-lib/tool')).toBe('src')
+    expect((await importBundled(projectRoot, ownPath)).definition).toEqual({ tool: 'src' })
+  })
+
   it('keeps the default aliases for a references tsconfig whose snapshot is missing', async () => {
     const { projectRoot } = await createNuxtProject({ projectTsconfig: nuxtReferencesTsconfig, snapshot: false })
     await writeFile(join(projectRoot, 'entry.ts'), "import { util } from '@/lib/util'\nexport const definition = { util }\n")
