@@ -16,7 +16,7 @@ export const postForm = schema({
 
 ## Next.js: server action
 
-Call the server action from a `submitter`. When validation fails, the thrown error reaches `useForm()`, which shows the field errors. When it succeeds, Next.js `redirect()` navigates as usual.
+Call the server action from a `submitter`. When validation fails, the action returns the failure payload instead of throwing, and `useForm()` shows the field errors. When it succeeds, Next.js `redirect()` navigates as usual.
 
 ```ts [app/posts/new/actions.ts]
 'use server'
@@ -84,31 +84,20 @@ export default function NewPostPage() {
 
 The submitter's `formData` is built from the form element, so inputs you don't bind to `form.values`, such as file inputs, are still sent.
 
-If you call a server action without `useForm()` (for example with React's `useActionState`), catch the error and return its payload:
+Holo wraps every action a `'use server'` file declares and exports. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`. Nothing is logged, because these are input mistakes, not server errors. This also applies to actions you call without `useForm()`, for example with React's `useActionState`:
 
-```ts [app/posts/new/actions.ts]
-'use server'
-
-import { validate } from '@holo-js/forms'
+```ts
 import { serializeValidationException } from '@holo-js/validation'
-import { postForm } from '@/lib/schemas/post'
-import Post from '@/server/models/Post'
 
-export async function createPostAction(formData: FormData) {
-  try {
-    const data = await validate(formData, postForm)
-    await Post.create(data)
-    return { ok: true, status: 201, data: undefined }
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
-  }
+const failure = serializeValidationException(await createPostAction(formData))
+if (failure) {
+  console.log(failure.status, failure.errors)
 }
 ```
+
+The action's TypeScript return type doesn't include this payload, so read it with `serializeValidationException()`, which accepts any value and returns the typed payload or `undefined`.
+
+Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, form posts sent without JavaScript, and actions a `'use server'` file re-exports from another module.
 
 ## Next.js: route handler
 

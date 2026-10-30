@@ -1,9 +1,12 @@
+import 'next/dist/server/node-environment'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { actionAsyncStorage, type ActionStore } from 'next/dist/server/app-render/action-async-storage.external.js'
+import { workUnitAsyncStorage, type WorkUnitStore } from 'next/dist/server/app-render/work-unit-async-storage.external.js'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { field, schema, validate } from '@holo-js/validation'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
 import { adapterNextRuntimeInternals, createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
@@ -85,5 +88,54 @@ describe('Next native runtime', () => {
       await expect(nativeAuth.user()).resolves.toBeNull()
       expect(() => nativeAuth.guard('missing')).toThrow(expect.objectContaining({ code: 'guard_not_configured' }))
     })
+  })
+})
+
+describe('Next server actions', () => {
+  const login = schema({ email: field.string().required().email(), password: field.password().required() })
+  const submitInvalidLogin = async () => {
+    await validate({ email: 'invalid', password: 'next-password' }, login)
+  }
+  const invokedId = `40${'a'.repeat(40)}`
+  const registerServerAction = <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => (
+    Object.defineProperty(adapterNextRuntimeInternals.serverAction(action), '$$id', { value: invokedId })
+  )
+  const runRequest = <TResult>(phase: string, actionId: string, callback: () => Promise<TResult>, actionStore: ActionStore = { isAction: true }) => {
+    vi.spyOn(process, 'cwd').mockReturnValue(resolve(import.meta.dirname, '..'))
+    const store = { type: 'request', phase, headers: new Headers({ 'next-action': actionId }) } as unknown as WorkUnitStore
+    return actionAsyncStorage.run(actionStore, () => workUnitAsyncStorage.run(store, callback))
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('answers the invoked fetch action with the validation failure instead of throwing it', async () => {
+    const action = registerServerAction(submitInvalidLogin)
+
+    const result = await runRequest('action', invokedId, () => action())
+
+    expect(result).toMatchObject({ ok: false, status: 422, errors: { email: expect.any(Array) } })
+    expect(JSON.stringify(result)).not.toContain('next-password')
+  })
+
+  it('keeps throwing outside the invoked fetch action', async () => {
+    const action = registerServerAction(submitInvalidLogin)
+    const nested = registerServerAction(async (depth: number): Promise<unknown> => depth === 0 ? await nested(1).catch((error: unknown) => ({ caught: error })) : await submitInvalidLogin())
+
+    await expect(action()).rejects.toMatchObject({ status: 422 })
+    await expect(runRequest('render', invokedId, () => action())).rejects.toMatchObject({ status: 422 })
+    await expect(runRequest('action', invokedId, () => action(), { isAction: true, isAppRoute: true })).rejects.toMatchObject({ status: 422 })
+    await expect(runRequest('action', `40${'b'.repeat(40)}`, () => action())).rejects.toMatchObject({ status: 422 })
+    expect(await runRequest('action', invokedId, () => nested(0))).toMatchObject({ caught: { status: 422 } })
+  })
+
+  it('rethrows errors that are not validation or rate-limit failures', async () => {
+    const redirect = Object.assign(new Error('NEXT_REDIRECT'), { digest: 'NEXT_REDIRECT;replace;/admin;307;' })
+    const action = registerServerAction(async () => {
+      throw redirect
+    })
+
+    await expect(runRequest('action', invokedId, () => action())).rejects.toBe(redirect)
   })
 })

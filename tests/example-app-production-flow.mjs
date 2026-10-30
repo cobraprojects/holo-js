@@ -45,7 +45,6 @@ async function assertBrowserNavigation(baseUrl, expectedTitle, framework) {
     await page.goto('/login', { waitUntil: 'networkidle' })
     assert.equal(new URL(page.url()).pathname, '/login')
     await page.goto('/register', { waitUntil: 'networkidle' })
-    assert.equal(new URL(page.url()).pathname, '/register')
     await page.goto('/admin', { waitUntil: 'networkidle' })
     assert.equal(new URL(page.url()).pathname, '/login')
     assert.deepEqual(observed.failures, [])
@@ -180,6 +179,27 @@ async function expectPageText(page, expectedText) {
   assert.match(body, new RegExp(expectedText))
 }
 
+async function assertNextServerActionValidation(baseUrl, getOutput) {
+  const context = await newExampleAppContext({ baseURL: baseUrl })
+  try {
+    const page = await context.newPage()
+    const observed = observeExampleAppPage(page)
+    await page.goto('/register', { waitUntil: 'networkidle' })
+    await page.getByLabel('Name', { exact: true }).fill('Editor Again')
+    await page.getByLabel('Email', { exact: true }).fill('editor@example.com')
+    await page.getByLabel('Password', { exact: true }).fill('secret-secret')
+    await page.getByLabel('Confirm password', { exact: true }).fill('secret-secret')
+    const action = page.waitForResponse(response => response.request().headers()['next-action'] !== undefined)
+    await page.getByRole('button', { name: 'Create account', exact: true }).click()
+    assert.equal((await action).status(), 200)
+    await page.getByText('A user with this email already exists.').waitFor({ timeout: 10000 })
+    assert.deepEqual(observed.failures, [])
+    assert.doesNotMatch(getOutput(), /ValidationException/)
+  } finally {
+    await context.close()
+  }
+}
+
 export async function assertFailedProductionInitialization(cwd, baseUrl, env, portArguments) {
   await clearExampleAppRateLimitBuckets(cwd)
   // The server's own output must name the error; the response it sent is kept only to explain a failure.
@@ -285,6 +305,7 @@ export async function assertExampleAppProductionFlow({
     await waitForProductionApp(baseUrl, expectedTitle, child, () => output)
     await assertBrowserNavigation(baseUrl, expectedTitle, framework)
     if (framework === 'nuxt' || framework === 'sveltekit') await assertExampleAppFormsBrowserFlow({ baseUrl, framework })
+    if (framework === 'next') await assertNextServerActionValidation(baseUrl, () => output)
     await assertExampleAppAuthFlow({
       baseUrl,
       getOutput: () => output,

@@ -38,7 +38,7 @@ You don't need to catch `ValidationException` yourself. Holo handles it in each 
 | Framework | Where you throw | What the client gets |
 |---|---|---|
 | Next.js | Route handler (`app/**/route.ts`) | 422 JSON response |
-| Next.js | Server action | The error reaches `useForm()`, which shows the field errors |
+| Next.js | Server action called from the browser | The action returns the failure payload, and `useForm()` shows the field errors |
 | Nuxt | `server/api/**` or a request that doesn't accept HTML | 422 JSON response |
 | Nuxt | `server/routes/**` from a native HTML form post | 303 redirect back to the form, with errors flashed for [`useValidationErrors()`](/basics/forms/frameworks#native-forms-in-nuxt) |
 | SvelteKit | `+server.ts` | 422 JSON response |
