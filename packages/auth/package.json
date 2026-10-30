@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Holo-JS Framework - auth contracts, guards, and config helpers",
   "type": "module",
   "license": "MIT",
