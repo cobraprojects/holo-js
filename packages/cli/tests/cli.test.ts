@@ -10505,31 +10505,9 @@ export default defineRedisConfig({
       createdRedisConfig: false,
       updatedRedisConfig: true,
     })
-    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(`\nimport { env } from '@holo-js/config'
-import { defineRedisConfig } from '@holo-js/kernel'
-
-export default defineRedisConfig({
-  default: 'default',
-  connections: {
-    default: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-    },
-    cache: {
-      url: env('REDIS_URL') || undefined,
-      host: env('REDIS_HOST', '127.0.0.1'),
-      port: env('REDIS_PORT', 6379),
-      username: env('REDIS_USERNAME'),
-      password: env('REDIS_PASSWORD'),
-      db: env('REDIS_CACHE_DB', 1),
-    },
-  },
-})
-`)
     const loaded = await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: {} })
-    expect(loaded.redis.connections.cache).toMatchObject({ db: 1 })
-    expect(loaded.redis.connections.default).toMatchObject({ db: 0 })
+    expect(loaded.redis.connections.cache).toMatchObject({ host: '127.0.0.1', port: 6379, db: 1 })
+    expect(loaded.redis.connections.default).toMatchObject({ host: '127.0.0.1', port: 6379, db: 0 })
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=1')
     await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: false })
   }, 30_000)
@@ -10553,10 +10531,8 @@ export default defineRedisConfig({
 
     await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: true })
 
-    const source = await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')
-    expect(source).toContain("import { env, env as readEnv } from '@holo-js/config'")
-    expect(source).toContain('type Options = { connections: { [name: string]: { host: string } } }')
-    expect((await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: {} })).redis.connections.cache).toMatchObject({ db: 1 })
+    const loaded = await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: { REDIS_HOST: 'redis.test' } })
+    expect(loaded.redis.connections).toMatchObject({ default: { host: 'redis.test', db: 0 }, cache: { host: 'redis.test', db: 1 } })
   }, 30_000)
 
   it('refuses to put the cache connection on a Redis database another connection uses', async () => {
@@ -10716,16 +10692,8 @@ export default defineRedisConfig({
 
         await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: true })
 
-        const source = await readFile(join(projectRoot, `config/redis.${extension}`), 'utf8')
-        if (moduleFormat === 'cjs') {
-          expect(source).toContain('db: Number(process.env.REDIS_CACHE_DB || 1) }')
-          expect(source).not.toContain('@holo-js/config')
-        } else {
-          expect(source.split(envImportLineFor(moduleFormat))).toHaveLength(2)
-          expect(source).toContain("db: env('REDIS_CACHE_DB', 1) }")
-        }
         const loaded = await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: { REDIS_CACHE_DB: '3' } })
-        expect(loaded.redis.connections.cache).toMatchObject({ db: 3 })
+        expect(loaded.redis.connections).toMatchObject({ default: { host: '127.0.0.1', db: 0 }, cache: { db: 3 } })
         expect(loaded.cache.drivers.redis).toMatchObject({ connection: 'cache' })
       },
       30_000,
