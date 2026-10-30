@@ -6,10 +6,12 @@ import {
 import type { MigrationDefinition, SeederDefinition } from '@holo-js/db'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
+  createProjectModuleBatch,
   loadAuthorizationDiscoveryModule,
   loadBroadcastDiscoveryModule,
   loadEventsDiscoveryModule,
   loadQueueDiscoveryModule,
+  type ProjectModuleBatch,
 } from './runtime'
 import {
   type CliModelReference,
@@ -115,6 +117,20 @@ export async function prepareProjectDiscovery(
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
   prepareFramework = true,
 ): Promise<GeneratedProjectRegistry> {
+  const modules = createProjectModuleBatch(projectRoot)
+  try {
+    return await discoverProjectRegistry(projectRoot, config, prepareFramework, modules)
+  } finally {
+    await modules.cleanup()
+  }
+}
+
+async function discoverProjectRegistry(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+  prepareFramework: boolean,
+  modules: ProjectModuleBatch,
+): Promise<GeneratedProjectRegistry> {
   const loadedConfig = await loadConfigWithNormalizers(projectRoot, {
     processEnv: process.env,
   })
@@ -133,10 +149,6 @@ export async function prepareProjectDiscovery(
   const abilitiesRoot = resolve(projectRoot, config.paths.authorizationAbilities ?? 'server/abilities')
   const generatedSchemaPath = resolve(projectRoot, config.paths.generatedSchema)
 
-  if (await pathExists(generatedSchemaPath)) {
-    await importProjectModule(projectRoot, generatedSchemaPath)
-  }
-
   const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
     collectFiles(migrationsRoot),
@@ -152,12 +164,30 @@ export async function prepareProjectDiscovery(
     collectFiles(policiesRoot),
     collectFiles(abilitiesRoot),
   ])
+  const hasGeneratedSchema = await pathExists(generatedSchemaPath)
+  await modules.bundle([
+    ...(hasGeneratedSchema ? [generatedSchemaPath] : []),
+    ...modelFiles,
+    ...migrationFiles,
+    ...seederFiles,
+    ...commandFiles,
+    ...jobFiles,
+    ...eventFiles,
+    ...listenerFiles,
+    ...broadcastFiles,
+    ...channelFiles,
+    ...policyFiles,
+    ...abilityFiles,
+  ])
+  if (hasGeneratedSchema) {
+    await modules.import(generatedSchemaPath)
+  }
 
   const models: GeneratedModelRegistryEntry[] = []
   for (const filePath of modelFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     try {
-      const moduleValue = await importProjectModule(projectRoot, filePath)
+      const moduleValue = await modules.import(filePath)
       const exportedModel = resolveNamedExportEntry(moduleValue, isCliModelReference)
       if (!exportedModel) {
         if (isInactiveGeneratedModelModule(moduleValue)) {
@@ -185,7 +215,7 @@ export async function prepareProjectDiscovery(
   const migrations: GeneratedMigrationRegistryEntry[] = []
   for (const filePath of migrationFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await importProjectModule(projectRoot, filePath)
+    const moduleValue = await modules.import(filePath)
     const migration = resolveNamedExport(moduleValue, isMigrationDefinition)
     if (!migration) {
       throw new Error(`Discovered migration "${relativePath}" does not export a Holo migration.`)
@@ -202,7 +232,7 @@ export async function prepareProjectDiscovery(
   for (const filePath of seederFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     try {
-      const moduleValue = await importProjectModule(projectRoot, filePath)
+      const moduleValue = await modules.import(filePath)
       const seeder = resolveNamedExport(moduleValue, isSeederDefinition)
       if (!seeder) {
         throw new Error(`Discovered seeder "${relativePath}" does not export a Holo seeder.`)
@@ -223,7 +253,7 @@ export async function prepareProjectDiscovery(
   const commands: GeneratedCommandRegistryEntry[] = []
   for (const filePath of commandFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await importProjectModule(projectRoot, filePath)
+    const moduleValue = await modules.import(filePath)
     const command = resolveCommandExport(moduleValue)
     if (!command) {
       throw new Error(`Discovered command "${relativePath}" does not export a Holo command.`)
@@ -247,7 +277,7 @@ export async function prepareProjectDiscovery(
     : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await importProjectModule(projectRoot, filePath)
+    const moduleValue = await modules.import(filePath)
     const exportedJob = resolveNamedExportEntry(
       moduleValue,
       (value): value is unknown => queueDiscovery!.isQueueJobDefinition(value),
@@ -278,7 +308,7 @@ export async function prepareProjectDiscovery(
   for (const filePath of eventFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const exportedEvent = resolveNamedExportEntry(
-      await importProjectModule(projectRoot, filePath),
+      await modules.import(filePath),
       (value): value is object => hasEventDefinitionMarker(value),
     )
     if (!exportedEvent || !eventsDiscovery!.isEventDefinition(exportedEvent.value)) {
@@ -302,7 +332,7 @@ export async function prepareProjectDiscovery(
   for (const filePath of listenerFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const exportedListener = resolveNamedExportEntry(
-      await importProjectModule(projectRoot, filePath),
+      await modules.import(filePath),
       (value): value is object => hasListenerDefinitionMarker(value),
     )
     if (!exportedListener || !eventsDiscovery!.isListenerDefinition(exportedListener.value)) {
@@ -355,7 +385,7 @@ export async function prepareProjectDiscovery(
   for (const filePath of broadcastFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const exportedBroadcast = resolveBroadcastExportEntry(
-      await importProjectModule(projectRoot, filePath),
+      await modules.import(filePath),
       broadcastDiscovery!,
     )
     if (!exportedBroadcast) {
@@ -380,7 +410,7 @@ export async function prepareProjectDiscovery(
   for (const filePath of channelFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const exportedChannel = resolveNamedExportEntry(
-      await importProjectModule(projectRoot, filePath),
+      await modules.import(filePath),
       (value): value is object => broadcastDiscovery!.isChannelDefinition(value),
     )
     if (!exportedChannel) {
@@ -423,7 +453,7 @@ export async function prepareProjectDiscovery(
 
     try {
       const exportedPolicy = resolveNamedExportEntry(
-        await importProjectModule(projectRoot, filePath),
+        await modules.import(filePath),
         (value): value is object => authorizationDiscovery!.isAuthorizationPolicyDefinition(value),
       )
       if (!exportedPolicy) {
@@ -478,7 +508,7 @@ export async function prepareProjectDiscovery(
 
     try {
       const exportedAbility = resolveNamedExportEntry(
-        await importProjectModule(projectRoot, filePath),
+        await modules.import(filePath),
         (value): value is object => authorizationDiscovery!.isAuthorizationAbilityDefinition(value),
       )
       if (!exportedAbility) {

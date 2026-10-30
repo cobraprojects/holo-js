@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, scrypt as nodeScrypt, scryptSync } from 'node:
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { beforeEach, describe, expect, it as vitestIt, onTestFinished, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 import { createNativeSessionStore } from './support/native-session'
 import { createNativeAuthPersistence } from './support/native-persistence'
@@ -60,6 +60,7 @@ import {
 } from '../src/runtime/failureFields'
 import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from '../src/runtime/sessionFailures'
 import { scryptPasswordHasherInternals } from '../src/runtime/scryptPasswordHasher'
+import { AUTH_TIMEBOX_MILLISECONDS } from '../src/runtime/timebox'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
 
 const REHASH_PASSWORD_IF_UNCHANGED = Symbol.for('holo.auth.rehashPasswordIfUnchanged')
@@ -192,6 +193,12 @@ type UserRecord = {
   email_verified_at?: Date | null
   remember_token?: string | null
 }
+
+const LOADED_SCRYPT_ROUND_MILLISECONDS = 1_200
+const MAX_SERIAL_SCRYPT_ROUNDS = 8
+const MAX_TIMEBOXED_CALLS = 4
+const LOAD_HEADROOM = 2
+const TIMEBOXED_TEST_TIMEOUT = LOAD_HEADROOM * (MAX_SERIAL_SCRYPT_ROUNDS * LOADED_SCRYPT_ROUND_MILLISECONDS + MAX_TIMEBOXED_CALLS * AUTH_TIMEBOX_MILLISECONDS)
 
 const resetBrokerConfig = { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 60 } } } as const
 
@@ -443,7 +450,23 @@ function reconfigureAuthRuntimeWithSession(
   })
 }
 
-afterEach(() => {
+let runningTest: Promise<void> = Promise.resolve()
+
+function trackRunningTest<TArgs extends unknown[]>(body: (...args: TArgs) => void | Promise<void>) {
+  return (...args: TArgs): Promise<void> => {
+    const run = Promise.resolve(body(...args))
+    runningTest = run.catch(() => undefined)
+    return run
+  }
+}
+
+const it = Object.assign(
+  (name: string, body: () => void | Promise<void>, timeout?: number) => vitestIt(name, trackRunningTest(body), timeout),
+  { each: <TCase>(cases: readonly TCase[]) => (name: string, body: (testCase: TCase) => void | Promise<void>, timeout?: number) => vitestIt.each([...cases])(name, trackRunningTest(body), timeout) },
+)
+
+beforeEach(async () => {
+  await runningTest
   validationInternals.setValidationExceptionThrower(undefined)
   resetAuthRuntime()
   resetSessionRuntime()
@@ -1755,7 +1778,7 @@ describe('@holo-js/auth package runtime', () => {
     } finally {
       scryptPasswordHasherInternals.resetScrypt()
     }
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('verifies a digest made at the previous cost, then stores the hardened digest on login', async () => {
     const runtime = await configureRuntime()
@@ -2907,7 +2930,7 @@ describe('@holo-js/auth package runtime', () => {
     await runtime.persistence.adapter.execute('DROP TRIGGER reject_auth_user_update')
     await expect(verifyEmail(verificationToken.plainTextToken)).resolves.toMatchObject({ email: 'ava@example.com' })
     await expect(resetPassword({ token: resetToken.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('does not verify email when verification token claiming fails', async () => {
     const runtime = await configureRuntime()
@@ -2965,7 +2988,7 @@ describe('@holo-js/auth package runtime', () => {
         (await runtime.usersProvider.findById(1))?.password ?? '',
       ),
     ).resolves.toBe(false)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('allows exactly one concurrent password reset', async () => {
     const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
@@ -2975,7 +2998,7 @@ describe('@holo-js/auth package runtime', () => {
     const results = await Promise.allSettled([resetPassword(input), resetPassword(input)])
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it.each(['provider failure', 'sibling deletion failure'] as const)('rolls back the native reset claim and password changes after %s', async (failure) => {
     const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
@@ -2994,7 +3017,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(resetPassword(input)).resolves.toMatchObject({ email: 'ava@example.com' })
     expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).toBeNull()
     expect(await runtime.passwordResetTokenStore.findById('sibling')).toBeNull()
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('resets different native users concurrently without exchanging passwords or tokens', async () => {
     const runtime = await configureRuntime({ authConfig: { passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } } })
@@ -3010,7 +3033,7 @@ describe('@holo-js/auth package runtime', () => {
       expect(await verifyPassword(passwords[1 - index]!, persisted?.password ?? '')).toBe(false)
       expect(await runtime.passwordResetTokenStore.findById(delivery.tokenId)).toBeNull()
     }
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('pads reset-link requests to the same minimum time for unknown and known accounts', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3026,7 +3049,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(unknownAccount).toBeGreaterThanOrEqual(190)
     expect(knownAccount).toBeGreaterThanOrEqual(190)
     expect(runtime.deliveries).toHaveLength(1)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('cycles the remember token and signs out other browsers on password reset', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3052,7 +3075,7 @@ describe('@holo-js/auth package runtime', () => {
     otherBrowserContext.setSessionId('web', otherBrowser.sessionId)
     configureAuthRuntime({ ...authRuntimeInternals.getRuntimeBindings(), providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserContext })
     await expect(check()).resolves.toBe(false)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refuses a reset before changing anything when the resetting browser cannot receive its rotated session cookie', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3090,7 +3113,7 @@ describe('@holo-js/auth package runtime', () => {
     retry.setSessionId('web', session.sessionId)
     configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
     await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refuses a reset before changing anything when the resetting browser cannot write its remember cookie', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3132,7 +3155,7 @@ describe('@holo-js/auth package runtime', () => {
     retry.setRememberToken?.('web', recaller)
     configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
     await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refuses a reset before changing anything when the session runtime cannot rotate a retained session', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3171,7 +3194,7 @@ describe('@holo-js/auth package runtime', () => {
     retry.setSessionId('web', session.sessionId)
     configureAuthRuntime({ ...bindings, providers, passwordResetTokens: nonTransactionalTokens, context: retry })
     await expect(resetPassword({ token, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('resets a password for a user without a remember token when the adapter has no remember-token setter', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3183,7 +3206,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
     const reset = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(await verifyPassword('new-secret', reset?.password ?? '')).toBe(true)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refuses a reset before changing anything when the user has a remember token the adapter cannot rotate', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3200,7 +3223,7 @@ describe('@holo-js/auth package runtime', () => {
     const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
     expect(await runtime.passwordResetTokenStore.findById(tokenId)).not.toBeNull()
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('resets a password from a browser whose session belongs to another user, without needing that session to write cookies', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3219,7 +3242,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
     const reset = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(await verifyPassword('new-secret', reset?.password ?? '')).toBe(true)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('checks remember-cookie scope only for the guard that retains the reset browser session', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3244,7 +3267,7 @@ describe('@holo-js/auth package runtime', () => {
     unscoped.setRememberToken?.('admin', adminRecaller)
     configureAuthRuntime({ ...bindings, providers, context: unscoped })
     await expect(resetPassword({ token: runtime.deliveries[0]!.tokenValue, password: 'new-secret', passwordConfirmation: 'new-secret' })).resolves.toMatchObject({ email: 'ava@example.com' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refuses a reset before a legacy token store consumes the token when the user has a remember token the adapter cannot rotate', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3269,7 +3292,7 @@ describe('@holo-js/auth package runtime', () => {
     const unchanged = await runtime.usersProvider.findByCredentials({ email: 'ava@example.com' })
     expect(await verifyPassword('secret-secret', unchanged?.password ?? '')).toBe(true)
     expect(await tokenStore.findById(tokenId)).not.toBeNull()
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('rejects a session scanned earlier in the same request once a reset has revoked it', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3288,7 +3311,7 @@ describe('@holo-js/auth package runtime', () => {
 
     request.setSessionId('web', session.sessionId)
     await expect(check()).resolves.toBe(false)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('keeps the browser that resets the password signed in on a rotated session', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3319,7 +3342,7 @@ describe('@holo-js/auth package runtime', () => {
     otherBrowserNextRequest.setSessionId('web', otherSession.sessionId)
     configureAuthRuntime({ ...bindings, providers: { users: runtime.usersProvider, admins: runtime.adminsProvider }, context: otherBrowserNextRequest })
     await expect(check()).resolves.toBe(false)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('rotates the remember token on password reset even when no remember-me lifetime is configured', async () => {
     const runtime = await configurePasswordResetRuntime()
@@ -3342,7 +3365,7 @@ describe('@holo-js/auth package runtime', () => {
     const reset = await runtime.usersProvider.findById(created!.id as number)
     expect(reset?.remember_token).toEqual(expect.any(String))
     expect(reset?.remember_token).not.toBe('remember-before-reset')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('creates, invalidates, and consumes password reset tokens', async () => {
     const runtime = await configureRuntime({
@@ -3422,7 +3445,7 @@ describe('@holo-js/auth package runtime', () => {
       password: 'another-secret',
       passwordConfirmation: 'another-secret',
     }), 'password_reset_token_expired')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('refreshes the session idle timeout when resolving a session-backed user', async () => {
     const runtime = await configureRuntime()
@@ -3550,7 +3573,7 @@ describe('@holo-js/auth package runtime', () => {
     const remainingRecords = (await Promise.all(runtime.deliveries.filter(delivery => delivery.type === 'password-reset').map(delivery => runtime.passwordResetTokenStore.findById(delivery.tokenId)))).filter(record => record !== null)
     expect(remainingRecords).toHaveLength(1)
     expect(remainingRecords[0]?.table).toBe('admin_password_reset_tokens')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('honors password reset throttle windows without rotating the active token', async () => {
     const runtime = await configureRuntime({
@@ -3583,7 +3606,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries).toHaveLength(1)
     expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
     expect(await runtime.passwordResetTokenStore.findById(firstDelivery.tokenId)).toEqual(firstRecord)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('keeps native shared throttling active after an existing token is removed', async () => {
     await createNativeAuthRateLimitStore()
@@ -3593,7 +3616,7 @@ describe('@holo-js/auth package runtime', () => {
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
     expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('releases native throttle reservations after a database insert fails', async () => {
     await createNativeAuthRateLimitStore()
@@ -3604,7 +3627,7 @@ describe('@holo-js/auth package runtime', () => {
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
     expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('allows a newly registered user to request a reset after unknown-email probes', async () => {
     await createNativeAuthRateLimitStore()
@@ -3615,7 +3638,7 @@ describe('@holo-js/auth package runtime', () => {
     await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: await hashPassword('secret-secret') })
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('uses persisted token throttling when no security store is configured', async () => {
     resetSecurityRuntime()
@@ -3626,7 +3649,7 @@ describe('@holo-js/auth package runtime', () => {
     await runtime.passwordResetTokenStore.delete(runtime.deliveries[0]!.tokenId)
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(2)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('isolates real throttle buckets for apps sharing a native store', async () => {
     const store = await createNativeAuthRateLimitStore('app-a')
@@ -3638,7 +3661,7 @@ describe('@holo-js/auth package runtime', () => {
     configureSecurityRuntime({ config: {}, csrfSigningKey: 'app-b', rateLimitStore: store })
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(2)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('keeps a native throttle active without querying an unavailable provider table', async () => {
     await createNativeAuthRateLimitStore()
@@ -3649,7 +3672,7 @@ describe('@holo-js/auth package runtime', () => {
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(1)
     expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(0)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('deletes freshly created password reset tokens when delivery fails', async () => {
     const runtime = await configureRuntime({
@@ -3686,7 +3709,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
     expect(runtime.deliveries).toHaveLength(1)
     expect(await runtime.persistence.db.table('password_reset_tokens').count()).toBe(1)
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
   it('preserves the original delivery error when password reset cleanup fails', async () => {
     const runtime = await configureRuntime({
       authConfig: {
@@ -3720,7 +3743,7 @@ describe('@holo-js/auth package runtime', () => {
 
     bindings.delivery.sendPasswordReset = originalSendPasswordReset
     await runtime.persistence.adapter.execute('DROP TRIGGER reject_reset_cleanup')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('returns cached users from user() and refetches with refreshUser()', async () => {
     const runtime = await configureRuntime()
@@ -5291,7 +5314,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(warn.mock.calls[0]?.[0]).not.toContain(verifyToken.plainTextToken)
     expect(warn.mock.calls[1]?.[0]).toContain(resetRecord?.id ?? '')
     expect(warn.mock.calls[1]?.[0]).not.toContain(resetRecord?.tokenHash ?? '')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('covers runtime helper branches for cookies, tokens, payloads, and async context', async () => {
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
@@ -5584,7 +5607,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(tokens.authenticate(`${orphanId}.secret`)).rejects.toThrow(
       'Auth provider "missing" is not configured',
     )
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('covers trusted-login compatibility and provider marker edge cases', async () => {
     const runtime = await configureRuntime()
@@ -5797,7 +5820,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(tokens.create(1 as never, {
       name: 'primitive-user',
     })).rejects.toThrow('Unable to resolve a provider for the given user.')
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('requires serialize for provider records when no public auth user type is registered', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-auth-provider-contract-'))
@@ -6359,7 +6382,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(requestPasswordReset({
       email: 'missing@app.test',
     }, { broker: 'missing' })).rejects.toMatchObject({ code: 'password_broker_not_configured' })
-  })
+  }, TIMEBOXED_TEST_TIMEOUT)
 
   it('maps token-guard credential and registration failures', async () => {
     await configureRuntime()
