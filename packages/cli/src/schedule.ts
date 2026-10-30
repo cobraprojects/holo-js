@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { relative, resolve } from 'node:path'
 import type * as ScheduleModule from '@holo-js/schedule'
 import type { ScheduleDefinition, ScheduledTaskReport } from '@holo-js/schedule'
-import { reportError } from '@holo-js/kernel/error-reporting'
+import { reportErrorAndWait } from '@holo-js/kernel/error-reporting'
 import { writeLine } from './io'
 import {
   loadProjectConfig,
@@ -135,7 +135,6 @@ function writeTaskReport(io: IoStreams, report: ScheduledTaskReport): void {
     case 'failed':
       writeLine(io.stdout, `[schedule] Running [${report.summary}] FAIL`)
       writeLine(io.stderr, report.error?.message ?? 'Scheduled task failed.')
-      reportError(report.error, { capability: 'schedule', operation: 'task' })
       return
     case 'skipped-overlapping':
       writeLine(io.stdout, `[schedule] Skipping [${report.summary}] because its previous run is still in progress.`)
@@ -165,6 +164,7 @@ export async function runScheduleRunCommand(
   try {
     const cliEntrypoint = await (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
     const supervisor = superviseChildren(io)
+    const deliveries: Promise<void>[] = []
     try {
       const spawnProcess = dependencies.spawnProcess ?? spawn
       const reports = await environment.scheduleModule.runDueScheduledTasks(environment.schedule, {
@@ -179,10 +179,14 @@ export async function runScheduleRunCommand(
           })
           return await supervisor.track(child) ?? 1
         },
-        onTaskFinished: report => writeTaskReport(io, report),
+        onTaskFinished: (report) => {
+          writeTaskReport(io, report)
+          if (report.outcome === 'failed') deliveries.push(reportErrorAndWait(report.error, { capability: 'schedule', operation: 'task' }))
+        },
       })
       if (reports.length === 0) writeLine(io.stdout, NO_DUE_TASKS_MESSAGE)
     } finally {
+      await Promise.all(deliveries)
       supervisor.dispose()
       await cliEntrypoint.cleanup()
     }

@@ -34,22 +34,23 @@ function isUnreported(error: unknown, exceptions: HoloExceptionsConfig): boolean
 
 export type HoloErrorReporter = (error: unknown, context: HoloErrorReportContext) => void
 
-function deliver(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
-  if (exceptions && isUnreported(error, exceptions)) return
+function deliver(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): Promise<void> {
+  if (exceptions && isUnreported(error, exceptions)) return Promise.resolve()
   if (!exceptions?.report) {
     console.error(describeContext(context), error)
-    return
+    return Promise.resolve()
   }
 
-  void Promise.resolve(exceptions.report(error, context))
+  return Promise.resolve(exceptions.report(error, context))
     .catch(reporterError => logReporterFailure(error, context, reporterError))
 }
 
-function reportWith(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): void {
+function reportWith(exceptions: HoloExceptionsConfig | undefined, error: unknown, context: HoloErrorReportContext): Promise<void> {
   try {
-    deliver(exceptions, error, context)
+    return deliver(exceptions, error, context)
   } catch (reporterError) {
     logReporterFailure(error, context, reporterError)
+    return Promise.resolve()
   }
 }
 
@@ -61,12 +62,18 @@ function configure(exceptions: HoloExceptionsConfig | undefined): HoloExceptions
 }
 
 export function reportError(error: unknown, context: HoloErrorReportContext): void {
-  reportWith(errorReportingState().exceptions, error, context)
+  void reportWith(errorReportingState().exceptions, error, context)
+}
+
+export function reportErrorAndWait(error: unknown, context: HoloErrorReportContext): Promise<void> {
+  return reportWith(errorReportingState().exceptions, error, context)
 }
 
 export function captureErrorReporter(): HoloErrorReporter {
   const exceptions = errorReportingState().exceptions
-  return (error, context) => reportWith(exceptions, error, context)
+  return (error, context) => {
+    void reportWith(exceptions, error, context)
+  }
 }
 
 export const errorReportingInternals = {

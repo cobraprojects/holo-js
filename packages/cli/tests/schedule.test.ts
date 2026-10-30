@@ -50,7 +50,8 @@ export default defineAppConfig({
   env: 'production',
   timezone: 'Africa/Cairo',
   exceptions: {
-    report(error, { capability, operation }) {
+    async report(error, { capability, operation }) {
+      await new Promise(resolve => setTimeout(resolve, 200))
       appendFileSync(${JSON.stringify(join(root, 'reports.log'))}, capability + ':' + operation + ':' + error.message + '\\n')
     },
   },

@@ -176,6 +176,8 @@ describe('next due dates', () => {
       ['0 0 15W * *', '2026-08-01T00:00:00Z', '2026-08-14T00:00:00.000Z'],
       ['0 0 1W * *', '2026-07-31T12:00:00Z', '2026-08-03T00:00:00.000Z'],
       ['0 9 31W * *', '2026-10-31T23:00:00Z', '2026-11-01T09:00:00.000Z'],
+      ['0 9 LW * *', '2026-11-01T00:00:00Z', '2026-11-02T09:00:00.000Z'],
+      ['0 9 LW * *', '2026-11-03T00:00:00Z', '2026-12-30T09:00:00.000Z'],
       ['0 0 * * 5L', '2026-10-01T00:00:00Z', '2026-10-30T00:00:00.000Z'],
       ['0 0 * * 1#2', '2026-11-01T00:00:00Z', '2026-11-09T00:00:00.000Z'],
       ['0 0 * * MON#1', '2026-11-01T00:00:00Z', '2026-11-02T00:00:00.000Z'],
@@ -237,6 +239,24 @@ describe('next due dates', () => {
       const [task] = await listScheduledTasks(definition, { now: new Date(now), timezone: 'UTC' })
       expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
     }
+  })
+
+  it('reads names in stepped ranges as Laravel does, which matches only their numeric prefix', async () => {
+    const cases = [
+      ['0 9 * * MON-FRI/2', '2026-11-01T10:00:00Z', '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * SUN-SAT/2', '2026-11-01T10:00:00Z', '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 1-5/2', '2026-11-01T10:00:00Z', '2026-11-02T09:00:00.000Z'],
+    ] as const
+
+    for (const [expression, now, expected] of cases) {
+      const definition = defineSchedule(schedule => schedule.call(() => {}).cron(expression))
+      const [task] = await listScheduledTasks(definition, { now: new Date(now), timezone: 'UTC' })
+      expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
+    }
+    await expect(listScheduledTasks(
+      defineSchedule(schedule => schedule.call(() => {}).cron('0 9 * JAN-JUN/2 *')),
+      { now: MIDNIGHT_UTC, timezone: 'UTC' },
+    )).rejects.toThrow(CronExpressionError)
   })
 
   it('reports an expression that never matches', async () => {

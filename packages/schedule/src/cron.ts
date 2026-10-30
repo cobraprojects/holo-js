@@ -74,6 +74,10 @@ function parseValue(token: string, spec: FieldSpec, expression: string): number 
   return value
 }
 
+function leadingInteger(token: string): number {
+  return Number(/^\d+/.exec(token)?.[0] ?? 0)
+}
+
 function parsePart(part: string, spec: FieldSpec, expression: string): number[] {
   const [range = '', stepToken, ...extra] = part.split('/')
   if (extra.length > 0 || range === '') throw new CronExpressionError(expression, `"${part}" is not a valid ${spec.label}.`)
@@ -93,6 +97,13 @@ function parsePart(part: string, spec: FieldSpec, expression: string): number[] 
     if (rest.length > 0) throw new CronExpressionError(expression, `"${part}" is not a valid ${spec.label}.`)
     start = parseValue(startToken, spec, expression)
     end = endToken === undefined ? (stepToken === undefined ? start : spec.max) : parseValue(endToken, spec, expression)
+    if (stepToken !== undefined) {
+      start = leadingInteger(startToken)
+      end = leadingInteger(endToken ?? startToken)
+      if (start < spec.min || end > spec.max) {
+        throw new CronExpressionError(expression, `"${part}" reads as ${start}-${end}, outside ${spec.min}-${spec.max}; use numbers in stepped ranges.`)
+      }
+    }
     if (end < start) throw new CronExpressionError(expression, `"${part}" is a descending range.`)
   }
 
@@ -130,7 +141,8 @@ function parseDayOfMonthRule(part: string, source: string, spec: FieldSpec, expr
   if (!special) return undefined
   if (source.includes(',')) throw new CronExpressionError(expression, `"${part}" can't be combined with other days of the month.`)
   if (part === 'L') return clock => clock.day === daysInMonth(clock.year, clock.month)
-  const target = parseValue(part.slice(0, -1), spec, expression)
+  const prefix = part.slice(0, -1)
+  const target = prefix === 'L' ? 0 : parseValue(prefix, spec, expression)
   return clock => nearestWeekday(clock.year, clock.month, target) === clock.day
 }
 

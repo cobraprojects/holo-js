@@ -131,6 +131,12 @@ schedule.command('reports:send').hourly().weekdays()     // 0 * * * 1-5
 | `5L` | Day of week | The last Friday of the month |
 | `1#2` | Day of week | The second Monday of the month |
 
+Holo reads cron expressions with the same rules as the library Laravel uses, including its quirks:
+
+- A named `SUN` at the end of a day-of-week range doesn't include Sunday: `FRI-SUN` runs on Friday and Saturday. Write `5-0` or `5-7` to include Sunday.
+- Names in a range with a step read as `0`: `MON-FRI/2` runs only on Sundays. Use numbers, such as `1-5/2`.
+- `LW` and a `W` day past the end of a month, such as `31W` in November, pick a day from the month before or after.
+
 When both the day-of-month and day-of-week fields are restricted, a day that matches either one is due. An invalid expression, time, or timezone throws when `schedule:run` or `schedule:list` reads the schedule.
 
 ## Timezones
@@ -181,7 +187,7 @@ Add one cron entry on the server that runs `schedule:run` every minute:
 * * * * * cd /path-to-your-app && npx holo schedule:run >> /dev/null 2>&1
 ```
 
-`schedule:run` checks every task once, runs the ones that are due one after another, and exits. A failing task is printed and sent to your app's [error reporter](/basics/errors#reporting-errors) with capability `schedule` and operation `task`, and the rest still run.
+`schedule:run` checks every task once, runs the ones that are due one after another, and exits. A failing task is printed and sent to your app's [error reporter](/basics/errors#reporting-errors) with capability `schedule` and operation `task`, and the rest still run. `schedule:run` waits for an `async` reporter to finish before it closes the app's connections.
 
 ### Without cron
 
