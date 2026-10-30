@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, scrypt as nodeScrypt, scryptSync } from 'node:
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
-import { afterEach, describe, expect, it as vitestIt, onTestFinished, vi } from 'vitest'
+import { beforeEach, describe, expect, it as vitestIt, onTestFinished, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, parseCookieHeader, resetSessionRuntime } from '../../session/src'
 import { createNativeSessionStore } from './support/native-session'
 import { createNativeAuthPersistence } from './support/native-persistence'
@@ -465,7 +465,7 @@ const it = Object.assign(
   { each: <TCase>(cases: readonly TCase[]) => (name: string, body: (testCase: TCase) => void | Promise<void>, timeout?: number) => vitestIt.each([...cases])(name, trackRunningTest(body), timeout) },
 )
 
-afterEach(async () => {
+beforeEach(async () => {
   await runningTest
   validationInternals.setValidationExceptionThrower(undefined)
   resetAuthRuntime()
