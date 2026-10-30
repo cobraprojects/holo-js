@@ -7,20 +7,23 @@ export interface ScheduleDefinition {
   readonly tasks: readonly ScheduledTask[]
 }
 
+const DOUBLE_QUOTE_ESCAPES = new Set(['$', '`', '"', '\\', '\n'])
+
 function tokenizeCommand(command: string): string[] {
   const tokens: string[] = []
   let token: string | undefined
   let quote: '"' | "'" | undefined
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index]!
+    const next = command[index + 1]
     if (quote === "'") {
       if (character === quote) quote = undefined
       else token += character
       continue
     }
-    if (character === '\\' && index + 1 < command.length && (quote === undefined || '"\\'.includes(command[index + 1]!))) {
+    if (character === '\\' && next !== undefined && (quote === undefined || DOUBLE_QUOTE_ESCAPES.has(next))) {
       index += 1
-      token = (token ?? '') + command[index]
+      if (next !== '\n') token = (token ?? '') + next
       continue
     }
     if (quote === '"') {

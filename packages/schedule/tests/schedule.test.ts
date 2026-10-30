@@ -102,13 +102,13 @@ describe('frequencies', () => {
     expect(await expressions(definition)).toEqual(['0 0 * * 1-5', '15 * * * *'])
   })
 
-  it('accepts a question mark only in one day field, as Laravel does', async () => {
+  it('accepts a question mark only as a whole day field and steps only over ranges, as Laravel does', async () => {
     const read = (expression: string) => listScheduledTasks(
       defineSchedule(schedule => schedule.call(() => {}).cron(expression)),
       { now: MIDNIGHT_UTC, timezone: 'UTC' },
     )
 
-    for (const expression of ['? * * * *', '0 ? * * *', '0 0 * ? *', '0 0 ? * ?']) {
+    for (const expression of ['? * * * *', '0 ? * * *', '0 0 * ? *', '0 0 ? * ?', '?/5 * * * *', '0 0 ?/2 * *', '0 0 * * ?,1', '5/10 * * * *']) {
       await expect(read(expression), expression).rejects.toThrow(CronExpressionError)
     }
     expect((await read('0 0 ? * 1'))[0]?.nextDueAt.toISOString()).toBe('2026-11-09T00:00:00.000Z')
@@ -195,6 +195,24 @@ describe('next due dates', () => {
     expect(task?.nextDueAt.toISOString()).toBe('2104-02-29T00:00:00.000Z')
   })
 
+  it('accepts day-of-week ranges that end or start at Sunday, as Laravel does', async () => {
+    const saturdayMorning = new Date('2026-11-07T10:00:00Z')
+    const sundayMorning = new Date('2026-11-08T10:00:00Z')
+    const cases = [
+      ['0 9 * * FRI-SUN', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 5-0', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 5-0', sundayMorning, '2026-11-13T09:00:00.000Z'],
+      ['0 9 * * 7-5', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 7-5', new Date('2026-11-06T10:00:00Z'), '2026-11-08T09:00:00.000Z'],
+    ] as const
+
+    for (const [expression, now, expected] of cases) {
+      const definition = defineSchedule(schedule => schedule.call(() => {}).cron(expression))
+      const [task] = await listScheduledTasks(definition, { now, timezone: 'UTC' })
+      expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
+    }
+  })
+
   it('reports an expression that never matches', async () => {
     const definition = defineSchedule(schedule => schedule.call(() => {}).cron('0 0 30 2 *'))
 
@@ -263,6 +281,21 @@ describe('running due tasks', () => {
     })
 
     expect(commands).toEqual([['backup:run', '--label=nightly backup', '--note=its fine', 'a b', 'say "hi"', '$HOME;rm']])
+  })
+
+  it('applies POSIX double-quote escapes and line continuations', async () => {
+    const commands: string[][] = []
+    const command = 'billing:charge --label="cost \\$10" "tick \\`" "keep \\x" a\\\nb "c\\\nd"'
+    const definition = defineSchedule(schedule => schedule.command(command).daily())
+
+    await runAt(definition, MIDNIGHT_UTC, {
+      async runCommand(argv) {
+        commands.push([...argv])
+        return 0
+      },
+    })
+
+    expect(commands).toEqual([['billing:charge', '--label=cost $10', 'tick `', 'keep \\x', 'ab', 'cd']])
   })
 
   it('reports a failing task and still runs the tasks after it', async () => {

@@ -81,13 +81,21 @@ function parsePart(part: string, spec: FieldSpec, expression: string): number[] 
     throw new CronExpressionError(expression, `"${part}" has an invalid step.`)
   }
 
+  if (stepToken !== undefined && range !== '*' && !range.includes('-')) {
+    throw new CronExpressionError(expression, `"${part}" steps over a single value; use a range such as "${range}-${spec.max}/${stepToken}".`)
+  }
+
   let start = spec.min
   let end = spec.max
-  if (range !== '*' && range !== '?') {
+  if (range !== '*') {
     const [startToken = '', endToken, ...rest] = range.split('-')
     if (rest.length > 0) throw new CronExpressionError(expression, `"${part}" is not a valid ${spec.label}.`)
     start = parseValue(startToken, spec, expression)
     end = endToken === undefined ? (stepToken === undefined ? start : spec.max) : parseValue(endToken, spec, expression)
+    if (spec.label === 'day of week' && endToken !== undefined) {
+      if (start === 7) start = 0
+      else if (end === 0) end = 7
+    }
     if (end < start) throw new CronExpressionError(expression, `"${part}" is a descending range.`)
   }
 
@@ -145,6 +153,7 @@ function parseRule(part: string, source: string, spec: FieldSpec, expression: st
 }
 
 function parseField(source: string, spec: FieldSpec, expression: string): CronField {
+  if (source === '?') return { values: new Set(parsePart('*', spec, expression)), rules: [], restricted: false }
   const values = new Set<number>()
   const rules: DayRule[] = []
   for (const part of source.split(',')) {
@@ -157,7 +166,7 @@ function parseField(source: string, spec: FieldSpec, expression: string): CronFi
       values.add(spec.label === 'day of week' && value === 7 ? 0 : value)
     }
   }
-  return { values, rules, restricted: source !== '*' && source !== '?' }
+  return { values, rules, restricted: source !== '*' }
 }
 
 export function normalizeCronExpression(expression: string): string {
