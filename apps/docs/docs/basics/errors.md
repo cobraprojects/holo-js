@@ -206,7 +206,7 @@ export default defineAppConfig({
 | `next` | `shutdown` (closing Holo's connections when the server stops) |
 | `nuxt` | `shutdown` (closing Holo's connections when the server stops) |
 
-`report` can be `async`. Holo doesn't wait for it, and a reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
+`report` can be `async`. Holo doesn't wait for it, except in `holo schedule:run`, which waits for the reports of failed tasks before it closes your app's connections. A reporter that throws or rejects never breaks the request or job. Holo writes the original error and the reporter's error to `console.error` instead.
 
 Errors that are instances of a class in `dontReport` are skipped, including subclasses.
 
