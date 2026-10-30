@@ -59,11 +59,40 @@ function declaredNames(file: ts.SourceFile): ReadonlySet<string> {
   }))
 }
 
+function typeNames(file: ts.SourceFile): ReadonlySet<string> {
+  return new Set(file.statements.flatMap((statement) => {
+    if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) return [statement.name.text]
+    const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined
+    if (!clause?.namedBindings || !ts.isNamedImports(clause.namedBindings)) return []
+    return clause.namedBindings.elements
+      .filter(element => element.isTypeOnly || clause.isTypeOnly)
+      .map(element => element.name.text)
+  }))
+}
+
+function boundNames(name: ts.BindingName): readonly ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name]
+  return name.elements.flatMap(element => ts.isOmittedExpression(element) ? [] : boundNames(element.name))
+}
+
+function exportLocal(name: ts.Identifier): ts.ExportDeclaration {
+  return ts.factory.createExportDeclaration(undefined, false, ts.factory.createNamedExports([
+    ts.factory.createExportSpecifier(false, undefined, name),
+  ]))
+}
+
 function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
   const localExports = localExportNames(file, wraps)
   const declared = declaredNames(file)
+  const types = typeNames(file)
   const wrapsLocal = (name: string) => localExports.has(name) && declared.has(name)
+  const leading: ts.Statement[] = []
   const trailing: ts.Statement[] = []
+  const exportWrapped = (name: ts.ModuleExportName, local: ts.Identifier) => {
+    const wrapped = ts.factory.createIdentifier(`__holoWrapped${name.text}`)
+    trailing.push(constant(wrapped, wrap(wrapper, local), false), ts.factory.createExportDeclaration(undefined, false,
+      ts.factory.createNamedExports([ts.factory.createExportSpecifier(false, wrapped, name)])))
+  }
   let changed = false
   const statements = file.statements.flatMap((statement): readonly ts.Statement[] => {
     if (ts.isFunctionDeclaration(statement) && statement.body) {
@@ -78,11 +107,8 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
         statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword && modifier.kind !== ts.SyntaxKind.DefaultKeyword),
         statement.asteriskToken, original, statement.typeParameters, statement.parameters, statement.type, statement.body)
       if (!name) return [declaration, ts.factory.createExportAssignment(undefined, false, wrap(wrapper, original))]
-      return [
-        declaration,
-        constant(name, wrap(wrapper, original), exported && !isDefault),
-        ...(isDefault ? [ts.factory.createExportAssignment(undefined, false, ts.factory.createIdentifier(name))] : []),
-      ]
+      leading.push(constant(name, wrap(wrapper, original), exported && !isDefault))
+      return [declaration, ...(isDefault ? [ts.factory.createExportAssignment(undefined, false, ts.factory.createIdentifier(name))] : [])]
     }
     if (ts.isExportAssignment(statement) && !statement.isExportEquals && wraps('default')
       && !(ts.isIdentifier(statement.expression) && declared.has(statement.expression.text))) {
@@ -91,7 +117,20 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     }
     if (ts.isVariableStatement(statement)) {
       const exported = hasModifier(statement, ts.SyntaxKind.ExportKeyword)
+      const destructured = exported && statement.declarationList.declarations.some(declaration => !ts.isIdentifier(declaration.name))
       const declarations = statement.declarationList.declarations.map(declaration => {
+        if (destructured && !ts.isIdentifier(declaration.name)) {
+          for (const name of boundNames(declaration.name)) {
+            if (!wraps(name.text)) {
+              trailing.push(exportLocal(name))
+              continue
+            }
+            changed = true
+            exportWrapped(name, name)
+          }
+          return declaration
+        }
+        if (destructured && ts.isIdentifier(declaration.name)) trailing.push(exportLocal(declaration.name))
         if (!ts.isIdentifier(declaration.name) || !declaration.initializer) return declaration
         const name = declaration.name.text
         if (!(exported ? wraps(name) : wrapsLocal(name))) return declaration
@@ -99,12 +138,13 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
         return ts.factory.updateVariableDeclaration(declaration, declaration.name, declaration.exclamationToken,
           declaration.type, wrap(wrapper, declaration.initializer))
       })
-      return [ts.factory.updateVariableStatement(statement, statement.modifiers,
+      const modifiers = destructured ? statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword) : statement.modifiers
+      return [ts.factory.updateVariableStatement(statement, modifiers,
         ts.factory.updateVariableDeclarationList(statement.declarationList, declarations))]
     }
     if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
       const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
-        && (statement.moduleSpecifier || !declared.has((element.propertyName ?? element.name).text)))
+        && (statement.moduleSpecifier || ![declared, types].some(names => names.has((element.propertyName ?? element.name).text))))
       if (handlers.length === 0) return [statement]
       changed = true
       const result: ts.Statement[] = []
@@ -118,9 +158,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
           ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
             ts.factory.createImportSpecifier(false, imported, local),
           ])), statement.moduleSpecifier))
-        const wrapped = ts.factory.createIdentifier(`__holoWrapped${handler.name.text}`)
-        trailing.push(constant(wrapped, wrap(wrapper, local), false), ts.factory.createExportDeclaration(undefined, false,
-          ts.factory.createNamedExports([ts.factory.createExportSpecifier(false, wrapped, handler.name)])))
+        exportWrapped(handler.name, local)
       }
       return result
     }
@@ -133,7 +171,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     ])), ts.factory.createStringLiteral('@holo-js/adapter-next/runtime'))
   const insertAt = prologueEnd(statements)
   return ts.createPrinter().printFile(ts.factory.updateSourceFile(file,
-    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...trailing]))
+    [...statements.slice(0, insertAt), runtimeImport, ...leading, ...statements.slice(insertAt), ...trailing]))
 }
 
 function parse(source: string, filename: string): ts.SourceFile {

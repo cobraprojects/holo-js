@@ -25,7 +25,11 @@ describe('Next server action loader', () => {
     const source = [
       '// actions',
       '\'use server\'',
-      'export { later, rename as alias }',
+      'export { later, rename as alias, type Payload, Result }',
+      'export const early = save',
+      'interface Result { readonly ok: boolean }',
+      'type Payload = { readonly value: string }',
+      'export const { pick } = { pick: async () => \'picked\' }',
       'export async function save(value: string) { return `saved ${value}` }',
       'export const remove = async () => \'removed\'',
       'async function rename() { return \'renamed\' }',
@@ -39,11 +43,13 @@ describe('Next server action loader', () => {
     const compiled = serverActionLoader.call({ resourcePath: 'actions.ts' }, source)
 
     expect(compiled.trimStart().startsWith('// actions\n\'use server\'')).toBe(true)
-    expect(await Promise.all(['save', 'remove', 'alias', 'later', 'shared', 'default'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
+    expect(Object.keys(module).sort()).toEqual(['alias', 'current', 'default', 'early', 'later', 'pick', 'remove', 'save', 'shared'])
+    expect(await Promise.all(['save', 'remove', 'alias', 'later', 'pick', 'shared', 'default'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
       { wrapped: 'saved undefined' },
       { wrapped: 'removed' },
       { wrapped: 'renamed' },
       { wrapped: 'later' },
+      { wrapped: 'picked' },
       { wrapped: 'shared' },
       { wrapped: { wrapped: 'saved default' } },
     ])

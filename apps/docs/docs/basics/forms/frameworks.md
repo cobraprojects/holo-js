@@ -87,13 +87,15 @@ The submitter's `formData` is built from the form element, so inputs you don't b
 Holo wraps every export of a `'use server'` file. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`. Nothing is logged, because these are input mistakes, not server errors. This also applies to actions you call without `useForm()`, for example with React's `useActionState`:
 
 ```ts
-const result = await createPostAction(formData)
-if (result?.ok === false) {
-  console.log(result.errors)
+import { serializeValidationException } from '@holo-js/validation'
+
+const failure = serializeValidationException(await createPostAction(formData))
+if (failure) {
+  console.log(failure.status, failure.errors)
 }
 ```
 
-The action's TypeScript return type doesn't include this payload, so check `ok === false` yourself when you call the action directly.
+The action's TypeScript return type doesn't include this payload, so read it with `serializeValidationException()`, which accepts any value and returns the typed payload or `undefined`.
 
 Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, and form posts sent without JavaScript.
 
