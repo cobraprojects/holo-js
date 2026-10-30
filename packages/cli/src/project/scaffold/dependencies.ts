@@ -42,7 +42,7 @@ import {
 } from '../runtime'
 import { writeTextFile } from '../atomic-file'
 import { loadGeneratedProjectRegistry } from '../registry'
-import { isWorkspaceDependencyVersion, resolveManagedHoloPackageVersion } from '../dependency-versions'
+import { isWorkspaceDependencyVersion, resolveHoloVersionPrefix, resolveManagedHoloPackageVersion } from '../dependency-versions'
 import { resolveWorkspacePackageNames } from '../workspaces'
 import type { LoadedConfigWithCache } from './types'
 import { loadConfigWithNormalizers } from '../load-config'
@@ -73,6 +73,7 @@ function resolveManagedPackageVersion(
     currentPackageVersion,
     HOLO_PACKAGE_VERSION,
     workspacePackageNames,
+    resolveHoloVersionPrefix(dependencies, devDependencies),
   )
 }
 

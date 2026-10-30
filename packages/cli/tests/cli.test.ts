@@ -10475,6 +10475,27 @@ export default defineRedisConfig({
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'cache\'')
   }, 30_000)
 
+  it('adds cache packages as exact versions to a project that pins Holo exactly', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: { '@holo-js/cli': HOLO_PACKAGE_VERSION, '@holo-js/core': HOLO_PACKAGE_VERSION, '@holo-js/db': '0.0.1', 'next': '^16.4.0' },
+    }, null, 2))
+
+    await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })
+
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toEqual({
+      '@holo-js/cache': HOLO_PACKAGE_VERSION,
+      '@holo-js/cache-redis': HOLO_PACKAGE_VERSION,
+      '@holo-js/cli': HOLO_PACKAGE_VERSION,
+      '@holo-js/core': HOLO_PACKAGE_VERSION,
+      '@holo-js/db': '0.0.1',
+      'next': '^16.4.0',
+    })
+  }, 30_000)
+
   describe('redis cache connection check', () => {
     const redisConfigFormats = [
       { extension: 'ts', moduleFormat: 'esm' },

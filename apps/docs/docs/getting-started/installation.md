@@ -130,6 +130,8 @@ The database layer is always installed. Add these packages when your app needs t
 
 Use `holo install` to add a feature later. It updates `package.json`, writes the config files and folders, installs dependencies, and refreshes generated files.
 
+New Holo packages follow the way your `package.json` already lists Holo: exact versions such as `"0.4.4"` if every `@holo-js/*` dependency is pinned exactly, `~` ranges if every one uses `~`, and `^` ranges otherwise. All Holo packages must stay on the same version.
+
 ```bash
 npx holo install queue
 ```
