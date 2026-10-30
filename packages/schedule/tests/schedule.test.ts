@@ -93,10 +93,21 @@ describe('frequencies', () => {
     ])
   })
 
-  it('rejects invalid expressions, times, and timezones when the task is defined', () => {
-    expect(() => defineSchedule(schedule => schedule.call(() => {}).cron('61 * * * *'))).toThrow(CronExpressionError)
-    expect(() => defineSchedule(schedule => schedule.call(() => {}).dailyAt('24:00'))).toThrow('Invalid time "24:00"')
-    expect(() => defineSchedule(schedule => schedule.call(() => {}).timezone('Mars/Olympus'))).toThrow('Invalid timezone')
+  it('combines frequency methods with cron macros', async () => {
+    const definition = defineSchedule((schedule) => {
+      schedule.command('a').cron('@daily').weekdays()
+      schedule.command('b').cron('@hourly').hourlyAt(15)
+    })
+
+    expect(await expressions(definition)).toEqual(['0 0 * * 1-5', '15 * * * *'])
+  })
+
+  it('rejects invalid expressions, times, and timezones when the scheduler reads the schedule', async () => {
+    const read = (definition: ScheduleDefinition) => listScheduledTasks(definition, { now: MIDNIGHT_UTC, timezone: 'UTC' })
+
+    await expect(read(defineSchedule(schedule => schedule.call(() => {}).cron('61 * * * *')))).rejects.toThrow(CronExpressionError)
+    await expect(read(defineSchedule(schedule => schedule.call(() => {}).dailyAt('24:00')))).rejects.toThrow('Invalid time "24:00"')
+    await expect(read(defineSchedule(schedule => schedule.call(() => {}).timezone('Mars/Olympus')))).rejects.toThrow('Invalid timezone')
   })
 })
 
@@ -118,12 +129,37 @@ describe('next due dates', () => {
     expect(tasks.map(task => task.timezone)).toEqual(['America/New_York', 'America/New_York', 'UTC'])
   })
 
+  it('does not skip a day when the timezone jumps two hours', async () => {
+    const definition = defineSchedule(schedule => schedule.call(() => {}).cron('0 0 30 3 *').timezone('Antarctica/Troll'))
+
+    const [task] = await listScheduledTasks(definition, { now: new Date('2026-03-28T23:59:00Z'), timezone: 'UTC' })
+
+    expect(task?.nextDueAt.toISOString()).toBe('2026-03-29T22:00:00.000Z')
+  })
+
   it('matches either restricted day field, as cron does', async () => {
     const definition = defineSchedule(schedule => schedule.call(() => {}).cron('0 0 13 * 5'))
 
     const [task] = await listScheduledTasks(definition, { now: new Date('2026-11-01T00:00:00Z'), timezone: 'UTC' })
 
     expect(task?.nextDueAt.toISOString()).toBe('2026-11-06T00:00:00.000Z')
+  })
+
+  it("supports Laravel's last-day, nearest-weekday, and nth-weekday syntax", async () => {
+    const cases = [
+      ['0 0 L * *', '2026-02-10T00:00:00Z', '2026-02-28T00:00:00.000Z'],
+      ['0 0 15W * *', '2026-08-01T00:00:00Z', '2026-08-14T00:00:00.000Z'],
+      ['0 0 1W * *', '2026-07-31T12:00:00Z', '2026-08-03T00:00:00.000Z'],
+      ['0 0 * * 5L', '2026-10-01T00:00:00Z', '2026-10-30T00:00:00.000Z'],
+      ['0 0 * * 1#2', '2026-11-01T00:00:00Z', '2026-11-09T00:00:00.000Z'],
+      ['0 0 * * MON#1', '2026-11-01T00:00:00Z', '2026-11-02T00:00:00.000Z'],
+    ] as const
+
+    for (const [expression, now, expected] of cases) {
+      const definition = defineSchedule(schedule => schedule.call(() => {}).cron(expression))
+      const [task] = await listScheduledTasks(definition, { now: new Date(now), timezone: 'UTC' })
+      expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
+    }
   })
 
   it('reports an expression that never matches', async () => {
@@ -180,6 +216,22 @@ describe('running due tasks', () => {
     ])
   })
 
+  it('splits command arguments like a shell word list without running a shell', async () => {
+    const commands: string[][] = []
+    const definition = defineSchedule((schedule) => {
+      schedule.command(`backup:run --label="nightly backup" --note='it''s fine' a\\ b "say \\"hi\\"" $HOME;rm`).daily()
+    })
+
+    await runAt(definition, MIDNIGHT_UTC, {
+      async runCommand(argv) {
+        commands.push([...argv])
+        return 0
+      },
+    })
+
+    expect(commands).toEqual([['backup:run', '--label=nightly backup', '--note=its fine', 'a b', 'say "hi"', '$HOME;rm']])
+  })
+
   it('reports a failing task and still runs the tasks after it', async () => {
     const ran: string[] = []
     const finished: string[] = []
@@ -195,6 +247,19 @@ describe('running due tasks', () => {
     expect(reports[0]).toMatchObject({ summary: 'broken', outcome: 'failed', error: new Error('boom') })
     expect(ran).toEqual(['after'])
     expect(finished).toEqual(['failed', 'ran'])
+  })
+  it('fails a function that returns false, as Laravel does', async () => {
+    const definition = defineSchedule((schedule) => {
+      schedule.call(() => false).name('refuses').everyMinute()
+      schedule.call(() => 0).name('returns-zero').everyMinute()
+    })
+
+    const reports = await runAt(definition, MIDNIGHT_UTC)
+
+    expect(reports.map(report => [report.summary, report.outcome, report.error?.message])).toEqual([
+      ['refuses', 'failed', 'Scheduled task [refuses] failed with exit code [1].'],
+      ['returns-zero', 'ran', undefined],
+    ])
   })
 })
 

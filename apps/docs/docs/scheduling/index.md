@@ -29,13 +29,15 @@ export default defineSchedule((schedule) => {
 
 A task with no frequency runs every minute.
 
+The function you pass to `defineSchedule()` runs when `schedule:run` or `schedule:list` reads the schedule, after your app's configuration has loaded, so it can call `config()`.
+
 ### Commands
 
-`schedule.command()` runs a [Holo command](/reference/custom-commands) in its own process, as if you typed `npx holo` followed by the string. Pass arguments and flags in the same string. Quote a value that contains spaces:
+`schedule.command()` runs a [Holo command](/reference/custom-commands) in its own process, as if you typed `npx holo` followed by the string. Pass arguments and flags in the same string. The string is split into arguments the way a shell splits words, with single quotes, double quotes, and backslash escapes, but no shell runs it, so `$VAR`, `;`, and `|` are passed through as plain text:
 
 ```ts
 schedule.command('reports:send --format csv').weekly()
-schedule.command('backup:run --label "nightly backup"').dailyAt('02:00')
+schedule.command('backup:run --label="nightly backup"').dailyAt('02:00')
 ```
 
 A command that exits with a non-zero code counts as failed. Its output is discarded, as Laravel discards a scheduled command's output by default.
@@ -50,7 +52,7 @@ schedule.job(SendDigest, { userId: 1 }).everyFiveMinutes()
 
 ### Functions
 
-`schedule.call()` runs a function inside the scheduler process. It can use models, the cache, and anything else your app's server code uses.
+`schedule.call()` runs a function inside the scheduler process. It can use models, the cache, and anything else your app's server code uses. A function that throws or returns `false` counts as failed, as in Laravel.
 
 ```ts
 import Session from './models/session'
@@ -120,7 +122,16 @@ schedule.command('reports:send').weekdays().hourly()     // 0 * * * 1-5
 schedule.command('reports:send').hourly().weekdays()     // 0 * * * 1-5
 ```
 
-`cron()` accepts the five standard fields with `*`, lists, ranges, steps, and month and day names (`JAN`, `MON`), plus `@hourly`, `@daily`, `@weekly`, `@monthly`, and `@yearly`. When both the day-of-month and day-of-week fields are restricted, a day that matches either one is due. An invalid expression, time, or timezone throws when `server/schedule.ts` loads.
+`cron()` accepts the five standard fields with `*`, lists, ranges, steps, and month and day names (`JAN`, `MON`), plus `@hourly`, `@daily`, `@weekly`, `@monthly`, and `@yearly`, which frequency methods can follow. Like Laravel, it also accepts:
+
+| Syntax | Field | Means |
+| --- | --- | --- |
+| `L` | Day of month | The last day of the month |
+| `15W` | Day of month | The weekday nearest the 15th, within the same month |
+| `5L` | Day of week | The last Friday of the month |
+| `1#2` | Day of week | The second Monday of the month |
+
+When both the day-of-month and day-of-week fields are restricted, a day that matches either one is due. An invalid expression, time, or timezone throws when `schedule:run` or `schedule:list` reads the schedule.
 
 ## Timezones
 
@@ -182,6 +193,8 @@ npx holo schedule:work
 
 If a run takes longer than a minute, the next one still starts on time, and they run side by side. `Ctrl+C`, `SIGINT`, and `SIGTERM` stop it: it passes the signal to any `schedule:run` still running and exits once they have.
 
+`schedule:run` itself handles `SIGINT` and `SIGTERM` the same way: it passes the signal to the command it is running, starts no more tasks, and exits once that command has. A function already running finishes first.
+
 ## List tasks
 
 ```bash
@@ -199,5 +212,5 @@ Times are shown in your app's timezone.
 
 - `schedule.job()` takes the job and its payload, `schedule.job(SendDigest, { userId: 1 })`, where Laravel takes a job instance.
 - A function without a `name()` can use `withoutOverlapping()` and `onOneServer()`. Laravel requires a name first.
-- `schedule:work` passes `SIGINT` and `SIGTERM` on to the `schedule:run` processes it started and waits for them to exit.
+- `schedule:work` and `schedule:run` pass `SIGINT` and `SIGTERM` on to the processes they started and wait for them to exit.
 - Holo doesn't yet have sub-minute frequencies, `between()`, `when()`, `skip()`, `environments()`, `runInBackground()`, output options such as `sendOutputTo()`, or before and after hooks.

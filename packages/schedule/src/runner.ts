@@ -16,6 +16,7 @@ export interface ScheduledTaskReport {
 export interface ScheduleRunOptions {
   readonly now: Date
   readonly timezone: string
+  readonly signal?: AbortSignal
   runCommand(argv: readonly string[]): Promise<number>
   onTaskFinished?(report: ScheduledTaskReport): void
 }
@@ -78,7 +79,9 @@ async function execute(state: ScheduledTaskState, summary: string, options: Sche
       await state.action.dispatch()
       return
     case 'call':
-      await state.action.callback()
+      if (await state.action.callback() === false) {
+        throw new Error(`Scheduled task [${summary}] failed with exit code [1].`)
+      }
   }
 }
 
@@ -113,6 +116,7 @@ export async function runDueScheduledTasks(
   const due = definition.tasks.map(stateOf).filter(state => isDue(state, options.now, options.timezone))
   const reports: ScheduledTaskReport[] = []
   for (const state of due) {
+    if (options.signal?.aborted) break
     const report = await runTask(state, options).catch(async (error: unknown): Promise<ScheduledTaskReport> => ({
       summary: await describeTask(state).catch(() => state.action.kind),
       outcome: 'failed',

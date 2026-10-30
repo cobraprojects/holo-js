@@ -30,8 +30,11 @@ const FIELD_SPECS: readonly FieldSpec[] = [
   { label: 'day of week', min: 0, max: 7, names: WEEKDAY_NAMES, nameOffset: 0 },
 ]
 
+type DayRule = (clock: WallClock) => boolean
+
 type CronField = {
   readonly values: ReadonlySet<number>
+  readonly rules: readonly DayRule[]
   readonly restricted: boolean
 }
 
@@ -93,19 +96,76 @@ function parsePart(part: string, spec: FieldSpec, expression: string): number[] 
   return values
 }
 
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
+
+function isWeekday(year: number, month: number, day: number): boolean {
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+  return weekday >= 1 && weekday <= 5
+}
+
+function nearestWeekday(target: number): DayRule {
+  return (clock) => {
+    const lastDay = daysInMonth(clock.year, clock.month)
+    if (target > lastDay) return false
+    const nearest = [0, -1, 1, -2, 2]
+      .map(offset => target + offset)
+      .find(day => day >= 1 && day <= lastDay && isWeekday(clock.year, clock.month, day))
+    return nearest === clock.day
+  }
+}
+
+function parseDayOfMonthRule(part: string, source: string, spec: FieldSpec, expression: string): DayRule | undefined {
+  const special = part === 'L' || part.endsWith('W')
+  if (!special) return undefined
+  if (source.includes(',')) throw new CronExpressionError(expression, `"${part}" can't be combined with other days of the month.`)
+  if (part === 'L') return clock => clock.day === daysInMonth(clock.year, clock.month)
+  return nearestWeekday(parseValue(part.slice(0, -1), spec, expression))
+}
+
+function parseDayOfWeekRule(part: string, spec: FieldSpec, expression: string): DayRule | undefined {
+  const last = /^(\w+)L$/i.exec(part)
+  if (last) {
+    const weekday = parseValue(last[1]!, spec, expression) % 7
+    return clock => clock.weekday === weekday && daysInMonth(clock.year, clock.month) - clock.day < 7
+  }
+  const nth = /^(\w+)#(\d+)$/.exec(part)
+  if (!nth) return undefined
+  const weekday = parseValue(nth[1]!, spec, expression) % 7
+  const occurrence = Number(nth[2])
+  if (occurrence < 1 || occurrence > 5) throw new CronExpressionError(expression, `"${part}" must name the 1st to 5th weekday of the month.`)
+  return clock => clock.weekday === weekday && Math.ceil(clock.day / 7) === occurrence
+}
+
+function parseRule(part: string, source: string, spec: FieldSpec, expression: string): DayRule | undefined {
+  if (spec.label === 'day of month') return parseDayOfMonthRule(part, source, spec, expression)
+  if (spec.label === 'day of week') return parseDayOfWeekRule(part, spec, expression)
+  return undefined
+}
+
 function parseField(source: string, spec: FieldSpec, expression: string): CronField {
   const values = new Set<number>()
+  const rules: DayRule[] = []
   for (const part of source.split(',')) {
+    const rule = parseRule(part, source, spec, expression)
+    if (rule) {
+      rules.push(rule)
+      continue
+    }
     for (const value of parsePart(part, spec, expression)) {
       values.add(spec.label === 'day of week' && value === 7 ? 0 : value)
     }
   }
-  return { values, restricted: source !== '*' && source !== '?' }
+  return { values, rules, restricted: source !== '*' && source !== '?' }
+}
+
+export function normalizeCronExpression(expression: string): string {
+  return MACROS[expression.trim().toLowerCase()] ?? expression.trim()
 }
 
 export function parseCronExpression(expression: string): CronSchedule {
-  const normalized = MACROS[expression.trim().toLowerCase()] ?? expression.trim()
-  const fields = normalized.split(/\s+/)
+  const fields = normalizeCronExpression(expression).split(/\s+/)
   if (fields.length !== 5) throw new CronExpressionError(expression, 'expected 5 fields.')
 
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields.map((field, index) => parseField(field, FIELD_SPECS[index]!, expression))
@@ -143,8 +203,8 @@ function wallClock(date: Date, timezone: string): WallClock {
 
 function dayMatches(schedule: CronSchedule, clock: WallClock): boolean {
   if (!schedule.month.values.has(clock.month)) return false
-  const dayOfMonth = schedule.dayOfMonth.values.has(clock.day)
-  const dayOfWeek = schedule.dayOfWeek.values.has(clock.weekday)
+  const dayOfMonth = schedule.dayOfMonth.values.has(clock.day) || schedule.dayOfMonth.rules.some(rule => rule(clock))
+  const dayOfWeek = schedule.dayOfWeek.values.has(clock.weekday) || schedule.dayOfWeek.rules.some(rule => rule(clock))
   if (schedule.dayOfMonth.restricted && schedule.dayOfWeek.restricted) return dayOfMonth || dayOfWeek
   return dayOfMonth && dayOfWeek
 }
@@ -169,13 +229,25 @@ export function cronMatches(schedule: CronSchedule, date: Date, timezone: string
     && schedule.minute.values.has(clock.minute)
 }
 
+function offsetAt(time: number, timezone: string): number {
+  const clock = wallClock(new Date(time), timezone)
+  return Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute) - Math.floor(time / MINUTE_MS) * MINUTE_MS
+}
+
+function nextLocalMidnight(time: number, clock: WallClock, timezone: string): number {
+  const midnight = Date.UTC(clock.year, clock.month - 1, clock.day + 1)
+  const estimate = midnight - offsetAt(midnight, timezone)
+  const candidate = Math.min(estimate, midnight - offsetAt(estimate, timezone))
+  return Math.max(time + MINUTE_MS, candidate)
+}
+
 export function nextCronDate(schedule: CronSchedule, after: Date, timezone: string, expression: string): Date {
   let time = Math.floor(after.getTime() / MINUTE_MS) * MINUTE_MS + MINUTE_MS
   const limit = time + MAX_SEARCH_DAYS * 24 * 60 * MINUTE_MS
   while (time <= limit) {
     const clock = wallClock(new Date(time), timezone)
     if (!dayMatches(schedule, clock)) {
-      time += Math.max(1, 24 * 60 - (clock.hour * 60 + clock.minute) - 60) * MINUTE_MS
+      time = nextLocalMidnight(time, clock, timezone)
       continue
     }
     if (!schedule.hour.values.has(clock.hour)) {

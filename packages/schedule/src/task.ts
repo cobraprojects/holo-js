@@ -1,4 +1,4 @@
-import { assertTimezone, parseCronExpression } from './cron'
+import { assertTimezone, normalizeCronExpression, parseCronExpression } from './cron'
 
 export type ScheduleCallback = () => unknown
 
@@ -64,7 +64,7 @@ export class ScheduledTask {
 
   cron(expression: string): this {
     parseCronExpression(expression)
-    this.#state = { ...this.#state, expression }
+    this.#state = { ...this.#state, expression: normalizeCronExpression(expression) }
     return this
   }
 

@@ -138,6 +138,82 @@ export default defineSchedule((schedule) => {
   })
 })
 
+describe('schedule:run shutdown', () => {
+  it('forwards a stop signal to the running command, waits for it, and starts no further tasks', { timeout: 30_000 }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-schedule-stop-'))
+    temporaryDirectories.push(root)
+    const { defineSchedule } = await import('@holo-js/schedule')
+    const started = join(root, 'started')
+    const stopped = join(root, 'stopped')
+    const child = `
+const { writeFileSync } = require('node:fs')
+process.on('SIGTERM', () => { setTimeout(() => { writeFileSync(${JSON.stringify(stopped)}, 'SIGTERM'); process.exit(0) }, 200) })
+writeFileSync(${JSON.stringify(started)}, 'yes')
+setInterval(() => {}, 1000)
+`
+    const spawned: string[][] = []
+    const sigtermListeners = process.listenerCount('SIGTERM')
+    const io = createIo(root)
+
+    const run = runScheduleRunCommand(io, root, {
+      loadEnvironment: async () => ({
+        schedule: defineSchedule((schedule) => {
+          schedule.command('long').everyMinute()
+          schedule.command('second').everyMinute()
+        }),
+        scheduleModule: await import('@holo-js/schedule'),
+        timezone: 'UTC',
+        cleanup: async () => {},
+      }),
+      spawnProcess: (command, args, options) => {
+        spawned.push(args.slice(1))
+        return spawn(command, ['-e', child], options)
+      },
+    })
+    await expect.poll(() => readFile(started, 'utf8').catch(() => ''), { timeout: 10_000 }).toBe('yes')
+    process.emit('SIGTERM', 'SIGTERM')
+    await run
+
+    expect(await readFile(stopped, 'utf8')).toBe('SIGTERM')
+    expect(spawned).toEqual([['long']])
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners)
+  })
+})
+
+describe('schedule:run resources', () => {
+  it('closes the app runtime when the CLI entrypoint fails to resolve or to clean up', async () => {
+    const { defineSchedule } = await import('@holo-js/schedule')
+    const cleanups: string[] = []
+    const loadEnvironment = async () => ({
+      schedule: defineSchedule(() => {}),
+      scheduleModule: await import('@holo-js/schedule'),
+      timezone: 'UTC',
+      cleanup: async () => {
+        cleanups.push('runtime')
+      },
+    })
+    const io = createIo(tmpdir())
+
+    await expect(runScheduleRunCommand(io, tmpdir(), {
+      loadEnvironment,
+      resolveCliEntrypoint: async () => {
+        throw new Error('bundle failed')
+      },
+    })).rejects.toThrow('bundle failed')
+    await expect(runScheduleRunCommand(io, tmpdir(), {
+      loadEnvironment,
+      resolveCliEntrypoint: async () => ({
+        path: 'holo.mjs',
+        async cleanup() {
+          throw new Error('cleanup failed')
+        },
+      }),
+    })).rejects.toThrow('cleanup failed')
+
+    expect(cleanups).toEqual(['runtime', 'runtime'])
+  })
+})
+
 describe('schedule:list', () => {
   it('lists each task with its next due time in the app timezone', { timeout: 60_000 }, async () => {
     const root = await createProject(`
@@ -162,6 +238,24 @@ export default defineSchedule((schedule) => {
   })
 })
 
+describe('schedule configuration', () => {
+  it('defines tasks after the app configuration is loaded', { timeout: 60_000 }, async () => {
+    const root = await createProject(`
+import { config } from '@holo-js/config'
+import { defineSchedule } from '@holo-js/schedule'
+
+export default defineSchedule((schedule) => {
+  schedule.command('privacy:maintain').dailyAt('03:00').timezone(config('app.timezone') === 'Africa/Cairo' ? 'Asia/Tokyo' : 'UTC')
+})
+`)
+    const io = createIo(root)
+
+    await runScheduleListCommand(io, root, { now: () => new Date('2026-11-02T10:02:00Z') })
+
+    expect(io.output()).toBe('0 3 * * *  holo privacy:maintain  Next Due: 2026-11-02 20:00:00 Africa/Cairo\n')
+  })
+})
+
 describe('schedule:work', () => {
   type FakeChild = SpawnProcessLike & EventEmitter & { readonly signals: NodeJS.Signals[] }
 
@@ -177,6 +271,53 @@ describe('schedule:work', () => {
     })
     return child
   }
+
+  it('leaves no signal handlers behind when the CLI entrypoint fails to resolve', async () => {
+    const sigtermListeners = process.listenerCount('SIGTERM')
+
+    await expect(runScheduleWorkCommand(createIo(tmpdir()), tmpdir(), {
+      resolveCliEntrypoint: async () => {
+        throw new Error('bundle failed')
+      },
+    })).rejects.toThrow('bundle failed')
+
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners)
+  })
+
+  it('keeps waiting for a running child that reports an error until it closes', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4242,
+      signals: [] as NodeJS.Signals[],
+      kill(signal: NodeJS.Signals) {
+        child.signals.push(signal)
+        return true
+      },
+    }) as FakeChild & { pid: number }
+    let minutes = 0
+    let finished = false
+
+    const work = runScheduleWorkCommand(createIo(tmpdir()), tmpdir(), {
+      resolveCliEntrypoint: async () => ({ path: 'holo.mjs', async cleanup() {} }),
+      spawnProcess: () => child,
+      async waitForNextMinute() {
+        minutes += 1
+        if (minutes === 2) {
+          child.emit('error', new Error('kill EPERM'))
+          process.emit('SIGTERM', 'SIGTERM')
+        }
+        await new Promise(resolvePromise => setImmediate(resolvePromise))
+      },
+    }).then(() => {
+      finished = true
+    })
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 50))
+
+    expect(finished).toBe(false)
+    expect(child.signals).toEqual(['SIGTERM'])
+    child.emit('close', null)
+    await work
+    expect(finished).toBe(true)
+  })
 
   it('starts schedule:run each minute, forwards stop signals, and waits for running children', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-schedule-work-'))

@@ -76,21 +76,54 @@ export async function loadScheduleEnvironment(projectRoot: string): Promise<Sche
   }
 }
 
-function runHoloCommand(
-  projectRoot: string,
-  cliEntrypoint: string,
-  argv: readonly string[],
-  spawnProcess: FrameworkSpawn,
-): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawnProcess(process.execPath, [cliEntrypoint, ...argv], {
-      cwd: projectRoot,
-      env: process.env,
-      stdio: 'ignore',
-    })
-    child.on('error', rejectPromise)
-    child.on('close', code => resolvePromise(code ?? 1))
-  })
+type ChildSupervisor = {
+  readonly stopping: AbortSignal
+  track(child: SpawnProcessLike): Promise<number | null>
+  settled(): Promise<void>
+  dispose(): void
+}
+
+function superviseChildren(io: IoStreams): ChildSupervisor {
+  const stopping = new AbortController()
+  const running = new Map<SpawnProcessLike, Promise<unknown>>()
+  let stopSignal: NodeJS.Signals | undefined
+  const onSignal = (signal: NodeJS.Signals) => {
+    stopSignal ??= signal
+    for (const child of running.keys()) child.kill?.(signal)
+    stopping.abort()
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+
+  return {
+    stopping: stopping.signal,
+    track(child) {
+      const exit = new Promise<number | null>((resolvePromise, rejectPromise) => {
+        child.on('close', (code) => {
+          running.delete(child)
+          resolvePromise(code)
+        })
+        child.on('error', (error) => {
+          if (child.pid === undefined) {
+            running.delete(child)
+            rejectPromise(error)
+            return
+          }
+          writeLine(io.stderr, `[schedule] ${error.message}`)
+        })
+      })
+      running.set(child, exit.catch(() => undefined))
+      if (stopSignal) child.kill?.(stopSignal)
+      return exit
+    },
+    async settled() {
+      await Promise.all(running.values())
+    },
+    dispose() {
+      process.off('SIGINT', onSignal)
+      process.off('SIGTERM', onSignal)
+    },
+  }
 }
 
 function writeTaskReport(io: IoStreams, report: ScheduledTaskReport): void {
@@ -117,6 +150,7 @@ export async function runScheduleRunCommand(
     readonly now?: () => Date
     readonly loadEnvironment?: ScheduleEnvironmentLoader
     readonly spawnProcess?: FrameworkSpawn
+    readonly resolveCliEntrypoint?: typeof resolveRunnableCliEntrypoint
   } = {},
 ): Promise<void> {
   const startedAt = (dependencies.now ?? (() => new Date()))()
@@ -126,17 +160,31 @@ export async function runScheduleRunCommand(
     return
   }
 
-  const cliEntrypoint = await resolveRunnableCliEntrypoint()
   try {
-    const reports = await environment.scheduleModule.runDueScheduledTasks(environment.schedule, {
-      now: startedAt,
-      timezone: environment.timezone,
-      runCommand: argv => runHoloCommand(projectRoot, cliEntrypoint.path, argv, dependencies.spawnProcess ?? spawn),
-      onTaskFinished: report => writeTaskReport(io, report),
-    })
-    if (reports.length === 0) writeLine(io.stdout, NO_DUE_TASKS_MESSAGE)
+    const cliEntrypoint = await (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
+    const supervisor = superviseChildren(io)
+    try {
+      const spawnProcess = dependencies.spawnProcess ?? spawn
+      const reports = await environment.scheduleModule.runDueScheduledTasks(environment.schedule, {
+        now: startedAt,
+        timezone: environment.timezone,
+        signal: supervisor.stopping,
+        runCommand: async (argv) => {
+          const child = spawnProcess(process.execPath, [cliEntrypoint.path, ...argv], {
+            cwd: projectRoot,
+            env: process.env,
+            stdio: 'ignore',
+          })
+          return await supervisor.track(child) ?? 1
+        },
+        onTaskFinished: report => writeTaskReport(io, report),
+      })
+      if (reports.length === 0) writeLine(io.stdout, NO_DUE_TASKS_MESSAGE)
+    } finally {
+      supervisor.dispose()
+      await cliEntrypoint.cleanup()
+    }
   } finally {
-    await cliEntrypoint.cleanup()
     await environment.cleanup()
   }
 }
@@ -210,25 +258,18 @@ export async function runScheduleWorkCommand(
   dependencies: {
     readonly spawnProcess?: FrameworkSpawn
     readonly waitForNextMinute?: (signal: AbortSignal) => Promise<void>
+    readonly resolveCliEntrypoint?: typeof resolveRunnableCliEntrypoint
   } = {},
 ): Promise<void> {
   const spawnProcess = dependencies.spawnProcess ?? spawn
   const wait = dependencies.waitForNextMinute ?? waitForNextMinute
-  const stopping = new AbortController()
-  const running = new Map<SpawnProcessLike, Promise<void>>()
-  const onSignal = (signal: NodeJS.Signals) => {
-    for (const child of running.keys()) child.kill?.(signal)
-    stopping.abort()
-  }
-  process.on('SIGINT', onSignal)
-  process.on('SIGTERM', onSignal)
-
-  const cliEntrypoint = await resolveRunnableCliEntrypoint()
-  writeLine(io.stdout, '[schedule] Running scheduled tasks every minute.')
+  const cliEntrypoint = await (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
+  const supervisor = superviseChildren(io)
   try {
-    while (!stopping.signal.aborted) {
-      await wait(stopping.signal)
-      if (stopping.signal.aborted) break
+    writeLine(io.stdout, '[schedule] Running scheduled tasks every minute.')
+    while (!supervisor.stopping.aborted) {
+      await wait(supervisor.stopping)
+      if (supervisor.stopping.aborted) break
 
       const child = spawnProcess(process.execPath, [cliEntrypoint.path, 'schedule:run'], {
         cwd: projectRoot,
@@ -237,23 +278,14 @@ export async function runScheduleWorkCommand(
       })
       child.stdout?.pipe(io.stdout, { end: false })
       child.stderr?.pipe(io.stderr, { end: false })
-      running.set(child, new Promise((resolvePromise) => {
-        const settle = () => {
-          running.delete(child)
-          resolvePromise()
-        }
-        child.on('close', settle)
-        child.on('error', (error) => {
-          writeLine(io.stderr, `[schedule] Failed to start schedule:run: ${error.message}`)
-          settle()
-        })
-      }))
+      supervisor.track(child).catch((error: Error) => {
+        writeLine(io.stderr, `[schedule] Failed to start schedule:run: ${error.message}`)
+      })
     }
 
-    await Promise.all(running.values())
+    await supervisor.settled()
   } finally {
-    process.off('SIGINT', onSignal)
-    process.off('SIGTERM', onSignal)
+    supervisor.dispose()
     await cliEntrypoint.cleanup()
   }
 }

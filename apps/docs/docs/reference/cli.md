@@ -569,7 +569,7 @@ Run every task that is due this minute, then exit. Run it from a system cron ent
 npx holo schedule:run
 ```
 
-A failing task is reported and the rest still run.
+A failing task is reported and the rest still run. `SIGINT` and `SIGTERM` are passed on to the command that is running; no further tasks start, and `schedule:run` exits once that command has.
 
 ### schedule:work
 

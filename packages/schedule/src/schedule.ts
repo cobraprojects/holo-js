@@ -9,10 +9,36 @@ export interface ScheduleDefinition {
 
 function tokenizeCommand(command: string): string[] {
   const tokens: string[] = []
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
-  for (const match of command.matchAll(pattern)) {
-    tokens.push(match[1] ?? match[2] ?? match[3] ?? '')
+  let token: string | undefined
+  let quote: '"' | "'" | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!
+    if (quote === "'") {
+      if (character === quote) quote = undefined
+      else token += character
+      continue
+    }
+    if (character === '\\' && index + 1 < command.length && (quote === undefined || '"\\'.includes(command[index + 1]!))) {
+      index += 1
+      token = (token ?? '') + command[index]
+      continue
+    }
+    if (quote === '"') {
+      if (character === quote) quote = undefined
+      else token += character
+      continue
+    }
+    if (/\s/.test(character)) {
+      if (token !== undefined) tokens.push(token)
+      token = undefined
+      continue
+    }
+    token ??= ''
+    if (character === '"' || character === "'") quote = character
+    else token += character
   }
+  if (quote) throw new Error(`[@holo-js/schedule] Scheduled command has an unterminated ${quote} quote: ${command}`)
+  if (token !== undefined) tokens.push(token)
   return tokens
 }
 
@@ -44,9 +70,18 @@ export class Schedule {
 }
 
 export function defineSchedule(define: (schedule: Schedule) => void): ScheduleDefinition {
-  const schedule = new Schedule()
-  define(schedule)
-  return Object.freeze({ [SCHEDULE_DEFINITION]: true as const, tasks: Object.freeze(schedule.tasks) })
+  let tasks: readonly ScheduledTask[] | undefined
+  return Object.freeze({
+    [SCHEDULE_DEFINITION]: true as const,
+    get tasks(): readonly ScheduledTask[] {
+      if (!tasks) {
+        const schedule = new Schedule()
+        define(schedule)
+        tasks = Object.freeze(schedule.tasks)
+      }
+      return tasks
+    },
+  })
 }
 
 export function isScheduleDefinition(value: unknown): value is ScheduleDefinition {
