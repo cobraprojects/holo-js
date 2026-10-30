@@ -38,6 +38,21 @@ return redirect(`/posts/${post.id}`)
 
 The browser binds `createPostForm` with `useForm`; the framework adapter owns validation-error transport; the route uses its native redirect API.
 
+## Example: recurring work
+
+Before, an app may run tasks from one crontab line per script, `node-cron`, or `setInterval` timers inside the web server.
+
+After, every task lives in `server/schedule.ts` and one cron entry or `holo schedule:work` runs the scheduler:
+
+```ts
+export default defineSchedule((schedule) => {
+  schedule.command('privacy:maintain').daily().withoutOverlapping().onOneServer()
+  schedule.job(SendDigest, { userId: 1 }).everyFiveMinutes()
+})
+```
+
+Move each script's body into a Holo command or job, then delete the old crontab lines, timers, and scheduling dependencies.
+
 ## No compatibility residue
 
 Leaving test-only imports, migration-only helpers, snapshots, or compatibility exports behind is an incomplete conversion. Confirm every removed module has zero imports, including tests, seeds, scripts, and generated files.

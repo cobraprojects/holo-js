@@ -1,6 +1,6 @@
 ---
 name: holo-testing-deployment
-description: Test, configure, operate, and deploy Holo-JS applications, including drivers, workers, migrations, caches, queues, realtime, and CLI workflows.
+description: Test, configure, operate, and deploy Holo-JS applications, including drivers, workers, scheduled tasks, migrations, caches, queues, realtime, and CLI workflows.
 metadata:
   type: focused
   source: https://docs.holo-js.com/testing
