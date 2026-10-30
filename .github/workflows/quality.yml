@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validation:
-    name: Typecheck and lint
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,6 +36,28 @@ jobs:
       - run: node scripts/build-libraries.mjs
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - name: Cache Bun downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: node scripts/build-libraries.mjs
+      - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run lint
 
   dependencies:
