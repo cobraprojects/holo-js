@@ -6,6 +6,14 @@
 
 - Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
 
+### Fixed
+
+- Next.js server actions no longer log a failed validation or rate limit as a server error. Holo wraps every export of a `'use server'` file, and when the browser called the action, it returns the failure payload (`{ ok: false, status: 422, errors, … }`) as the action's result instead of throwing, as route handlers already answer with a 422. `useForm()` shows the field errors as before. Next.js used to print each failure as `⨯ ValidationException` and answer with HTTP 500; Laravel never reports a `ValidationException`. See [Next.js: server action](apps/docs/docs/basics/forms/frameworks.md#next-js-server-action).
+
+### Compatibility and upgrade requirements
+
+- Client code that calls a server action and catches its error to read validation failures now receives the failure payload as the action's result instead, so check `result.ok === false`. `useForm()` handles both. Actions called from server code, actions called by another action, forms posted without JavaScript, and inline `'use server'` functions still throw.
+
 ## 0.4.4 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.

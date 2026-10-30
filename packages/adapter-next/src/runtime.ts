@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
@@ -349,8 +350,28 @@ function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs
   }
 }
 
+const serverActionCalls = new AsyncLocalStorage<true>()
+
+function serverAction<TAction>(action: TAction): TAction {
+  if (typeof action !== 'function') return action
+  const run = action as (...args: unknown[]) => unknown
+  return (async (...args: unknown[]) => {
+    if (serverActionCalls.getStore()) return await run(...args)
+    return await serverActionCalls.run(true, async () => {
+      try {
+        return await run(...args)
+      } catch (error) {
+        const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
+        if (!payload || await resolveNextAuthRequestAccessors().getHeader?.('next-action') === undefined) throw error
+        return payload
+      }
+    })
+  }) as TAction
+}
+
 export const adapterNextRuntimeInternals = {
   routeHandler,
+  serverAction,
   safeDecodeCookieSegment,
   parseResponseCookie,
   parseRequestCookies,

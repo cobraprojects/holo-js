@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { field, schema, validate } from '@holo-js/validation'
+import { field, schema, validate, ValidationException } from '@holo-js/validation'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
 import { adapterNextRuntimeInternals, createNextHoloHelpers, createNextRequestContext, runWithNextRequest } from '../src/runtime'
 
@@ -39,6 +39,46 @@ describe('Next native runtime', () => {
     const body = await response.text()
     expect(JSON.parse(body)).toMatchObject({ status: 422, values: { email: 'invalid' } })
     expect(body).not.toContain('next-password')
+  })
+
+  it('returns server action validation failures to the client that called the action instead of throwing them', async () => {
+    const login = schema({ email: field.string().required().email(), password: field.password().required() })
+    const action = adapterNextRuntimeInternals.serverAction(async (formData: FormData) => {
+      await validate(formData, login)
+      return { ok: true }
+    })
+    const formData = new FormData()
+    formData.set('email', 'invalid')
+    formData.set('password', 'next-password')
+    const actionRequest = new NextRequest('https://app.test/login', { method: 'POST', headers: { 'next-action': 'abc123' } })
+
+    const result = await runWithNextRequest(actionRequest, () => action(formData))
+
+    expect(result).toMatchObject({ ok: false, status: 422, valid: false, values: { email: 'invalid' }, errors: { email: [expect.any(String)] } })
+    expect(JSON.stringify(result)).not.toContain('next-password')
+  })
+
+  it('still throws from server actions called outside a client action request, inside another action, or for other errors', async () => {
+    const failing = adapterNextRuntimeInternals.serverAction(async () => {
+      throw ValidationException.withMessages({ title: ['Title is required.'] })
+    })
+    const actionRequest = new NextRequest('https://app.test/posts', { method: 'POST', headers: { 'next-action': 'abc123' } })
+
+    await expect(failing()).rejects.toBeInstanceOf(ValidationException)
+    await expect(runWithNextRequest(new NextRequest('https://app.test/posts', { method: 'POST' }), () => failing())).rejects.toBeInstanceOf(ValidationException)
+
+    const outer = adapterNextRuntimeInternals.serverAction(async () => {
+      const inner = await failing().then(() => 'returned', (error: unknown) => error)
+      expect(inner).toBeInstanceOf(ValidationException)
+      throw inner
+    })
+    await expect(runWithNextRequest(actionRequest, () => outer())).resolves.toMatchObject({ ok: false, status: 422, errors: { title: ['Title is required.'] } })
+
+    const broken = adapterNextRuntimeInternals.serverAction(async () => {
+      throw new Error('database is down')
+    })
+    await expect(runWithNextRequest(actionRequest, () => broken())).rejects.toThrow('database is down')
+    expect(adapterNextRuntimeInternals.serverAction('not an action')).toBe('not an action')
   })
 
   it('reads native Next cookies and standard HTTP cookies without inventing missing values', () => {

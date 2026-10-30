@@ -307,6 +307,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const hasRealtime = isOptionalServerExternalPackageInstalled('@holo-js/realtime', packageManifest)
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
+  const serverActionLoader = fileURLToPath(new URL('./server-action-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
@@ -317,6 +318,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(existingTurbopack.rules?.['*'] ? [existingTurbopack.rules['*']].flat() : []),
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
+        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: /['"]use server['"]/ }] }, loaders: [serverActionLoader] },
       ],
       ...(hasRealtime
         ? {
@@ -369,6 +371,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer, realtimeDirectoryPatterns.absolute)] : []),
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
+        ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
       ]
       return nextWebpackConfig
     },

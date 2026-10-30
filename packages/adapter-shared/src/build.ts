@@ -432,3 +432,4 @@ export function createRealtimeClientDefinitionTransform(input: RealtimeDefinitio
 
 export { compileBrowserValidation } from './validation-transform'
 export { compileNextRoute } from './next-route-transform'
+export { compileNextServerActions } from './next-server-action-transform'

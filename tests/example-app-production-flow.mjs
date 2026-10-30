@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { assertExampleAppAuthFlow } from './example-app-auth-flow.mjs'
 import { newExampleAppContext, observeExampleAppPage } from './example-app-browser.mjs'
 import { assertExampleAppFormsBrowserFlow } from './example-app-forms-browser-flow.mjs'
+import { assertNextServerActionValidationFlow } from './example-app-next-action-validation.mjs'
 import { clearExampleAppRateLimitBuckets } from './example-app-rate-limit.mjs'
 import { assertExampleAppTokenAuthFlow } from './example-app-token-auth-flow.mjs'
 
@@ -285,6 +286,7 @@ export async function assertExampleAppProductionFlow({
     await waitForProductionApp(baseUrl, expectedTitle, child, () => output)
     await assertBrowserNavigation(baseUrl, expectedTitle, framework)
     if (framework === 'nuxt' || framework === 'sveltekit') await assertExampleAppFormsBrowserFlow({ baseUrl, framework })
+    if (framework === 'next') await assertNextServerActionValidationFlow({ baseUrl, getOutput: () => output })
     await assertExampleAppAuthFlow({
       baseUrl,
       getOutput: () => output,

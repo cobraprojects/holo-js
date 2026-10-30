@@ -16,7 +16,7 @@ export const postForm = schema({
 
 ## Next.js: server action
 
-Call the server action from a `submitter`. When validation fails, the thrown error reaches `useForm()`, which shows the field errors. When it succeeds, Next.js `redirect()` navigates as usual.
+Call the server action from a `submitter`. When validation fails, `useForm()` shows the field errors. When it succeeds, Next.js `redirect()` navigates as usual.
 
 ```ts [app/posts/new/actions.ts]
 'use server'
@@ -84,31 +84,39 @@ export default function NewPostPage() {
 
 The submitter's `formData` is built from the form element, so inputs you don't bind to `form.values`, such as file inputs, are still sent.
 
-If you call a server action without `useForm()` (for example with React's `useActionState`), catch the error and return its payload:
+A failed `validate()`, a `ValidationException` you throw, and a rate limit all leave the action the same way. Holo wraps every export of a file that starts with `'use server'`, and when the browser called the action, the wrapper returns the failure payload as the action's result instead of throwing it:
 
-```ts [app/posts/new/actions.ts]
-'use server'
+```text
+{ ok: false, status: 422, valid: false, message, bag: 'default', values, errors: { title: ['The title is required.'] } }
+```
 
-import { validate } from '@holo-js/forms'
-import { serializeValidationException } from '@holo-js/validation'
-import { postForm } from '@/lib/schemas/post'
-import Post from '@/server/models/Post'
+`useForm()` reads that result as field errors. Next.js doesn't log it or answer with a 500, the same as Laravel, which never reports a `ValidationException`. Other errors, `redirect()`, and `notFound()` behave as usual. The action still throws when server code calls it directly, or when another action calls it, so the outer action decides what to do. A form posted without JavaScript also still throws.
 
-export async function createPostAction(formData: FormData) {
-  try {
-    const data = await validate(formData, postForm)
-    await Post.create(data)
-    return { ok: true, status: 201, data: undefined }
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
+If you call a server action without `useForm()`, for example with React's `useActionState`, the failure payload is the action's result, so read `ok` and `errors` from the state:
 
-    throw error
-  }
+```tsx [app/posts/new/page.tsx]
+'use client'
+
+import { useActionState } from 'react'
+import { createPostAction } from './actions'
+
+export default function NewPostPage() {
+  const [state, formAction] = useActionState(
+    async (_previous: unknown, formData: FormData) => await createPostAction(formData),
+    undefined,
+  )
+
+  return (
+    <form action={formAction}>
+      <input name="title" />
+      {state?.ok === false ? <p>{state.errors.title?.[0]}</p> : null}
+      <button>Save</button>
+    </form>
+  )
 }
 ```
+
+Only functions in a file with a top-level `'use server'` directive are wrapped. An inline server action, with `'use server'` inside the function body, still throws, so catch the error there and return `serializeValidationException(error)` from `@holo-js/validation`.
 
 ## Next.js: route handler
 
