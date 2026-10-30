@@ -13,17 +13,13 @@ function wrap(wrapper: RuntimeWrapper, handler: ts.Expression): ts.CallExpressio
   )
 }
 
-function exportHandler(wrapper: RuntimeWrapper, name: string, handler: ts.Expression): readonly ts.Statement[] {
-  if (name === 'default') return [ts.factory.createExportAssignment(undefined, false, wrap(wrapper, handler))]
-  const wrapped = ts.factory.createIdentifier(`__holoWrapped${name}`)
-  return [
-    ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
-      ts.factory.createVariableDeclaration(wrapped, undefined, undefined, wrap(wrapper, handler)),
-    ], ts.NodeFlags.Const)),
-    ts.factory.createExportDeclaration(undefined, false, ts.factory.createNamedExports([
-      ts.factory.createExportSpecifier(false, wrapped, name),
-    ])),
-  ]
+function constant(name: string | ts.Identifier, initializer: ts.Expression, exported: boolean): ts.VariableStatement {
+  return ts.factory.createVariableStatement(
+    exported ? [ts.factory.createModifier(ts.SyntaxKind.ExportKeyword)] : undefined,
+    ts.factory.createVariableDeclarationList([
+      ts.factory.createVariableDeclaration(name, undefined, undefined, initializer),
+    ], ts.NodeFlags.Const),
+  )
 }
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
@@ -39,26 +35,66 @@ function hasModifier(statement: ts.Statement, kind: ts.SyntaxKind): boolean {
   return ts.canHaveModifiers(statement) && Boolean(ts.getModifiers(statement)?.some(modifier => modifier.kind === kind))
 }
 
+function localExportNames(file: ts.SourceFile, wraps: (name: string) => boolean): ReadonlySet<string> {
+  const names = new Set<string>()
+  for (const statement of file.statements) {
+    if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && !statement.moduleSpecifier
+      && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) {
+        if (!element.isTypeOnly && wraps(element.name.text)) names.add((element.propertyName ?? element.name).text)
+      }
+    }
+    if (ts.isExportAssignment(statement) && !statement.isExportEquals && ts.isIdentifier(statement.expression) && wraps('default')) {
+      names.add(statement.expression.text)
+    }
+  }
+  return names
+}
+
+function declaredNames(file: ts.SourceFile): ReadonlySet<string> {
+  return new Set(file.statements.flatMap((statement) => {
+    if (ts.isFunctionDeclaration(statement) && statement.name) return [statement.name.text]
+    if (!ts.isVariableStatement(statement)) return []
+    return statement.declarationList.declarations.flatMap(declaration => ts.isIdentifier(declaration.name) ? [declaration.name.text] : [])
+  }))
+}
+
 function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
+  const localExports = localExportNames(file, wraps)
+  const declared = declaredNames(file)
+  const wrapsLocal = (name: string) => localExports.has(name) && declared.has(name)
+  const trailing: ts.Statement[] = []
   let changed = false
   const statements = file.statements.flatMap((statement): readonly ts.Statement[] => {
-    if (ts.isFunctionDeclaration(statement) && statement.body && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
-      const name = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name?.text
-      if (!name || !wraps(name)) return [statement]
+    if (ts.isFunctionDeclaration(statement) && statement.body) {
+      const exported = hasModifier(statement, ts.SyntaxKind.ExportKeyword)
+      const isDefault = exported && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)
+      const name = statement.name?.text
+      const wrapsExport = exported && wraps(isDefault ? 'default' : name ?? '')
+      if (!wrapsExport && !(name && wrapsLocal(name))) return [statement]
       changed = true
-      const localName = statement.name ?? ts.factory.createIdentifier('__holoOriginaldefault')
-      return [ts.factory.updateFunctionDeclaration(statement,
+      const original = ts.factory.createIdentifier(`__holoOriginal${name ?? 'default'}`)
+      const declaration = ts.factory.updateFunctionDeclaration(statement,
         statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword && modifier.kind !== ts.SyntaxKind.DefaultKeyword),
-        statement.asteriskToken, localName, statement.typeParameters, statement.parameters, statement.type, statement.body,
-      ), ...exportHandler(wrapper, name, localName)]
+        statement.asteriskToken, original, statement.typeParameters, statement.parameters, statement.type, statement.body)
+      if (!name) return [declaration, ts.factory.createExportAssignment(undefined, false, wrap(wrapper, original))]
+      return [
+        declaration,
+        constant(name, wrap(wrapper, original), exported && !isDefault),
+        ...(isDefault ? [ts.factory.createExportAssignment(undefined, false, ts.factory.createIdentifier(name))] : []),
+      ]
     }
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals && wraps('default')) {
+    if (ts.isExportAssignment(statement) && !statement.isExportEquals && wraps('default')
+      && !(ts.isIdentifier(statement.expression) && declared.has(statement.expression.text))) {
       changed = true
-      return exportHandler(wrapper, 'default', statement.expression)
+      return [ts.factory.createExportAssignment(undefined, false, wrap(wrapper, statement.expression))]
     }
-    if (ts.isVariableStatement(statement) && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
+    if (ts.isVariableStatement(statement)) {
+      const exported = hasModifier(statement, ts.SyntaxKind.ExportKeyword)
       const declarations = statement.declarationList.declarations.map(declaration => {
-        if (!ts.isIdentifier(declaration.name) || !wraps(declaration.name.text) || !declaration.initializer) return declaration
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) return declaration
+        const name = declaration.name.text
+        if (!(exported ? wraps(name) : wrapsLocal(name))) return declaration
         changed = true
         return ts.factory.updateVariableDeclaration(declaration, declaration.name, declaration.exclamationToken,
           declaration.type, wrap(wrapper, declaration.initializer))
@@ -67,7 +103,8 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
         ts.factory.updateVariableDeclarationList(statement.declarationList, declarations))]
     }
     if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-      const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text))
+      const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
+        && (statement.moduleSpecifier || !declared.has((element.propertyName ?? element.name).text)))
       if (handlers.length === 0) return [statement]
       changed = true
       const result: ts.Statement[] = []
@@ -76,12 +113,14 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
         ts.factory.updateNamedExports(statement.exportClause, remaining), statement.moduleSpecifier, statement.attributes))
       for (const handler of handlers) {
         const imported = handler.propertyName ?? handler.name
-        const local = ts.factory.createIdentifier(statement.moduleSpecifier ? `__holoOriginal${handler.name.text}` : imported.text)
+        const local = !statement.moduleSpecifier && ts.isIdentifier(imported) ? imported : ts.factory.createIdentifier(`__holoImported${handler.name.text}`)
         if (statement.moduleSpecifier) result.push(ts.factory.createImportDeclaration(undefined,
           ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
             ts.factory.createImportSpecifier(false, imported, local),
           ])), statement.moduleSpecifier))
-        result.push(...exportHandler(wrapper, handler.name.text, local))
+        const wrapped = ts.factory.createIdentifier(`__holoWrapped${handler.name.text}`)
+        trailing.push(constant(wrapped, wrap(wrapper, local), false), ts.factory.createExportDeclaration(undefined, false,
+          ts.factory.createNamedExports([ts.factory.createExportSpecifier(false, wrapped, handler.name)])))
       }
       return result
     }
@@ -94,7 +133,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     ])), ts.factory.createStringLiteral('@holo-js/adapter-next/runtime'))
   const insertAt = prologueEnd(statements)
   return ts.createPrinter().printFile(ts.factory.updateSourceFile(file,
-    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt)]))
+    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...trailing]))
 }
 
 function parse(source: string, filename: string): ts.SourceFile {

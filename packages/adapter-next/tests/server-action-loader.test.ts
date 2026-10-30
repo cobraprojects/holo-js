@@ -21,15 +21,17 @@ async function importCompiled(filename: string, source: string): Promise<Record<
 }
 
 describe('Next server action loader', () => {
-  it('wraps every export of a use server module and keeps the directive first', async () => {
+  it('wraps every export of a use server module at its binding and keeps the directive first', async () => {
     const source = [
       '// actions',
       '\'use server\'',
+      'export { later, rename as alias }',
       'export async function save(value: string) { return `saved ${value}` }',
       'export const remove = async () => \'removed\'',
       'async function rename() { return \'renamed\' }',
-      'export { rename, rename as alias }',
       'export { shared } from \'./helpers\'',
+      'export async function current() { return save }',
+      'const later = async () => \'later\'',
       'export default async function submit() { return save(\'default\') }',
     ].join('\n')
 
@@ -37,14 +39,15 @@ describe('Next server action loader', () => {
     const compiled = serverActionLoader.call({ resourcePath: 'actions.ts' }, source)
 
     expect(compiled.trimStart().startsWith('// actions\n\'use server\'')).toBe(true)
-    expect(await Promise.all(['save', 'remove', 'rename', 'alias', 'shared', 'default'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
+    expect(await Promise.all(['save', 'remove', 'alias', 'later', 'shared', 'default'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
       { wrapped: 'saved undefined' },
       { wrapped: 'removed' },
       { wrapped: 'renamed' },
-      { wrapped: 'renamed' },
+      { wrapped: 'later' },
       { wrapped: 'shared' },
-      { wrapped: 'saved default' },
+      { wrapped: { wrapped: 'saved default' } },
     ])
+    expect(await (module.current as () => Promise<unknown>)()).toEqual({ wrapped: module.save })
   })
 
   it('leaves modules without a leading use server directive unchanged', () => {
