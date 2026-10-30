@@ -214,6 +214,16 @@ describe('Next server action loader', () => {
     expect(originalPositionFor(new TraceMap(output.map as string), reExport)).toMatchObject({ line: 3 })
   })
 
+  it('keeps the lines after a replaced statement that spans several lines in place', () => {
+    const route = ['export {', '  shared as GET, shared /* kept', '  comment */ as other', '} from \'./helpers\'', 'export async function POST() { throw new Error(\'x\') }'].join('\n')
+    const actions = ['\'use server\'', 'export default', '(async () => 1)', 'export async function save() { throw new Error(\'x\') }'].join('\n')
+
+    for (const [source, loader] of [[route, routeLoader], [actions, serverActionLoader]] as const) {
+      const lines = source.split('\n')
+      expect(runLoader(loader, 'module.ts', source).code.split('\n')[lines.length - 1]).toBe(lines.at(-1))
+    }
+  })
+
   it('chains the map an earlier loader passed', () => {
     const resourcePath = join(import.meta.dirname, 'app', 'actions.ts')
     const original = ['\'use server\'', 'export async function save() {', '  throw new Error(\'save failed\')', '}'].join('\n')

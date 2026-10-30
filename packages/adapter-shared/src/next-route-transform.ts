@@ -154,17 +154,22 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   const locals = new Set(wrappedLocals(file, wraps, defaultName))
   const localized = new Set<string>()
   const reassign = (local: string) => `${local} = ${runtimeName}.${wrapper}(${local});`
+  // Keeps the line breaks of a replaced span so the lines after it stay in place.
+  const lineBreaks = (text: string) => text.split('\n').length - 1
+  const overwrite = (start: number, end: number, text: string) => {
+    output.overwrite(start, end, `${text}${'\n'.repeat(Math.max(0, lineBreaks(source.slice(start, end)) - lineBreaks(text)))}`)
+  }
   for (const statement of file.statements) {
     const assignment = wraps('default') ? defaultFunction(statement) : undefined
     if (assignment) {
-      output.overwrite(assignment.getStart(), assignment.expression.getStart(), `let ${defaultName} = `)
+      overwrite(assignment.getStart(), assignment.expression.getStart(), `let ${defaultName} = `)
       output.appendLeft(assignment.end, `${statementEnd(source, assignment)} ${reassign(defaultName)} export default ${defaultName};`)
       localized.add(defaultName)
       continue
     }
     const routeExports = wrapper === 'routeHandler' ? localizeRouteExports(statement, wraps, declared, allocate) : undefined
     if (routeExports) {
-      output.overwrite(statement.getStart(), statement.end, routeExports.map(entry => entry.text).join(' '))
+      overwrite(statement.getStart(), statement.end, routeExports.map(entry => entry.text).join(' '))
       for (const entry of routeExports) if (entry.local) locals.add(entry.local)
     }
   }
