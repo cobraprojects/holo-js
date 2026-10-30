@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -759,6 +759,35 @@ console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConf
       { projectRoot },
     )).rejects.toThrow('missing-child.mjs')
   })
+
+  it('maps bundled modules back to their sources for stack traces and V8 coverage', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const abilityPath = join(projectRoot, 'server/abilities/manage-tenants.ts')
+    await mkdir(dirname(abilityPath), { recursive: true })
+    await writeFile(abilityPath, "type Tenant = { id: number }\nexport function manageTenants(tenant: Tenant): never {\n  throw new Error(`denied ${tenant.id}`)\n}\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const ability = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(abilityPath)})
+try { ability.manageTenants({ id: 7 }) } catch (error) { console.log(JSON.stringify({ stack: error.stack })) }
+`)
+    const coverageDir = join(projectRoot, 'coverage')
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_V8_COVERAGE: coverageDir, ESBUILD_BINARY_PATH: esbuildBinary }
+    const { stdout } = await promisify(execFile)(process.execPath, ['--enable-source-maps', childPath], { cwd: projectRoot, env })
+
+    const { stack } = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { stack: string }
+    expect(stack).toContain(`${abilityPath}:3:`)
+    const coverage = await Promise.all((await readdir(coverageDir)).map(async name => JSON.parse(await readFile(join(coverageDir, name), 'utf8')) as {
+      'source-map-cache'?: Record<string, { data: { sources: string[] } }>
+    }))
+    const mappedSources = coverage.flatMap(report => Object.entries(report['source-map-cache'] ?? {}))
+      .filter(([url]) => url.includes('/.holo-js/runtime/bundle-'))
+      .flatMap(([url, entry]) => entry.data.sources.map(source => new URL(source, url).pathname))
+    expect(mappedSources).toContain(abilityPath)
+  }, 30_000)
 
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()

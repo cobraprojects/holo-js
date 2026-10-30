@@ -522,7 +522,9 @@ async function bundleRuntimeModule(
       plugins: [bridgeRuntimeModuleInstances()],
       target: 'node22',
       tsconfig: tsconfigPath,
-      sourcemap: false,
+      // Inline, because the bundle folder is deleted after the import. Node reads the map for --enable-source-maps and
+      // NODE_V8_COVERAGE, so stack traces and coverage point at the project sources.
+      sourcemap: 'inline',
       metafile,
     }))
 

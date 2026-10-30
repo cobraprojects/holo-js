@@ -145,6 +145,10 @@ it('only editors can publish', async () => {
 })
 ```
 
+### Coverage and stack traces
+
+When Holo can't import a policy, ability, or other discovered file directly, it bundles the file into `.holo-js/runtime` and imports the bundle. Each bundle carries an inline source map, so V8 coverage (`NODE_V8_COVERAGE`, which Vitest's `v8` coverage provider uses) counts lines in your source files, and with `--enable-source-maps` an error thrown in a policy points at its line in `server/policies/`.
+
 ## Next steps
 
 - [Database Tests](/testing/database) — migrations, factories, and clean data between tests
