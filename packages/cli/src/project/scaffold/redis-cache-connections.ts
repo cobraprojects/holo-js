@@ -109,14 +109,36 @@ function addConnectionToObject(source: string, masked: string, open: number, mod
 
 type RedisConnectionTarget = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number, readonly db: number }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '::1', '0.0.0.0', '::'])
+
+function redisHostIdentity(host: string): string {
+  const normalized = host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1')
+  return LOOPBACK_HOSTS.has(normalized) || /^127\./.test(normalized) ? 'loopback' : normalized
+}
+
+// The server a connection reaches, whether it is written as a URL, a socket path, or host and port. Credentials and
+// the database path don't change the server. Loopback names count as one host, so the check errs toward a refusal.
+function redisServerIdentity(connection: RedisConnectionTarget): string {
+  if (connection.url) {
+    try {
+      const url = new URL(connection.url)
+      if (url.protocol === 'unix:' || url.protocol === 'redis+unix:') return `socket:${url.pathname}`
+      return `tcp:${redisHostIdentity(url.hostname)}:${url.port || 6379}`
+    } catch {
+      return `url:${connection.url}`
+    }
+  }
+  if (connection.socketPath) return `socket:${connection.socketPath}`
+  return `tcp:${redisHostIdentity(connection.host)}:${connection.port}`
+}
+
 // Names the connection that uses the same Redis server and database as the cache connection. A cache flush deletes
 // that whole database, so it must not hold another connection's data.
 export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>, name = 'cache'): string | undefined {
-  const server = (connection: RedisConnectionTarget) => connection.url ?? connection.socketPath ?? `${connection.host}:${connection.port}`
   const cache = connections[name]
   if (!cache) return undefined
   return Object.entries(connections).find(([other, connection]) => (
-    other !== name && server(connection) === server(cache) && connection.db === cache.db
+    other !== name && redisServerIdentity(connection) === redisServerIdentity(cache) && connection.db === cache.db
   ))?.[0]
 }
 

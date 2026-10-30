@@ -10586,6 +10586,19 @@ export default defineRedisConfig({
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=2')
   }, 30_000)
 
+  it('refuses the cache connection when another connection reaches the same Redis database through a URL', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    const source = "import { defineRedisConfig } from '@holo-js/kernel'\nexport default defineRedisConfig({ default: 'default', connections: { default: { url: 'redis://127.0.0.1:6379/1' } } })\n"
+    await writeProjectFile(projectRoot, 'config/redis.ts', source)
+
+    const failure = await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' }).then(() => undefined, (error: unknown) => error)
+
+    expect((failure as Error).message).toContain('the "default" connection already uses Redis database 1')
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(source)
+  }, 30_000)
+
   it('refuses a redis cache install when it cannot add the cache connection, and leaves the redis config as it was', async () => {
     for (const source of [
       `import { defineRedisConfig } from '@holo-js/kernel'\nconst connections = { default: { host: '127.0.0.1' } }\nexport default defineRedisConfig({ default: 'default', connections })\n`,
