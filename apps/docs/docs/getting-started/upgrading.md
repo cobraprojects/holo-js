@@ -1,5 +1,37 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.4 to 0.5.0
+
+Update every installed `@holo-js/*` package to `0.5.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. Review the two behavior changes below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#050---2026-10-30) lists the release changes.
+
+0.5.0 adds [task scheduling](/scheduling/). Run `holo install schedule` to add it.
+
+### Next.js server actions return validation failures
+
+When the browser calls a server action and it throws a validation or rate-limit error, the action now returns the `{ ok: false, ... }` payload instead of answering with a 500. Forms that use `useForm()` show the field errors as before and need no change.
+
+If your client code calls an action directly and catches the thrown error, read the returned value instead. The action's TypeScript return type doesn't include the payload, so read it with `serializeValidationException()`:
+
+```ts
+try { // [!code --]
+  await createPostAction(formData) // [!code --]
+} catch (error) { // [!code --]
+  showErrors(error) // [!code --]
+} // [!code --]
+const failure = serializeValidationException(await createPostAction(formData)) // [!code ++]
+if (failure) { // [!code ++]
+  showErrors(failure.errors) // [!code ++]
+} // [!code ++]
+```
+
+Actions called from server code or from inside another action, form posts sent without JavaScript, `redirect()`, and other errors still throw. See [Framework Recipes](/basics/forms/frameworks#next-js-server-action).
+
+### Redis connections with both a `url` database and a `db`
+
+When a Redis connection sets a `url` with a database path, such as `REDIS_URL=redis://127.0.0.1:6379/0`, and also sets `db`, queues, sessions, the rate limiter, and cache stores now use the `db` database. Before, they used the URL's database. When `db` is not set, the URL's database still applies.
+
+After the upgrade, jobs, sessions, rate-limit counters, and cache entries stored in the URL's database are no longer read. Before deploying, drain those queues, or make the `url` and `db` name the same database. See [Redis cache](/cache/drivers#redis) and [Redis queues](/queue/drivers#redis).
+
 ## Upgrading from 0.4.3 to 0.4.4
 
 Update every installed `@holo-js/*` package to `0.4.4` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#044---2026-10-30) lists the release changes.
