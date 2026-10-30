@@ -11,18 +11,12 @@ import {
   resolveProjectPackageImportSpecifier,
 } from './project'
 import { resolveFirstExistingPath } from './project/runtime'
+import { SCHEDULE_FILE_NAMES } from './project/shared'
 import { resolveModuleExport, resolveRunnableCliEntrypoint } from './queue'
 import { initializeProjectRuntime } from './runtime'
 import { loadConfigWithNormalizers } from './project/load-config'
 import type { FrameworkSpawn } from './framework-run'
 import type { IoStreams, SpawnProcessLike } from './cli-types'
-
-export const SCHEDULE_FILE_NAMES = [
-  'server/schedule.ts',
-  'server/schedule.mts',
-  'server/schedule.js',
-  'server/schedule.mjs',
-] as const
 
 const MINUTE_MS = 60_000
 const NO_DUE_TASKS_MESSAGE = '[schedule] No scheduled commands are ready to run.'

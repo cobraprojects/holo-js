@@ -67,6 +67,15 @@ export function renderStorageConfig(): string {
   ].join('\n')
 }
 
+export function renderScheduleDefinition(): string {
+  return [
+    'import { defineSchedule } from \'@holo-js/schedule\'',
+    '',
+    'export default defineSchedule(() => {})',
+    '',
+  ].join('\n')
+}
+
 export function renderMediaConfig(): string {
   return [
     'import { env } from \'@holo-js/config\'',

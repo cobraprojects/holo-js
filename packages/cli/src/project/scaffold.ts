@@ -15,6 +15,7 @@ import {
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
   REDIS_CONFIG_FILE_NAMES,
+  SCHEDULE_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
@@ -28,6 +29,7 @@ import {
   type NotificationsInstallResult,
   type QueueInstallResult,
   type RealtimeInstallResult,
+  type ScheduleInstallResult,
   type SecurityInstallResult,
   type SupportedCacheInstallerDriver,
   type SupportedQueueInstallerDriver,
@@ -61,6 +63,7 @@ import {
   renderNotificationsConfig,
   renderQueueConfig,
   renderRedisConfig,
+  renderScheduleDefinition,
   renderSecurityConfig,
   renderSessionConfig,
   renderStorageConfig,
@@ -69,8 +72,11 @@ import {
   syncBroadcastAuthSupportAfterAuthInstall,
 } from './scaffold/config-renderers'
 import {
+  addRedisCacheConnection,
   assertRedisCacheConnectionsAvailable,
+  findRedisDatabaseShare,
   resolveRequiredRedisConnections,
+  type RedisConfigSnapshot,
 } from './scaffold/redis-cache-connections'
 import {
   detectProjectFrameworkDescriptor,
@@ -90,6 +96,7 @@ import {
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
   upsertRealtimePackageDependency,
+  upsertSchedulePackageDependency,
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
@@ -767,6 +774,26 @@ export async function installMediaIntoProject(
   }
 }
 
+export async function installScheduleIntoProject(
+  projectRoot: string,
+): Promise<ScheduleInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const schedulePath = await resolveFirstExistingPath(projectRoot, SCHEDULE_FILE_NAMES)
+
+  if (!schedulePath) {
+    await mkdir(resolve(projectRoot, 'server'), { recursive: true })
+    await writeTextFile(resolve(projectRoot, 'server/schedule.ts'), renderScheduleDefinition())
+  }
+
+  return {
+    updatedPackageJson: await upsertSchedulePackageDependency(projectRoot),
+    createdScheduleFile: !schedulePath,
+    cacheInstalled: '@holo-js/cache' in dependencies || '@holo-js/cache' in devDependencies,
+    queueInstalled: '@holo-js/queue' in dependencies || '@holo-js/queue' in devDependencies,
+  }
+}
+
 export async function installSecurityIntoProject(
   projectRoot: string,
 ): Promise<SecurityInstallResult> {
@@ -803,6 +830,30 @@ export async function installSecurityIntoProject(
   }
 }
 
+async function addRedisCacheConnectionToConfig(projectRoot: string, redisConfig: RedisConfigSnapshot): Promise<string | undefined> {
+  const edits = addRedisCacheConnection(redisConfig.source, resolveConfigModuleFormat(redisConfig.path, redisConfig.source))
+  if ('reason' in edits) return edits.reason
+
+  let reason = 'the connection was missing after the edit'
+  for (const edited of edits) {
+    await writeTextFile(redisConfig.path, edited)
+    const loaded = await loadConfigWithNormalizers(projectRoot, { preferCache: false, processEnv: process.env })
+      .catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
+    if (loaded instanceof Error) {
+      reason = `the edited file didn't load: ${loaded.message}`
+      continue
+    }
+    const cache = loaded.redis.connections.cache
+    if (!cache) continue
+    const sharing = findRedisDatabaseShare(loaded.redis.connections)
+    if (!sharing) return undefined
+    reason = `the "${sharing}" connection already uses Redis database ${cache.db}, and a cache flush would delete its data. Set REDIS_CACHE_DB to a database that holds nothing else`
+    break
+  }
+  await writeTextFile(redisConfig.path, redisConfig.source)
+  return reason
+}
+
 export async function installCacheIntoProject(
   projectRoot: string,
   options: {
@@ -835,15 +886,21 @@ export async function installCacheIntoProject(
     )
   }
 
+  await readPackageJsonDependencyState(projectRoot)
+  let updatedRedisConfig = false
   if (driver === 'redis') {
     const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
     const redisConfigSource = redisConfigPath ? await readTextFile(redisConfigPath) : undefined
-    assertRedisCacheConnectionsAvailable({
-      redisConfig: redisConfigPath && redisConfigSource !== undefined
-        ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
-        : undefined,
-      requiredConnections: resolveRequiredRedisConnections(loadedCacheConfig?.drivers),
-    })
+    const redisConfig = redisConfigPath && redisConfigSource !== undefined
+      ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
+      : undefined
+    const requiredConnections = resolveRequiredRedisConnections(loadedCacheConfig?.drivers)
+    assertRedisCacheConnectionsAvailable({ redisConfig, requiredConnections: requiredConnections.filter(name => name !== 'cache') })
+    if (redisConfig && requiredConnections.includes('cache') && !redisConfig.connections.includes('cache')) {
+      const cannotAddReason = await addRedisCacheConnectionToConfig(projectRoot, redisConfig)
+      if (cannotAddReason) assertRedisCacheConnectionsAvailable({ redisConfig, requiredConnections, cannotAddReason })
+      updatedRedisConfig = true
+    }
   }
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -878,6 +935,7 @@ export async function installCacheIntoProject(
     updatedPackageJson: await upsertCachePackageDependencies(projectRoot, driver),
     createdCacheConfig: !cacheConfigPath,
     createdRedisConfig,
+    updatedRedisConfig,
     updatedEnv: nextEnv.changed,
     updatedEnvExample: nextEnvExample.changed,
     databaseDriver: driver === 'database',

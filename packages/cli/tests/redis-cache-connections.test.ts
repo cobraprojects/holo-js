@@ -1,10 +1,19 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { loadConfigDirectory } from '@holo-js/config'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { renderRedisCacheConnectionLines } from '../src/project/scaffold/config-renderers'
 import {
+  addRedisCacheConnection,
   assertRedisCacheConnectionsAvailable,
+  findRedisDatabaseShare,
   resolveRequiredRedisConnections,
 } from '../src/project/scaffold/redis-cache-connections'
+
+const configSourceUrl = pathToFileURL(resolve(import.meta.dirname, '../../config/src/index.ts')).href
 
 const moduleFormats = [
   { extension: 'ts', moduleFormat: 'esm' },
@@ -156,5 +165,78 @@ describe('redis cache connection check', () => {
         alternate: { driver: 'redis', connection: 'cache' },
       })).toEqual(['sessions', 'cache'])
     })
+  })
+})
+
+describe('adding the redis cache connection', () => {
+  async function loadEditedConnections(source: string, moduleFormat: 'esm' | 'cjs') {
+    const edits = addRedisCacheConnection(source, moduleFormat)
+    if ('reason' in edits) throw new Error(edits.reason)
+    const root = await mkdtemp(join(tmpdir(), 'holo-redis-edit-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    await mkdir(join(root, 'config'))
+    await writeFile(join(root, `config/redis.${moduleFormat === 'cjs' ? 'cjs' : 'mjs'}`), edits[0]!.replaceAll("'@holo-js/config'", JSON.stringify(configSourceUrl)))
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    return loaded.redis.connections
+  }
+
+  it('ignores braces and connections in comments and strings', async () => {
+    const connections = await loadEditedConnections([
+      '// connections: { old }',
+      'module.exports = {',
+      "  default: 'default',",
+      '  connections: {',
+      "    default: { host: '}', port: 6379 }, /* } */",
+      '  },',
+      '}',
+      '',
+    ].join('\n'), 'cjs')
+
+    expect(connections).toMatchObject({ default: { host: '}', db: 0 }, cache: { db: 1 } })
+  })
+
+  it.each([
+    ['an import of other names', "import { config } from '@holo-js/config'\nexport default { default: 'default', connections: { default: { host: config === undefined ? 'missing' : 'redis.test' } } }\n"],
+    ['env imported under another name', "import { env as readEnv } from '@holo-js/config'\nexport default { default: 'default', connections: { default: { host: readEnv('REDIS_HOST', 'redis.test') } } }\n"],
+    ['env imported with an explicit alias', "import { env as env } from '@holo-js/config'\nexport default { default: 'default', connections: { default: { host: env('REDIS_HOST', 'redis.test') } } }\n"],
+    ['only a commented-out env import', "// import { env } from '@holo-js/config'\nexport default { default: 'default', connections: { default: { host: 'redis.test' } } }\n"],
+    ['a single-quoted connections key', "export default { default: 'default', 'connections': { default: { host: 'redis.test' } } }\n"],
+    ['a double-quoted connections key', 'export default { default: \'default\', "connections": { default: { host: \'redis.test\' } } }\n'],
+  ])('adds a cache connection that loads to a config with %s', async (_shape, source) => {
+    expect(await loadEditedConnections(source, 'esm')).toMatchObject({ default: { host: 'redis.test', db: 0 }, cache: { host: '127.0.0.1', db: 1 } })
+  })
+
+  it('fills an empty connections object', async () => {
+    expect(await loadEditedConnections("export default { default: 'cache', connections: {} }\n", 'esm')).toMatchObject({ cache: { db: 1 } })
+  })
+
+  it('says why it cannot edit configs without one inline connections object', () => {
+    expect(addRedisCacheConnection('const connections = {}\nexport default { connections }\n', 'esm'))
+      .toEqual({ reason: 'its connections are not written as an inline object' })
+    expect(addRedisCacheConnection('export default { connections: shared }\n', 'esm'))
+      .toEqual({ reason: 'its connections are not written as an inline object' })
+    expect(addRedisCacheConnection('type Options = { connections: Record<string, object> }\nexport default { connections: shared }\n', 'esm'))
+      .toEqual({ reason: 'its connections are not written as an inline object' })
+    expect(addRedisCacheConnection("const text = \"'connections': {\"\nexport default { connections: shared }\n", 'cjs'))
+      .toEqual({ reason: 'its connections are not written as an inline object' })
+  })
+
+  it('finds another connection on the same Redis server and database as the cache', () => {
+    const connection = { host: '127.0.0.1', port: 6379, db: 0 }
+    expect(findRedisDatabaseShare({ default: connection, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, db: 1 }, cache: { ...connection, db: 1 } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: { ...connection, host: 'other', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://a' }, cache: { ...connection, url: 'redis://a' } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: connection })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://user:secret@127.0.0.1:6379/1', db: 1 }, cache: { ...connection, db: 1 } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://LOCALHOST/1', db: 1 }, cache: { ...connection, db: 1 } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'rediss://[::1]:6380', db: 1 }, cache: { ...connection, port: 6380, db: 1 } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://cache.internal:6379/1', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://127.0.0.1:6380/1', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, host: '127.0.0.2', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    const clusterNodes = [{ host: 'redis-a.internal', port: 6379 }, { url: 'redis://redis-b.internal:6380', host: 'redis-b.internal', port: 6380 }]
+    expect(findRedisDatabaseShare({ queue: { ...connection, clusters: clusterNodes }, cache: { ...connection, host: 'redis-b.internal', port: 6380 } })).toBe('queue')
+    expect(findRedisDatabaseShare({ queue: { ...connection, clusters: clusterNodes }, cache: { ...connection, host: 'redis-c.internal' } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, socketPath: '/tmp/redis.sock', db: 1 }, cache: { ...connection, url: 'unix:///tmp/redis.sock', db: 1 } })).toBe('default')
   })
 })

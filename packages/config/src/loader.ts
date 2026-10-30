@@ -87,8 +87,13 @@ let configImportNonce = 0
 async function importConfigModule(filePath: string, importKey?: string): Promise<unknown> {
   const key = importKey ?? String(++configImportNonce)
   const extension = extname(filePath)
-  if (extension === '.ts' || extension === '.mts' || extension === '.cts') {
+  if (extension === '.ts' || extension === '.mts') {
     return importConfig.import(filePath)
+  }
+
+  if (extension === '.cts') {
+    const exports = await importConfig.import(filePath)
+    return isObject(exports) && (isObject(exports.default) || isObject(exports.config)) ? exports : { default: exports }
   }
 
   if (extension === '.js' || extension === '.cjs') {

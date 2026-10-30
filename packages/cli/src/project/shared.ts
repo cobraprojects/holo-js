@@ -284,6 +284,7 @@ export type CacheInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdCacheConfig: boolean
   readonly createdRedisConfig: boolean
+  readonly updatedRedisConfig: boolean
   readonly updatedEnv: boolean
   readonly updatedEnvExample: boolean
   readonly databaseDriver: boolean
@@ -304,6 +305,13 @@ export type BroadcastInstallResult = {
   readonly createdFrameworkSetup: boolean
   readonly updatedEnv: boolean
   readonly updatedEnvExample: boolean
+}
+
+export type ScheduleInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdScheduleFile: boolean
+  readonly cacheInstalled: boolean
+  readonly queueInstalled: boolean
 }
 
 export type RealtimeInstallResult = {
@@ -358,6 +366,13 @@ export const MAIL_CONFIG_FILE_NAMES = configFileNamesFor('mail')
 export const MEDIA_CONFIG_FILE_NAMES = configFileNamesFor('media')
 
 export const SECURITY_CONFIG_FILE_NAMES = configFileNamesFor('security')
+
+export const SCHEDULE_FILE_NAMES = [
+  'server/schedule.ts',
+  'server/schedule.mts',
+  'server/schedule.js',
+  'server/schedule.mjs',
+] as const
 
 export const CORS_CONFIG_FILE_NAMES = configFileNamesFor('cors')
 

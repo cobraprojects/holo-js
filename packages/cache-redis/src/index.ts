@@ -230,18 +230,24 @@ function createRedisClusterOptions(
   }
 }
 
+function withoutDatabasePath(url: string): string {
+  const target = new URL(url)
+  target.pathname = ''
+  return target.toString()
+}
+
 function createRedisClient(options: RedisCacheDriverOptions): RedisClientLike {
   const RedisConstructor = Redis as RedisCtor
   const clientOptions = createRedisClientOptions(options)
-  const hasStandaloneUrl = typeof options.redis.url === 'string'
+  const standaloneUrl = options.redis.url
   const hasClusters = !!options.redis.clusters?.length
 
-  if (hasStandaloneUrl && hasClusters) {
+  if (typeof standaloneUrl === 'string' && hasClusters) {
     throw new Error('[@holo-js/cache-redis] Configure either redis.url or redis.clusters, but not both.')
   }
 
-  if (hasStandaloneUrl) {
-    return new RedisConstructor(options.redis.url, clientOptions)
+  if (typeof standaloneUrl === 'string') {
+    return new RedisConstructor(withoutDatabasePath(standaloneUrl), clientOptions)
   }
 
   if (hasClusters) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveManagedHoloPackageVersion } from '../src/project/dependency-versions'
+import { resolveHoloVersionPrefix, resolveManagedHoloPackageVersion } from '../src/project/dependency-versions'
 
 const packageName = '@holo-js/core'
 const currentVersion = '0.3.8'
@@ -29,5 +29,44 @@ describe('managed Holo dependency versions', () => {
       .toBe('^0.3.8')
     expect(resolveManagedHoloPackageVersion(packageName, 'latest', currentVersion, new Set()))
       .toBe('^0.3.8')
+  })
+
+  it('adds and raises packages in the version prefix it is given', () => {
+    expect(resolveManagedHoloPackageVersion('@holo-js/cache', undefined, currentVersion, new Set(), ''))
+      .toBe('0.3.8')
+    expect(resolveManagedHoloPackageVersion(packageName, '0.3.7', currentVersion, new Set(), ''))
+      .toBe('0.3.8')
+    expect(resolveManagedHoloPackageVersion(packageName, '0.3.8', currentVersion, new Set(), ''))
+      .toBe('0.3.8')
+    expect(resolveManagedHoloPackageVersion('@holo-js/cache', undefined, currentVersion, new Set(), '~'))
+      .toBe('~0.3.8')
+  })
+})
+
+describe('project Holo version prefix', () => {
+  it('uses exact versions when every Holo package is pinned exactly', () => {
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '0.4.4', '@holo-js/cli': '0.4.4', 'next': '^16.4.0' }, { '@holo-js/db': '0.4.4' }))
+      .toBe('')
+  })
+
+  it('uses a tilde when every Holo package uses one', () => {
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '~0.4.4', '@holo-js/cli': '~0.4.4' }))
+      .toBe('~')
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': 'v0.4.4', '@holo-js/cli': '0.4.4' }))
+      .toBe('')
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '=0.4.4', '@holo-js/cli': '= 0.4.4' }))
+      .toBe('')
+  })
+
+  it('uses a caret for caret, mixed, and missing Holo versions', () => {
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '^0.4.4', '@holo-js/cli': '^0.4.4' })).toBe('^')
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '0.4.4', '@holo-js/cli': '^0.4.4' })).toBe('^')
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '>=0.4.4' })).toBe('^')
+    expect(resolveHoloVersionPrefix({ 'next': '16.4.0' })).toBe('^')
+  })
+
+  it('ignores catalog and workspace Holo versions', () => {
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '0.4.4', '@holo-js/cli': 'catalog:', '@holo-js/db': 'workspace:*', '@holo-js/auth': 'catalog:tools' }))
+      .toBe('')
   })
 })

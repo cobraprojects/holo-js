@@ -583,7 +583,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|realtime|security|cache|media> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|realtime|security|cache|media|schedule> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const interactive = isInteractive(context, input.flags)
@@ -622,6 +622,9 @@ export function createInternalCommands(
         }
         if (target === 'media' && requestedDriver) {
           throw new Error('The media installer does not support --driver.')
+        }
+        if (target === 'schedule' && requestedDriver) {
+          throw new Error('The schedule installer does not support --driver.')
         }
 
         const driver = target === 'queue'
@@ -927,6 +930,7 @@ export function createInternalCommands(
 
           const changed = result.createdCacheConfig
             || result.createdRedisConfig
+            || result.updatedRedisConfig
             || result.updatedPackageJson
             || result.updatedEnv
             || result.updatedEnvExample
@@ -934,6 +938,7 @@ export function createInternalCommands(
           writeLine(context.stdout, changed ? 'Installed cache support.' : 'Cache support is already installed.')
           if (result.createdCacheConfig) writeLine(context.stdout, '  - created config/cache.ts')
           if (result.createdRedisConfig) writeLine(context.stdout, '  - created config/redis.ts')
+          if (result.updatedRedisConfig) writeLine(context.stdout, '  - added the "cache" connection to config/redis.ts')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
@@ -954,6 +959,21 @@ export function createInternalCommands(
           if (result.createdMediaConfig) writeLine(context.stdout, '  - created config/media.ts')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, '  - created media migration')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
+          return
+        }
+
+        if (target === 'schedule') {
+          const { installScheduleIntoProject } = await loadProjectScaffoldModule()
+          const result = await installScheduleIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson || result.createdScheduleFile
+
+          writeLine(context.stdout, changed ? 'Installed schedule support.' : 'Schedule support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdScheduleFile) writeLine(context.stdout, '  - created server/schedule.ts')
+          if (!result.cacheInstalled) writeLine(context.stdout, '  - run "holo install cache" before using withoutOverlapping() or onOneServer(); onOneServer() needs a store every server shares, such as --driver redis or --driver database')
+          if (!result.queueInstalled) writeLine(context.stdout, '  - run "holo install queue" before scheduling jobs')
+          if (changed) writeLine(context.stdout, '  - run "holo schedule:work", or "holo schedule:run" every minute from cron')
           await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }

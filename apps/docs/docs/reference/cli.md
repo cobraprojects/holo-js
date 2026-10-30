@@ -190,7 +190,7 @@ npx holo prepare
 
 ### install
 
-Add a first-party Holo feature to an existing project. It adds the package, creates config files and folders, updates `.env` and `.env.example`, then installs dependencies.
+Add a first-party Holo feature to an existing project. It adds the package, creates config files and folders, updates `.env` and `.env.example`, then installs dependencies. Packages are added in your project's Holo version style: exact if every `@holo-js/*` dependency is pinned exactly, `~` if every one uses `~`, and `^` otherwise. A setting it adds to `.env` or `.env.example` goes next to the related settings already in the file, such as other `REDIS_*` keys. Settings with no related ones in the file are appended at the end.
 
 ```bash
 npx holo install <target> [options]
@@ -198,7 +198,7 @@ npx holo install <target> [options]
 
 | Argument / flag | Description |
 | --- | --- |
-| `<target>` | One of `queue`, `events`, `auth`, `authorization`, `notifications`, `mail`, `broadcast`, `realtime`, `security`, `cache`, `media`. |
+| `<target>` | One of `queue`, `events`, `auth`, `authorization`, `notifications`, `mail`, `broadcast`, `realtime`, `security`, `cache`, `media`, `schedule`. |
 | `--driver <name>` | Only for `queue` (`sync`, `redis`, `database`; default `sync`) and `cache` (`file`, `redis`, `database`; default `file`). Other targets reject this flag. |
 | `--social` | `auth` only. Add social login support. |
 | `--provider <name>` | `auth` only. Social provider to add: `google`, `github`, `discord`, `facebook`, `apple`, `linkedin`. Repeat or comma-separate. Implies `--social`. |
@@ -218,8 +218,9 @@ What each target creates:
 | `broadcast` | `config/broadcast.ts`, `server/broadcast`, `server/channels`, the `/broadcasting/auth` route, and client setup |
 | `realtime` | `server/realtime` and framework setup |
 | `security` | `config/security.ts`, `config/cors.ts` |
-| `cache` | `config/cache.ts` (and `config/redis.ts` for Redis) |
+| `cache` | `config/cache.ts` (and `config/redis.ts` for Redis, or the `cache` connection in an existing one) |
 | `media` | `config/media.ts` and the media table migration |
+| `schedule` | `server/schedule.ts`. Says when `cache` or `queue` is missing, since `withoutOverlapping()`, `onOneServer()` (with a store every server shares, such as Redis or the database), and scheduled jobs need them. |
 
 ```bash
 npx holo install queue --driver redis

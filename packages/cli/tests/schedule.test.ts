@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
+import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
+import { renderScheduleDefinition } from '../src/project/scaffold/config-renderers'
 import { runScheduleListCommand, runScheduleRunCommand, runScheduleWorkCommand } from '../src/schedule'
 import type { IoStreams, SpawnProcessLike } from '../src/cli-types'
 
@@ -284,6 +286,34 @@ export default defineSchedule((schedule) => {
       '*/5 * * * *  send-digest            Next Due: 2026-11-02 12:05:00 Africa/Cairo',
       '0 * * * *    Closure                Next Due: 2026-11-02 13:00:00 Africa/Cairo',
     ])
+  })
+})
+
+describe('scaffolded schedule', () => {
+  it('lists and runs the server/schedule.ts that holo install schedule creates', { timeout: 60_000 }, async () => {
+    const root = await createProject(renderScheduleDefinition())
+    const io = createIo(root)
+
+    await runScheduleListCommand(io, root)
+    await runScheduleRunCommand(io, root)
+
+    expect(io.output()).toBe('[schedule] No scheduled tasks have been defined.\n[schedule] No scheduled commands are ready to run.\n')
+  })
+
+  it('typechecks the scaffolded server/schedule.ts with unused parameters and locals reported', async () => {
+    const root = await createProject(renderScheduleDefinition())
+    const program = ts.createProgram([join(root, 'server/schedule.ts')], {
+      strict: true,
+      noUnusedLocals: true,
+      noUnusedParameters: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   })
 })
 

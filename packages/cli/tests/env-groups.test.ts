@@ -75,6 +75,38 @@ describe('env file groups', () => {
     expect(files.example.split('\n')).toContain('TRUSTED_PROXIES=')
   })
 
+  it('puts missing keys next to the keys from their group that the file already has', () => {
+    const existing = 'APP_NAME=Repro\n\n# Redis\nREDIS_HOST=127.0.0.1\nREDIS_PORT=6379\nREDIS_DB=0\n\nMAIL_MAILER=preview\n'
+    const files = renderCacheEnvFiles('redis')
+
+    const env = upsertEnvContents(existing, files.env)
+    expect(env.contents).toBe([
+      'APP_NAME=Repro',
+      '',
+      '# Redis',
+      'REDIS_CONNECTION=',
+      'REDIS_URL=',
+      'REDIS_HOST=127.0.0.1',
+      'REDIS_PORT=6379',
+      'REDIS_USERNAME=',
+      'REDIS_PASSWORD=',
+      'REDIS_DB=0',
+      'REDIS_CACHE_DB=1',
+      '',
+      'MAIL_MAILER=preview',
+      '',
+      'CACHE_DRIVER=redis',
+      'CACHE_PREFIX=',
+      '',
+    ].join('\n'))
+    expect(upsertEnvContents(env.contents, files.env)).toEqual({ contents: env.contents, changed: false })
+    expect(upsertEnvContents('REDIS_DB=0', ['REDIS_DB=0', 'REDIS_CACHE_DB=1'])).toEqual({ contents: 'REDIS_DB=0\nREDIS_CACHE_DB=1\n', changed: true })
+  })
+
+  it('shows the Redis cache database in .env.example', () => {
+    expect(renderCacheEnvFiles('redis').example).toContain('REDIS_CACHE_DB=1')
+  })
+
   it('skips existing groups without losing separators between missing groups', () => {
     const existing = '# Keep this comment\r\nREDIS_CONNECTION=shared\r\nREDIS_HOST=remote\r\n'
     const additions = ['', 'QUEUE_CONNECTION=redis', '', 'REDIS_CONNECTION=default', 'REDIS_HOST=localhost', '', 'CACHE_DRIVER=redis', 'CACHE_DRIVER=file', '']

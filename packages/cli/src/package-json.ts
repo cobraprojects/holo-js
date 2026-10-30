@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { WORKSPACE_CATALOG } from './generated/workspaceCatalog'
 import { HOLO_PACKAGE_VERSION } from './metadata'
 import { readTextFile, writeTextFile } from './project'
-import { resolveManagedHoloPackageVersion } from './project/dependency-versions'
+import { resolveHoloVersionPrefix, resolveManagedHoloPackageVersion } from './project/dependency-versions'
 import { resolveWorkspacePackageNames } from './project/workspaces'
 
 type PackageJsonDependencyState = {
@@ -70,6 +70,7 @@ async function resolvePackageVersion(
       currentPackageVersion,
       HOLO_PACKAGE_VERSION,
       workspacePackageNames,
+      resolveHoloVersionPrefix(dependencies, devDependencies),
     )
   }
   if (typeof currentPackageVersion === 'string') return currentPackageVersion

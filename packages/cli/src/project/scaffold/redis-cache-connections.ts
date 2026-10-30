@@ -1,8 +1,14 @@
 import { REDIS_CONFIG_ENV_IMPORT, renderRedisCacheConnectionLines, resolveConfigModuleFormat } from './config-renderers'
+import type { ConfigModuleFormat } from './types'
 
 const SCAFFOLDED_REDIS_CONNECTIONS = ['default', 'cache'] as const
 
-const ESM_ENV_IMPORT_PATTERN = /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/
+const CONFIG_NAMED_IMPORTS_PATTERN = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/config\2/g
+
+function importsEnvBinding(source: string): boolean {
+  return [...maskNonCode(source, { keepStrings: true }).matchAll(CONFIG_NAMED_IMPORTS_PATTERN)].some(match => match[1]!.split(',')
+    .some(specifier => specifier.trim().split(/\s+as\s+/).at(-1)?.trim() === 'env'))
+}
 
 export type RedisConfigSnapshot = {
   readonly path: string
@@ -22,9 +28,123 @@ export function resolveRequiredRedisConnections(
   )))]
 }
 
+function maskNonCode(source: string, options: { readonly keepStrings?: boolean } = {}): string {
+  let masked = ''
+  let index = 0
+  while (index < source.length) {
+    const char = source[index]!
+    const next = source[index + 1]
+    let end = index + 1
+    if (char === '/' && next === '/') {
+      end = source.indexOf('\n', index)
+      if (end < 0) end = source.length
+    } else if (char === '/' && next === '*') {
+      end = source.indexOf('*/', index + 2)
+      end = end < 0 ? source.length : end + 2
+    } else if (char === '\'' || char === '"' || char === '`') {
+      while (end < source.length && source[end] !== char) end += source[end] === '\\' ? 2 : 1
+      end = Math.min(end + 1, source.length)
+      if (options.keepStrings) {
+        masked += source.slice(index, end)
+        index = end
+        continue
+      }
+    } else {
+      masked += char
+      index += 1
+      continue
+    }
+    masked += source.slice(index, end).replace(/[^\n]/g, ' ')
+    index = end
+  }
+  return masked
+}
+
+function addEnvImport(source: string): string {
+  const configImport = new RegExp(CONFIG_NAMED_IMPORTS_PATTERN.source).exec(maskNonCode(source, { keepStrings: true }))
+  if (configImport) {
+    const names = configImport[1]!.split(',').map(name => name.trim()).filter(Boolean)
+    return `${source.slice(0, configImport.index)}import { ${['env', ...names].join(', ')} } from ${configImport[2]}@holo-js/config${configImport[2]}${source.slice(configImport.index + configImport[0].length)}`
+  }
+  const firstImport = /^import\s/m.exec(maskNonCode(source))
+  const at = firstImport?.index ?? 0
+  return `${source.slice(0, at)}${REDIS_CONFIG_ENV_IMPORT}\n${firstImport ? '' : '\n'}${source.slice(at)}`
+}
+
+export function addRedisCacheConnection(source: string, moduleFormat: ConfigModuleFormat): readonly string[] | { readonly reason: string } {
+  const masked = maskNonCode(source)
+  const inline = [...maskNonCode(source, { keepStrings: true }).matchAll(/(?:\bconnections|(['"])connections\1)\s*:\s*\{/g)]
+    .map(match => match.index + match[0].length - 1)
+    .filter(open => masked[open] === '{')
+  if (inline.length === 0) return { reason: 'its connections are not written as an inline object' }
+
+  const needsEnvImport = moduleFormat === 'esm' && !importsEnvBinding(source)
+  return inline.map((open) => {
+    const edited = addConnectionToObject(source, masked, open, moduleFormat)
+    return needsEnvImport ? addEnvImport(edited) : edited
+  })
+}
+
+function addConnectionToObject(source: string, masked: string, open: number, moduleFormat: ConfigModuleFormat): string {
+  let close = open
+  for (let depth = 0; close < masked.length; close += 1) {
+    if (masked[close] === '{') depth += 1
+    else if (masked[close] === '}' && --depth === 0) break
+  }
+
+  const lastCode = masked.slice(0, close).trimEnd().length - 1
+  const separator = lastCode === open || masked[lastCode] === ',' ? '' : ','
+  const lineStart = source.lastIndexOf('\n', close) + 1
+  const closingIndent = source.slice(lineStart, close)
+  const connectionLines = renderRedisCacheConnectionLines(moduleFormat).map(line => line.slice(4))
+  if (/^\s*$/.test(closingIndent) && lineStart > open) {
+    const propertyIndent = `${closingIndent}  `
+    return `${source.slice(0, lastCode + 1)}${separator}${source.slice(lastCode + 1, lineStart)}${connectionLines.map(line => `${propertyIndent}${line}`).join('\n')}\n${source.slice(lineStart)}`
+  }
+
+  const inlineConnection = `${connectionLines.map(line => line.trim()).join(' ').replace(/, \},$/, ' }')}`
+  const rest = source.slice(lastCode + 1)
+  return `${source.slice(0, lastCode + 1)}${separator} ${inlineConnection}${/^\s/.test(rest) ? '' : ' '}${rest}`
+}
+
+type RedisEndpoint = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number }
+
+type RedisConnectionTarget = RedisEndpoint & { readonly clusters?: readonly RedisEndpoint[], readonly db: number }
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'])
+
+function redisHostIdentity(host: string): string {
+  const normalized = host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1')
+  return LOOPBACK_HOSTS.has(normalized) ? 'loopback' : normalized
+}
+
+function redisEndpointIdentity(endpoint: RedisEndpoint): string {
+  if (endpoint.url) {
+    const url = new URL(endpoint.url)
+    if (url.protocol === 'unix:' || url.protocol === 'redis+unix:') return `socket:${url.pathname}`
+    return `tcp:${redisHostIdentity(url.hostname)}:${url.port || 6379}`
+  }
+  if (endpoint.socketPath) return `socket:${endpoint.socketPath}`
+  return `tcp:${redisHostIdentity(endpoint.host)}:${endpoint.port}`
+}
+
+function redisServerIdentities(connection: RedisConnectionTarget): readonly string[] {
+  return connection.clusters?.length ? connection.clusters.map(redisEndpointIdentity) : [redisEndpointIdentity(connection)]
+}
+
+export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>): string | undefined {
+  const cache = connections.cache
+  if (!cache) return undefined
+  const cacheServers = redisServerIdentities(cache)
+  return Object.entries(connections).find(([name, connection]) => (
+    name !== 'cache' && connection.db === cache.db && redisServerIdentities(connection).some(server => cacheServers.includes(server))
+  ))?.[0]
+}
+
 export function assertRedisCacheConnectionsAvailable(options: {
   readonly redisConfig: RedisConfigSnapshot | undefined
   readonly requiredConnections: readonly string[]
+  readonly cannotAddReason?: string
 }): void {
   const available: readonly string[] = options.redisConfig?.connections ?? SCAFFOLDED_REDIS_CONNECTIONS
   const missing = options.requiredConnections.filter(name => !available.includes(name))
@@ -43,12 +163,15 @@ export function assertRedisCacheConnectionsAvailable(options: {
   ]
 
   if (missing.includes('cache')) {
+    if (options.cannotAddReason) {
+      sections.push(`Holo can't add it to config/redis.ts because ${options.cannotAddReason}.`)
+    }
     sections.push(
       `The "cache" connection keeps cache flushes on their own Redis database, because a flush deletes that whole database. `
       + `Add this connection to the connections object in config/redis.ts:\n\n${renderRedisCacheConnectionLines(moduleFormat).join('\n')}`,
       'REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.',
     )
-    if (moduleFormat === 'esm' && redisConfig && !ESM_ENV_IMPORT_PATTERN.test(redisConfig.source)) {
+    if (moduleFormat === 'esm' && redisConfig && !importsEnvBinding(redisConfig.source)) {
       sections.push(
         `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n${REDIS_CONFIG_ENV_IMPORT}`,
       )

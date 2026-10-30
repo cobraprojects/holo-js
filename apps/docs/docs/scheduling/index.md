@@ -5,10 +5,12 @@ The scheduler runs commands, jobs, and functions on a timetable that lives in yo
 ## Install
 
 ```bash
-npm install @holo-js/schedule
+npx holo install schedule
 ```
 
-`withoutOverlapping()` and `onOneServer()` also need [`@holo-js/cache`](/cache/). Scheduling a job needs [`@holo-js/queue`](/queue/).
+The installer adds `@holo-js/schedule` at your project's Holo version, creates a `server/schedule.ts` with no tasks if your app has no schedule file, and installs dependencies.
+
+`withoutOverlapping()` and `onOneServer()` also need [`@holo-js/cache`](/cache/), so run `npx holo install cache` before you use them. `onOneServer()` only works across servers with a store they all share, so install the cache with `--driver redis` or `--driver database`, not the default `file` driver. Scheduling a job needs [`@holo-js/queue`](/queue/), which `npx holo install queue` adds. The installer reminds you of both when they're missing.
 
 ## Define tasks
 
