@@ -40,8 +40,7 @@ export function serializeValidationFlash(flash: ValidationFlash): string {
   if (fitsInCookie(flash)) return JSON.stringify(flash)
   const errors: Record<string, readonly string[]> = {}
   for (const [path, messages] of Object.entries(firstMessages(flash.errors))) {
-    if (!fitsInCookie({ ...flash, errors: { ...errors, [path]: messages } })) break
-    errors[path] = messages
+    if (fitsInCookie({ ...flash, errors: { ...errors, [path]: messages } })) errors[path] = messages
   }
   return JSON.stringify({ ...flash, errors })
 }

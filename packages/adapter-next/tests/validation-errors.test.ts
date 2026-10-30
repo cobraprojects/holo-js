@@ -30,6 +30,12 @@ const saveItems = Object.defineProperty(adapterNextRuntimeInternals.serverAction
   await validate({}, manyFields)
 }), '$$id', { value: actionId })
 
+const profileForm = schema({ bio: field.string().required('x'.repeat(4000)), email: field.string().required('Email is required.') })
+
+const saveProfile = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
+  await validate({}, profileForm)
+}), '$$id', { value: actionId })
+
 const changePassword = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
   await validate({ title: 'x', password: 'short' }, postForm, { bag: 'password' })
 }), '$$id', { value: actionId })
@@ -223,5 +229,15 @@ describe('useValidationErrors() in Next', () => {
     await page.refresh()
 
     expect(page.errors.flatten()).toEqual({})
+  })
+
+  it('keeps the errors that fit when one message is too large for the browser cookie', async () => {
+    const browser = installBrowserCookies()
+    const page = await openPage('/posts/new')
+
+    browser.receive((await submit(saveProfile, { withJavaScript: true })).setCookies)
+    await page.refresh()
+
+    expect(page.errors.first('email')).toBe('Email is required.')
   })
 })

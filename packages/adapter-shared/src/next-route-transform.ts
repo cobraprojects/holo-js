@@ -50,9 +50,13 @@ function nameAllocator(file: ts.SourceFile): NameAllocator {
   }
 }
 
+function isDeclaredValue(statement: ts.Statement): statement is ts.FunctionDeclaration | ts.ClassDeclaration {
+  return (ts.isFunctionDeclaration(statement) && Boolean(statement.body)) || ts.isClassDeclaration(statement)
+}
+
 function declaredValues(file: ts.SourceFile, defaultName: string): ReadonlySet<string> {
   return new Set(file.statements.flatMap((statement) => {
-    if (ts.isFunctionDeclaration(statement) && statement.body) return [statement.name?.text ?? defaultName]
+    if (isDeclaredValue(statement)) return [statement.name?.text ?? defaultName]
     if (!ts.isVariableStatement(statement)) return []
     return statement.declarationList.declarations.flatMap(declaration => boundNames(declaration.name))
   }))
@@ -65,7 +69,7 @@ function wrappedLocals(file: ts.SourceFile, wraps: (name: string) => boolean, de
     if (declared.has(local) && wraps(exported)) locals.add(local)
   }
   for (const statement of file.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.body && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
+    if (isDeclaredValue(statement) && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
       const local = statement.name?.text ?? defaultName
       add(local, hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? 'default' : local)
     }
@@ -89,6 +93,10 @@ function reassignable(statement: ts.Statement, locals: ReadonlySet<string>, defa
   if (ts.isFunctionDeclaration(statement) && statement.body && !statement.name && locals.has(defaultName)) {
     return ts.factory.updateFunctionDeclaration(statement, statement.modifiers, statement.asteriskToken,
       ts.factory.createIdentifier(defaultName), statement.typeParameters, statement.parameters, statement.type, statement.body)
+  }
+  if (ts.isClassDeclaration(statement) && !statement.name && locals.has(defaultName)) {
+    return ts.factory.updateClassDeclaration(statement, statement.modifiers, ts.factory.createIdentifier(defaultName),
+      statement.typeParameters, statement.heritageClauses, statement.members)
   }
   if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
     && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
@@ -131,7 +139,7 @@ function localizeDefaultExport(statement: ts.Statement, defaultName: string, loc
   if (!ts.isExportAssignment(statement) || statement.isExportEquals) return [statement]
   let expression = statement.expression
   while (ts.isParenthesizedExpression(expression)) expression = expression.expression
-  if (!localizes(expression)) return [statement]
+  if (!localizes(expression)) return [ts.factory.updateExportAssignment(statement, statement.modifiers, expression)]
   return [
     ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
       ts.factory.createVariableDeclaration(defaultName, undefined, undefined, expression),
