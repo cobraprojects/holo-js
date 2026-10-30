@@ -163,6 +163,7 @@ import {
   nextMigrationTemplate,
 } from '../src/migrations'
 import { installRealtimeIntoProject } from '../src/project/scaffold'
+import { renderScheduleDefinition } from '../src/project/scaffold/config-renderers'
 import {
   defaultProjectConfig,
   discoverAppCommands,
@@ -2380,7 +2381,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, realtime, security, cache, media.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, realtime, security, cache, media, schedule.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -2413,6 +2414,10 @@ export default defineAppConfig({
     const mediaDriver = runCliProcess(projectRoot, ['install', 'media', '--driver', 'redis'])
     expect(mediaDriver.status).toBe(1)
     expect(mediaDriver.stderr).toContain('The media installer does not support --driver.')
+
+    const scheduleDriver = runCliProcess(projectRoot, ['install', 'schedule', '--driver', 'redis'])
+    expect(scheduleDriver.status).toBe(1)
+    expect(scheduleDriver.stderr).toContain('The schedule installer does not support --driver.')
   }, 60000)
 
   it('installs Holo agent skills for selected coding agents', async () => {
@@ -4282,6 +4287,47 @@ export default defineCacheConfig({
     expect(second.status, second.stderr || second.stdout).toBe(0)
     expect(second.stdout).toContain('Media support is already installed.')
     expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('_create_media_table.ts'))).toHaveLength(1)
+  }, 30_000)
+
+  it('installs schedule support through the CLI, points out the cache and queue packages, and is idempotent', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const first = runCliProcess(projectRoot, ['install', 'schedule'])
+    expect(first.status, first.stderr || first.stdout).toBe(0)
+    expect(first.stdout).toContain('Installed schedule support.')
+    expect(first.stdout).toContain('  - updated package.json')
+    expect(first.stdout).toContain('  - created server/schedule.ts')
+    expect(first.stdout).toContain('  - run "holo install cache" before using withoutOverlapping() or onOneServer()')
+    expect(first.stdout).toContain('  - run "holo install queue" before scheduling jobs')
+    expect(first.stdout).toContain('  - run "holo schedule:work", or "holo schedule:run" every minute from cron')
+    expect(await readFile(join(projectRoot, 'server/schedule.ts'), 'utf8')).toBe(renderScheduleDefinition())
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies).toMatchObject({ '@holo-js/schedule': expectedHoloPackageRange })
+
+    const second = runCliProcess(projectRoot, ['install', 'schedule'])
+    expect(second.status, second.stderr || second.stdout).toBe(0)
+    expect(second.stdout).toContain('Schedule support is already installed.')
+    expect(second.stdout).not.toContain('schedule:work')
+  }, 30_000)
+
+  it('installs schedule support at the exact Holo version and keeps an existing schedule file', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: { '@holo-js/cache': HOLO_PACKAGE_VERSION, '@holo-js/core': HOLO_PACKAGE_VERSION, '@holo-js/queue': HOLO_PACKAGE_VERSION },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'server/schedule.mjs', 'export default {}\n')
+
+    await expect(projectInternals.installScheduleIntoProject(projectRoot)).resolves.toEqual({
+      updatedPackageJson: true,
+      createdScheduleFile: false,
+      cacheInstalled: true,
+      queueInstalled: true,
+    })
+    await expect(readFile(join(projectRoot, 'server/schedule.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/schedule']).toBe(HOLO_PACKAGE_VERSION)
   }, 30_000)
 
   it('generates the media table migration through the CLI', async () => {
@@ -10624,10 +10670,10 @@ export default defineRedisConfig({
       { store: 'none', redis: 'absent', outcome: 'installs' },
       { store: 'cache', redis: 'default-only', outcome: 'installs' },
       { store: 'omitted', redis: 'default-only', outcome: 'installs' },
-      { store: 'sessions', redis: 'default-only', outcome: 'refuses', snippet: false, missing: '"sessions"' },
+      { store: 'sessions', redis: 'default-only', outcome: 'refuses', missing: '"sessions"' },
       { store: 'cache', redis: 'default-and-cache', outcome: 'installs' },
       { store: 'cache', redis: 'absent', outcome: 'installs' },
-      { store: 'sessions', redis: 'absent', outcome: 'refuses', snippet: false, missing: '"sessions"' },
+      { store: 'sessions', redis: 'absent', outcome: 'refuses', missing: '"sessions"' },
     ] as const)(
       'redis cache install with redis config $redis and store $store $outcome',
       async ({ store, redis, outcome, ...expected }) => {
@@ -10662,14 +10708,7 @@ export default defineCacheConfig({
         if (outcome === 'refuses') {
           const message = await refusalMessage(projectRoot)
           expect(message).toContain(expected.missing)
-          if (expected.snippet) {
-            expect(message).toContain('cache: {')
-          } else {
-            expect(message).not.toContain('cache: {')
-          }
-          if (store === 'none') {
-            await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-          }
+          expect(message).not.toContain('cache: {')
           return
         }
 

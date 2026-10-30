@@ -15,6 +15,7 @@ import {
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
   REDIS_CONFIG_FILE_NAMES,
+  SCHEDULE_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
@@ -28,6 +29,7 @@ import {
   type NotificationsInstallResult,
   type QueueInstallResult,
   type RealtimeInstallResult,
+  type ScheduleInstallResult,
   type SecurityInstallResult,
   type SupportedCacheInstallerDriver,
   type SupportedQueueInstallerDriver,
@@ -61,6 +63,7 @@ import {
   renderNotificationsConfig,
   renderQueueConfig,
   renderRedisConfig,
+  renderScheduleDefinition,
   renderSecurityConfig,
   renderSessionConfig,
   renderStorageConfig,
@@ -92,6 +95,7 @@ import {
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
   upsertRealtimePackageDependency,
+  upsertSchedulePackageDependency,
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
@@ -766,6 +770,27 @@ export async function installMediaIntoProject(
     updatedPackageJson: await upsertMediaPackageDependency(projectRoot),
     createdMediaConfig: !mediaConfigPath,
     createdMigrationFiles: migrationFilePath ? [migrationFilePath] : [],
+  }
+}
+
+export async function installScheduleIntoProject(
+  projectRoot: string,
+): Promise<ScheduleInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const schedulePath = await resolveFirstExistingPath(projectRoot, SCHEDULE_FILE_NAMES)
+
+  if (!schedulePath) {
+    await mkdir(resolve(projectRoot, 'server'), { recursive: true })
+    await writeTextFile(resolve(projectRoot, 'server/schedule.ts'), renderScheduleDefinition())
+  }
+
+  const updatedPackageJson = await upsertSchedulePackageDependency(projectRoot)
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  return {
+    updatedPackageJson,
+    createdScheduleFile: !schedulePath,
+    cacheInstalled: '@holo-js/cache' in dependencies || '@holo-js/cache' in devDependencies,
+    queueInstalled: '@holo-js/queue' in dependencies || '@holo-js/queue' in devDependencies,
   }
 }
 

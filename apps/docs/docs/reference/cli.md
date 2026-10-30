@@ -198,7 +198,7 @@ npx holo install <target> [options]
 
 | Argument / flag | Description |
 | --- | --- |
-| `<target>` | One of `queue`, `events`, `auth`, `authorization`, `notifications`, `mail`, `broadcast`, `realtime`, `security`, `cache`, `media`. |
+| `<target>` | One of `queue`, `events`, `auth`, `authorization`, `notifications`, `mail`, `broadcast`, `realtime`, `security`, `cache`, `media`, `schedule`. |
 | `--driver <name>` | Only for `queue` (`sync`, `redis`, `database`; default `sync`) and `cache` (`file`, `redis`, `database`; default `file`). Other targets reject this flag. |
 | `--social` | `auth` only. Add social login support. |
 | `--provider <name>` | `auth` only. Social provider to add: `google`, `github`, `discord`, `facebook`, `apple`, `linkedin`. Repeat or comma-separate. Implies `--social`. |
@@ -218,8 +218,9 @@ What each target creates:
 | `broadcast` | `config/broadcast.ts`, `server/broadcast`, `server/channels`, the `/broadcasting/auth` route, and client setup |
 | `realtime` | `server/realtime` and framework setup |
 | `security` | `config/security.ts`, `config/cors.ts` |
-| `cache` | `config/cache.ts` (and `config/redis.ts` for Redis) |
+| `cache` | `config/cache.ts` (and `config/redis.ts` for Redis, or the `cache` connection in an existing one) |
 | `media` | `config/media.ts` and the media table migration |
+| `schedule` | `server/schedule.ts`. Says when `cache` or `queue` is missing, since `withoutOverlapping()`, `onOneServer()`, and scheduled jobs need them. |
 
 ```bash
 npx holo install queue --driver redis

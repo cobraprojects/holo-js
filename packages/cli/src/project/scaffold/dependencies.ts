@@ -688,6 +688,10 @@ async function upsertMediaPackageDependency(projectRoot: string): Promise<boolea
   return await upsertManagedPackageDependency(projectRoot, '@holo-js/media')
 }
 
+async function upsertSchedulePackageDependency(projectRoot: string): Promise<boolean> {
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/schedule')
+}
+
 async function upsertSecurityPackageDependency(projectRoot: string): Promise<boolean> {
   const updatedSecurity = await upsertManagedPackageDependency(projectRoot, '@holo-js/security')
   const updatedSession = await upsertManagedPackageDependency(projectRoot, '@holo-js/session')
@@ -943,5 +947,6 @@ export {
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
   upsertRealtimePackageDependency,
+  upsertSchedulePackageDependency,
   upsertSecurityPackageDependency,
 }

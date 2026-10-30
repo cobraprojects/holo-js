@@ -151,6 +151,7 @@ Valid names are:
 | `realtime` | — |
 | `security` | — |
 | `media` | — |
+| `schedule` | — |
 
 For example, to add auth with Google and GitHub login:
 
@@ -161,7 +162,7 @@ npx holo install auth --provider google,github
 In an interactive terminal, `holo install auth` without flags asks which providers you want. If a feature is already fully installed, the command reports that and changes nothing.
 
 ::: info
-`media` is only available through `holo install`. `validation`, `forms`, and `storage` are only offered when you create the project. To add them later, install the package with your package manager (for example `npm install @holo-js/validation @holo-js/forms`) and follow the setup on the [Validation](/basics/validation/), [Forms](/basics/forms/), or [File Storage](/storage/) page.
+`media` and `schedule` are only available through `holo install`. `validation`, `forms`, and `storage` are only offered when you create the project. To add them later, install the package with your package manager (for example `npm install @holo-js/validation @holo-js/forms`) and follow the setup on the [Validation](/basics/validation/), [Forms](/basics/forms/), or [File Storage](/storage/) page.
 :::
 
 ## Running the CLI
