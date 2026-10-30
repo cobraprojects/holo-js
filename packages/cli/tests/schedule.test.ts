@@ -43,7 +43,18 @@ async function createProject(schedule: string): Promise<string> {
   await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
   await writeFile(join(root, 'config/app.ts'), `
 import { defineAppConfig } from '@holo-js/config'
-export default defineAppConfig({ name: 'Schedule', key: 'base64:schedule', env: 'production', timezone: 'Africa/Cairo' })
+import { appendFileSync } from 'node:fs'
+export default defineAppConfig({
+  name: 'Schedule',
+  key: 'base64:schedule',
+  env: 'production',
+  timezone: 'Africa/Cairo',
+  exceptions: {
+    report(error, { capability, operation }) {
+      appendFileSync(${JSON.stringify(join(root, 'reports.log'))}, capability + ':' + operation + ':' + error.message + '\\n')
+    },
+  },
+})
 `)
   await writeFile(join(root, 'config/database.ts'), `
 import { defineDatabaseConfig } from '@holo-js/db'
@@ -125,6 +136,27 @@ export default defineSchedule((schedule) => {
     expect(io.output()).toContain('[schedule] Running [Closure] DONE')
     expect(io.output()).toContain('[schedule] Running [broken] FAIL')
     expect(io.errors()).toContain('closure failed')
+  })
+
+  it("reports failed tasks through the app's error reporter", { timeout: 60_000 }, async () => {
+    const root = await createProject(`
+import { defineSchedule } from '@holo-js/schedule'
+
+export default defineSchedule((schedule) => {
+  schedule.call(() => {
+    throw new Error('closure failed')
+  }).name('broken').everyMinute()
+  schedule.call(() => false).name('refuses').everyMinute()
+  schedule.call(() => {}).name('fine').everyMinute()
+})
+`)
+
+    await runScheduleRunCommand(createIo(root), root)
+
+    expect((await readFile(join(root, 'reports.log'), 'utf8')).split('\n').filter(Boolean)).toEqual([
+      'schedule:task:closure failed',
+      'schedule:task:Scheduled task [refuses] failed with exit code [1].',
+    ])
   })
 
   it('reports that nothing is due when the app has no schedule', async () => {

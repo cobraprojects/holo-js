@@ -1,5 +1,5 @@
 const MINUTE_MS = 60_000
-const MAX_SEARCH_DAYS = 366 * 5
+const MAX_SEARCH_DAYS = 366 * 9
 
 const MACROS: Readonly<Record<string, string>> = {
   '@yearly': '0 0 1 1 *',
@@ -167,6 +167,9 @@ export function normalizeCronExpression(expression: string): string {
 export function parseCronExpression(expression: string): CronSchedule {
   const fields = normalizeCronExpression(expression).split(/\s+/)
   if (fields.length !== 5) throw new CronExpressionError(expression, 'expected 5 fields.')
+  if ([fields[0], fields[1], fields[3]].includes('?') || (fields[2] === '?' && fields[4] === '?')) {
+    throw new CronExpressionError(expression, '"?" is only allowed in one of the day-of-month and day-of-week fields.')
+  }
 
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields.map((field, index) => parseField(field, FIELD_SPECS[index]!, expression))
   return { minute: minute!, hour: hour!, dayOfMonth: dayOfMonth!, month: month!, dayOfWeek: dayOfWeek! }

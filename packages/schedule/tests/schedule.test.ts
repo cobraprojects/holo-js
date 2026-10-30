@@ -102,12 +102,37 @@ describe('frequencies', () => {
     expect(await expressions(definition)).toEqual(['0 0 * * 1-5', '15 * * * *'])
   })
 
+  it('accepts a question mark only in one day field, as Laravel does', async () => {
+    const read = (expression: string) => listScheduledTasks(
+      defineSchedule(schedule => schedule.call(() => {}).cron(expression)),
+      { now: MIDNIGHT_UTC, timezone: 'UTC' },
+    )
+
+    for (const expression of ['? * * * *', '0 ? * * *', '0 0 * ? *', '0 0 ? * ?']) {
+      await expect(read(expression), expression).rejects.toThrow(CronExpressionError)
+    }
+    expect((await read('0 0 ? * 1'))[0]?.nextDueAt.toISOString()).toBe('2026-11-09T00:00:00.000Z')
+    expect((await read('0 0 15 * ?'))[0]?.nextDueAt.toISOString()).toBe('2026-11-15T00:00:00.000Z')
+  })
+
   it('rejects invalid expressions, times, and timezones when the scheduler reads the schedule', async () => {
     const read = (definition: ScheduleDefinition) => listScheduledTasks(definition, { now: MIDNIGHT_UTC, timezone: 'UTC' })
 
     await expect(read(defineSchedule(schedule => schedule.call(() => {}).cron('61 * * * *')))).rejects.toThrow(CronExpressionError)
     await expect(read(defineSchedule(schedule => schedule.call(() => {}).dailyAt('24:00')))).rejects.toThrow('Invalid time "24:00"')
     await expect(read(defineSchedule(schedule => schedule.call(() => {}).timezone('Mars/Olympus')))).rejects.toThrow('Invalid timezone')
+  })
+})
+
+describe('definitions', () => {
+  it('rejects an asynchronous schedule definition instead of losing its tasks', async () => {
+    const definition = defineSchedule(async (schedule) => {
+      await Promise.resolve()
+      schedule.call(() => {}).daily()
+    })
+
+    await expect(listScheduledTasks(definition, { now: MIDNIGHT_UTC, timezone: 'UTC' }))
+      .rejects.toThrow('[@holo-js/schedule] defineSchedule() callbacks must define tasks synchronously.')
   })
 })
 
@@ -160,6 +185,14 @@ describe('next due dates', () => {
       const [task] = await listScheduledTasks(definition, { now: new Date(now), timezone: 'UTC' })
       expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
     }
+  })
+
+  it('finds a leap day across a century that skips one', async () => {
+    const definition = defineSchedule(schedule => schedule.call(() => {}).yearlyOn(2, 29))
+
+    const [task] = await listScheduledTasks(definition, { now: new Date('2096-03-01T00:00:00Z'), timezone: 'UTC' })
+
+    expect(task?.nextDueAt.toISOString()).toBe('2104-02-29T00:00:00.000Z')
   })
 
   it('reports an expression that never matches', async () => {
@@ -316,6 +349,26 @@ describe('withoutOverlapping', () => {
     await first
 
     expect(ran).toEqual(['slow', 'fast', 'fast'])
+  })
+})
+
+describe('stopping', () => {
+  it('starts no task once the stop signal fires, even while a lock is being acquired', async () => {
+    const ran: string[] = []
+    const definition = defineSchedule((schedule) => {
+      schedule.call(() => ran.push('locked')).name('locked').everyMinute().withoutOverlapping()
+      schedule.call(() => ran.push('next')).everyMinute()
+    })
+    const stop = new AbortController()
+
+    const run = runAt(definition, MIDNIGHT_UTC, { signal: stop.signal })
+    stop.abort()
+    const reports = await run
+    const later = await runAt(definition, new Date('2026-11-02T00:01:00Z'))
+
+    expect(ran).toEqual(['locked', 'next'])
+    expect(reports).toEqual([])
+    expect(later.map(report => report.outcome)).toEqual(['ran', 'ran'])
   })
 })
 

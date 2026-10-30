@@ -181,7 +181,7 @@ Add one cron entry on the server that runs `schedule:run` every minute:
 * * * * * cd /path-to-your-app && npx holo schedule:run >> /dev/null 2>&1
 ```
 
-`schedule:run` checks every task once, runs the ones that are due one after another, and exits. A failing task is reported and the rest still run.
+`schedule:run` checks every task once, runs the ones that are due one after another, and exits. A failing task is printed and sent to your app's [error reporter](/basics/errors#reporting-errors) with capability `schedule` and operation `task`, and the rest still run.
 
 ### Without cron
 

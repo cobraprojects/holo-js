@@ -69,6 +69,10 @@ export class Schedule {
   }
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && typeof (value as { then?: unknown }).then === 'function'
+}
+
 export function defineSchedule(define: (schedule: Schedule) => void): ScheduleDefinition {
   let tasks: readonly ScheduledTask[] | undefined
   return Object.freeze({
@@ -76,7 +80,11 @@ export function defineSchedule(define: (schedule: Schedule) => void): ScheduleDe
     get tasks(): readonly ScheduledTask[] {
       if (!tasks) {
         const schedule = new Schedule()
-        define(schedule)
+        const result: unknown = define(schedule)
+        if (isPromiseLike(result)) {
+          Promise.resolve(result).catch(() => undefined)
+          throw new Error('[@holo-js/schedule] defineSchedule() callbacks must define tasks synchronously.')
+        }
         tasks = Object.freeze(schedule.tasks)
       }
       return tasks

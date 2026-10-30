@@ -85,7 +85,7 @@ async function execute(state: ScheduledTaskState, summary: string, options: Sche
   }
 }
 
-async function runTask(state: ScheduledTaskState, options: ScheduleRunOptions): Promise<ScheduledTaskReport> {
+async function runTask(state: ScheduledTaskState, options: ScheduleRunOptions): Promise<ScheduledTaskReport | undefined> {
   const summary = await describeTask(state)
   const name = await mutexName(state)
 
@@ -98,6 +98,7 @@ async function runTask(state: ScheduledTaskState, options: ScheduleRunOptions): 
   if (overlapLock && await overlapLock.get() !== true) return { summary, outcome: 'skipped-overlapping' }
 
   try {
+    if (options.signal?.aborted) return undefined
     await execute(state, summary, options)
     return { summary, outcome: 'ran' }
   } finally {
@@ -117,11 +118,12 @@ export async function runDueScheduledTasks(
   const reports: ScheduledTaskReport[] = []
   for (const state of due) {
     if (options.signal?.aborted) break
-    const report = await runTask(state, options).catch(async (error: unknown): Promise<ScheduledTaskReport> => ({
+    const report = await runTask(state, options).catch(async (error: unknown): Promise<ScheduledTaskReport | undefined> => ({
       summary: await describeTask(state).catch(() => state.action.kind),
       outcome: 'failed',
       error: error instanceof Error ? error : new Error(String(error)),
     }))
+    if (!report) break
     reports.push(report)
     options.onTaskFinished?.(report)
   }
