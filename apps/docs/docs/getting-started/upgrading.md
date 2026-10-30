@@ -1129,8 +1129,6 @@ Forms helpers such as `validate()` and `useForm()` accept these schemas directly
 If you use `isValidationException(error)` to recognize a serialized response or framework-wrapped error, switch to `serializeValidationException(error)` from `@holo-js/validation`. Releases after 0.5.0 remove it ([upgrade section](#serializevalidationexception-is-removed)). It returns the failure payload, or `undefined` for unrelated errors:
 
 ```ts
-import { serializeValidationException } from '@holo-js/validation'
-
 const payload = serializeValidationException(error)
 if (payload) {
   return payload
