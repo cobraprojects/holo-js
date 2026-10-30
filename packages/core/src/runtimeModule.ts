@@ -724,6 +724,21 @@ function importNeedsNodeResolutionBundle(
     )
 }
 
+const nativeLoadCheckStop = Symbol.for('holo-js.native-load-check')
+
+// Node loads and links a module's whole static graph before it runs any of it, so importing the sources behind a
+// module that throws while it runs reports syntax Node can't strip (such as enums) without running user code.
+// This replaces module.stripTypeScriptTypes(), which prints an ExperimentalWarning.
+async function nodeLoadsTypeScriptSources(tempDir: string, sourcePaths: readonly string[]): Promise<boolean> {
+  const checkPath = join(tempDir, 'native-load-check.mjs')
+  await writeFile(checkPath, [
+    `import ${JSON.stringify(`data:text/javascript,${encodeURIComponent('throw Symbol.for("holo-js.native-load-check")')}`)}`,
+    ...sourcePaths.map(sourcePath => `import ${JSON.stringify(pathToFileURL(sourcePath).href)}`),
+  ].join('\n'), 'utf8')
+  const outcome = await importModule(pathToFileURL(checkPath).href).catch((error: unknown) => error)
+  return outcome === nativeLoadCheckStop
+}
+
 export async function loadProjectDefinitionRuntimeModules(
   projectRoot: string,
   entryPaths: readonly string[],
@@ -741,6 +756,7 @@ export async function loadProjectDefinitionRuntimeModules(
     const nativeSourceLoader = isBunRuntime()
       || [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)].some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
     let nativeGraph = true
+    const typeScriptSources: string[] = []
     const projectImports: Array<{ readonly dependency: MetafileImport, readonly importerPath: string }> = []
     for (const [inputPath, input] of Object.entries(bundled.metafile?.inputs ?? {})) {
       if (inputPath.startsWith(`${runtimeInstanceNamespace}:`)) continue
@@ -756,14 +772,10 @@ export async function loadProjectDefinitionRuntimeModules(
       if (input.imports.some(dependency => importNeedsNodeResolutionBundle(dependency))) nativeGraph = false
       if (/\.[cm]?tsx?$/.test(sourcePath)) {
         if (!('typescript' in process.features) || !process.features.typescript) nativeGraph = false
-        try {
-          if (!nodeModule.stripTypeScriptTypes) nativeGraph = false
-          else nodeModule.stripTypeScriptTypes(source)
-        } catch {
-          nativeGraph = false
-        }
+        typeScriptSources.push(sourcePath)
       }
     }
+    if (nativeGraph && typeScriptSources.length) nativeGraph = await nodeLoadsTypeScriptSources(tempDir, typeScriptSources)
     if (nativeSourceLoader && projectImports.some(({ dependency, importerPath }) => !staticImportMatchesBundle(dependency, importerPath, projectRoot))) nativeGraph = false
     const previous = definitionGraphSources.get(projectRoot)
     if (previous && (!previous.native || previous.sources.size !== sources.size || [...sources].some(([path, source]) => previous.sources.get(path) !== source))) nativeGraph = false

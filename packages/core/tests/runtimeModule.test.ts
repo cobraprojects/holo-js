@@ -510,6 +510,67 @@ console.log(JSON.stringify({ sameJob: listenerModule.listener.job === reportModu
     }, 30_000)
   })
 
+  describe('checks TypeScript definitions under plain Node without experimental APIs', () => {
+    const firstSource = "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.HOLO_SIDE_EFFECT_LOG as string, 'first ran\\n')\nexport const first = { name: 'first' as string }\n"
+
+    async function runPlainNodeDefinitionChild(projectRoot: string, definitionPaths: readonly string[]): Promise<{ shared: boolean, lazy?: number, stderr: string }> {
+      const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+      const childPath = join(projectRoot, 'child.mjs')
+      await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const paths = ${JSON.stringify(definitionPaths)}
+const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, paths)
+const loaded = await Promise.all(paths.map(path => importDefinition(path)))
+const direct = await import(${JSON.stringify(pathToFileURL(definitionPaths[0]!).href)})
+const lazy = typeof loaded[0].load === 'function' ? (await loaded[0].load()).color : undefined
+console.log(JSON.stringify({ shared: loaded[0].first === direct.first, lazy }))
+`)
+      const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+      const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+      const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', ESBUILD_BINARY_PATH: esbuildBinary, HOLO_SIDE_EFFECT_LOG: join(projectRoot, 'side-effects.log') }
+      delete env.TSX_TSCONFIG_PATH
+      const { stdout, stderr } = await promisify(execFile)(process.execPath, [childPath], { cwd: projectRoot, env })
+      return { ...JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { shared: boolean, lazy?: number }, stderr }
+    }
+
+    it('loads erasable definitions natively and prints no ExperimentalWarning', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: firstSource })
+      const secondPath = join(projectRoot, 'jobs/second.ts')
+      await writeFile(secondPath, "import { label } from './label.ts'\nexport const second = { label }\n")
+      await writeFile(join(projectRoot, 'jobs/label.ts'), "export const label: string = 'label'\n")
+
+      const result = await runPlainNodeDefinitionChild(projectRoot, [definitionPath, secondPath])
+
+      expect(result.shared).toBe(true)
+      expect(result.stderr).not.toContain('ExperimentalWarning')
+      expect(await readSideEffectLog(projectRoot)).toEqual(['first ran'])
+    }, 30_000)
+
+    it('bundles when a later definition uses syntax Node cannot strip, without running the earlier one natively first', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({ definition: firstSource })
+      const secondPath = join(projectRoot, 'jobs/second.ts')
+      await writeFile(secondPath, 'enum Color { Red }\nexport const second = { color: Color.Red }\n')
+
+      const result = await runPlainNodeDefinitionChild(projectRoot, [definitionPath, secondPath])
+
+      expect(result.shared).toBe(false)
+      expect(result.stderr).not.toContain('ExperimentalWarning')
+      expect(await readSideEffectLog(projectRoot)).toEqual(['first ran', 'first ran'])
+    }, 30_000)
+
+    it('bundles when only a dynamically imported module uses syntax Node cannot strip', async () => {
+      const { projectRoot, definitionPath } = await createAliasDefinitionProject({
+        definition: `${firstSource}export const load = () => import('./lazy.ts')\n`,
+        files: { 'jobs/lazy.ts': 'enum Color { Red = 7 }\nexport const color = Color.Red\n' },
+      })
+
+      const result = await runPlainNodeDefinitionChild(projectRoot, [definitionPath])
+
+      expect(result).toMatchObject({ shared: false, lazy: 7 })
+      expect(result.stderr).not.toContain('ExperimentalWarning')
+    }, 30_000)
+  })
+
   describe('keeps package-scoped imports native', () => {
     const packageImportsManifest = { type: 'module', imports: { '#internal': './internal.ts' } }
 
