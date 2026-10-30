@@ -522,8 +522,6 @@ async function bundleRuntimeModule(
       plugins: [bridgeRuntimeModuleInstances()],
       target: 'node22',
       tsconfig: tsconfigPath,
-      // Inline, because the bundle folder is deleted after the import. Node reads the map for --enable-source-maps and
-      // NODE_V8_COVERAGE, so stack traces and coverage point at the project sources.
       sourcemap: 'inline',
       metafile,
     }))
@@ -728,9 +726,6 @@ function importNeedsNodeResolutionBundle(
 
 const nativeLoadCheckStop = Symbol.for('holo-js.native-load-check')
 
-// Node loads and links a module's whole static graph before it runs any of it, so importing the sources behind a
-// module that throws while it runs reports syntax Node can't strip (such as enums) without running user code.
-// This replaces module.stripTypeScriptTypes(), which prints an ExperimentalWarning.
 async function nodeLoadsTypeScriptSources(tempDir: string, sourcePaths: readonly string[]): Promise<boolean> {
   const checkPath = join(tempDir, 'native-load-check.mjs')
   await writeFile(checkPath, [

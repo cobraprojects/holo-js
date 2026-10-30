@@ -5,9 +5,8 @@ const SCAFFOLDED_REDIS_CONNECTIONS = ['default', 'cache'] as const
 
 const CONFIG_NAMED_IMPORTS_PATTERN = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/config\2/g
 
-// True when an import from @holo-js/config binds the local name env, as `env` or `something as env`.
 function importsEnvBinding(source: string): boolean {
-  return [...source.matchAll(CONFIG_NAMED_IMPORTS_PATTERN)].some(match => match[1]!.split(',')
+  return [...maskNonCode(source, { keepStrings: true }).matchAll(CONFIG_NAMED_IMPORTS_PATTERN)].some(match => match[1]!.split(',')
     .some(specifier => specifier.trim().split(/\s+as\s+/).at(-1)?.trim() === 'env'))
 }
 
@@ -29,9 +28,7 @@ export function resolveRequiredRedisConnections(
   )))]
 }
 
-// Replaces comments, strings and template literals with spaces, keeping offsets, so braces and names inside them
-// aren't read as code.
-function maskNonCode(source: string): string {
+function maskNonCode(source: string, options: { readonly keepStrings?: boolean } = {}): string {
   let masked = ''
   let index = 0
   while (index < source.length) {
@@ -47,6 +44,11 @@ function maskNonCode(source: string): string {
     } else if (char === '\'' || char === '"' || char === '`') {
       while (end < source.length && source[end] !== char) end += source[end] === '\\' ? 2 : 1
       end = Math.min(end + 1, source.length)
+      if (options.keepStrings) {
+        masked += source.slice(index, end)
+        index = end
+        continue
+      }
     } else {
       masked += char
       index += 1
@@ -59,7 +61,7 @@ function maskNonCode(source: string): string {
 }
 
 function addEnvImport(source: string): string {
-  const configImport = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/config\2/.exec(source)
+  const configImport = new RegExp(CONFIG_NAMED_IMPORTS_PATTERN.source).exec(maskNonCode(source, { keepStrings: true }))
   if (configImport) {
     const names = configImport[1]!.split(',').map(name => name.trim()).filter(Boolean)
     return `${source.slice(0, configImport.index)}import { ${['env', ...names].join(', ')} } from ${configImport[2]}@holo-js/config${configImport[2]}${source.slice(configImport.index + configImport[0].length)}`
@@ -69,28 +71,26 @@ function addEnvImport(source: string): string {
   return `${source.slice(0, at)}${REDIS_CONFIG_ENV_IMPORT}\n${firstImport ? '' : '\n'}${source.slice(at)}`
 }
 
-// Returns one edited copy of an existing Redis config per inline `connections: { ... }` object, each with the
-// scaffolded "cache" connection added to that object, or why there is nothing to edit. Type declarations can also
-// have a connections key, so the caller keeps the first copy whose reloaded config resolves the connection.
 export function addRedisCacheConnection(source: string, moduleFormat: ConfigModuleFormat): readonly string[] | { readonly reason: string } {
   const masked = maskNonCode(source)
-  const inline = [...masked.matchAll(/\bconnections\s*:\s*\{/g)].map(match => match.index + match[0].length - 1)
+  const inline = [...maskNonCode(source, { keepStrings: true }).matchAll(/(?:\bconnections|(['"])connections\1)\s*:\s*\{/g)]
+    .map(match => match.index + match[0].length - 1)
+    .filter(open => masked[open] === '{')
   if (inline.length === 0) return { reason: 'its connections are not written as an inline object' }
 
-  const edits = inline.flatMap(open => {
+  const needsEnvImport = moduleFormat === 'esm' && !importsEnvBinding(source)
+  return inline.map((open) => {
     const edited = addConnectionToObject(source, masked, open, moduleFormat)
-    return edited === undefined ? [] : [moduleFormat === 'esm' && !importsEnvBinding(source) ? addEnvImport(edited) : edited]
+    return needsEnvImport ? addEnvImport(edited) : edited
   })
-  return edits.length > 0 ? edits : { reason: 'its connections object is not closed' }
 }
 
-function addConnectionToObject(source: string, masked: string, open: number, moduleFormat: ConfigModuleFormat): string | undefined {
+function addConnectionToObject(source: string, masked: string, open: number, moduleFormat: ConfigModuleFormat): string {
   let close = open
   for (let depth = 0; close < masked.length; close += 1) {
     if (masked[close] === '{') depth += 1
     else if (masked[close] === '}' && --depth === 0) break
   }
-  if (close >= masked.length) return undefined
 
   const lastCode = masked.slice(0, close).trimEnd().length - 1
   const separator = lastCode === open || masked[lastCode] === ',' ? '' : ','
@@ -116,29 +116,21 @@ function redisHostIdentity(host: string): string {
   return LOOPBACK_HOSTS.has(normalized) || /^127\./.test(normalized) ? 'loopback' : normalized
 }
 
-// The server a connection reaches, whether it is written as a URL, a socket path, or host and port. Credentials and
-// the database path don't change the server. Loopback names count as one host, so the check errs toward a refusal.
 function redisServerIdentity(connection: RedisConnectionTarget): string {
   if (connection.url) {
-    try {
-      const url = new URL(connection.url)
-      if (url.protocol === 'unix:' || url.protocol === 'redis+unix:') return `socket:${url.pathname}`
-      return `tcp:${redisHostIdentity(url.hostname)}:${url.port || 6379}`
-    } catch {
-      return `url:${connection.url}`
-    }
+    const url = new URL(connection.url)
+    if (url.protocol === 'unix:' || url.protocol === 'redis+unix:') return `socket:${url.pathname}`
+    return `tcp:${redisHostIdentity(url.hostname)}:${url.port || 6379}`
   }
   if (connection.socketPath) return `socket:${connection.socketPath}`
   return `tcp:${redisHostIdentity(connection.host)}:${connection.port}`
 }
 
-// Names the connection that uses the same Redis server and database as the cache connection. A cache flush deletes
-// that whole database, so it must not hold another connection's data.
-export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>, name = 'cache'): string | undefined {
-  const cache = connections[name]
+export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>): string | undefined {
+  const cache = connections.cache
   if (!cache) return undefined
-  return Object.entries(connections).find(([other, connection]) => (
-    other !== name && redisServerIdentity(connection) === redisServerIdentity(cache) && connection.db === cache.db
+  return Object.entries(connections).find(([name, connection]) => (
+    name !== 'cache' && redisServerIdentity(connection) === redisServerIdentity(cache) && connection.db === cache.db
   ))?.[0]
 }
 

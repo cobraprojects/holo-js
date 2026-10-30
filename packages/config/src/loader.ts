@@ -92,9 +92,6 @@ async function importConfigModule(filePath: string, importKey?: string): Promise
   }
 
   if (extension === '.cts') {
-    // jiti returns a CommonJS file's module.exports itself. Exports that already hold the config under an object
-    // `default` or `config` key resolve as they are. Wrap the rest as import() wraps a .cjs file, so a config whose
-    // own `default` is a name, such as a Redis config's default connection, isn't read as a module namespace.
     const exports = await importConfig.import(filePath)
     return isObject(exports) && (isObject(exports.default) || isObject(exports.config)) ? exports : { default: exports }
   }

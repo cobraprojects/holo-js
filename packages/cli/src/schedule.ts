@@ -18,8 +18,6 @@ import { loadConfigWithNormalizers } from './project/load-config'
 import type { FrameworkSpawn } from './framework-run'
 import type { IoStreams, SpawnProcessLike } from './cli-types'
 
-export { SCHEDULE_FILE_NAMES }
-
 const MINUTE_MS = 60_000
 const NO_DUE_TASKS_MESSAGE = '[schedule] No scheduled commands are ready to run.'
 const NO_TASKS_MESSAGE = '[schedule] No scheduled tasks have been defined.'

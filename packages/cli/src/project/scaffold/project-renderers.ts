@@ -751,7 +751,6 @@ export function renderCacheEnvFiles(
         'CACHE_PREFIX=',
         '',
         ...redis.example,
-        // Shown because it must differ from REDIS_DB: flushing the cache deletes its whole database.
         'REDIS_CACHE_DB=1',
       ],
     }
@@ -803,8 +802,6 @@ export function normalizeScaffoldEnvSegments(segments: string): readonly string[
     .filter(segment => segment.length > 0)
 }
 
-// A missing key goes next to the keys from its group that the file already has: after the closest one that comes
-// before it in the group, or before the first one. Groups the file has none of are appended, after a blank line.
 export function upsertEnvContents(
   existingContents: string | undefined,
   additions: readonly string[],

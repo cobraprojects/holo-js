@@ -778,7 +778,7 @@ export async function installScheduleIntoProject(
   projectRoot: string,
 ): Promise<ScheduleInstallResult> {
   await loadProjectConfig(projectRoot, { required: true })
-  const updatedPackageJson = await upsertSchedulePackageDependency(projectRoot)
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   const schedulePath = await resolveFirstExistingPath(projectRoot, SCHEDULE_FILE_NAMES)
 
   if (!schedulePath) {
@@ -786,9 +786,8 @@ export async function installScheduleIntoProject(
     await writeTextFile(resolve(projectRoot, 'server/schedule.ts'), renderScheduleDefinition())
   }
 
-  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   return {
-    updatedPackageJson,
+    updatedPackageJson: await upsertSchedulePackageDependency(projectRoot),
     createdScheduleFile: !schedulePath,
     cacheInstalled: '@holo-js/cache' in dependencies || '@holo-js/cache' in devDependencies,
     queueInstalled: '@holo-js/queue' in dependencies || '@holo-js/queue' in devDependencies,
@@ -831,8 +830,6 @@ export async function installSecurityIntoProject(
   }
 }
 
-// Adds the "cache" connection to an existing Redis config, then loads the config again to check that it resolves
-// on a database no other connection uses. Restores the file and returns the reason when it can't.
 async function addRedisCacheConnectionToConfig(projectRoot: string, redisConfig: RedisConfigSnapshot): Promise<string | undefined> {
   const edits = addRedisCacheConnection(redisConfig.source, resolveConfigModuleFormat(redisConfig.path, redisConfig.source))
   if ('reason' in edits) return edits.reason
@@ -889,7 +886,6 @@ export async function installCacheIntoProject(
     )
   }
 
-  // Fails on a missing or invalid package.json before any project file changes.
   await readPackageJsonDependencyState(projectRoot)
   let updatedRedisConfig = false
   if (driver === 'redis') {

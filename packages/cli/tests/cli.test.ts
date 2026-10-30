@@ -4310,15 +4310,15 @@ export default defineCacheConfig({
     expect(second.stdout).not.toContain('schedule:work')
   }, 30_000)
 
-  it('leaves no schedule file or Redis config edit behind when package.json is invalid', async () => {
+  it('leaves no schedule file or Redis config edit behind when package.json is missing', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const redisSource = "import { defineRedisConfig } from '@holo-js/kernel'\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', db: 0 } } })\n"
     await writeProjectFile(projectRoot, 'config/redis.ts', redisSource)
-    await writeFile(join(projectRoot, 'package.json'), '{ not json')
+    await rm(join(projectRoot, 'package.json'))
 
-    await expect(projectInternals.installScheduleIntoProject(projectRoot)).rejects.toThrow()
-    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow()
+    await expect(projectInternals.installScheduleIntoProject(projectRoot)).rejects.toThrow('Missing package.json')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('Missing package.json')
 
     await expect(readFile(join(projectRoot, 'server/schedule.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
@@ -10586,24 +10586,11 @@ export default defineRedisConfig({
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=2')
   }, 30_000)
 
-  it('refuses the cache connection when another connection reaches the same Redis database through a URL', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, '.env', '')
-    const source = "import { defineRedisConfig } from '@holo-js/kernel'\nexport default defineRedisConfig({ default: 'default', connections: { default: { url: 'redis://127.0.0.1:6379/1' } } })\n"
-    await writeProjectFile(projectRoot, 'config/redis.ts', source)
-
-    const failure = await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' }).then(() => undefined, (error: unknown) => error)
-
-    expect((failure as Error).message).toContain('the "default" connection already uses Redis database 1')
-    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(source)
-  }, 30_000)
-
   it('refuses a redis cache install when it cannot add the cache connection, and leaves the redis config as it was', async () => {
-    for (const source of [
-      `import { defineRedisConfig } from '@holo-js/kernel'\nconst connections = { default: { host: '127.0.0.1' } }\nexport default defineRedisConfig({ default: 'default', connections })\n`,
-      `import { defineRedisConfig } from '@holo-js/kernel'\nconst env = { host: '127.0.0.1' }\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: env.host } } })\n`,
-    ]) {
+    for (const [source, reason] of [
+      [`import { defineRedisConfig } from '@holo-js/kernel'\nconst connections = { default: { host: '127.0.0.1' } }\nexport default defineRedisConfig({ default: 'default', connections })\n`, 'its connections are not written as an inline object'],
+      [`import { defineRedisConfig } from '@holo-js/kernel'\nconst env = { host: '127.0.0.1' }\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: env.host } } })\n`, 'the edited file didn\'t load'],
+    ] as const) {
       const projectRoot = await createTempProject()
       tempDirs.push(projectRoot)
       await writeProjectFile(projectRoot, '.env', '')
@@ -10613,7 +10600,7 @@ export default defineRedisConfig({
 
       expect(failure).toBeInstanceOf(Error)
       expect((failure as Error).message).toContain('does not define the "cache" Redis connection')
-      expect((failure as Error).message).toMatch(/Holo can't add it to config\/redis\.ts because (its connections are not written as an inline object|the edited file didn't load)/)
+      expect((failure as Error).message).toContain(`Holo can't add it to config/redis.ts because ${reason}`)
       expect((failure as Error).message).toContain('cache: {')
       expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(source)
       await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })

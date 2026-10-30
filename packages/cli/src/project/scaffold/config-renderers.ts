@@ -71,8 +71,11 @@ export function renderScheduleDefinition(): string {
   return [
     'import { defineSchedule } from \'@holo-js/schedule\'',
     '',
-    '// Declare tasks in the callback, for example:',
-    '//   defineSchedule((schedule) => { schedule.command(\'cache:clear\').daily() })',
+    '// Declare tasks on the schedule the callback receives, for example:',
+    '//',
+    '// export default defineSchedule((schedule) => {',
+    '//   schedule.command(\'reports:send\').daily()',
+    '// })',
     'export default defineSchedule(() => {})',
     '',
   ].join('\n')

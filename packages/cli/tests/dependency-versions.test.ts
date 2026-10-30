@@ -54,6 +54,8 @@ describe('project Holo version prefix', () => {
       .toBe('~')
     expect(resolveHoloVersionPrefix({ '@holo-js/core': 'v0.4.4', '@holo-js/cli': '0.4.4' }))
       .toBe('')
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '=0.4.4', '@holo-js/cli': '= 0.4.4' }))
+      .toBe('')
   })
 
   it('uses a caret for caret, mixed, and missing Holo versions', () => {

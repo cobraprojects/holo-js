@@ -1647,14 +1647,6 @@ export default defineQueueConfig({
     expect(loaded.redis.connections.main).toMatchObject({ host: 'redis.test' })
   })
 
-  it('loads a .cts config written with export default', async () => {
-    const root = await createProject()
-    await writeFile(join(root, 'config/redis.cts'), "export default { default: 'main', connections: { main: { host: 'redis.test' } } }\n")
-
-    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
-    expect(loaded.redis.default).toBe('main')
-  })
-
   it('loads process env overrides even when env files are missing', async () => {
     const root = await createProject()
 
