@@ -84,6 +84,8 @@
   },
   "dependencies": {
     "@holo-js/kernel": "catalog:",
+    "@jridgewell/remapping": "catalog:",
+    "magic-string": "catalog:",
     "typescript": "catalog:"
   },
   "devDependencies": {

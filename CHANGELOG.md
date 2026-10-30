@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- In Next.js apps, errors thrown in `'use server'` modules and `app/**/route.ts` handlers point at the right source lines again, and V8 coverage (`NODE_V8_COVERAGE` with `experimental.serverSourceMaps`) counts the right lines. Since 0.5.0, Holo reprinted these files to wrap their exports and passed no source map, so blank lines disappeared, statements were reformatted, and positions shifted. Holo now edits the original text in place, so untouched lines keep their line and column, and the loaders pass a source map to Turbopack and webpack, chained with any map an earlier loader passed. `@holo-js/adapter-shared/build` adds `transformNextServerActions()` and `transformNextRoute()`, which return the code with its map. See [Coverage and stack traces](apps/docs/docs/testing/index.md#coverage-and-stack-traces).
+
 ## 0.5.0 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-044-to-050) for Next.js server actions and Redis connections that set both a `url` with a database path and a `db`. No required migrations.
