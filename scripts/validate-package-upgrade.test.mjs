@@ -80,3 +80,17 @@ test('passes when optional Holo peers accept any version, for patch and minor re
     'npm: upgrading every @holo-js package from 0.1.0 to 0.2.0 resolves',
   ])
 })
+
+test('passes when Bun upgrades a lockfile across patch and minor releases', async () => {
+  const upstream = await startPublishedRegistry()
+  const root = await createRepo('*')
+  const resolved = []
+
+  const failures = await validatePackageUpgrade({ root, upstream, managers: ['bun'], log: message => resolved.push(message) })
+
+  assert.deepEqual(failures, [])
+  assert.deepEqual(resolved, [
+    'bun: upgrading every @holo-js package from 0.1.0 to 0.1.1 resolves',
+    'bun: upgrading every @holo-js package from 0.1.0 to 0.2.0 resolves',
+  ])
+})
