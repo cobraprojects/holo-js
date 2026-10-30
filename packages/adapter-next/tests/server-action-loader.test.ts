@@ -70,6 +70,15 @@ describe('Next server action loader', () => {
     expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'submitted' })
   })
 
+  it('wraps a default-exported arrow action', async () => {
+    const module = await importCompiled('arrow-actions.ts', [
+      '\'use server\'',
+      'export default (async () => \'arrow\')',
+    ].join('\n'))
+
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'arrow' })
+  })
+
   it('wraps an anonymous default action without clashing with module bindings', async () => {
     const module = await importCompiled('anonymous-actions.ts', [
       '\'use server\'',

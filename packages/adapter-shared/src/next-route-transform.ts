@@ -116,14 +116,27 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
   ]
 }
 
+function localizeDefaultFunction(statement: ts.Statement, defaultName: string): readonly ts.Statement[] {
+  if (!ts.isExportAssignment(statement) || statement.isExportEquals) return [statement]
+  let expression = statement.expression
+  while (ts.isParenthesizedExpression(expression)) expression = expression.expression
+  if (!ts.isArrowFunction(expression) && !ts.isFunctionExpression(expression)) return [statement]
+  return [
+    ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
+      ts.factory.createVariableDeclaration(defaultName, undefined, undefined, expression),
+    ], ts.NodeFlags.Let)),
+    ts.factory.updateExportAssignment(statement, statement.modifiers, ts.factory.createIdentifier(defaultName)),
+  ]
+}
+
 function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
   const allocate = nameAllocator(source)
   const defaultName = allocate('__holoDefault')
   const runtimeName = allocate('__holoRouteRuntime')
   const declared = declaredValues(source, defaultName)
-  const file = wrapper === 'routeHandler'
-    ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeRouteExports(statement, wraps, declared, allocate)))
-    : source
+  const file = ts.factory.updateSourceFile(source, source.statements
+    .flatMap(statement => localizeDefaultFunction(statement, defaultName))
+    .flatMap(statement => wrapper === 'routeHandler' ? localizeRouteExports(statement, wraps, declared, allocate) : [statement]))
   const locals = wrappedLocals(file, wraps, defaultName)
   if (locals.size === 0) return undefined
   const runtimeImport = ts.factory.createImportDeclaration(undefined,
