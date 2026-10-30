@@ -14,6 +14,7 @@
 - `holo install` adds Holo packages the way your `package.json` already lists them: exact versions such as `"0.4.4"` when every `@holo-js/*` dependency is pinned exactly, `~` ranges when every one uses `~`, and `^` ranges otherwise. Before, it always added `^` ranges.
 - `holo install` puts each setting it adds to `.env` and `.env.example` next to the related settings already in the file, such as other `REDIS_*` keys, instead of at the end. The Redis cache install writes `REDIS_CACHE_DB=1` to `.env.example` instead of leaving it blank, since it must differ from `REDIS_DB`.
 - Holo's runtime bundles of policies, abilities, and other discovered files carry inline source maps. V8 coverage now counts those source files instead of reporting them as unmeasured, and with `--enable-source-maps` an error thrown in them points at the source line instead of the deleted bundle in `.holo-js/runtime`. See [Coverage and stack traces](apps/docs/docs/testing/index.md#coverage-and-stack-traces).
+- A Redis cache store whose connection has both a `url` with a database path, such as `redis://127.0.0.1:6379/0`, and a `db` uses the `db`, as Holo's Redis config reads it. Before, the URL's database won, so `cache.flush()` could delete a database the config gave to queues or sessions.
 - A CommonJS `config/*.cts` file whose export has a `default` key, such as `config/redis.cts` with `default: 'main'`, is loaded again. Before, it was ignored and Holo used the built-in defaults.
 
 ### Changed

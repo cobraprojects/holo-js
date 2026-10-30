@@ -6,7 +6,7 @@ import Redis from 'ioredis'
 import { startRedisService } from '../../session/tests/support/redis'
 import { createRedisCacheDriver, type RedisCacheDriverOptions } from '../src'
 
-async function configureRealCache(options: { cluster?: boolean; socket?: boolean; url?: boolean; db?: number } = {}) {
+async function configureRealCache(options: { cluster?: boolean; socket?: boolean; url?: boolean; urlDatabase?: number; db?: number } = {}) {
   const service = await startRedisService(options)
   const port = service.ports[0]
   if (!port) throw new Error('Expected Redis port')
@@ -15,7 +15,7 @@ async function configureRealCache(options: { cluster?: boolean; socket?: boolean
     : options.socket
       ? { socketPath: service.socket, db: options.db ?? 0 }
       : options.url
-        ? { url: `redis://127.0.0.1:${port}`, db: options.db ?? 0 }
+        ? { url: `redis://127.0.0.1:${port}${options.urlDatabase === undefined ? '' : `/${options.urlDatabase}`}`, db: options.db ?? 0 }
         : { host: '127.0.0.1', port, db: options.db ?? 0 }
   const prefix = `holo:cache:${randomUUID()}:`
   const driver = createRedisCacheDriver({ name: 'redis', connectionName: 'cache', redis })
@@ -121,8 +121,8 @@ describe('Redis cache behavior', () => {
     }
   })
 
-  it('flushes the configured Redis database and leaves other databases untouched', async () => {
-    const { service, port } = await configureRealCache({ db: 2 })
+  it.each([{ db: 2 }, { url: true, urlDatabase: 0, db: 2 }])('flushes the configured Redis database and leaves other databases untouched through %j', async (options) => {
+    const { service, port } = await configureRealCache(options)
     const cacheDatabase = new Redis({ host: '127.0.0.1', port, db: 2, maxRetriesPerRequest: 1 })
     const defaultDatabase = service.clients[0]
     if (!defaultDatabase) throw new Error('Expected Redis client')
