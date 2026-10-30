@@ -212,7 +212,6 @@ export {
   installNotificationsIntoProject,
   publishAuthNotificationsIntoProject,
   installQueueIntoProject,
-  installScheduleIntoProject,
   installSecurityIntoProject,
   loadHoloPluginFromPackage,
   loadProjectPluginCommands,
