@@ -3,8 +3,17 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
+import { parseShard, readLibrarySuiteDurations, selectShardTasks } from '../scripts/library-suite-shards.mjs'
 
 const root = resolve(import.meta.dirname, '..')
+const { values: options } = parseArgs({
+  options: {
+    'skip-build': { type: 'boolean', default: false },
+    shard: { type: 'string', default: '1/1' },
+  },
+})
+const shard = parseShard(options.shard)
 const resultsRoot = join(root, 'coverage', 'native-libraries')
 const pg = createRequire(join(root, 'packages/db-postgres/package.json'))('pg')
 const mysql = createRequire(join(root, 'packages/db-mysql/package.json'))('mysql2/promise')
@@ -30,7 +39,7 @@ const env = {
 const results = []
 let mysqlAdmin
 
-function run(label, command, args, cwd = root, extraEnv = {}, reportPaths = []) {
+function run({ label, command, args, cwd = root, extraEnv = {}, reportPaths = [] }) {
   process.stdout.write(`Starting ${label}\n`)
   for (const reportPath of reportPaths) rmSync(reportPath, { force: true })
   const result = spawnSync(command, args, {
@@ -58,18 +67,13 @@ function run(label, command, args, cwd = root, extraEnv = {}, reportPaths = []) 
   }
 }
 
-mkdirSync(resultsRoot, { recursive: true })
-await postgres.connect()
-try {
-  mysqlAdmin = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root' })
-  await postgres.query(`CREATE DATABASE ${name}`)
-  await mysqlAdmin.query(`CREATE DATABASE ${name}`)
-
-  run('library-build', process.execPath, ['scripts/build-libraries.mjs'])
-  if (results.at(-1).status !== 0) throw new Error('Native package tests require a successful library build.')
-
+function collectTasks() {
   const policyScript = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts['test:dependency-policy']
-  run('dependency-policy', '/bin/sh', ['-c', policyScript.replace('node --test ', 'node --test --test-concurrency=4 ')])
+  const tasks = [{
+    label: 'dependency-policy',
+    command: '/bin/sh',
+    args: ['-c', policyScript.replace('node --test ', 'node --test --test-concurrency=4 ')],
+  }]
   for (const directory of readdirSync(join(root, 'packages'), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort()) {
     const cwd = join(root, 'packages', directory)
     const manifestPath = join(cwd, 'package.json')
@@ -83,12 +87,35 @@ try {
       reportPaths.push(join(resultsRoot, filename))
       return `npx vitest --pool forks --fileParallelism --maxWorkers 4 --reporter=json --outputFile=../../coverage/native-libraries/${filename}`
     })
-    run(`packages/${directory}`, '/bin/sh', ['-c', command], cwd, {}, reportPaths)
+    tasks.push({ label: `packages/${directory}`, command: '/bin/sh', args: ['-c', command], cwd, reportPaths })
   }
-  run('cache-redis-live', 'npx', [
-    'vitest', 'run', '--pool', 'forks', '--fileParallelism', '--maxWorkers', '4', '--reporter=json',
-    `--outputFile=${join(resultsRoot, 'cache-redis-live.json')}`,
-  ], join(root, 'packages/cache-redis'), { HOLO_REDIS_INTEGRATION: '1' }, [join(resultsRoot, 'cache-redis-live.json')])
+  tasks.push({
+    label: 'cache-redis-live',
+    command: 'npx',
+    args: [
+      'vitest', 'run', '--pool', 'forks', '--fileParallelism', '--maxWorkers', '4', '--reporter=json',
+      `--outputFile=${join(resultsRoot, 'cache-redis-live.json')}`,
+    ],
+    cwd: join(root, 'packages/cache-redis'),
+    extraEnv: { HOLO_REDIS_INTEGRATION: '1' },
+    reportPaths: [join(resultsRoot, 'cache-redis-live.json')],
+  })
+  return tasks
+}
+
+mkdirSync(resultsRoot, { recursive: true })
+await postgres.connect()
+try {
+  mysqlAdmin = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root' })
+  await postgres.query(`CREATE DATABASE ${name}`)
+  await mysqlAdmin.query(`CREATE DATABASE ${name}`)
+
+  if (!options['skip-build']) {
+    run({ label: 'library-build', command: process.execPath, args: ['scripts/build-libraries.mjs'] })
+    if (results.at(-1).status !== 0) throw new Error('Native package tests require a successful library build.')
+  }
+
+  for (const task of selectShardTasks(collectTasks(), shard, readLibrarySuiteDurations(root))) run(task)
 } finally {
   writeFileSync(join(resultsRoot, 'summary.json'), JSON.stringify(results, null, 2))
   try {
