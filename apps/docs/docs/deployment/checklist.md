@@ -35,7 +35,7 @@ Skip this if `QUEUE_CONNECTION=sync`.
 
 ## Scheduler
 
-Skip this if your app has no `server/schedule.ts`.
+Skip this if your app has no `server/schedule.ts` (or `.mts`, `.js`, or `.mjs`).
 
 - [ ] One cron entry runs `npx holo schedule:run` every minute, or `holo schedule:work` runs under a process manager that restarts it.
 - [ ] Tasks that use `withoutOverlapping()` or `onOneServer()` use a cache store every scheduler process shares (`redis` or `database` across servers). See [Task Scheduling](/scheduling/).

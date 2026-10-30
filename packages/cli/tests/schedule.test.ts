@@ -128,6 +128,7 @@ export default defineSchedule((schedule) => {
     const io = createIo(root)
 
     await runScheduleRunCommand(io, root, {
+      now: () => new Date('2026-11-02T10:02:00Z'),
       spawnProcess: (command, args, options) => spawn(command, ['--import', import.meta.resolve('tsx'), sourceCliEntrypoint, ...args.slice(1)], options),
     })
 
@@ -214,27 +215,41 @@ setInterval(() => {}, 1000)
 })
 
 describe('schedule:run resources', () => {
-  it('closes the app runtime when the CLI entrypoint fails to resolve or to clean up', async () => {
+  it('resolves the CLI entrypoint only for due commands, and closes the app runtime when it fails', async () => {
     const { defineSchedule } = await import('@holo-js/schedule')
     const cleanups: string[] = []
-    const loadEnvironment = async () => ({
-      schedule: defineSchedule(() => {}),
+    const ran: string[] = []
+    let resolutions = 0
+    const loadEnvironment = (withCommand: boolean) => async () => ({
+      schedule: defineSchedule((schedule) => {
+        schedule.call(() => ran.push('closure')).everyMinute()
+        if (withCommand) schedule.command('marker').everyMinute()
+      }),
       scheduleModule: await import('@holo-js/schedule'),
       timezone: 'UTC',
       cleanup: async () => {
         cleanups.push('runtime')
       },
     })
-    const io = createIo(tmpdir())
+    const failingResolution = async () => {
+      resolutions += 1
+      throw new Error('bundle failed')
+    }
 
-    await expect(runScheduleRunCommand(io, tmpdir(), {
-      loadEnvironment,
-      resolveCliEntrypoint: async () => {
-        throw new Error('bundle failed')
-      },
-    })).rejects.toThrow('bundle failed')
-    await expect(runScheduleRunCommand(io, tmpdir(), {
-      loadEnvironment,
+    await runScheduleRunCommand(createIo(tmpdir()), tmpdir(), { loadEnvironment: loadEnvironment(false), resolveCliEntrypoint: failingResolution })
+    expect(resolutions).toBe(0)
+
+    const io = createIo(tmpdir())
+    await runScheduleRunCommand(io, tmpdir(), { loadEnvironment: loadEnvironment(true), resolveCliEntrypoint: failingResolution })
+    expect(io.output()).toContain('[schedule] Running [Closure] DONE')
+    expect(io.output()).toContain('[schedule] Running [holo marker] FAIL')
+    expect(io.errors()).toContain('bundle failed')
+
+    await expect(runScheduleRunCommand(createIo(tmpdir()), tmpdir(), {
+      loadEnvironment: loadEnvironment(true),
+      spawnProcess: () => Object.assign(new EventEmitter(), { pid: 1 }).on('newListener', function (this: EventEmitter, event: string) {
+        if (event === 'close') setImmediate(() => this.emit('close', 0))
+      }) as unknown as SpawnProcessLike,
       resolveCliEntrypoint: async () => ({
         path: 'holo.mjs',
         async cleanup() {
@@ -243,7 +258,8 @@ describe('schedule:run resources', () => {
       }),
     })).rejects.toThrow('cleanup failed')
 
-    expect(cleanups).toEqual(['runtime', 'runtime'])
+    expect(ran).toEqual(['closure', 'closure', 'closure'])
+    expect(cleanups).toEqual(['runtime', 'runtime', 'runtime'])
   })
 })
 
@@ -316,6 +332,28 @@ describe('schedule:work', () => {
       },
     })).rejects.toThrow('bundle failed')
 
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners)
+  })
+
+  it('stops with the error when schedule:run cannot be started, as Laravel does', async () => {
+    const sigtermListeners = process.listenerCount('SIGTERM')
+    let minutes = 0
+
+    await expect(runScheduleWorkCommand(createIo(tmpdir()), tmpdir(), {
+      resolveCliEntrypoint: async () => ({ path: 'holo.mjs', async cleanup() {} }),
+      spawnProcess: () => {
+        const child = new EventEmitter()
+        setImmediate(() => child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })))
+        return child as unknown as SpawnProcessLike
+      },
+      async waitForNextMinute() {
+        minutes += 1
+        if (minutes > 3) process.emit('SIGTERM', 'SIGTERM')
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 5))
+      },
+    })).rejects.toThrow('spawn ENOENT')
+
+    expect(minutes).toBeLessThanOrEqual(2)
     expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners)
   })
 

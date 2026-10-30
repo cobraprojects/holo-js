@@ -579,7 +579,7 @@ Start `schedule:run` at the start of every minute, in the foreground. Use it ins
 npx holo schedule:work
 ```
 
-`Ctrl+C`, `SIGINT`, and `SIGTERM` stop it. The signal is passed on to any `schedule:run` still running, and `schedule:work` exits once they have.
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop it. The signal is passed on to any `schedule:run` still running, and `schedule:work` exits once they have. If `schedule:run` can't be started, it stops the same way and exits with the error.
 
 ### schedule:list
 

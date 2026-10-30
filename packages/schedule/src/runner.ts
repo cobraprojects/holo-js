@@ -41,16 +41,28 @@ function stateOf(task: ScheduledTask): ScheduledTaskState {
   return task[SCHEDULED_TASK_STATE]
 }
 
-async function resolveJobName(job: object): Promise<string> {
-  const { queueJobInternals } = await import('@holo-js/queue')
-  return queueJobInternals.resolveQueueJobDefinitionName(job)
+async function resolveJobName(job: object): Promise<string | undefined> {
+  try {
+    const { queueJobInternals } = await import('@holo-js/queue')
+    return queueJobInternals.resolveQueueJobDefinitionName(job)
+  } catch {
+    return undefined
+  }
+}
+
+async function requireJobName(state: ScheduledTaskState, job: object): Promise<string> {
+  const name = state.description ?? await resolveJobName(job)
+  if (name === undefined) {
+    throw new Error('[@holo-js/schedule] Name this job with name() to use withoutOverlapping() or onOneServer(); it has no registered job name.')
+  }
+  return name
 }
 
 async function describeTask(state: ScheduledTaskState): Promise<string> {
   if (state.description) return state.description
   switch (state.action.kind) {
     case 'command': return `holo ${state.action.command}`
-    case 'job': return await resolveJobName(state.action.job)
+    case 'job': return await resolveJobName(state.action.job) ?? 'Job'
     case 'call': return 'Closure'
   }
 }
@@ -58,7 +70,7 @@ async function describeTask(state: ScheduledTaskState): Promise<string> {
 async function mutexName(state: ScheduledTaskState): Promise<string> {
   switch (state.action.kind) {
     case 'command': return `framework/schedule-${sha1(state.expression + state.action.command)}`
-    case 'job': return `framework/schedule-${sha1(state.description ?? await resolveJobName(state.action.job))}`
+    case 'job': return `framework/schedule-${sha1(await requireJobName(state, state.action.job))}`
     case 'call': return `framework/schedule-${sha1(state.description ?? state.expression + state.action.callback.toString())}`
   }
 }
@@ -106,6 +118,11 @@ async function runTask(
   serverDecisions: Map<string, Promise<boolean>>,
 ): Promise<ScheduledTaskReport | undefined> {
   const summary = await describeTask(state)
+  if (!state.withoutOverlapping && !state.onOneServer) {
+    if (options.signal?.aborted) return undefined
+    await execute(state, summary, options)
+    return { summary, outcome: 'ran' }
+  }
   const name = await mutexName(state)
 
   if (state.withoutOverlapping && !await isLockFree(name, state.expiresAtMinutes * 60)) {

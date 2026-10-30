@@ -548,4 +548,29 @@ describe('jobs', () => {
     expect(handled).toEqual([7])
     expect(reports.map(report => [report.summary, report.outcome])).toEqual([['reports.send-digest', 'ran']])
   })
+  it('runs and lists a job that has no registered name, and asks for a name before locking it', async () => {
+    const dispatched: unknown[] = []
+    const job = {
+      dispatch(payload: { readonly id: number }) {
+        dispatched.push(payload)
+        return Promise.resolve()
+      },
+    }
+    const definition = defineSchedule((schedule) => {
+      schedule.job(job, { id: 1 }).everyMinute()
+      schedule.job(job, { id: 2 }).everyMinute().withoutOverlapping()
+      schedule.job(job, { id: 3 }).name('nightly-sync').everyMinute().withoutOverlapping()
+    })
+
+    const reports = await runAt(definition, MIDNIGHT_UTC)
+    const listed = await listScheduledTasks(definition, { now: MIDNIGHT_UTC, timezone: 'UTC' })
+
+    expect(dispatched).toEqual([{ id: 1 }, { id: 3 }])
+    expect(reports.map(report => [report.summary, report.outcome, report.error?.message])).toEqual([
+      ['Job', 'ran', undefined],
+      ['Job', 'failed', '[@holo-js/schedule] Name this job with name() to use withoutOverlapping() or onOneServer(); it has no registered job name.'],
+      ['nightly-sync', 'ran', undefined],
+    ])
+    expect(listed.map(task => task.summary)).toEqual(['Job', 'Job', 'nightly-sync'])
+  })
 })

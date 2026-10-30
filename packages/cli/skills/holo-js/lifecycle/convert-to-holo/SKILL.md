@@ -51,7 +51,7 @@ export default defineSchedule((schedule) => {
 })
 ```
 
-Move each script's body into a Holo command or job, then delete the old crontab lines, timers, and scheduling dependencies.
+Move each script's body into a Holo command or job, then delete the old crontab lines, timers, and scheduling dependencies. The scheduler runs tasks at most once a minute, so keep a timer that runs more often than that (every 30 seconds, for example) until something else replaces it, and report it.
 
 ## No compatibility residue
 

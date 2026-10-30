@@ -70,7 +70,7 @@ schedule.call(async () => {
 schedule.call(pruneSessions).name('prune-sessions').hourly()
 ```
 
-Names are optional. A command is shown as `holo <command>`, a job by its job name, and a function as `Closure`.
+Names are optional. A command is shown as `holo <command>`, a job by its job name, and a function as `Closure`. A job object Holo didn't discover has no job name, so it's shown as `Job` and needs `name()` before it can use `withoutOverlapping()` or `onOneServer()`.
 
 ## Frequencies
 
@@ -197,7 +197,7 @@ Add one cron entry on the server that runs `schedule:run` every minute:
 npx holo schedule:work
 ```
 
-If a run takes longer than a minute, the next one still starts on time, and they run side by side. `Ctrl+C`, `SIGINT`, and `SIGTERM` stop it: it passes the signal to any `schedule:run` still running and exits once they have.
+If a run takes longer than a minute, the next one still starts on time, and they run side by side. A `schedule:run` that fails doesn't stop it, but if `schedule:run` can't be started at all, `schedule:work` stops the runs still going and exits with the error, as Laravel's does. `Ctrl+C`, `SIGINT`, and `SIGTERM` stop it: it passes the signal to any `schedule:run` still running and exits once they have.
 
 `schedule:run` itself handles `SIGINT` and `SIGTERM` the same way: it passes the signal to the command it is running, starts no more tasks, and exits once that command has. A function already running finishes first.
 

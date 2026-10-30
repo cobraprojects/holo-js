@@ -91,6 +91,7 @@ type ChildSupervisor = {
   readonly stopping: AbortSignal
   track(child: SpawnProcessLike): Promise<number | null>
   settled(): Promise<void>
+  stop(signal: NodeJS.Signals): void
   dispose(): void
 }
 
@@ -130,6 +131,7 @@ function superviseChildren(io: IoStreams): ChildSupervisor {
     async settled() {
       await Promise.all(running.values())
     },
+    stop: onSignal,
     dispose() {
       process.off('SIGINT', onSignal)
       process.off('SIGTERM', onSignal)
@@ -172,7 +174,7 @@ export async function runScheduleRunCommand(
   }
 
   try {
-    const cliEntrypoint = await (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
+    let cliEntrypoint: ReturnType<typeof resolveRunnableCliEntrypoint> | undefined
     const supervisor = superviseChildren(io)
     const deliveries: Promise<void>[] = []
     try {
@@ -182,7 +184,8 @@ export async function runScheduleRunCommand(
         timezone: environment.timezone,
         signal: supervisor.stopping,
         runCommand: async (argv) => {
-          const child = spawnProcess(process.execPath, [cliEntrypoint.path, ...argv], {
+          cliEntrypoint ??= (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
+          const child = spawnProcess(process.execPath, [(await cliEntrypoint).path, ...argv], {
             cwd: projectRoot,
             env: process.env,
             stdio: 'ignore',
@@ -198,7 +201,7 @@ export async function runScheduleRunCommand(
     } finally {
       await Promise.all(deliveries)
       supervisor.dispose()
-      await cliEntrypoint.cleanup()
+      await (await cliEntrypoint?.catch(() => undefined))?.cleanup()
     }
   } finally {
     await environment.cleanup()
@@ -281,6 +284,7 @@ export async function runScheduleWorkCommand(
   const wait = dependencies.waitForNextMinute ?? waitForNextMinute
   const cliEntrypoint = await (dependencies.resolveCliEntrypoint ?? resolveRunnableCliEntrypoint)()
   const supervisor = superviseChildren(io)
+  let launchFailure: Error | undefined
   try {
     writeLine(io.stdout, '[schedule] Running scheduled tasks every minute.')
     while (!supervisor.stopping.aborted) {
@@ -295,11 +299,13 @@ export async function runScheduleWorkCommand(
       child.stdout?.pipe(io.stdout, { end: false })
       child.stderr?.pipe(io.stderr, { end: false })
       supervisor.track(child).catch((error: Error) => {
-        writeLine(io.stderr, `[schedule] Failed to start schedule:run: ${error.message}`)
+        launchFailure ??= error
+        supervisor.stop('SIGTERM')
       })
     }
 
     await supervisor.settled()
+    if (launchFailure) throw new Error(`[schedule] Failed to start schedule:run: ${launchFailure.message}`, { cause: launchFailure })
   } finally {
     supervisor.dispose()
     await cliEntrypoint.cleanup()
