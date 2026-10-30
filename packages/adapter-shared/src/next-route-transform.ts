@@ -1,7 +1,6 @@
 import ts from 'typescript'
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
-const runtimeName = '__holoRouteRuntime'
 
 type RuntimeWrapper = 'routeHandler' | 'serverAction'
 
@@ -23,10 +22,21 @@ function boundNames(name: ts.BindingName): readonly string[] {
   return name.elements.flatMap(element => ts.isOmittedExpression(element) ? [] : boundNames(element.name))
 }
 
-function unusedName(file: ts.SourceFile, base: string): string {
-  let name = base
-  while (file.text.includes(name)) name = `${name}_`
-  return name
+type NameAllocator = (base: string) => string
+
+function nameAllocator(file: ts.SourceFile): NameAllocator {
+  const used = new Set<string>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) used.add(node.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return (base) => {
+    let name = base
+    while (used.has(name)) name = `${name}_`
+    used.add(name)
+    return name
+  }
 }
 
 function declaredValues(file: ts.SourceFile, defaultName: string): ReadonlySet<string> {
@@ -77,7 +87,7 @@ function reassignable(statement: ts.Statement, locals: ReadonlySet<string>, defa
   return statement
 }
 
-function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => boolean, declared: ReadonlySet<string>): readonly ts.Statement[] {
+function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => boolean, declared: ReadonlySet<string>, allocate: NameAllocator): readonly ts.Statement[] {
   if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) return [statement]
   const { moduleSpecifier } = statement
   const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
@@ -89,8 +99,8 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
       ts.factory.updateNamedExports(statement.exportClause, remaining), moduleSpecifier, statement.attributes)] : []),
     ...handlers.flatMap((handler) => {
       const source = handler.propertyName ?? handler.name
-      const imported = moduleSpecifier || !ts.isIdentifier(source) ? ts.factory.createIdentifier(`__holoImported${handler.name.text}`) : source
-      const local = ts.factory.createIdentifier(`__holoExported${handler.name.text}`)
+      const imported = moduleSpecifier || !ts.isIdentifier(source) ? ts.factory.createIdentifier(allocate(`__holoImported${handler.name.text}`)) : source
+      const local = ts.factory.createIdentifier(allocate(`__holoExported${handler.name.text}`))
       return [
         ...(moduleSpecifier ? [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
           ts.factory.createImportSpecifier(false, source, imported),
@@ -107,10 +117,12 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
 }
 
 function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
-  const defaultName = unusedName(source, '__holoDefault')
+  const allocate = nameAllocator(source)
+  const defaultName = allocate('__holoDefault')
+  const runtimeName = allocate('__holoRouteRuntime')
   const declared = declaredValues(source, defaultName)
   const file = wrapper === 'routeHandler'
-    ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeRouteExports(statement, wraps, declared)))
+    ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeRouteExports(statement, wraps, declared, allocate)))
     : source
   const locals = wrappedLocals(file, wraps, defaultName)
   if (locals.size === 0) return undefined

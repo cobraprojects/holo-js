@@ -73,11 +73,12 @@ describe('Next server action loader', () => {
   it('wraps an anonymous default action without clashing with module bindings', async () => {
     const module = await importCompiled('anonymous-actions.ts', [
       '\'use server\'',
-      'const __holoDefault = \'taken\'',
-      'export default async function () { return __holoDefault }',
+      'const __holoDefaul\\u0074 = \'taken\'',
+      'const __holoRouteRuntime = \'runtime\'',
+      'export default async function () { return `${__holoDefault} ${__holoRouteRuntime}` }',
     ].join('\n'))
 
-    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'taken' })
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'taken runtime' })
   })
 
   it('wraps route handlers declared, listed, imported, or re-exported in a route file', async () => {
@@ -85,6 +86,7 @@ describe('Next server action loader', () => {
       'import { shared } from \'./helpers\'',
       'export { shared as GET } from \'./helpers\'',
       'export { shared as PUT }',
+      'const __holoExportedGET = \'kept\'',
       'export async function POST() { return \'posted\' }',
       'const DELETE = async () => \'deleted\'',
       'export { DELETE }',
