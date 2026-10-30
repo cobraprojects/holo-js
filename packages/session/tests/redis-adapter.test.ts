@@ -63,6 +63,34 @@ describe('session Redis behavior', () => {
     await adapter.close()
   })
 
+  it('stores sessions in the configured database when the URL names another one', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    const client = service.clients[0]
+    if (!port || !client) throw new Error('Expected Redis service port and client')
+    const configuredDatabase = client.duplicate({ db: 2 })
+    onTestFinished(() => configuredDatabase.disconnect())
+    const prefix = `holo:session:${randomUUID()}:`
+    const adapter = createSessionRedisAdapter({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      host: '127.0.0.1',
+      port,
+      url: `redis://127.0.0.1:${port}/0`,
+      db: 2,
+      prefix,
+    })
+    onTestFinished(() => adapter.disconnect())
+    await adapter.connect()
+    const now = new Date()
+    const record: SessionRecord = { id: randomUUID(), store: 'redis', data: { userId: 42 }, createdAt: now, lastActivityAt: now, expiresAt: new Date(now.getTime() + 60_000) }
+    await adapter.set(record)
+    const key = `${prefix}holo:session:${record.id}`
+    expect(await client.exists(key)).toBe(0)
+    expect(await configuredDatabase.exists(key)).toBe(1)
+  })
+
   it('expires sessions on the real Redis clock without flash extending their lifetime', async () => {
     const { adapter, record, service, prefix } = await createStore()
     const client = service.clients[0]

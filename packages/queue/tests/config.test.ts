@@ -220,6 +220,21 @@ describe('@holo-js/queue config', () => {
     })
   })
 
+  it('selects the database named by a Redis url override over the shared connection database', () => {
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: { driver: 'redis', connection: 'cache', redis: { url: 'redis://queue.internal:6380/3' } },
+        explicit: { driver: 'redis', connection: 'cache', redis: { url: 'redis://queue.internal:6380/3', db: 1 } },
+        pathless: { driver: 'redis', connection: 'cache', redis: { url: 'redis://queue.internal:6380' } },
+      },
+    }, sharedRedisConfig).connections).toMatchObject({
+      redis: { redis: { url: 'redis://queue.internal:6380/3', db: 3 } },
+      explicit: { redis: { url: 'redis://queue.internal:6380/3', db: 1 } },
+      pathless: { redis: { url: 'redis://queue.internal:6380', db: 4 } },
+    })
+  })
+
   it('normalizes inline Redis urls and cluster nodes', () => {
     expect(normalizeQueueConfig({
       default: 'redis',

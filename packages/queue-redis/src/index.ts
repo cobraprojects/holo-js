@@ -1,3 +1,4 @@
+import { redisUrlInternals } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { randomUUID } from 'node:crypto'
 import {
@@ -185,7 +186,7 @@ function resolveBullConnection(
   }
 
   if (typeof connection.redis.url === 'string') {
-    return new Redis(connection.redis.url, {
+    return new Redis(redisUrlInternals.withoutDatabasePath(connection.redis.url), {
       username: connection.redis.username,
       password: connection.redis.password,
       db: connection.redis.db,

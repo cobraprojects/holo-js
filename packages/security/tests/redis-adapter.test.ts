@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { createRedisRateLimitStore } from '../src'
 import { createSecurityRedisAdapter } from '../src/drivers/redis-adapter'
@@ -49,6 +49,27 @@ describe('Redis rate-limit behavior', () => {
       expect(await adapter.del('login:127.0.0.1')).toBe(1)
       expect(await adapter.del('login:127.0.0.1')).toBe(0)
       expect(await adapter.increment('login:127.0.0.1', { decaySeconds: 60 })).toEqual({ attempts: 1, ttlSeconds: 60 })
+    } finally {
+      await adapter.close()
+    }
+  })
+
+  it('counts hits in the configured database when the URL names another one', async () => {
+    const service = await startRedisService()
+    const port = service.ports[0]
+    const client = service.clients[0]
+    if (!port || !client) throw new Error('Expected Redis port and client')
+    const configuredDatabase = client.duplicate({ db: 2 })
+    onTestFinished(() => configuredDatabase.disconnect())
+    const prefix = `holo:rate-limit:${randomUUID()}:`
+    const adapter = createSecurityRedisAdapter({
+      url: `redis://127.0.0.1:${port}/0`, host: '127.0.0.1', port, db: 2, prefix, connection: 'default',
+    })
+    try {
+      await adapter.connect()
+      await adapter.increment('login:127.0.0.1', { decaySeconds: 60 })
+      expect(await client.exists(`${prefix}login:127.0.0.1`)).toBe(0)
+      expect(await configuredDatabase.exists(`${prefix}login:127.0.0.1`)).toBe(1)
     } finally {
       await adapter.close()
     }

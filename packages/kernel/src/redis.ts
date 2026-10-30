@@ -250,6 +250,14 @@ export function normalizeRedisConfig(config: HoloRedisConfig = {}): NormalizedHo
   })
 }
 
+function withoutDatabasePath(url: string): string {
+  const parsed = new URL(url)
+  parsed.pathname = ''
+  return parsed.toString()
+}
+
+export const redisUrlInternals = Object.freeze({ withoutDatabasePath })
+
 export function defineRedisConfig<TConfig extends HoloRedisConfig>(config: TConfig): Readonly<TConfig> {
   return Object.freeze({ ...config })
 }

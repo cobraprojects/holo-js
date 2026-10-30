@@ -248,12 +248,13 @@ function normalizeRedisOptions(
     || typeof overrides?.clusters !== 'undefined'
     || typeof overrides?.host !== 'undefined'
     || typeof overrides?.port !== 'undefined'
-  const url = normalizeOptionalRedisString(overrides?.url) ?? (hasTargetOverride ? undefined : base?.url)
+  const overrideUrl = normalizeOptionalRedisString(overrides?.url)
+  const url = overrideUrl ?? (hasTargetOverride ? undefined : base?.url)
   const clusters = typeof overrides?.clusters === 'undefined'
     ? hasTargetOverride ? undefined : base?.clusters
     : normalizeRedisClusterNodes(connectionName, overrides.clusters)
-  const dbFromUrl = parseRedisDatabaseFromUrl(url, `queue connection "${connectionName}" redis url`)
-  const db = parseInteger(overrides?.db ?? base?.db ?? dbFromUrl, DEFAULT_REDIS_DB, `queue connection "${connectionName}" redis db`, {
+  const dbFromUrl = parseRedisDatabaseFromUrl(overrideUrl, `queue connection "${connectionName}" redis url`)
+  const db = parseInteger(overrides?.db ?? dbFromUrl ?? base?.db, DEFAULT_REDIS_DB, `queue connection "${connectionName}" redis db`, {
     minimum: 0,
   })
 
