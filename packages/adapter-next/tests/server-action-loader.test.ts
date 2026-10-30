@@ -34,7 +34,7 @@ describe('Next server action loader', () => {
       'export const remove = async () => \'removed\'',
       'async function rename() { return \'renamed\' }',
       'export { shared } from \'./helpers\'',
-      'export async function current() { return save }',
+      'export async function current() { return [save, pick] }',
       'const later = async () => \'later\'',
       'export default async function submit() { return save(\'default\') }',
     ].join('\n')
@@ -53,7 +53,7 @@ describe('Next server action loader', () => {
       { wrapped: 'shared' },
       { wrapped: { wrapped: 'saved default' } },
     ])
-    expect(await (module.current as () => Promise<unknown>)()).toEqual({ wrapped: module.save })
+    expect(await (module.current as () => Promise<unknown>)()).toEqual({ wrapped: [module.save, module.pick] })
   })
 
   it('leaves modules without a leading use server directive unchanged', () => {

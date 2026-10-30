@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
+import { actionAsyncStorage, type ActionStore } from 'next/dist/server/app-render/action-async-storage.external.js'
 import { workUnitAsyncStorage, type WorkUnitStore } from 'next/dist/server/app-render/work-unit-async-storage.external.js'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { field, schema, validate } from '@holo-js/validation'
@@ -98,10 +99,10 @@ describe('Next server actions', () => {
   const registerServerAction = <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => (
     Object.defineProperty(adapterNextRuntimeInternals.serverAction(action), '$$id', { value: `7f${'a'.repeat(40)}` })
   )
-  const runRequest = <TResult>(phase: string, actionId: string, callback: () => Promise<TResult>) => {
+  const runRequest = <TResult>(phase: string, actionId: string, callback: () => Promise<TResult>, actionStore: ActionStore = { isAction: true }) => {
     vi.spyOn(process, 'cwd').mockReturnValue(resolve(import.meta.dirname, '..'))
     const store = { type: 'request', phase, headers: new Headers({ 'next-action': actionId }) } as unknown as WorkUnitStore
-    return workUnitAsyncStorage.run(store, callback)
+    return actionAsyncStorage.run(actionStore, () => workUnitAsyncStorage.run(store, callback))
   }
   const invokedId = `40${'a'.repeat(40)}`
 
@@ -124,6 +125,7 @@ describe('Next server actions', () => {
 
     await expect(action()).rejects.toMatchObject({ status: 422 })
     await expect(runRequest('render', invokedId, () => action())).rejects.toMatchObject({ status: 422 })
+    await expect(runRequest('action', invokedId, () => action(), { isAction: true, isAppRoute: true })).rejects.toMatchObject({ status: 422 })
     await expect(runRequest('action', `40${'b'.repeat(40)}`, () => action())).rejects.toMatchObject({ status: 422 })
     expect(await runRequest('action', invokedId, () => nested(0))).toMatchObject({ caught: { status: 422 } })
   })

@@ -55,7 +55,7 @@ function declaredNames(file: ts.SourceFile): ReadonlySet<string> {
   return new Set(file.statements.flatMap((statement) => {
     if (ts.isFunctionDeclaration(statement) && statement.name) return [statement.name.text]
     if (!ts.isVariableStatement(statement)) return []
-    return statement.declarationList.declarations.flatMap(declaration => ts.isIdentifier(declaration.name) ? [declaration.name.text] : [])
+    return statement.declarationList.declarations.flatMap(declaration => boundNames(declaration.name).map(name => name.text))
   }))
 }
 
@@ -75,10 +75,26 @@ function boundNames(name: ts.BindingName): readonly ts.Identifier[] {
   return name.elements.flatMap(element => ts.isOmittedExpression(element) ? [] : boundNames(element.name))
 }
 
-function exportLocal(name: ts.Identifier): ts.ExportDeclaration {
-  return ts.factory.createExportDeclaration(undefined, false, ts.factory.createNamedExports([
-    ts.factory.createExportSpecifier(false, undefined, name),
-  ]))
+function originalName(name: string): ts.Identifier {
+  return ts.factory.createIdentifier(`__holoOriginal${name}`)
+}
+
+function renameBindings(name: ts.BindingName, needsWrap: (name: string) => boolean, renamed: ts.Identifier[]): ts.BindingName {
+  if (ts.isIdentifier(name)) {
+    if (!needsWrap(name.text)) return name
+    renamed.push(name)
+    return originalName(name.text)
+  }
+  if (ts.isObjectBindingPattern(name)) {
+    return ts.factory.updateObjectBindingPattern(name, name.elements.map(element => ts.factory.updateBindingElement(element,
+      element.dotDotDotToken,
+      element.propertyName ?? (ts.isIdentifier(element.name) && !element.dotDotDotToken && needsWrap(element.name.text) ? ts.factory.createIdentifier(element.name.text) : undefined),
+      renameBindings(element.name, needsWrap, renamed), element.initializer)))
+  }
+  return ts.factory.updateArrayBindingPattern(name, name.elements.map(element => ts.isOmittedExpression(element)
+    ? element
+    : ts.factory.updateBindingElement(element, element.dotDotDotToken, element.propertyName,
+      renameBindings(element.name, needsWrap, renamed), element.initializer)))
 }
 
 function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
@@ -88,11 +104,6 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   const wrapsLocal = (name: string) => localExports.has(name) && declared.has(name)
   const leading: ts.Statement[] = []
   const trailing: ts.Statement[] = []
-  const exportWrapped = (name: ts.ModuleExportName, local: ts.Identifier) => {
-    const wrapped = ts.factory.createIdentifier(`__holoWrapped${name.text}`)
-    trailing.push(constant(wrapped, wrap(wrapper, local), false), ts.factory.createExportDeclaration(undefined, false,
-      ts.factory.createNamedExports([ts.factory.createExportSpecifier(false, wrapped, name)])))
-  }
   let changed = false
   const statements = file.statements.flatMap((statement): readonly ts.Statement[] => {
     if (ts.isFunctionDeclaration(statement) && statement.body) {
@@ -102,7 +113,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
       const wrapsExport = exported && wraps(isDefault ? 'default' : name ?? '')
       if (!wrapsExport && !(name && wrapsLocal(name))) return [statement]
       changed = true
-      const original = ts.factory.createIdentifier(`__holoOriginal${name ?? 'default'}`)
+      const original = originalName(name ?? 'default')
       const declaration = ts.factory.updateFunctionDeclaration(statement,
         statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword && modifier.kind !== ts.SyntaxKind.DefaultKeyword),
         statement.asteriskToken, original, statement.typeParameters, statement.parameters, statement.type, statement.body)
@@ -117,30 +128,30 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     }
     if (ts.isVariableStatement(statement)) {
       const exported = hasModifier(statement, ts.SyntaxKind.ExportKeyword)
-      const destructured = exported && statement.declarationList.declarations.some(declaration => !ts.isIdentifier(declaration.name))
-      const declarations = statement.declarationList.declarations.map(declaration => {
-        if (destructured && !ts.isIdentifier(declaration.name)) {
-          for (const name of boundNames(declaration.name)) {
-            if (!wraps(name.text)) {
-              trailing.push(exportLocal(name))
-              continue
-            }
-            changed = true
-            exportWrapped(name, name)
-          }
-          return declaration
+      const needsWrap = (name: string) => exported ? wraps(name) : wrapsLocal(name)
+      const destructured: ts.Identifier[] = []
+      const declarations = statement.declarationList.declarations.map((declaration) => {
+        if (!ts.isIdentifier(declaration.name)) {
+          return ts.factory.updateVariableDeclaration(declaration, renameBindings(declaration.name, needsWrap, destructured),
+            declaration.exclamationToken, declaration.type, declaration.initializer)
         }
-        if (destructured && ts.isIdentifier(declaration.name)) trailing.push(exportLocal(declaration.name))
-        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) return declaration
-        const name = declaration.name.text
-        if (!(exported ? wraps(name) : wrapsLocal(name))) return declaration
+        if (!declaration.initializer || !needsWrap(declaration.name.text)) return declaration
         changed = true
         return ts.factory.updateVariableDeclaration(declaration, declaration.name, declaration.exclamationToken,
           declaration.type, wrap(wrapper, declaration.initializer))
       })
-      const modifiers = destructured ? statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword) : statement.modifiers
-      return [ts.factory.updateVariableStatement(statement, modifiers,
-        ts.factory.updateVariableDeclarationList(statement.declarationList, declarations))]
+      const list = ts.factory.updateVariableDeclarationList(statement.declarationList, declarations)
+      if (destructured.length === 0) return [ts.factory.updateVariableStatement(statement, statement.modifiers, list)]
+      changed = true
+      const modifiers = statement.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword)
+      const exportedNames = statement.declarationList.declarations.flatMap(declaration => boundNames(declaration.name))
+      return [
+        ts.factory.updateVariableStatement(statement, modifiers, list),
+        ...destructured.map(name => constant(name.text, wrap(wrapper, originalName(name.text)), false)),
+        ...(exported ? [ts.factory.createExportDeclaration(undefined, false, ts.factory.createNamedExports(
+          exportedNames.map(name => ts.factory.createExportSpecifier(false, undefined, name.text)),
+        ))] : []),
+      ]
     }
     if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
       const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
@@ -158,7 +169,9 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
           ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
             ts.factory.createImportSpecifier(false, imported, local),
           ])), statement.moduleSpecifier))
-        exportWrapped(handler.name, local)
+        const wrapped = ts.factory.createIdentifier(`__holoWrapped${handler.name.text}`)
+        trailing.push(constant(wrapped, wrap(wrapper, local), false), ts.factory.createExportDeclaration(undefined, false,
+          ts.factory.createNamedExports([ts.factory.createExportSpecifier(false, wrapped, handler.name)])))
       }
       return result
     }

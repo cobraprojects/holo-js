@@ -163,20 +163,24 @@ type NextWorkUnitStore = {
   readonly headers?: Headers
 }
 
-type WorkUnitStorageModule = {
-  readonly workUnitAsyncStorage: { getStore(): NextWorkUnitStore | undefined }
+type NextActionStore = {
+  readonly isAction?: boolean
+  readonly isAppRoute?: boolean
 }
 
-function loadNextWorkUnitStorage(requireNext: (id: string) => unknown): WorkUnitStorageModule['workUnitAsyncStorage'] | undefined {
+type NextAsyncStorage<TStore> = { getStore(): TStore | undefined }
+
+function loadNextAsyncStorage<TStore>(requireNext: (id: string) => unknown, name: 'work-unit' | 'action'): NextAsyncStorage<TStore> | undefined {
   try {
-    return (requireNext('next/dist/server/app-render/work-unit-async-storage.external.js') as WorkUnitStorageModule).workUnitAsyncStorage
+    const storage = requireNext(`next/dist/server/app-render/${name}-async-storage.external.js`) as Readonly<Record<string, NextAsyncStorage<TStore>>>
+    return storage[name === 'action' ? 'actionAsyncStorage' : 'workUnitAsyncStorage']
   } catch {
     return undefined
   }
 }
 
 function nextCookiesMutableInCurrentPhase(requireNext: (id: string) => unknown): boolean {
-  const workUnitAsyncStorage = loadNextWorkUnitStorage(requireNext)
+  const workUnitAsyncStorage = loadNextAsyncStorage<NextWorkUnitStore>(requireNext, 'work-unit')
   return !workUnitAsyncStorage || workUnitAsyncStorage.getStore()?.phase === 'action'
 }
 
@@ -374,8 +378,10 @@ function serverReferenceExport(id: unknown): string | undefined {
 }
 
 function isInvokedServerAction(action: object): boolean {
-  const store = loadNextWorkUnitStorage(createRequire(resolve(process.cwd(), 'package.json')))?.getStore()
-  if (store?.type !== 'request' || store.phase !== 'action') return false
+  const requireNext = createRequire(resolve(process.cwd(), 'package.json'))
+  const actionStore = loadNextAsyncStorage<NextActionStore>(requireNext, 'action')?.getStore()
+  const store = loadNextAsyncStorage<NextWorkUnitStore>(requireNext, 'work-unit')?.getStore()
+  if (!actionStore?.isAction || actionStore.isAppRoute || store?.type !== 'request' || store.phase !== 'action') return false
   const invoked = serverReferenceExport(store.headers?.get('next-action'))
   return invoked !== undefined && invoked === serverReferenceExport(Reflect.get(action, '$$id'))
 }
