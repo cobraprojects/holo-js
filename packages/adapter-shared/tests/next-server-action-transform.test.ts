@@ -30,19 +30,22 @@ describe('Next server action transform', () => {
     expect(output).toContain('export { __holoServerAction_archivePost as archivePost };')
   })
 
-  it('keeps declared action names callable inside the module and parses .ts files as TypeScript', async () => {
+  it('keeps declared action names callable inside the module, wraps exports listed before their declaration, and parses .ts files as TypeScript', async () => {
     const output = compileNextServerActions([
       '\'use server\'',
       'const identity = <T>(value: T) => value',
       'export async function load() { return identity(1) }',
       'export default async function save() { return await load() }',
+      'export { remove }',
+      'const remove = async () => await load()',
     ].join('\n'), '/app/actions.ts')
     const transpiled = ts.transpileModule(output.replace(runtimeImport, 'const __holoServerActionRuntime = { serverAction: <T>(action: T) => action };'), {
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
     }).outputText
-    const module = await import(`data:text/javascript,${encodeURIComponent(transpiled)}`) as { default: () => Promise<number> }
+    const module = await import(`data:text/javascript,${encodeURIComponent(transpiled)}`) as { default: () => Promise<number>, remove: () => Promise<number> }
 
     await expect(module.default()).resolves.toBe(1)
+    await expect(module.remove()).resolves.toBe(1)
   })
 
   it('wraps a default export expression', () => {

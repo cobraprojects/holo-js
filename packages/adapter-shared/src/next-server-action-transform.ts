@@ -31,7 +31,7 @@ function exportWrapped(exportName: string, action: ts.Identifier): readonly ts.S
   ]
 }
 
-function compileStatement(statement: ts.Statement): readonly ts.Statement[] | undefined {
+function compileStatement(statement: ts.Statement, trailing: ts.Statement[]): readonly ts.Statement[] | undefined {
   if (ts.isFunctionDeclaration(statement) && statement.body && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
     const exportName = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name!.text
     const name = statement.name ?? ts.factory.createIdentifier('__holoServerAction_default')
@@ -56,9 +56,12 @@ function compileStatement(statement: ts.Statement): readonly ts.Statement[] | un
     const actions = statement.exportClause.elements.filter(element => !element.isTypeOnly)
     if (actions.length === 0) return undefined
     const moduleSpecifier = statement.moduleSpecifier
+    if (!moduleSpecifier) {
+      trailing.push(...actions.flatMap(element => exportWrapped(element.name.text, ts.factory.createIdentifier((element.propertyName ?? element.name).text))))
+      return []
+    }
     return actions.flatMap((element) => {
       const imported = element.propertyName ?? element.name
-      if (!moduleSpecifier) return exportWrapped(element.name.text, ts.factory.createIdentifier(imported.text))
       const local = ts.factory.createIdentifier(`__holoImported_${element.name.text}`)
       return [
         ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
@@ -79,8 +82,9 @@ export function compileNextServerActions(source: string, filename: string): stri
   if (!prologue.some(statement => isDirective(statement) && statement.expression.text === 'use server')) return source
 
   let changed = false
+  const trailing: ts.Statement[] = []
   const statements = file.statements.slice(prologue.length).flatMap((statement) => {
-    const compiled = compileStatement(statement)
+    const compiled = compileStatement(statement, trailing)
     if (!compiled) return [statement]
     changed = true
     return compiled
@@ -91,5 +95,5 @@ export function compileNextServerActions(source: string, filename: string): stri
     ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
       ts.factory.createImportSpecifier(false, ts.factory.createIdentifier('adapterNextRuntimeInternals'), ts.factory.createIdentifier(runtimeName)),
     ])), ts.factory.createStringLiteral('@holo-js/adapter-next/runtime'))
-  return ts.createPrinter().printFile(ts.factory.updateSourceFile(file, [...prologue, runtimeImport, ...statements]))
+  return ts.createPrinter().printFile(ts.factory.updateSourceFile(file, [...prologue, runtimeImport, ...statements, ...trailing]))
 }
