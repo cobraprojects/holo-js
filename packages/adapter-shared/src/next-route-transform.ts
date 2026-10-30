@@ -72,23 +72,24 @@ function reassignable(statement: ts.Statement, locals: ReadonlySet<string>): ts.
   return statement
 }
 
-function localizeReexports(statement: ts.Statement, wraps: (name: string) => boolean): readonly ts.Statement[] {
-  if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.moduleSpecifier
-    || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) return [statement]
-  const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text))
-  if (handlers.length === 0) return [statement]
+function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => boolean, declared: ReadonlySet<string>): readonly ts.Statement[] {
+  if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) return [statement]
   const { moduleSpecifier } = statement
+  const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
+    && (moduleSpecifier || !declared.has((element.propertyName ?? element.name).text)))
+  if (handlers.length === 0) return [statement]
   const remaining = statement.exportClause.elements.filter(element => !handlers.includes(element))
   return [
     ...(remaining.length ? [ts.factory.updateExportDeclaration(statement, statement.modifiers, false,
       ts.factory.updateNamedExports(statement.exportClause, remaining), moduleSpecifier, statement.attributes)] : []),
     ...handlers.flatMap((handler) => {
-      const imported = ts.factory.createIdentifier(`__holoImported${handler.name.text}`)
+      const source = handler.propertyName ?? handler.name
+      const imported = moduleSpecifier || !ts.isIdentifier(source) ? ts.factory.createIdentifier(`__holoImported${handler.name.text}`) : source
       const local = ts.factory.createIdentifier(`__holoExported${handler.name.text}`)
       return [
-        ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
-          ts.factory.createImportSpecifier(false, handler.propertyName ?? handler.name, imported),
-        ])), moduleSpecifier),
+        ...(moduleSpecifier ? [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
+          ts.factory.createImportSpecifier(false, source, imported),
+        ])), moduleSpecifier)] : []),
         ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
           ts.factory.createVariableDeclaration(local, undefined, undefined, imported),
         ], ts.NodeFlags.Let)),
@@ -101,8 +102,9 @@ function localizeReexports(statement: ts.Statement, wraps: (name: string) => boo
 }
 
 function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
+  const declared = declaredValues(source)
   const file = wrapper === 'routeHandler'
-    ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeReexports(statement, wraps)))
+    ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeRouteExports(statement, wraps, declared)))
     : source
   const locals = wrappedLocals(file, wraps)
   if (locals.size === 0) return undefined
@@ -110,18 +112,24 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
     ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
       ts.factory.createImportSpecifier(false, ts.factory.createIdentifier('adapterNextRuntimeInternals'), ts.factory.createIdentifier(runtimeName)),
     ])), ts.factory.createStringLiteral('@holo-js/adapter-next/runtime'))
-  const reassignments = [...locals].map(local => ts.factory.createExpressionStatement(ts.factory.createAssignment(
+  const reassign = (local: string) => ts.factory.createExpressionStatement(ts.factory.createAssignment(
     ts.factory.createIdentifier(local),
     ts.factory.createCallExpression(
       ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier(runtimeName), wrapper),
       undefined,
       [ts.factory.createIdentifier(local)],
     ),
-  )))
-  const statements = file.statements.map(statement => reassignable(statement, locals))
+  ))
+  const pending = new Set(locals)
+  const statements = file.statements.flatMap((statement): readonly ts.Statement[] => {
+    if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression) && pending.delete(statement.expression.text)) {
+      return [reassign(statement.expression.text), statement]
+    }
+    return [reassignable(statement, locals)]
+  })
   const insertAt = prologueEnd(statements)
   return ts.createPrinter().printFile(ts.factory.updateSourceFile(file,
-    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...reassignments]))
+    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...[...pending].map(reassign)]))
 }
 
 function parse(source: string, filename: string): ts.SourceFile {

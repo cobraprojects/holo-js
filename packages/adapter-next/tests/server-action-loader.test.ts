@@ -60,16 +60,29 @@ describe('Next server action loader', () => {
     expect(await (module.current as () => Promise<unknown>)()).toEqual({ wrapped: [module.save, module.pick] })
   })
 
-  it('wraps route handlers declared, listed, or re-exported in a route file', async () => {
+  it('wraps an action exported as default by name before the export reads it', async () => {
+    const module = await importCompiled('default-actions.ts', [
+      '\'use server\'',
+      'const submit = async () => \'submitted\'',
+      'export default submit',
+    ].join('\n'))
+
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'submitted' })
+  })
+
+  it('wraps route handlers declared, listed, imported, or re-exported in a route file', async () => {
     const module = await importCompiled('route.ts', [
+      'import { shared } from \'./helpers\'',
       'export { shared as GET } from \'./helpers\'',
+      'export { shared as PUT }',
       'export async function POST() { return \'posted\' }',
       'const DELETE = async () => \'deleted\'',
       'export { DELETE }',
       'export const dynamic = \'force-dynamic\'',
     ].join('\n'), routeLoader)
 
-    expect(await Promise.all(['GET', 'POST', 'DELETE'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
+    expect(await Promise.all(['GET', 'PUT', 'POST', 'DELETE'].map(name => (module[name] as () => Promise<unknown>)()))).toEqual([
+      { route: 'shared' },
       { route: 'shared' },
       { route: 'posted' },
       { route: 'deleted' },
