@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - queue contracts and config helpers",
   "type": "module",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "catalog:"
+    "@holo-js/db": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {

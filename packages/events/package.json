@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/events",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - event contracts and runtime surface",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "@holo-js/db": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/queue": "catalog:"
+    "@holo-js/queue": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue": {

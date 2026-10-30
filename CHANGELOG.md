@@ -6,6 +6,14 @@
 
 - Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
 
+## 0.4.4 - 2026-10-30
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.
+
+### Fixed
+
+- npm can upgrade every `@holo-js/*` package together with your existing `package-lock.json`. Before, raising the pins across a minor release stopped with `ERESOLVE ... Conflicting peer dependency`, and deleting the lockfile was the only workaround. Optional peers between Holo packages, such as `@holo-js/core` on `@holo-js/storage`, now require 0.4.0 or later instead of the exact current release, so later upgrades succeed while npm still refuses to mix in a 0.3.x package. Peers that a package requires, such as `@holo-js/db-postgres` on `@holo-js/db`, and framework peers such as `next` keep their minimum versions. Each release now checks that npm and Bun upgrade a lockfile from the previous release to the next patch and minor release.
+
 ## 0.4.3 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-042-to-043) for hydrating rows loaded outside a model query. No breaking changes or required migrations.

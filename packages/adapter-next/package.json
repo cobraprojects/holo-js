@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-next",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - Next.js adapter",
   "type": "module",
   "license": "MIT",
@@ -61,8 +61,8 @@
     "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/forms": "catalog:",
-    "@holo-js/realtime": "catalog:",
+    "@holo-js/forms": ">=0.4.0",
+    "@holo-js/realtime": ">=0.4.0",
     "next": "catalog:",
     "react": "catalog:"
   },

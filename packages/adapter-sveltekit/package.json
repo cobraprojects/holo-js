@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-sveltekit",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - SvelteKit adapter",
   "type": "module",
   "license": "MIT",
@@ -78,8 +78,8 @@
     "sirv": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/forms": "catalog:",
-    "@holo-js/realtime": "catalog:",
+    "@holo-js/forms": ">=0.4.0",
+    "@holo-js/realtime": ">=0.4.0",
     "@sveltejs/kit": "catalog:",
     "svelte": "catalog:"
   },

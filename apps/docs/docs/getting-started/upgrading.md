@@ -1,5 +1,11 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.3 to 0.4.4
+
+Update every installed `@holo-js/*` package to `0.4.4` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#044---2026-10-30) lists the release changes.
+
+Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. From 0.4.4, raising every Holo pin no longer makes npm stop with `ERESOLVE ... Conflicting peer dependency`, including across minor releases.
+
 ## Upgrading from 0.4.2 to 0.4.3
 
 Update every installed `@holo-js/*` package to `0.4.3` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#043---2026-10-30) lists the release changes.
@@ -39,6 +45,17 @@ The native `@sveltejs/adapter-node` 6 remains supported. It does not read runtim
 ## Upgrading from 0.3.x to 0.4.0
 
 0.4.0 is a breaking release. Before you install it, upgrade Node.js and your framework: see [Node.js 22.18 or newer](#node-js-22-18-or-newer), [Framework peer dependencies](#framework-peer-dependencies), and [SvelteKit 3](#sveltekit-3). Then work through the sections below that apply to your app. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#040---2026-10-24) lists every change.
+
+::: tip
+With npm, changing the `@holo-js/*` versions in `package.json` and running `npm install` stops with `ERESOLVE ... Conflicting peer dependency` on this upgrade. Remove the Holo packages first, then install them at the new version. Your lockfile keeps your other dependencies:
+
+```bash
+npm uninstall @holo-js/core @holo-js/cli @holo-js/db
+npm install --save-exact @holo-js/core@0.4.4 @holo-js/cli@0.4.4 @holo-js/db@0.4.4
+```
+
+List every `@holo-js/*` package from your `package.json` in both commands.
+:::
 
 [Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
 
