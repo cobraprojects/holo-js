@@ -107,7 +107,9 @@ function addConnectionToObject(source: string, masked: string, open: number, mod
   return `${source.slice(0, lastCode + 1)}${separator} ${inlineConnection}${/^\s/.test(rest) ? '' : ' '}${rest}`
 }
 
-type RedisConnectionTarget = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number, readonly db: number }
+type RedisEndpoint = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number }
+
+type RedisConnectionTarget = RedisEndpoint & { readonly clusters?: readonly RedisEndpoint[], readonly db: number }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'])
 
@@ -116,21 +118,26 @@ function redisHostIdentity(host: string): string {
   return LOOPBACK_HOSTS.has(normalized) ? 'loopback' : normalized
 }
 
-function redisServerIdentity(connection: RedisConnectionTarget): string {
-  if (connection.url) {
-    const url = new URL(connection.url)
+function redisEndpointIdentity(endpoint: RedisEndpoint): string {
+  if (endpoint.url) {
+    const url = new URL(endpoint.url)
     if (url.protocol === 'unix:' || url.protocol === 'redis+unix:') return `socket:${url.pathname}`
     return `tcp:${redisHostIdentity(url.hostname)}:${url.port || 6379}`
   }
-  if (connection.socketPath) return `socket:${connection.socketPath}`
-  return `tcp:${redisHostIdentity(connection.host)}:${connection.port}`
+  if (endpoint.socketPath) return `socket:${endpoint.socketPath}`
+  return `tcp:${redisHostIdentity(endpoint.host)}:${endpoint.port}`
+}
+
+function redisServerIdentities(connection: RedisConnectionTarget): readonly string[] {
+  return connection.clusters?.length ? connection.clusters.map(redisEndpointIdentity) : [redisEndpointIdentity(connection)]
 }
 
 export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>): string | undefined {
   const cache = connections.cache
   if (!cache) return undefined
+  const cacheServers = redisServerIdentities(cache)
   return Object.entries(connections).find(([name, connection]) => (
-    name !== 'cache' && redisServerIdentity(connection) === redisServerIdentity(cache) && connection.db === cache.db
+    name !== 'cache' && connection.db === cache.db && redisServerIdentities(connection).some(server => cacheServers.includes(server))
   ))?.[0]
 }
 

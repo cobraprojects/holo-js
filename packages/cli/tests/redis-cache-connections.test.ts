@@ -234,6 +234,9 @@ describe('adding the redis cache connection', () => {
     expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://cache.internal:6379/1', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
     expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://127.0.0.1:6380/1', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
     expect(findRedisDatabaseShare({ default: { ...connection, host: '127.0.0.2', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    const clusterNodes = [{ host: 'redis-a.internal', port: 6379 }, { url: 'redis://redis-b.internal:6380', host: 'redis-b.internal', port: 6380 }]
+    expect(findRedisDatabaseShare({ queue: { ...connection, clusters: clusterNodes }, cache: { ...connection, host: 'redis-b.internal', port: 6380 } })).toBe('queue')
+    expect(findRedisDatabaseShare({ queue: { ...connection, clusters: clusterNodes }, cache: { ...connection, host: 'redis-c.internal' } })).toBeUndefined()
     expect(findRedisDatabaseShare({ default: { ...connection, socketPath: '/tmp/redis.sock', db: 1 }, cache: { ...connection, url: 'unix:///tmp/redis.sock', db: 1 } })).toBe('default')
   })
 })
