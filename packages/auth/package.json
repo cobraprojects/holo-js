@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - auth contracts, guards, and config helpers",
   "type": "module",
   "license": "MIT",
@@ -90,7 +90,7 @@
     "@holo-js/adapter-shared": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/security": "catalog:",
+    "@holo-js/security": ">=0.4.0",
     "next": "catalog:",
     "nuxt": "catalog:",
     "react": "catalog:",

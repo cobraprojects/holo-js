@@ -128,6 +128,16 @@ export async function collectPackageManifestFailures(root = repoRoot) {
       }
 
       for (const [packageName, version] of Object.entries(section)) {
+        const isOptionalWorkspacePeer = sectionName === 'peerDependencies'
+          && workspacePackageNames.has(packageName)
+          && manifest.peerDependenciesMeta?.[packageName]?.optional === true
+        if (isOptionalWorkspacePeer) {
+          if (!/^>=\d+\.\d+\.\d+$/.test(version)) {
+            failures.push(`${manifestPath}: ${sectionName}.${packageName} is an optional Holo peer and must be an open-ended floor such as ">=0.4.0" so npm can upgrade every Holo package together, found "${version}".`)
+          }
+          continue
+        }
+
         if (version !== 'catalog:' && !(version === 'workspace:*' && workspacePackageNames.has(packageName))) {
           failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in package manifests, found "${version}".`)
         }

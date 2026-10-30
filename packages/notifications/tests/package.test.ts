@@ -28,7 +28,7 @@ describe('@holo-js/notifications package surface', () => {
     }
 
     expect(manifest.peerDependencies?.['@holo-js/db']).toBeUndefined()
-    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('catalog:')
+    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('>=0.4.0')
     expect(manifest.peerDependenciesMeta?.['@holo-js/queue']).toEqual({
       optional: true,
     })

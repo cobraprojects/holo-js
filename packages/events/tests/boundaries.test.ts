@@ -57,7 +57,7 @@ describe('@holo-js/events package boundaries', () => {
     }
 
     expect(Object.keys(packageJson.dependencies ?? {})).toEqual(['@holo-js/db'])
-    expect(packageJson.peerDependencies?.['@holo-js/queue']).toBe('catalog:')
+    expect(packageJson.peerDependencies?.['@holo-js/queue']).toBe('>=0.4.0')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/queue']?.optional).toBe(true)
     expect(packageJson.devDependencies?.['@holo-js/queue']).toBe('catalog:')
   })

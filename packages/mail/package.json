@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/mail",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Holo-JS Framework - mail contracts, preview helpers, and fluent send helpers",
   "type": "module",
   "license": "MIT",
@@ -47,9 +47,9 @@
     "nodemailer": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "catalog:",
-    "@holo-js/queue": "catalog:",
-    "@holo-js/storage": "catalog:"
+    "@holo-js/db": ">=0.4.0",
+    "@holo-js/queue": ">=0.4.0",
+    "@holo-js/storage": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {
