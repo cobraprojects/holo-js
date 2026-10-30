@@ -40,6 +40,7 @@ export default defineConfig({
       'packages/queue',
       'packages/queue-db',
       'packages/realtime',
+      'packages/schedule',
       'packages/session',
       'packages/security',
       'packages/storage',

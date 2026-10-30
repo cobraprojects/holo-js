@@ -8,7 +8,7 @@ metadata:
 
 # Testing and deployment
 
-Read [testing](https://docs.holo-js.com/testing), [configuration](https://docs.holo-js.com/getting-started/configuration), [database commands](https://docs.holo-js.com/reference/cli), [queue workers](https://docs.holo-js.com/queue/workers), [broadcast deployment](https://docs.holo-js.com/broadcasting/production), and [deployment](https://docs.holo-js.com/deployment).
+Read [testing](https://docs.holo-js.com/testing), [configuration](https://docs.holo-js.com/getting-started/configuration), [database commands](https://docs.holo-js.com/reference/cli), [queue workers](https://docs.holo-js.com/queue/workers), [task scheduling](https://docs.holo-js.com/scheduling/), [broadcast deployment](https://docs.holo-js.com/broadcasting/production), and [deployment](https://docs.holo-js.com/deployment).
 
 ## Testing
 
@@ -25,6 +25,14 @@ Read [testing](https://docs.holo-js.com/testing), [configuration](https://docs.h
 3. Apply migrations according to the documented release strategy.
 4. Restart web, queue, scheduler, and realtime processes with compatible code and configuration.
 5. Verify health, worker throughput, failed jobs, storage access, and broadcast connectivity.
+
+## Scheduled tasks
+
+- Declare recurring work in `server/schedule.ts` with `defineSchedule()` from `@holo-js/schedule`; do not add one system cron entry per task.
+- Use `schedule.command('name args')` for Holo commands, `schedule.job(Job, payload)` for queued jobs, and `schedule.call(fn)` for functions, with Laravel frequency methods such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, and `timezone()`.
+- Run the scheduler with a single `* * * * * npx holo schedule:run` cron entry, or keep `holo schedule:work` running under a process manager. Check tasks with `holo schedule:list`.
+- `withoutOverlapping()` and `onOneServer()` use cache locks, so configure a store every scheduler process shares (`file` on one machine, `redis` or `database` across servers), never `memory`.
+- Scheduled command output is discarded; have commands report failures through their exit code and Holo error reporting.
 
 ## Operational boundaries
 

@@ -57,7 +57,8 @@
     "@holo-js/mail": "catalog:",
     "@holo-js/media": "catalog:",
     "@holo-js/session": "catalog:",
-    "@holo-js/queue": "catalog:"
+    "@holo-js/queue": "catalog:",
+    "@holo-js/schedule": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {
@@ -70,6 +71,9 @@
       "optional": true
     },
     "@holo-js/queue": {
+      "optional": true
+    },
+    "@holo-js/schedule": {
       "optional": true
     },
     "@holo-js/session": {
@@ -92,7 +96,8 @@
     "@types/semver": "catalog:",
     "tsup": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@holo-js/schedule": "catalog:"
   },
   "engines": {
     "node": "^22.18.0 || ^24.0.0 || ^26.0.0"

@@ -58,6 +58,10 @@ _Avoid_: Stalled job, stuck job
 **Job finalization**:
 The acknowledgement, release, or terminal failure of a reserved job following its execution attempt.
 
+**Scheduled task**:
+A command, job dispatch, or function declared in `server/schedule.ts` that the scheduler runs whenever its cron expression is due.
+_Avoid_: Cron job
+
 **Media mutation**:
 An attachment, regeneration, or deletion that changes a Media record and its stored files.
 

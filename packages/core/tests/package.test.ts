@@ -24,6 +24,7 @@ describe('@holo-js/core package boundaries', () => {
       '@holo-js/queue',
       '@holo-js/queue-db',
       '@holo-js/queue-redis',
+      '@holo-js/schedule',
       '@holo-js/security',
       '@holo-js/session',
       '@holo-js/storage',

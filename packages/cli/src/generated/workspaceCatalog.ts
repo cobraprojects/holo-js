@@ -44,6 +44,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "@holo-js/queue-db": "^0.4.3",
   "@holo-js/queue-redis": "^0.4.3",
   "@holo-js/realtime": "^0.4.3",
+  "@holo-js/schedule": "^0.4.3",
   "@holo-js/security": "^0.4.3",
   "@holo-js/session": "^0.4.3",
   "@holo-js/storage": "^0.4.3",

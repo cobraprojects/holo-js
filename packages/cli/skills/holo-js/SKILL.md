@@ -37,7 +37,7 @@ Application code never imports `internal` paths. Prefer public package exports a
 | Next.js integration | [framework-next](framework-next/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
 | Nuxt integration | [framework-nuxt](framework-nuxt/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
 | SvelteKit integration | [framework-sveltekit](framework-sveltekit/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
-| Tests, configuration, CLI, deployment | [testing-deployment](testing-deployment/SKILL.md) | [Testing](https://docs.holo-js.com/testing) |
+| Tests, configuration, CLI, scheduled tasks, deployment | [testing-deployment](testing-deployment/SKILL.md) | [Testing](https://docs.holo-js.com/testing) |
 | Replace custom or legacy architecture with Holo | [convert-to-holo](lifecycle/convert-to-holo/SKILL.md) | [Upgrade architecture](https://docs.holo-js.com/getting-started/upgrading) |
 | Package choice, ownership, or install question | [package catalog](references/packages.md) | Read the direct link in the matching package row |
 

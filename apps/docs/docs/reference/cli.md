@@ -557,6 +557,38 @@ npx holo prune [ModelName ...]
 npx holo prune Session AuditLog
 ```
 
+## Schedule commands
+
+See [Task Scheduling](/scheduling/) for how to declare tasks in `server/schedule.ts`.
+
+### schedule:run
+
+Run every task that is due this minute, then exit. Run it from a system cron entry of `* * * * *`.
+
+```bash
+npx holo schedule:run
+```
+
+A failing task is reported and the rest still run.
+
+### schedule:work
+
+Start `schedule:run` at the start of every minute, in the foreground. Use it instead of a cron entry.
+
+```bash
+npx holo schedule:work
+```
+
+`Ctrl+C`, `SIGINT`, and `SIGTERM` stop it. The signal is passed on to any `schedule:run` still running, and `schedule:work` exits once they have.
+
+### schedule:list
+
+List the tasks with their cron expressions and next due times in the app's timezone.
+
+```bash
+npx holo schedule:list
+```
+
 ## Queue commands
 
 See [Running Workers](/queue/workers) and [Failed Jobs](/queue/failed-jobs) for the full workflow.

@@ -2440,6 +2440,7 @@ function getConfigSection(key: string): unknown {
 
 export const holoRuntimeInternals = {
   setProjectDefinitionImporter,
+  loadProjectDefinitionRuntimeModules,
   createAuthMailDeliveryHook,
   createAuthNotificationsDeliveryHook,
   createCoreNotificationBroadcaster,

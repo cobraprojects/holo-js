@@ -24,6 +24,9 @@
       "@holo-js/queue-db": [
         "../queue-db/src/index.ts"
       ],
+      "@holo-js/schedule": [
+        "../schedule/src/index.ts"
+      ],
       "@holo-js/security": [
         "../security/src/index.ts"
       ],

@@ -63,6 +63,7 @@
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
     "@holo-js/queue-redis": "catalog:",
+    "@holo-js/schedule": "catalog:",
     "@holo-js/security": "catalog:",
     "@holo-js/session": "catalog:",
     "@holo-js/storage": "catalog:"
@@ -108,6 +109,9 @@
       "optional": true
     },
     "@holo-js/queue-redis": {
+      "optional": true
+    },
+    "@holo-js/schedule": {
       "optional": true
     },
     "@holo-js/security": {

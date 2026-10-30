@@ -185,6 +185,12 @@ const features: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'Task Scheduling',
+    items: [
+      { text: 'Scheduling Tasks', link: '/scheduling/' },
+    ],
+  },
+  {
     text: 'Events',
     items: [
       { text: 'Getting Started', link: '/events/' },

@@ -67,6 +67,7 @@ Install one for each database engine your `config/database.ts` uses.
 | `@holo-js/queue` | Jobs, `dispatch()`, workers, failed jobs | Running work in the background | [Queues](/queue/) |
 | `@holo-js/queue-db` | Database queue driver and database failed-job storage | Queues stored in your database | [Drivers and Tables](/queue/drivers) |
 | `@holo-js/queue-redis` | Redis queue driver | Queues stored in Redis | [Drivers and Tables](/queue/drivers) |
+| `@holo-js/schedule` | `defineSchedule()`, `schedule:run`, `schedule:work`, `schedule:list` | Running commands, jobs, and functions on a timetable | [Task Scheduling](/scheduling/) |
 | `@holo-js/events` | Events, listeners, queued and after-commit listeners | Decoupling side effects from your main code | [Events](/events/) |
 | `@holo-js/mail` | Mail definitions, Markdown mail, previews, SMTP | Sending email | [Mail](/mail/) |
 | `@holo-js/notifications` | Notifications over email, database, broadcast, or custom channels | Notifying users | [Notifications](/notifications/) |

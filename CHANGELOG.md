@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
+
 ## 0.4.3 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-042-to-043) for hydrating rows loaded outside a model query. No breaking changes or required migrations.
