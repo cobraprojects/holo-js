@@ -4,7 +4,7 @@ const MAX_FLASH_COOKIE_BYTES = 3_800
 
 export type ValidationFlash = {
   readonly bag: string
-  readonly path: string
+  readonly page: string
   readonly errors: Readonly<Record<string, readonly string[]>>
 }
 
@@ -21,11 +21,19 @@ export function parseValidationFlash(value: string): ValidationFlash | undefined
   try {
     const flash: unknown = JSON.parse(value)
     if (typeof flash !== 'object' || flash === null) return undefined
-    const { bag, path, errors } = flash as Record<string, unknown>
-    return typeof bag === 'string' && typeof path === 'string' && isErrors(errors) ? { bag, path, errors } : undefined
+    const { bag, page, errors } = flash as Record<string, unknown>
+    return typeof bag === 'string' && typeof page === 'string' && isErrors(errors) ? { bag, page, errors } : undefined
   } catch {
     return undefined
   }
+}
+
+export function validationFlashPage(pathname: string): string {
+  let hash = 0x811c9dc5
+  for (const character of pathname) {
+    hash = Math.imul(hash ^ (character.codePointAt(0) ?? 0), 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 function fitsInCookie(flash: ValidationFlash): boolean {
@@ -36,8 +44,9 @@ function firstMessages(errors: ValidationFlash['errors']): ValidationFlash['erro
   return Object.fromEntries(Object.entries(errors).map(([path, messages]) => [path, messages.slice(0, 1)]))
 }
 
-export function serializeValidationFlash(flash: ValidationFlash): string {
+export function serializeValidationFlash(flash: ValidationFlash): string | undefined {
   if (fitsInCookie(flash)) return JSON.stringify(flash)
+  if (!fitsInCookie({ ...flash, errors: {} })) return undefined
   const errors: Record<string, readonly string[]> = {}
   for (const [path, messages] of Object.entries(firstMessages(flash.errors))) {
     if (fitsInCookie({ ...flash, errors: { ...errors, [path]: messages } })) errors[path] = messages

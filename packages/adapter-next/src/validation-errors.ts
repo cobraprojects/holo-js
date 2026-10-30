@@ -3,7 +3,7 @@
 import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation.js'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
-import { VALIDATION_FLASH_COOKIE, parseValidationFlash, type ValidationFlash } from './validation-flash'
+import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, type ValidationFlash } from './validation-flash'
 
 type BrowserDocument = { cookie: string }
 
@@ -66,7 +66,7 @@ export function HoloValidationErrorsProvider({ initial = '', children }: { reado
 export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAULT_VALIDATION_BAG): ValidationErrorBag<TData> {
   const flash = useContext(ValidationFlashContext)
   const pathname = usePathname()
-  return createErrorBag<TData>(flash?.bag === bag && flash.path === pathname ? flash.errors : {})
+  return createErrorBag<TData>(flash?.bag === bag && flash.page === validationFlashPage(pathname) ? flash.errors : {})
 }
 
 function validationErrorsClientLayout<TProps extends object>(layout: (props: TProps) => ReactNode): (props: TProps) => ReactNode {

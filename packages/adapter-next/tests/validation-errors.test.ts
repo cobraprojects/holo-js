@@ -61,7 +61,8 @@ function installBrowserCookies(): CookieJar {
   return { receive: setCookies => setCookies.forEach(write), header }
 }
 
-async function submit<TResult>(action: () => Promise<TResult>, request: { readonly cookie?: string, readonly withJavaScript: boolean, readonly render?: () => ReactNode }) {
+async function submit<TResult>(action: () => Promise<TResult>, request: { readonly cookie?: string, readonly withJavaScript: boolean, readonly pathname?: string, readonly render?: () => ReactNode }) {
+  const pathname = request.pathname ?? '/posts/new'
   const headers = new Headers({
     origin: 'https://blog.test',
     ...(request.withJavaScript ? { 'next-action': actionId } : {}),
@@ -73,7 +74,7 @@ async function submit<TResult>(action: () => Promise<TResult>, request: { readon
     type: 'request',
     phase: 'action',
     headers,
-    url: { pathname: '/posts/new', search: '' },
+    url: { pathname, search: '' },
     cookies: requestCookies,
     userspaceMutableCookies: MutableRequestCookiesAdapter.wrap(requestCookies, (cookies) => {
       setCookies = cookies
@@ -81,7 +82,7 @@ async function submit<TResult>(action: () => Promise<TResult>, request: { readon
   } as unknown as WorkUnitStore
   const result = await workAsyncStorage.run({ route: '/posts/new' } as WorkStore, () => actionAsyncStorage.run({ isAction: true }, () => workUnitAsyncStorage.run(store, async () => {
     const value = await action()
-    return { value, html: request.render ? renderToString(createElement(PathnameContext.Provider, { value: '/posts/new' }, request.render())) : undefined }
+    return { value, html: request.render ? renderToString(createElement(PathnameContext.Provider, { value: pathname }, request.render())) : undefined }
   })))
   return { ...result, setCookies }
 }
@@ -225,7 +226,10 @@ describe('useValidationErrors() in Next', () => {
     const browser = installBrowserCookies()
     const page = await openPage('/posts/new')
 
-    browser.receive([`holo_form_failure=${encodeURIComponent(JSON.stringify({ bag: 'default', path: '/posts/new', errors: { '__proto__.polluted': ['forged'] } }))}; Path=/`])
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    const [name, value] = browser.header().split('=') as [string, string]
+    const forged = { ...JSON.parse(decodeURIComponent(value)) as object, errors: { '__proto__.polluted': ['forged'] } }
+    browser.receive([`${name}=${encodeURIComponent(JSON.stringify(forged))}; Path=/`])
     await page.refresh()
 
     expect(page.errors.flatten()).toEqual({})
@@ -239,5 +243,18 @@ describe('useValidationErrors() in Next', () => {
     await page.refresh()
 
     expect(page.errors.first('email')).toBe('Email is required.')
+  })
+
+  it('shows the errors of a page with a very long address', async () => {
+    const browser = installBrowserCookies()
+    const pathname = `/posts/${'a'.repeat(4050)}`
+    const page = await openPage(pathname)
+
+    const response = await submit(() => createPost({ title: '' }), { withJavaScript: true, pathname })
+    browser.receive(response.setCookies)
+    await page.refresh()
+
+    expect(response.setCookies.every(cookie => cookie.length < 4096)).toBe(true)
+    expect(page.errors.has('title')).toBe(true)
   })
 })

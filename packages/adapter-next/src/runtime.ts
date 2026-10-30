@@ -11,7 +11,7 @@ import { getCurrentNextRequest, setNextAuthRequestRunner, type NextRequestLike }
 import { currentWorkUnitStore, loadNextAsyncStorage, requireNextFromProject, type NextActionStore, type NextWorkUnitStore } from './next-async-storage'
 import { rememberRenderedValidationFlash } from './rendered-validation-flash'
 import { installNextShutdown } from './shutdown'
-import { VALIDATION_FLASH_COOKIE, serializeValidationFlash } from './validation-flash'
+import { VALIDATION_FLASH_COOKIE, serializeValidationFlash, validationFlashPage } from './validation-flash'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
@@ -378,7 +378,8 @@ async function actionCookies(): Promise<NextActionCookieStore> {
 }
 
 async function flashValidationErrors(store: NextWorkUnitStore, failure: SerializedValidationException): Promise<void> {
-  const flash = serializeValidationFlash({ bag: failure.bag, path: store.url?.pathname ?? '/', errors: failure.errors })
+  const flash = serializeValidationFlash({ bag: failure.bag, page: validationFlashPage(store.url?.pathname ?? '/'), errors: failure.errors })
+  if (!flash) return
   rememberRenderedValidationFlash(store, flash)
   const cookies = await actionCookies()
   cookies.set(VALIDATION_FLASH_COOKIE, flash, {
