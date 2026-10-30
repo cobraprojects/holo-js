@@ -12,6 +12,7 @@ type LayoutLoaderContext = {
   cacheable?: () => void
   readonly resourcePath: string
   readonly resourceQuery?: string
+  addDependency?(file: string): void
   getOptions?(): { readonly pageExtensions?: readonly string[], readonly bundler?: NextBundler }
 }
 
@@ -45,9 +46,6 @@ function writeClientLayoutEntry(layout: string, projectRoot: string): string {
   return entry
 }
 
-function clientLayoutRequest(layout: string, projectRoot: string, bundler: NextBundler): string {
-  return bundler === 'webpack' ? writeClientLayoutEntry(layout, projectRoot) : `./${basename(layout)}${CLIENT_LAYOUT_QUERY}`
-}
 
 export default function layoutLoader(this: LayoutLoaderContext, source: string): string {
   this.cacheable?.()
@@ -56,5 +54,10 @@ export default function layoutLoader(this: LayoutLoaderContext, source: string):
   const projectRoot = process.cwd()
   const layoutFile = layoutFileNamePattern(options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS)
   if (!isRootLayout(this.resourcePath, projectRoot, layoutFile)) return source
-  return compileNextRootLayout(source, this.resourcePath, () => clientLayoutRequest(this.resourcePath, projectRoot, options?.bundler ?? 'turbopack'))
+  return compileNextRootLayout(source, this.resourcePath, () => {
+    if (options?.bundler !== 'webpack') return `./${basename(this.resourcePath)}${CLIENT_LAYOUT_QUERY}`
+    const entry = writeClientLayoutEntry(this.resourcePath, projectRoot)
+    this.addDependency?.(entry)
+    return entry
+  })
 }

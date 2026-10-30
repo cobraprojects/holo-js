@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import layoutLoader from '../src/layout-loader'
@@ -101,5 +101,16 @@ describe('Next layout loader', () => {
     expect(await renderLayout(project, 'app/layout.page.tsx', source, ['page.tsx'])).toEqual({ provided: 'Posts' })
     expect(await renderLayout(project, 'app/admin/layout.page.tsx', source, ['page.tsx'])).toBe('Posts')
     expect(await renderLayout(project, 'app/docs/layout.tsx', source, ['page.tsx'])).toBe('Posts')
+  })
+
+  it('registers the generated client layout entry as a webpack dependency so a missing entry rebuilds the layout', async () => {
+    const project = await createProject(['app/layout.tsx'])
+    const source = '\'use client\'\nexport default function RootLayout() { return null }\n'
+    const dependencies: string[] = []
+
+    layoutLoader.call({ resourcePath: join(project, 'app/layout.tsx'), addDependency: file => dependencies.push(file), getOptions: () => ({ bundler: 'webpack' }) }, source)
+
+    expect(dependencies).toHaveLength(1)
+    expect(await readFile(dependencies[0] ?? '', 'utf8')).toContain(JSON.stringify(join(project, 'app/layout.tsx')))
   })
 })

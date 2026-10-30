@@ -86,7 +86,7 @@ The submitter's `formData` is built from the form element, so inputs you don't b
 
 Holo wraps every action a `'use server'` file declares and exports. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`, and `useForm()` shows them. Nothing is logged, because these are input mistakes, not server errors.
 
-Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, and actions a `'use server'` file re-exports from another module.
+Everything else still throws: `redirect()`, `notFound()`, other errors, rate-limit errors from a form posted without JavaScript, actions called from server code, actions called inside another action, and actions a `'use server'` file re-exports from another module.
 
 ## Next.js: native forms
 
