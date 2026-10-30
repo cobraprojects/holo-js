@@ -1,6 +1,6 @@
 ---
 name: holo-queues-events
-description: Implement Holo-JS jobs, queue workers, retries, failed jobs, domain events, listeners, queued listeners, after-commit dispatch, and model event coordination.
+description: Implement Holo-JS jobs, scheduled job dispatch, queue workers, retries, failed jobs, domain events, listeners, queued listeners, after-commit dispatch, and model event coordination.
 metadata:
   type: focused
   source: https://docs.holo-js.com/events/
@@ -16,6 +16,7 @@ Read [event pattern selection](https://docs.holo-js.com/events/choosing-patterns
 - A job is explicit background work with queue, retry, timeout, and failure policy.
 - A queued listener moves one event reaction off the request path.
 - A model observer owns lifecycle behavior tightly coupled to model persistence; see the database skill.
+- Recurring work belongs in `server/schedule.ts`: `schedule.job(SendDigest, { userId: 1 }).daily()` dispatches the job on its own connection and queue each time it's due. See [task scheduling](https://docs.holo-js.com/scheduling/) and the testing-deployment skill.
 
 ```ts
 export const PostPublished = defineEvent<{ postId: string }>({

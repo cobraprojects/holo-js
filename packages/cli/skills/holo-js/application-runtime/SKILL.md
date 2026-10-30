@@ -39,6 +39,8 @@ const report = await cache.remember('reports.daily', 300, async () => {
 
 Use locks around work that must have one active owner. Cache data remains disposable; the database remains the source of truth.
 
+Scheduled tasks with `withoutOverlapping()` or `onOneServer()` take cache locks from separate `schedule:run` processes, so they need a store those processes share: `file` on one machine, Redis or database across servers, never `memory`. See [task scheduling](https://docs.holo-js.com/scheduling/).
+
 ## Plugins
 
 Plugins expose a package-local `holo.plugin` entry and a `defineHoloPlugin` definition. Keep contribution module paths inside the package root. Register feature-specific config normalization in the feature package, add the package to `config/app.ts`, and run `holo prepare` after activation changes.

@@ -605,6 +605,7 @@
         "@holo-js/media": "catalog:",
         "@holo-js/queue": "catalog:",
         "@holo-js/queue-db": "catalog:",
+        "@holo-js/schedule": "catalog:",
         "@holo-js/session": "catalog:",
         "@sveltejs/adapter-node": "catalog:",
         "@sveltejs/kit": "catalog:",
@@ -620,6 +621,7 @@
         "@holo-js/mail": ">=0.4.0",
         "@holo-js/media": ">=0.4.0",
         "@holo-js/queue": ">=0.4.0",
+        "@holo-js/schedule": ">=0.4.0",
         "@holo-js/session": ">=0.4.0",
       },
       "optionalPeers": [
@@ -627,6 +629,7 @@
         "@holo-js/mail",
         "@holo-js/media",
         "@holo-js/queue",
+        "@holo-js/schedule",
         "@holo-js/session",
       ],
     },
@@ -688,6 +691,7 @@
         "@holo-js/queue": ">=0.4.0",
         "@holo-js/queue-db": ">=0.4.0",
         "@holo-js/queue-redis": ">=0.4.0",
+        "@holo-js/schedule": ">=0.4.0",
         "@holo-js/security": ">=0.4.0",
         "@holo-js/session": ">=0.4.0",
         "@holo-js/storage": ">=0.4.0",
@@ -707,6 +711,7 @@
         "@holo-js/queue",
         "@holo-js/queue-db",
         "@holo-js/queue-redis",
+        "@holo-js/schedule",
         "@holo-js/security",
         "@holo-js/session",
         "@holo-js/storage",
@@ -1085,6 +1090,26 @@
         "@holo-js/security",
       ],
     },
+    "packages/schedule": {
+      "name": "@holo-js/schedule",
+      "version": "0.4.4",
+      "devDependencies": {
+        "@holo-js/cache": "catalog:",
+        "@holo-js/queue": "catalog:",
+        "@types/node": "catalog:",
+        "tsup": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@holo-js/cache": ">=0.4.0",
+        "@holo-js/queue": ">=0.4.0",
+      },
+      "optionalPeers": [
+        "@holo-js/cache",
+        "@holo-js/queue",
+      ],
+    },
     "packages/security": {
       "name": "@holo-js/security",
       "version": "0.4.4",
@@ -1227,6 +1252,7 @@
     "@holo-js/queue-db": "^0.4.4",
     "@holo-js/queue-redis": "^0.4.4",
     "@holo-js/realtime": "^0.4.4",
+    "@holo-js/schedule": "^0.4.4",
     "@holo-js/security": "^0.4.4",
     "@holo-js/session": "^0.4.4",
     "@holo-js/storage": "^0.4.4",
@@ -1573,6 +1599,8 @@
     "@holo-js/queue-redis": ["@holo-js/queue-redis@workspace:packages/queue-redis"],
 
     "@holo-js/realtime": ["@holo-js/realtime@workspace:packages/realtime"],
+
+    "@holo-js/schedule": ["@holo-js/schedule@workspace:packages/schedule"],
 
     "@holo-js/security": ["@holo-js/security@workspace:packages/security"],
 

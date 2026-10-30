@@ -44,6 +44,7 @@ Use this catalog when choosing a package or locating its authoritative documenta
 | `@holo-js/queue-db` | Database-backed queue driver | [Database queues](https://docs.holo-js.com/queue/drivers) |
 | `@holo-js/queue-redis` | Redis-backed queue driver | [Queues](https://docs.holo-js.com/queue/) |
 | `@holo-js/realtime` | Realtime server and WebSocket protocol integration | [Realtime](https://docs.holo-js.com/realtime/) |
+| `@holo-js/schedule` | Scheduled commands, jobs, and functions in `server/schedule.ts`, with `schedule:run`, `schedule:work`, and `schedule:list` | [Task Scheduling](https://docs.holo-js.com/scheduling/) |
 | `@holo-js/security` | CSRF, encryption, hashing, rate limiting, and secure request utilities | [Security](https://docs.holo-js.com/basics/security/) |
 | `@holo-js/session` | Session stores, cookies, flash data, and request session lifecycle | [Sessions and cookies](https://docs.holo-js.com/auth/session-and-cookies) |
 | `@holo-js/storage` | Storage disks and file operations | [Storage](https://docs.holo-js.com/storage) |

@@ -61,6 +61,7 @@ import {
   loadProjectRuntimeModule,
   loadProjectScaffoldModule,
   loadRuntimeModule,
+  loadScheduleModule,
   loadSecurityModule,
   loadStorageModule,
   resolveBroadcastExecutor,
@@ -1579,6 +1580,45 @@ export function createInternalCommands(
       },
     },
     {
+      name: 'schedule:run',
+      description: 'Run the scheduled tasks that are due.',
+      usage: 'holo schedule:run',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const { runScheduleRunCommand } = await loadScheduleModule()
+        await runScheduleRunCommand(context, context.projectRoot)
+      },
+    },
+    {
+      name: 'schedule:work',
+      description: 'Run the scheduler every minute in the foreground.',
+      usage: 'holo schedule:work',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const { runScheduleWorkCommand } = await loadScheduleModule()
+        await runScheduleWorkCommand(context, context.projectRoot)
+      },
+    },
+    {
+      name: 'schedule:list',
+      description: 'List the scheduled tasks and their next due times.',
+      usage: 'holo schedule:list',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const { runScheduleListCommand } = await loadScheduleModule()
+        await runScheduleListCommand(context, context.projectRoot)
+      },
+    },
+    {
       name: 'rate-limit:clear',
       description: 'Clear rate-limit buckets for the configured security driver.',
       usage: 'holo rate-limit:clear [--limiter <name>] [--key <value>] [--all]',
@@ -2322,6 +2362,9 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
       || requestedCommandName === 'queue:restart'
       || requestedCommandName === 'queue:clear'
       || requestedCommandName === 'rate-limit:clear'
+      || requestedCommandName === 'schedule:run'
+      || requestedCommandName === 'schedule:work'
+      || requestedCommandName === 'schedule:list'
       || requestedCommandName === 'plugin:add'
       || requestedCommandName === 'plugins:add'
       || requestedCommandName === 'plugin:list'

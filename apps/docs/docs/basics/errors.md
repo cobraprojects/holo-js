@@ -201,6 +201,7 @@ export default defineAppConfig({
 | `db` | `cache.invalidationListener` |
 | `broadcast` | `worker.socketMessage`, `worker.scalingMessage`, `worker.socketCleanup`, `worker.realtimeSubscriptionCleanup` |
 | `realtime` | `subscription.onData`, `subscription.onPatch`, `subscription.onError` |
+| `schedule` | `task` (a scheduled task that threw, returned `false`, or whose command exited with a non-zero code) |
 | `sveltekit` | `handleError` (unexpected errors when your `hooks.server.ts` has no `handleError`) |
 | `next` | `shutdown` (closing Holo's connections when the server stops) |
 | `nuxt` | `shutdown` (closing Holo's connections when the server stops) |

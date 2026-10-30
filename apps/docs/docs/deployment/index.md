@@ -16,6 +16,7 @@ Plus, if you use them:
 ```bash
 npx holo queue:work --connection redis
 npx holo broadcast:work
+npx holo schedule:work
 ```
 
 The scaffolded `build` and `start` scripts run `holo build` and `holo start`.
@@ -29,6 +30,7 @@ What you need depends on whether anything has to keep running after a request en
 | Pages, API routes, database, auth, forms, storage, `sync` queue | A web server only | Any host your framework supports, including Vercel and Cloudflare when the framework supports them |
 | `redis` or `database` queues, queued mail or notifications, queued listeners, media conversions on a queue | Web server + queue worker | Web app anywhere, plus a VPS, container service, or PaaS that runs long-lived processes |
 | Self-hosted broadcasting (`holo` driver) or [realtime queries](/realtime/) | Web server + broadcast worker | Same as above |
+| [Scheduled tasks](/scheduling/) (`server/schedule.ts`) | Web server + a cron entry for `holo schedule:run`, or `holo schedule:work` | Same as above |
 
 A common setup is to put the web app on a serverless platform and run workers on a small server or container, all with the same environment variables. Serverless platforms can't run workers on their own.
 

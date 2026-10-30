@@ -1,6 +1,6 @@
 ---
 name: holo-js
-description: Build, convert, debug, or review Holo-JS applications. Routes work to focused Holo-JS skills for forms, ORM, auth, storage, media, queues, events, observers, broadcasting, realtime, mail, notifications, framework adapters, testing, and deployment.
+description: Build, convert, debug, or review Holo-JS applications. Routes work to focused Holo-JS skills for forms, ORM, auth, storage, media, queues, scheduled tasks, events, observers, broadcasting, realtime, mail, notifications, framework adapters, testing, and deployment.
 metadata:
   type: router
   library: holo-js
@@ -38,6 +38,7 @@ Application code never imports `internal` paths. Prefer public package exports a
 | Nuxt integration | [framework-nuxt](framework-nuxt/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
 | SvelteKit integration | [framework-sveltekit](framework-sveltekit/SKILL.md) | [Runtime services](https://docs.holo-js.com/basics/services) |
 | Tests, configuration, CLI, deployment | [testing-deployment](testing-deployment/SKILL.md) | [Testing](https://docs.holo-js.com/testing) |
+| Scheduled tasks, cron entries, recurring commands or jobs | [testing-deployment](testing-deployment/SKILL.md) | [Task Scheduling](https://docs.holo-js.com/scheduling/) |
 | Replace custom or legacy architecture with Holo | [convert-to-holo](lifecycle/convert-to-holo/SKILL.md) | [Upgrade architecture](https://docs.holo-js.com/getting-started/upgrading) |
 | Package choice, ownership, or install question | [package catalog](references/packages.md) | Read the direct link in the matching package row |
 

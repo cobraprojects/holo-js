@@ -1,0 +1,55 @@
+{
+  "name": "@holo-js/schedule",
+  "version": "0.4.4",
+  "description": "Holo-JS Framework - task scheduling",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobraprojects/holo-js.git",
+    "directory": "packages/schedule"
+  },
+  "exports": {
+    ".": {
+      "@holo-js/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@holo-js/cache": ">=0.4.0",
+    "@holo-js/queue": ">=0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/cache": {
+      "optional": true
+    },
+    "@holo-js/queue": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@holo-js/cache": "catalog:",
+    "@holo-js/queue": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": "^22.18.0 || ^24.0.0 || ^26.0.0"
+  }
+}

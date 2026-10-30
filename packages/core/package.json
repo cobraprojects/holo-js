@@ -63,6 +63,7 @@
     "@holo-js/queue": ">=0.4.0",
     "@holo-js/queue-db": ">=0.4.0",
     "@holo-js/queue-redis": ">=0.4.0",
+    "@holo-js/schedule": ">=0.4.0",
     "@holo-js/security": ">=0.4.0",
     "@holo-js/session": ">=0.4.0",
     "@holo-js/storage": ">=0.4.0"
@@ -108,6 +109,9 @@
       "optional": true
     },
     "@holo-js/queue-redis": {
+      "optional": true
+    },
+    "@holo-js/schedule": {
       "optional": true
     },
     "@holo-js/security": {
