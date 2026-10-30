@@ -24,6 +24,12 @@ const createPost = Object.defineProperty(adapterNextRuntimeInternals.serverActio
   return 'created'
 }), '$$id', { value: actionId })
 
+const manyFields = schema(Object.fromEntries(Array.from({ length: 120 }, (_, index) => [`item_${index}_title`, field.string().required('This field is required for this item.').min(3, 'Use at least three characters.')])))
+
+const saveItems = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
+  await validate({}, manyFields)
+}), '$$id', { value: actionId })
+
 const changePassword = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
   await validate({ title: 'x', password: 'short' }, postForm, { bag: 'password' })
 }), '$$id', { value: actionId })
@@ -195,5 +201,27 @@ describe('useValidationErrors() in Next', () => {
     await reloaded.navigate('/posts/new')
     expect(reloaded.errors.flatten()).toEqual({})
     expect(browser.header()).toBe('')
+  })
+
+  it('keeps the errors of a large form within the browser cookie limit', async () => {
+    const browser = installBrowserCookies()
+    const page = await openPage('/posts/new')
+
+    const response = await submit(saveItems, { withJavaScript: true })
+    browser.receive(response.setCookies)
+    await page.refresh()
+
+    expect(response.setCookies.every(cookie => cookie.length < 4096)).toBe(true)
+    expect(page.errors.first('item_0_title')).toBe('This field is required for this item.')
+  })
+
+  it('ignores a forged error cookie instead of failing to render', async () => {
+    const browser = installBrowserCookies()
+    const page = await openPage('/posts/new')
+
+    browser.receive([`holo_form_failure=${encodeURIComponent(JSON.stringify({ bag: 'default', path: '/posts/new', errors: { '__proto__.polluted': ['forged'] } }))}; Path=/`])
+    await page.refresh()
+
+    expect(page.errors.flatten()).toEqual({})
   })
 })

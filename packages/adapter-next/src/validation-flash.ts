@@ -1,5 +1,7 @@
 export const VALIDATION_FLASH_COOKIE = 'holo_form_failure'
 
+const MAX_FLASH_COOKIE_BYTES = 3_800
+
 export type ValidationFlash = {
   readonly bag: string
   readonly path: string
@@ -24,4 +26,22 @@ export function parseValidationFlash(value: string): ValidationFlash | undefined
   } catch {
     return undefined
   }
+}
+
+function fitsInCookie(flash: ValidationFlash): boolean {
+  return encodeURIComponent(JSON.stringify(flash)).length <= MAX_FLASH_COOKIE_BYTES
+}
+
+function firstMessages(errors: ValidationFlash['errors']): ValidationFlash['errors'] {
+  return Object.fromEntries(Object.entries(errors).map(([path, messages]) => [path, messages.slice(0, 1)]))
+}
+
+export function serializeValidationFlash(flash: ValidationFlash): string {
+  if (fitsInCookie(flash)) return JSON.stringify(flash)
+  const errors: Record<string, readonly string[]> = {}
+  for (const [path, messages] of Object.entries(firstMessages(flash.errors))) {
+    if (!fitsInCookie({ ...flash, errors: { ...errors, [path]: messages } })) break
+    errors[path] = messages
+  }
+  return JSON.stringify({ ...flash, errors })
 }

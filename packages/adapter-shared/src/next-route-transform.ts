@@ -2,12 +2,17 @@ import ts from 'typescript'
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
-type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout'
+type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout' | 'validationErrorsClientLayout'
 
 const RUNTIME_MODULES: Readonly<Record<RuntimeWrapper, { readonly specifier: string, readonly internals: string }>> = {
   routeHandler: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   serverAction: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   validationErrorsLayout: { specifier: '@holo-js/adapter-next/internal/validation-layout', internals: 'adapterNextLayoutInternals' },
+  validationErrorsClientLayout: { specifier: '@holo-js/adapter-next/internal/validation-errors', internals: 'adapterNextClientLayoutInternals' },
+}
+
+function isLayoutWrapper(wrapper: RuntimeWrapper): boolean {
+  return wrapper === 'validationErrorsLayout' || wrapper === 'validationErrorsClientLayout'
 }
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
@@ -122,11 +127,11 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
   ]
 }
 
-function localizeDefaultFunction(statement: ts.Statement, defaultName: string): readonly ts.Statement[] {
+function localizeDefaultExport(statement: ts.Statement, defaultName: string, localizes: (expression: ts.Expression) => boolean): readonly ts.Statement[] {
   if (!ts.isExportAssignment(statement) || statement.isExportEquals) return [statement]
   let expression = statement.expression
   while (ts.isParenthesizedExpression(expression)) expression = expression.expression
-  if (!ts.isArrowFunction(expression) && !ts.isFunctionExpression(expression)) return [statement]
+  if (!localizes(expression)) return [statement]
   return [
     ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
       ts.factory.createVariableDeclaration(defaultName, undefined, undefined, expression),
@@ -140,9 +145,12 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
   const defaultName = allocate('__holoDefault')
   const runtimeName = allocate('__holoRouteRuntime')
   const declared = declaredValues(source, defaultName)
+  const localizes = isLayoutWrapper(wrapper)
+    ? (expression: ts.Expression) => !ts.isIdentifier(expression) || !declared.has(expression.text)
+    : (expression: ts.Expression) => ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)
   const file = ts.factory.updateSourceFile(source, source.statements
-    .flatMap(statement => localizeDefaultFunction(statement, defaultName))
-    .flatMap(statement => wrapper === 'routeHandler' ? localizeRouteExports(statement, wraps, declared, allocate) : [statement]))
+    .flatMap(statement => localizeDefaultExport(statement, defaultName, localizes))
+    .flatMap(statement => wrapper === 'serverAction' ? [statement] : localizeRouteExports(statement, wraps, declared, allocate)))
   const locals = wrappedLocals(file, wraps, defaultName)
   if (locals.size === 0) return undefined
   const runtimeModule = RUNTIME_MODULES[wrapper]
@@ -198,6 +206,6 @@ export function compileNextServerActions(source: string, filename: string): stri
 
 export function compileNextRootLayout(source: string, filename: string): string {
   const file = parse(source, filename)
-  if (hasDirective(file, 'use client')) return source
-  return wrapExports(file, 'validationErrorsLayout', name => name === 'default') ?? source
+  const wrapper = hasDirective(file, 'use client') ? 'validationErrorsClientLayout' : 'validationErrorsLayout'
+  return wrapExports(file, wrapper, name => name === 'default') ?? source
 }

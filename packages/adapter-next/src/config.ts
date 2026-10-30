@@ -322,7 +322,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: USE_SERVER_DIRECTIVE }] }, loaders: [serverActionLoader] },
-        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: APP_LAYOUT_FILE }] }, loaders: [layoutLoader] },
+        { condition: { all: [{ not: 'foreign' }, { path: APP_LAYOUT_FILE }] }, loaders: [layoutLoader] },
       ],
       ...(hasRealtime
         ? {
@@ -376,7 +376,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
         ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
-        ...(context.isServer ? [{ test: APP_LAYOUT_FILE, exclude: /node_modules/, use: [{ loader: layoutLoader }] }] : []),
+        { test: APP_LAYOUT_FILE, exclude: /node_modules/, use: [{ loader: layoutLoader }] },
       ]
       return nextWebpackConfig
     },

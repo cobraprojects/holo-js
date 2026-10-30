@@ -9,6 +9,12 @@ vi.mock('@holo-js/adapter-next/internal/validation-layout', () => ({
   },
 }))
 
+vi.mock('@holo-js/adapter-next/internal/validation-errors', () => ({
+  adapterNextClientLayoutInternals: {
+    validationErrorsClientLayout: <TProps>(layout: (props: TProps) => unknown) => (props: TProps) => ({ providedInBrowser: layout(props) }),
+  },
+}))
+
 async function createProject(files: readonly string[]): Promise<string> {
   const root = await mkdtemp(join(import.meta.dirname, '.layouts-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
@@ -23,9 +29,11 @@ async function createProject(files: readonly string[]): Promise<string> {
   return root
 }
 
+let compiledLayouts = 0
+
 async function renderLayout(root: string, file: string, source: string): Promise<unknown> {
   const path = join(root, file)
-  const compiled = join(root, file.replace(/\.tsx$/, '.compiled.ts'))
+  const compiled = join(root, file.replace(/\.tsx$/, `.compiled-${compiledLayouts += 1}.ts`))
   await writeFile(compiled, layoutLoader.call({ resourcePath: path }, source))
   const module = await import(compiled) as { readonly default: (props: { readonly title: string }) => unknown }
   return module.default({ title: 'Posts' })
@@ -45,12 +53,26 @@ describe('Next layout loader', () => {
     expect(await renderLayout(sourceDirectory, 'src/app/layout.tsx', 'const Root = (props: { readonly title: string }) => props.title\nexport default Root\n')).toEqual({ provided: 'Posts' })
   })
 
-  it('leaves nested layouts, client layouts and files outside the app directory unchanged', async () => {
+  it('provides validation errors around root layouts defined in another module', async () => {
+    const project = await createProject(['app/layout.tsx'])
+    await writeFile(join(project, 'app/shell.ts'), 'export default function Shell(props: { readonly title: string }) { return props.title }\nexport const withTitle = <TProps>(layout: TProps) => layout\n')
+
+    expect(await renderLayout(project, 'app/layout.tsx', 'export { default } from \'./shell\'\n')).toEqual({ provided: 'Posts' })
+    expect(await renderLayout(project, 'app/layout.tsx', 'import Shell from \'./shell\'\nexport default Shell\n')).toEqual({ provided: 'Posts' })
+    expect(await renderLayout(project, 'app/layout.tsx', 'import Shell, { withTitle } from \'./shell\'\nexport default withTitle(Shell)\n')).toEqual({ provided: 'Posts' })
+  })
+
+  it('provides validation errors in the browser around a root layout marked use client', async () => {
+    const project = await createProject(['app/layout.tsx'])
+
+    expect(await renderLayout(project, 'app/layout.tsx', '\'use client\'\nexport default function RootLayout(props: { readonly title: string }) { return props.title }\n')).toEqual({ providedInBrowser: 'Posts' })
+  })
+
+  it('leaves nested layouts and files outside the app directory unchanged', async () => {
     const source = 'export default function Layout(props: { readonly title: string }) { return props.title }\n'
     const project = await createProject(['app/layout.tsx', 'app/admin/layout.tsx', 'components/layout.tsx'])
 
     expect(await renderLayout(project, 'app/admin/layout.tsx', source)).toBe('Posts')
     expect(await renderLayout(project, 'components/layout.tsx', source)).toBe('Posts')
-    expect(layoutLoader.call({ resourcePath: join(project, 'app/layout.tsx') }, `'use client'\n${source}`)).toBe(`'use client'\n${source}`)
   })
 })

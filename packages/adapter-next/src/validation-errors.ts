@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, createElement, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation.js'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
 import { VALIDATION_FLASH_COOKIE, parseValidationFlash, type ValidationFlash } from './validation-flash'
@@ -21,6 +21,17 @@ function readFlashCookie(): string {
     return decodeURIComponent(cookie.slice(prefix.length))
   } catch {
     return ''
+  }
+}
+
+function readableValidationFlash(value: string): ValidationFlash | undefined {
+  const flash = parseValidationFlash(value)
+  if (!flash) return undefined
+  try {
+    createErrorBag(flash.errors)
+    return flash
+  } catch {
+    return undefined
   }
 }
 
@@ -48,11 +59,20 @@ export function HoloValidationErrorsProvider({ initial = '', children }: { reado
     setFlash(readFlashCookie())
   })
 
-  return createElement(ValidationFlashContext.Provider, { value: parseValidationFlash(flash) }, children)
+  const value = useMemo(() => readableValidationFlash(flash), [flash])
+  return createElement(ValidationFlashContext.Provider, { value }, children)
 }
 
 export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAULT_VALIDATION_BAG): ValidationErrorBag<TData> {
   const flash = useContext(ValidationFlashContext)
   const pathname = usePathname()
   return createErrorBag<TData>(flash?.bag === bag && flash.path === pathname ? flash.errors : {})
+}
+
+function validationErrorsClientLayout<TProps extends object>(layout: (props: TProps) => ReactNode): (props: TProps) => ReactNode {
+  return props => createElement(HoloValidationErrorsProvider, null, createElement(layout, props))
+}
+
+export const adapterNextClientLayoutInternals = {
+  validationErrorsClientLayout,
 }
