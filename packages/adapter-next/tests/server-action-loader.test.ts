@@ -138,14 +138,15 @@ describe('Next server action loader', () => {
     expect(module.dynamic).toBe('force-dynamic')
   })
 
-  it('inserts the runtime import after a terminated directive or a shebang without moving any line', async () => {
-    const actions = ['\'use server\';', 'export const save = async () => \'saved\''].join('\n')
+  it('appends the runtime import, so a shebang, a terminated directive, and every column stay in place', async () => {
+    const actions = ['\'use server\';', 'export const save = async () => { return \'saved\' }'].join('\n')
     const route = ['#!/usr/bin/env node', 'export const GET = async () => \'got\''].join('\n')
 
     for (const [source, loader] of [[actions, serverActionLoader], [route, routeLoader]] as const) {
-      expect(loader.call({ resourcePath: 'module.ts' }, source)!.split('\n')).toHaveLength(source.split('\n').length + 2)
+      const lines = loader.call({ resourcePath: 'module.ts' }, source)!.split('\n')
+      expect(lines.slice(0, 2).map(line => line.replace('let  ', 'const'))).toEqual(source.split('\n'))
+      expect(lines[2]).toMatch(/^import \{ adapterNextRuntimeInternals as __holoRouteRuntime \} from /)
     }
-    expect(serverActionLoader.call({ resourcePath: 'module.ts' }, actions)).toMatch(/^'use server';import /)
     expect(await (((await importCompiled('terminated-actions.ts', actions)).save) as () => Promise<unknown>)()).toEqual({ wrapped: 'saved' })
     expect(await (((await importCompiled('route.ts', route, routeLoader)).GET) as () => Promise<unknown>)()).toEqual({ route: 'got' })
   })
@@ -159,7 +160,7 @@ describe('Next server action loader', () => {
     }
   })
 
-  it('keeps every untouched line of a use server module in place and maps each position back to it', () => {
+  it('keeps every line and column of a use server module in place and maps each position back to it', () => {
     const resourcePath = join(import.meta.dirname, 'app', 'ai-actions.ts')
     const source = [
       '// AI actions',
@@ -181,9 +182,7 @@ describe('Next server action loader', () => {
     const output = runLoader(serverActionLoader, resourcePath, source)
     const lines = output.code.split('\n')
 
-    for (const [index, line] of source.split('\n').entries()) {
-      if (index !== 1 && index < 12) expect(lines[index]).toBe(line)
-    }
+    expect(lines.slice(0, source.split('\n').length).map(line => line.replace('export let  ', 'export const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n'))
     for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'remove = async', 'return aiMessage(']) {
       expectMapped(output, source, needle, resourcePath)
     }
@@ -206,7 +205,7 @@ describe('Next server action loader', () => {
 
     const output = runLoader(routeLoader, resourcePath, source)
 
-    expect(output.code.split('\n')).toHaveLength(source.split('\n').length + 4)
+    expect(output.code.split('\n')).toHaveLength(source.split('\n').length + 5)
     for (const needle of ['POST(request', 'throw new Error', 'return shared()', 'DELETE = async']) {
       expectMapped(output, source, needle, resourcePath)
     }
@@ -215,7 +214,7 @@ describe('Next server action loader', () => {
   })
 
   it('keeps the lines after a replaced statement that spans several lines in place', () => {
-    const route = ['export {', '  shared as GET, shared /* kept', '  comment */ as other', '} from \'./helpers\'', 'export async function POST() { throw new Error(\'x\') }'].join('\n')
+    const route = ['export {', '  shared as GET, shared /* kept', '  comment */ as other', '} from \'./hel\\', 'pers\'', 'export async function POST() { throw new Error(\'x\') }'].join('\n')
     const actions = ['\'use server\'', 'export default', '(async () => 1)', 'export async function save() { throw new Error(\'x\') }'].join('\n')
 
     for (const [source, loader] of [[route, routeLoader], [actions, serverActionLoader]] as const) {

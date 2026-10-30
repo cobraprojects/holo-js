@@ -109,6 +109,18 @@ function defaultFunction(statement: ts.Statement): ts.ExportAssignment | undefin
   return ts.isArrowFunction(expression) || ts.isFunctionExpression(expression) ? statement : undefined
 }
 
+function moduleExportName(name: ts.ModuleExportName): string {
+  return ts.isIdentifier(name) ? name.text : JSON.stringify(name.text)
+}
+
+// Rebuilt from parsed values, since raw text can hold line continuations that would add lines when copied.
+function importSource(moduleSpecifier: ts.StringLiteral, attributes: ts.ImportAttributes | undefined): string {
+  const entries = attributes?.elements.map(attribute => `${moduleExportName(attribute.name)}: ${
+    ts.isStringLiteral(attribute.value) ? JSON.stringify(attribute.value.text) : attribute.value.getText()}`)
+  const keyword = attributes?.token === ts.SyntaxKind.AssertKeyword ? 'assert' : 'with'
+  return ` from ${JSON.stringify(moduleSpecifier.text)}${entries ? ` ${keyword} { ${entries.join(', ')} }` : ''}`
+}
+
 type RouteExport = {
   readonly local: string
   readonly text: string
@@ -120,7 +132,7 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
   const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
     && (moduleSpecifier || !declared.has((element.propertyName ?? element.name).text)))
   if (handlers.length === 0) return undefined
-  const from = moduleSpecifier ? ` from ${moduleSpecifier.getText()}${statement.attributes ? ` ${statement.attributes.getText()}` : ''}` : ''
+  const from = moduleSpecifier && ts.isStringLiteral(moduleSpecifier) ? importSource(moduleSpecifier, statement.attributes) : ''
   const remaining = statement.exportClause.elements.filter(element => !handlers.includes(element))
   return [
     ...(remaining.length ? [{ local: '', text: `export { ${remaining.map(element => element.getText()).join(', ')} }${from};` }] : []),
@@ -128,20 +140,10 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
       const source = handler.propertyName ?? handler.name
       const imported = moduleSpecifier || !ts.isIdentifier(source) ? allocate(`__holoImported${handler.name.text}`) : source.text
       const local = allocate(`__holoExported${handler.name.text}`)
-      const importText = moduleSpecifier ? `import { ${source.getText()} as ${imported} }${from}; ` : ''
-      return { local, text: `${importText}let ${local} = ${imported}; export { ${local} as ${handler.name.getText()} };` }
+      const importText = moduleSpecifier ? `import { ${moduleExportName(source)} as ${imported} }${from}; ` : ''
+      return { local, text: `${importText}let ${local} = ${imported}; export { ${local} as ${moduleExportName(handler.name)} };` }
     }),
   ]
-}
-
-function runtimeImportAt(file: ts.SourceFile, statements: readonly ts.Statement[]): readonly [number, string] {
-  const directives = statements.slice(0, prologueEnd(statements))
-  const last = directives.at(-1)
-  if (last) return [last.end, statementEnd(file.text, last)]
-  const shebang = ts.getShebang(file.text)
-  if (!shebang) return [0, '']
-  const lineEnd = file.text.indexOf('\n', shebang.length)
-  return [lineEnd === -1 ? file.text.length : lineEnd + 1, lineEnd === -1 ? '\n' : '']
 }
 
 function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): MagicString | undefined {
@@ -185,12 +187,12 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
     if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
       && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
       const keyword = statement.declarationList.getStart()
-      output.overwrite(keyword, keyword + 'const'.length, 'let')
+      output.overwrite(keyword, keyword + 'const'.length, 'let  ')
     }
   }
-  const [importAt, separator] = runtimeImportAt(file, file.statements)
-  output.appendLeft(importAt, `${separator}import { adapterNextRuntimeInternals as ${runtimeName} } from '@holo-js/adapter-next/runtime'; `)
-  if (pending.size) output.append(`\n${[...pending].map(reassign).join('\n')}\n`)
+  // Imports are hoisted, so appending this one leaves every original line where it was.
+  const runtimeImport = `import { adapterNextRuntimeInternals as ${runtimeName} } from '@holo-js/adapter-next/runtime';`
+  output.append(`\n${[runtimeImport, ...[...pending].map(reassign)].join('\n')}\n`)
   return output
 }
 

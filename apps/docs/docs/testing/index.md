@@ -149,7 +149,7 @@ it('only editors can publish', async () => {
 
 When Holo can't import a policy, ability, or other discovered file directly, it bundles the file into `.holo-js/runtime` and imports the bundle. Each bundle carries an inline source map, so V8 coverage (`NODE_V8_COVERAGE`, which Vitest's `v8` coverage provider uses) counts lines in your source files, and with `--enable-source-maps` an error thrown in a policy points at its line in `server/policies/`.
 
-In a Next.js app, Holo wraps the exports of every `'use server'` module and the method handlers of every `app/**/route.ts`. It edits those files in place: it adds one import after the `'use server'` directive, changes `const` to `let` on wrapped exports, and appends the wrapping lines after your code. Every other line keeps its line and column, and the loader passes a source map to Turbopack and webpack. Stack traces and V8 coverage from `NODE_V8_COVERAGE` with `experimental.serverSourceMaps` point at your source lines.
+In a Next.js app, Holo wraps the exports of every `'use server'` module and the method handlers of every `app/**/route.ts`. It edits those files in place: it changes `const` to `let` on wrapped exports and appends its runtime import and the wrapping lines after your code. Your code keeps its line and column, and the loader passes a source map to Turbopack and webpack. Stack traces and V8 coverage from `NODE_V8_COVERAGE` with `experimental.serverSourceMaps` point at your source lines.
 
 ## Next steps
 
