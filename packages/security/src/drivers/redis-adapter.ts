@@ -1,6 +1,7 @@
 import type {
   NormalizedSecurityRateLimitRedisConfig,
 } from '../config'
+import { redisUrlInternals } from '@holo-js/kernel'
 import Redis from 'ioredis'
 import type { SecurityRateLimitRedisDriverAdapter } from '../contracts'
 
@@ -74,6 +75,12 @@ function toRedisSocketPath(value: string): string {
   return value.startsWith('unix://')
     ? value.slice('unix://'.length)
     : value
+}
+
+function withoutUrlDatabasePath(target: string): string {
+  return isRedisSocketConnectionTarget(target)
+    ? target
+    : redisUrlInternals.withoutDatabasePath(target)
 }
 
 function escapeRedisGlob(value: string): string {
@@ -189,11 +196,11 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     const RedisConstructor = Redis as RedisCtor
 
     this.client = typeof config.url === 'string'
-      ? new RedisConstructor(config.url, clientOptions)
+      ? new RedisConstructor(redisUrlInternals.withoutDatabasePath(config.url), clientOptions)
       : config.clusters && config.clusters.length > 0
         ? new RedisConstructor.Cluster(resolveClusterStartupNodes(config), createRedisClusterOptions(config))
         : isRedisConnectionTarget(config.connection)
-          ? new RedisConstructor(config.connection, clientOptions)
+          ? new RedisConstructor(withoutUrlDatabasePath(config.connection), clientOptions)
           : new RedisConstructor(clientOptions)
   }
 

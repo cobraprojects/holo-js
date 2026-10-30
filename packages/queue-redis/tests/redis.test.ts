@@ -5,12 +5,12 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { canTrustTestCertificates, startRedisService } from '../../session/tests/support/redis'
 import { redisQueueDriverFactory, type QueueJobEnvelope } from '../src'
 
-async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: boolean; host?: boolean } = {}) {
+async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: boolean; host?: boolean; urlDatabase?: number; db?: number } = {}) {
   const service = await startRedisService(options)
   const port = service.ports[0]
   if (port === undefined) throw new Error('Expected a Redis port')
   const queue = `holo-${randomUUID()}`
-  const url = `${options.tls ? 'rediss' : 'redis'}://127.0.0.1:${service.ports[0]}`
+  const url = `${options.tls ? 'rediss' : 'redis'}://127.0.0.1:${service.ports[0]}${options.urlDatabase === undefined ? '' : `/${options.urlDatabase}`}`
   const driver = redisQueueDriverFactory.create({
     name: 'redis',
     driver: 'redis',
@@ -21,7 +21,7 @@ async function openQueue(options: { cluster?: boolean; tls?: boolean; socket?: b
     blockFor: 0,
     redis: options.cluster
       ? { host: '127.0.0.1', port, db: 0, clusters: service.ports.map(port => ({ host: '127.0.0.1', port, url: `${options.tls ? 'rediss' : 'redis'}://127.0.0.1:${port}` })) }
-      : options.socket ? { host: service.socket, port, db: 0 } : options.host ? { host: '127.0.0.1', port, db: 0 } : { host: '127.0.0.1', port, url, db: 0 },
+      : options.socket ? { host: service.socket, port, db: 0 } : options.host ? { host: '127.0.0.1', port, db: 0 } : { host: '127.0.0.1', port, url, db: options.db ?? 0 },
   }, { async execute() { throw new Error('Manual reservations do not execute jobs') } })
   onTestFinished(() => driver.close())
   const job = (payload = { message: 'hello' }): QueueJobEnvelope<typeof payload> => ({
@@ -51,6 +51,17 @@ describe('@holo-js/queue-redis native Redis behavior', () => {
     expect(await driver.reserve({ timeout: 0 })).toBeNull()
     await expect(driver.acknowledge(reserved)).rejects.toThrow('not active')
   }, 30_000)
+
+  it('stores jobs in the configured database when the URL names another one', async () => {
+    const { driver, service, job } = await openQueue({ urlDatabase: 0, db: 2 })
+    const client = service.clients[0]
+    if (!client) throw new Error('Expected a Redis client')
+    const configuredDatabase = client.duplicate({ db: 2 })
+    onTestFinished(() => configuredDatabase.disconnect())
+    await driver.dispatch(job())
+    expect(await client.dbsize()).toBe(0)
+    expect(await configuredDatabase.dbsize()).toBeGreaterThan(0)
+  })
 
   it('reserves concurrent jobs exactly once and clears queued and delayed jobs', async () => {
     const { driver, job } = await openQueue()

@@ -1,6 +1,7 @@
 import type {
   NormalizedSessionRedisStoreConfig,
 } from '../config'
+import { redisUrlInternals } from '@holo-js/kernel'
 import Redis from 'ioredis'
 import type { SessionRecord, SessionStoreSetDataResult, SessionStoreTakeResult, SessionStoreTouchOptions } from '../contracts'
 import type { SessionRedisDriverAdapter } from './redis'
@@ -248,7 +249,7 @@ function createRedisClient(config: NormalizedSessionRedisStoreConfig): RedisClie
   const RedisConstructor = Redis as RedisCtor
 
   if (typeof config.url === 'string' && isRedisUrlTarget(config.url)) {
-    return new RedisConstructor(config.url, {
+    return new RedisConstructor(redisUrlInternals.withoutDatabasePath(config.url), {
       password: config.password,
       username: config.username,
       db: config.db,

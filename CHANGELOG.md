@@ -22,6 +22,10 @@
 - `holo queue:*` commands start faster, which helps when cron or a supervisor runs `holo queue:work --once`. Project discovery and the queue worker now bundle all models, migrations, jobs, events, listeners, channels and policies in one esbuild build instead of one build per file. Nuxt projects no longer load the `typescript` package on every command: Holo caches the resolved `tsconfig.json` `paths` and `extends` in `.holo-js/generated/tsconfig-paths.json` and resolves them again when any config in the chain changes. `queue:failed`, `queue:retry`, `queue:forget` and `queue:flush` no longer boot the whole application, only the queue and the database. In the Nuxt example app, `queue:work --once` drops from about 720 ms to 420 ms, and the failed-job commands from about 435 ms to 185 ms.
 - Next.js server actions called from the browser return the `{ ok: false, ... }` payload when they throw a validation or rate-limit error. Before, Next.js answered with a 500 and logged every `ValidationException` as a server error. `useForm()` shows the field errors as before. Client code that caught the thrown error from an action now receives the payload as the return value. `redirect()`, other errors, actions called from server code or from inside another action, and form posts sent without JavaScript still throw. See [Framework Recipes](apps/docs/docs/basics/forms/frameworks.md#next-js-server-action).
 
+### Fixed
+
+- Redis queues, Redis sessions and the Redis rate limiter use the database a connection's `db` names. Before, when the connection's `url` included a database path, such as `REDIS_URL=redis://127.0.0.1:6379/0` with `db: env('REDIS_CACHE_DB', 1)`, they read and wrote the URL's database instead. The URL's database still applies when `db` is not set. A queue connection's own `redis.url` with a database path now also selects that database instead of the shared connection's `db`.
+
 ## 0.4.4 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.
