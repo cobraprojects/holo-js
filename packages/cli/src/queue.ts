@@ -3,7 +3,7 @@ import { existsSync, watch } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { LoadedHoloConfig } from '@holo-js/config'
+import { configureConfigRuntime, resetConfigRuntime, type LoadedHoloConfig } from '@holo-js/config'
 import type { loadConfigDirectory } from '@holo-js/config'
 import {
   configureDB,
@@ -441,9 +441,17 @@ export async function initializeQueueMaintenanceEnvironment(
     ...createQueueDbRuntimeOptions(),
   })
 
-  await loadProjectDatabaseDrivers(projectRoot, loadedConfig.database)
+  return await openQueueDatabase(projectRoot, loadedConfig.database, queueModule)
+}
+
+async function openQueueDatabase(
+  projectRoot: string,
+  database: LoadedHoloConfig['database'],
+  queueModule: Pick<QueueCliModule, 'shutdownQueueRuntime'>,
+): Promise<QueueMaintenanceEnvironment> {
+  await loadProjectDatabaseDrivers(projectRoot, database)
   const manager = resolveRuntimeConnectionManagerOptions({
-    db: loadedConfig.database,
+    db: database,
   })
   configureDB(manager)
 
@@ -459,12 +467,37 @@ export async function initializeQueueMaintenanceEnvironment(
   return {
     async cleanup() {
       try {
-        await manager.disconnectAll()
-      } finally {
-        resetDB()
         await queueModule.shutdownQueueRuntime()
+      } finally {
+        try {
+          await manager.disconnectAll()
+        } finally {
+          resetDB()
+        }
       }
     },
+  }
+}
+
+export async function initializeFailedQueueJobsEnvironment(projectRoot: string): Promise<QueueMaintenanceEnvironment> {
+  const loadedConfig = await loadConfigWithNormalizers(projectRoot)
+  configureConfigRuntime(loadedConfig.all)
+  try {
+    const { holoRuntimeInternals } = await import('@holo-js/core')
+    await holoRuntimeInternals.configureQueueSubsystem(projectRoot, loadedConfig)
+    const database = await openQueueDatabase(projectRoot, loadedConfig.database, await loadQueueCliModule(projectRoot))
+    return {
+      async cleanup() {
+        try {
+          await database.cleanup()
+        } finally {
+          resetConfigRuntime()
+        }
+      },
+    }
+  } catch (error) {
+    resetConfigRuntime()
+    throw error
   }
 }
 
@@ -686,13 +719,11 @@ export async function runQueueFailedCommand(
   io: IoStreams,
   projectRoot: string,
   dependencies: {
-    initialize?: (projectRoot: string) => Promise<HoloRuntime>
+    initializeQueue?: (projectRoot: string) => Promise<QueueMaintenanceEnvironment>
     list?: QueueCliModule['listFailedQueueJobs']
   } = {},
 ): Promise<void> {
-  const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
-    registerProjectQueueJobs: false,
-  })
+  const environment = await (dependencies.initializeQueue ?? initializeFailedQueueJobsEnvironment)(projectRoot)
 
   try {
     const queueModule = dependencies.list ? undefined : await loadQueueCliModule(projectRoot)
@@ -709,7 +740,7 @@ export async function runQueueFailedCommand(
       )
     }
   } finally {
-    await runtime.shutdown()
+    await environment.cleanup()
   }
 }
 
@@ -718,20 +749,18 @@ export async function runQueueRetryCommand(
   projectRoot: string,
   identifier: 'all' | string,
   dependencies: {
-    initialize?: (projectRoot: string) => Promise<HoloRuntime>
+    initializeQueue?: (projectRoot: string) => Promise<QueueMaintenanceEnvironment>
     retry?: QueueCliModule['retryFailedQueueJobs']
   } = {},
 ): Promise<void> {
-  const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
-    registerProjectQueueJobs: false,
-  })
+  const environment = await (dependencies.initializeQueue ?? initializeFailedQueueJobsEnvironment)(projectRoot)
 
   try {
     const queueModule = dependencies.retry ? undefined : await loadQueueCliModule(projectRoot)
     const retried = await (dependencies.retry ?? queueModule!.retryFailedQueueJobs)(identifier)
     writeLine(io.stdout, `[queue] Retried ${retried} failed job(s).`)
   } finally {
-    await runtime.shutdown()
+    await environment.cleanup()
   }
 }
 
@@ -740,13 +769,11 @@ export async function runQueueForgetCommand(
   projectRoot: string,
   identifier: string,
   dependencies: {
-    initialize?: (projectRoot: string) => Promise<HoloRuntime>
+    initializeQueue?: (projectRoot: string) => Promise<QueueMaintenanceEnvironment>
     forget?: QueueCliModule['forgetFailedQueueJob']
   } = {},
 ): Promise<void> {
-  const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
-    registerProjectQueueJobs: false,
-  })
+  const environment = await (dependencies.initializeQueue ?? initializeFailedQueueJobsEnvironment)(projectRoot)
 
   try {
     const queueModule = dependencies.forget ? undefined : await loadQueueCliModule(projectRoot)
@@ -755,7 +782,7 @@ export async function runQueueForgetCommand(
       ? `[queue] Forgot failed job ${identifier}.`
       : `[queue] Failed job ${identifier} was not found.`)
   } finally {
-    await runtime.shutdown()
+    await environment.cleanup()
   }
 }
 
@@ -763,19 +790,17 @@ export async function runQueueFlushCommand(
   io: IoStreams,
   projectRoot: string,
   dependencies: {
-    initialize?: (projectRoot: string) => Promise<HoloRuntime>
+    initializeQueue?: (projectRoot: string) => Promise<QueueMaintenanceEnvironment>
     flush?: QueueCliModule['flushFailedQueueJobs']
   } = {},
 ): Promise<void> {
-  const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
-    registerProjectQueueJobs: false,
-  })
+  const environment = await (dependencies.initializeQueue ?? initializeFailedQueueJobsEnvironment)(projectRoot)
 
   try {
     const queueModule = dependencies.flush ? undefined : await loadQueueCliModule(projectRoot)
     const flushed = await (dependencies.flush ?? queueModule!.flushFailedQueueJobs)()
     writeLine(io.stdout, `[queue] Flushed ${flushed} failed job(s).`)
   } finally {
-    await runtime.shutdown()
+    await environment.cleanup()
   }
 }

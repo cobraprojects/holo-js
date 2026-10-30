@@ -1559,6 +1559,55 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   return optionalSubsystems
 }
 
+async function configureQueueSubsystem<TCustom extends HoloConfigMap = HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+): Promise<QueueModule | undefined> {
+  const queueConfigured = hasLoadedConfigFile(loadedConfig, 'queue')
+  const queueModule = await loadQueueModule(queueConfigured)
+  if (queueModule) {
+    const queueUsesExplicitDatabaseFeatures = queueConfigured
+      && (
+        queueConfigUsesDatabaseDriver(loadedConfig)
+        || queueConfigUsesDatabaseBackedFailedStore(loadedConfig)
+      )
+    const queueUsesImplicitDefaultFailedStore = !queueConfigured
+      && queueConfigUsesDatabaseBackedFailedStore(loadedConfig)
+    const queueDbModule = (queueUsesExplicitDatabaseFeatures || queueUsesImplicitDefaultFailedStore)
+      ? await loadQueueDbModule(projectRoot)
+      : undefined
+    const queueUsesRedis = queueConfigUsesRedisDriver(loadedConfig)
+    const queueRedisModule = queueUsesRedis ? await loadQueueRedisModule(projectRoot) : undefined
+
+    /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
+    if (queueUsesExplicitDatabaseFeatures && !queueDbModule) {
+      throw new Error('[@holo-js/core] Database-backed queue features require @holo-js/queue-db to be installed.')
+    }
+    if (queueUsesRedis && !queueRedisModule) {
+      throw new Error('[@holo-js/core] Redis-backed queue connections require @holo-js/queue-redis to be installed.')
+    }
+    /* v8 ignore stop */
+
+    const queuePluginDriverFactories = await queueModule.loadQueuePluginDriverFactories(
+      projectRoot,
+      resolveLoadedPluginNames(loadedConfig),
+    )
+    const queueDbRuntimeOptions = queueDbModule?.createQueueDbRuntimeOptions()
+    const queueDriverFactories = mergeQueueRuntimeDriverFactories(
+      queuePluginDriverFactories,
+      queueDbRuntimeOptions?.driverFactories,
+      queueRedisModule ? [queueRedisModule.redisQueueDriverFactory] : undefined,
+    )
+    queueModule.configureQueueRuntime({
+      config: loadedConfig.queue,
+      redisConfig: loadedConfig.redis,
+      ...queueDbRuntimeOptions,
+      ...(queueDriverFactories.length > 0 ? { driverFactories: queueDriverFactories } : {}),
+    })
+  }
+  return queueModule
+}
+
 async function bootHoloPluginModules<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
@@ -1605,48 +1654,7 @@ async function configureOptionalHoloSubsystems<TCustom extends HoloConfigMap = H
     }
   }
 
-  const queueConfigured = hasLoadedConfigFile(loadedConfig, 'queue')
-  const queueModule = await loadQueueModule(queueConfigured)
-  if (queueModule) {
-    const queueUsesExplicitDatabaseFeatures = queueConfigured
-      && (
-        queueConfigUsesDatabaseDriver(loadedConfig)
-        || queueConfigUsesDatabaseBackedFailedStore(loadedConfig)
-      )
-    const queueUsesImplicitDefaultFailedStore = !queueConfigured
-      && queueConfigUsesDatabaseBackedFailedStore(loadedConfig)
-    const queueDbModule = (queueUsesExplicitDatabaseFeatures || queueUsesImplicitDefaultFailedStore)
-      ? await loadQueueDbModule(projectRoot)
-      : undefined
-    const queueUsesRedis = queueConfigUsesRedisDriver(loadedConfig)
-    const queueRedisModule = queueUsesRedis ? await loadQueueRedisModule(projectRoot) : undefined
-
-    /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
-    if (queueUsesExplicitDatabaseFeatures && !queueDbModule) {
-      throw new Error('[@holo-js/core] Database-backed queue features require @holo-js/queue-db to be installed.')
-    }
-    if (queueUsesRedis && !queueRedisModule) {
-      throw new Error('[@holo-js/core] Redis-backed queue connections require @holo-js/queue-redis to be installed.')
-    }
-    /* v8 ignore stop */
-
-    const queuePluginDriverFactories = await queueModule.loadQueuePluginDriverFactories(
-      projectRoot,
-      resolveLoadedPluginNames(loadedConfig),
-    )
-    const queueDbRuntimeOptions = queueDbModule?.createQueueDbRuntimeOptions()
-    const queueDriverFactories = mergeQueueRuntimeDriverFactories(
-      queuePluginDriverFactories,
-      queueDbRuntimeOptions?.driverFactories,
-      queueRedisModule ? [queueRedisModule.redisQueueDriverFactory] : undefined,
-    )
-    queueModule.configureQueueRuntime({
-      config: loadedConfig.queue,
-      redisConfig: loadedConfig.redis,
-      ...queueDbRuntimeOptions,
-      ...(queueDriverFactories.length > 0 ? { driverFactories: queueDriverFactories } : {}),
-    })
-  }
+  const queueModule = await configureQueueSubsystem(projectRoot, loadedConfig)
 
   const storageConfigured = hasLoadedConfigFile(loadedConfig, 'storage')
   const storageInstalled = Boolean(await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>('@holo-js/storage'))
@@ -2439,6 +2447,7 @@ function getConfigSection(key: string): unknown {
 }
 
 export const holoRuntimeInternals = {
+  configureQueueSubsystem,
   setProjectDefinitionImporter,
   loadProjectDefinitionRuntimeModules,
   createAuthMailDeliveryHook,
