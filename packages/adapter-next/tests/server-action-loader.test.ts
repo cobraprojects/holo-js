@@ -70,6 +70,16 @@ describe('Next server action loader', () => {
     expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'submitted' })
   })
 
+  it('wraps an anonymous default action without clashing with module bindings', async () => {
+    const module = await importCompiled('anonymous-actions.ts', [
+      '\'use server\'',
+      'const __holoDefault = \'taken\'',
+      'export default async function () { return __holoDefault }',
+    ].join('\n'))
+
+    expect(await (module.default as () => Promise<unknown>)()).toEqual({ wrapped: 'taken' })
+  })
+
   it('wraps route handlers declared, listed, imported, or re-exported in a route file', async () => {
     const module = await importCompiled('route.ts', [
       'import { shared } from \'./helpers\'',

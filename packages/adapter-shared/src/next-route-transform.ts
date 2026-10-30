@@ -2,7 +2,6 @@ import ts from 'typescript'
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const runtimeName = '__holoRouteRuntime'
-const defaultName = '__holoDefault'
 
 type RuntimeWrapper = 'routeHandler' | 'serverAction'
 
@@ -24,7 +23,13 @@ function boundNames(name: ts.BindingName): readonly string[] {
   return name.elements.flatMap(element => ts.isOmittedExpression(element) ? [] : boundNames(element.name))
 }
 
-function declaredValues(file: ts.SourceFile): ReadonlySet<string> {
+function unusedName(file: ts.SourceFile, base: string): string {
+  let name = base
+  while (file.text.includes(name)) name = `${name}_`
+  return name
+}
+
+function declaredValues(file: ts.SourceFile, defaultName: string): ReadonlySet<string> {
   return new Set(file.statements.flatMap((statement) => {
     if (ts.isFunctionDeclaration(statement) && statement.body) return [statement.name?.text ?? defaultName]
     if (!ts.isVariableStatement(statement)) return []
@@ -32,8 +37,8 @@ function declaredValues(file: ts.SourceFile): ReadonlySet<string> {
   }))
 }
 
-function wrappedLocals(file: ts.SourceFile, wraps: (name: string) => boolean): ReadonlySet<string> {
-  const declared = declaredValues(file)
+function wrappedLocals(file: ts.SourceFile, wraps: (name: string) => boolean, defaultName: string): ReadonlySet<string> {
+  const declared = declaredValues(file, defaultName)
   const locals = new Set<string>()
   const add = (local: string, exported: string) => {
     if (declared.has(local) && wraps(exported)) locals.add(local)
@@ -59,7 +64,7 @@ function wrappedLocals(file: ts.SourceFile, wraps: (name: string) => boolean): R
   return locals
 }
 
-function reassignable(statement: ts.Statement, locals: ReadonlySet<string>): ts.Statement {
+function reassignable(statement: ts.Statement, locals: ReadonlySet<string>, defaultName: string): ts.Statement {
   if (ts.isFunctionDeclaration(statement) && statement.body && !statement.name && locals.has(defaultName)) {
     return ts.factory.updateFunctionDeclaration(statement, statement.modifiers, statement.asteriskToken,
       ts.factory.createIdentifier(defaultName), statement.typeParameters, statement.parameters, statement.type, statement.body)
@@ -102,11 +107,12 @@ function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => 
 }
 
 function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
-  const declared = declaredValues(source)
+  const defaultName = unusedName(source, '__holoDefault')
+  const declared = declaredValues(source, defaultName)
   const file = wrapper === 'routeHandler'
     ? ts.factory.updateSourceFile(source, source.statements.flatMap(statement => localizeRouteExports(statement, wraps, declared)))
     : source
-  const locals = wrappedLocals(file, wraps)
+  const locals = wrappedLocals(file, wraps, defaultName)
   if (locals.size === 0) return undefined
   const runtimeImport = ts.factory.createImportDeclaration(undefined,
     ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
@@ -125,7 +131,7 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
     if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression) && pending.delete(statement.expression.text)) {
       return [reassign(statement.expression.text), statement]
     }
-    return [reassignable(statement, locals)]
+    return [reassignable(statement, locals, defaultName)]
   })
   const insertAt = prologueEnd(statements)
   return ts.createPrinter().printFile(ts.factory.updateSourceFile(file,
