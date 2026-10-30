@@ -190,7 +190,7 @@ npx holo prepare
 
 ### install
 
-Add a first-party Holo feature to an existing project. It adds the package, creates config files and folders, updates `.env` and `.env.example`, then installs dependencies. Packages are added in your project's Holo version style: exact if every `@holo-js/*` dependency is pinned exactly, `~` if every one uses `~`, and `^` otherwise.
+Add a first-party Holo feature to an existing project. It adds the package, creates config files and folders, updates `.env` and `.env.example`, then installs dependencies. Packages are added in your project's Holo version style: exact if every `@holo-js/*` dependency is pinned exactly, `~` if every one uses `~`, and `^` otherwise. A setting it adds to `.env` or `.env.example` goes next to the related settings already in the file, such as other `REDIS_*` keys. Settings with no related ones in the file are appended at the end.
 
 ```bash
 npx holo install <target> [options]

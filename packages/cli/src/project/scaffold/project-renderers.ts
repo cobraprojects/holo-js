@@ -751,7 +751,8 @@ export function renderCacheEnvFiles(
         'CACHE_PREFIX=',
         '',
         ...redis.example,
-        'REDIS_CACHE_DB=',
+        // Shown because it must differ from REDIS_DB: flushing the cache deletes its whole database.
+        'REDIS_CACHE_DB=1',
       ],
     }
   }
@@ -802,56 +803,69 @@ export function normalizeScaffoldEnvSegments(segments: string): readonly string[
     .filter(segment => segment.length > 0)
 }
 
+// A missing key goes next to the keys from its group that the file already has: after the closest one that comes
+// before it in the group, or before the first one. Groups the file has none of are appended, after a blank line.
 export function upsertEnvContents(
   existingContents: string | undefined,
   additions: readonly string[],
 ): { readonly contents?: string, readonly changed: boolean } {
-  if (additions.length === 0) {
-    return {
-      contents: existingContents,
-      changed: false,
-    }
-  }
-
-  const nextLines = existingContents
+  const lines = existingContents
     ? existingContents.replace(/\r\n/g, '\n').split('\n')
     : []
-  const existingKeys = new Set(nextLines.map(parseEnvKey).filter((value): value is string => typeof value === 'string'))
+  const existingKeyLines = new Map<string, number>()
+  lines.forEach((line, index) => {
+    const key = parseEnvKey(line)
+    if (key && !existingKeyLines.has(key)) existingKeyLines.set(key, index)
+  })
+
+  const groups: { key: string, line: string }[][] = [[]]
   const additionKeys = new Set<string>()
-  const missingGroups: string[][] = []
-  let missingLines: string[] = []
   for (const line of additions) {
     const normalizedLine = line.trim()
-    if (!normalizedLine) {
-      if (missingLines.length > 0) {
-        missingGroups.push(missingLines)
-        missingLines = []
-      }
-      continue
-    }
-
     const key = parseEnvKey(normalizedLine)
-    if (!key || additionKeys.has(key) || existingKeys.has(key)) {
+    if (!normalizedLine) groups.push([])
+    else if (key && !additionKeys.has(key)) {
+      additionKeys.add(key)
+      groups.at(-1)!.push({ key, line: normalizedLine })
+    }
+  }
+
+  const insertionsBefore = new Map<number, string[]>()
+  const missingGroups: string[][] = []
+  for (const group of groups) {
+    const presentLines = group.flatMap(entry => existingKeyLines.get(entry.key) ?? [])
+    if (presentLines.length === 0) {
+      if (group.length > 0) missingGroups.push(group.map(entry => entry.line))
       continue
     }
 
-    additionKeys.add(key)
-    missingLines.push(normalizedLine)
-  }
-  if (missingLines.length > 0) {
-    missingGroups.push(missingLines)
+    let insertBefore = Math.min(...presentLines)
+    for (const entry of group) {
+      const presentLine = existingKeyLines.get(entry.key)
+      if (presentLine !== undefined) {
+        insertBefore = presentLine + 1
+        continue
+      }
+      insertionsBefore.set(insertBefore, [...insertionsBefore.get(insertBefore) ?? [], entry.line])
+    }
   }
 
-  if (missingGroups.length === 0) {
+  if (insertionsBefore.size === 0 && missingGroups.length === 0) {
     return {
       contents: existingContents,
       changed: false,
     }
   }
 
-  const existing = nextLines.join('\n').replace(/\n*$/, '')
+  const existing = lines
+    .flatMap((line, index) => [...insertionsBefore.get(index) ?? [], line])
+    .concat(insertionsBefore.get(lines.length) ?? [])
+    .join('\n')
+    .replace(/\n*$/, '')
   return {
-    contents: `${existing ? `${existing}\n\n` : ''}${renderEnvGroups(missingGroups)}`,
+    contents: missingGroups.length > 0
+      ? `${existing ? `${existing}\n\n` : ''}${renderEnvGroups(missingGroups)}`
+      : `${existing}\n`,
     changed: true,
   }
 }
