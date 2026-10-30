@@ -5,6 +5,15 @@
 ### Added
 
 - Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
+- Add `holo install schedule`. It adds `@holo-js/schedule`, creates `server/schedule.ts` if your app has no schedule file, and says when `@holo-js/cache` or `@holo-js/queue` is missing, since `withoutOverlapping()`, `onOneServer()`, and scheduled jobs need them. See [Task Scheduling](apps/docs/docs/scheduling/index.md#install).
+
+### Fixed
+
+- `holo schedule:list`, `schedule:run`, and `schedule:work` no longer print Node's `ExperimentalWarning: stripTypeScriptTypes is an experimental feature`. Holo checks whether Node can load your TypeScript definitions by loading them without running them, instead of calling the experimental `module.stripTypeScriptTypes()`. Definitions that use syntax Node can't strip, such as `enum`, are still bundled.
+- `holo install cache --driver redis` adds the `cache` connection to an existing `config/redis.ts` itself, with the `env` import if the file needs it, instead of asking you to paste it in and run the command again. If it can't edit the file, for example because `connections` isn't written inline, it says why and prints the connection as before. See [Cache drivers](apps/docs/docs/cache/drivers.md#redis).
+- `holo install` adds Holo packages the way your `package.json` already lists them: exact versions such as `"0.4.4"` when every `@holo-js/*` dependency is pinned exactly, `~` ranges when every one uses `~`, and `^` ranges otherwise. Before, it always added `^` ranges.
+- `holo install` puts each setting it adds to `.env` and `.env.example` next to the related settings already in the file, such as other `REDIS_*` keys, instead of at the end. The Redis cache install writes `REDIS_CACHE_DB=1` to `.env.example` instead of leaving it blank, since it must differ from `REDIS_DB`.
+- A CommonJS `config/*.cts` file whose export has a `default` key, such as `config/redis.cts` with `default: 'main'`, is loaded again. Before, it was ignored and Holo used the built-in defaults.
 
 ## 0.4.4 - 2026-10-30
 
