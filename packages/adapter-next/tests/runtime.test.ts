@@ -96,15 +96,15 @@ describe('Next server actions', () => {
   const submitInvalidLogin = async () => {
     await validate({ email: 'invalid', password: 'next-password' }, login)
   }
+  const invokedId = `40${'a'.repeat(40)}`
   const registerServerAction = <TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) => (
-    Object.defineProperty(adapterNextRuntimeInternals.serverAction(action), '$$id', { value: `7f${'a'.repeat(40)}` })
+    Object.defineProperty(adapterNextRuntimeInternals.serverAction(action), '$$id', { value: invokedId })
   )
   const runRequest = <TResult>(phase: string, actionId: string, callback: () => Promise<TResult>, actionStore: ActionStore = { isAction: true }) => {
     vi.spyOn(process, 'cwd').mockReturnValue(resolve(import.meta.dirname, '..'))
     const store = { type: 'request', phase, headers: new Headers({ 'next-action': actionId }) } as unknown as WorkUnitStore
     return actionAsyncStorage.run(actionStore, () => workUnitAsyncStorage.run(store, callback))
   }
-  const invokedId = `40${'a'.repeat(40)}`
 
   afterEach(() => {
     vi.restoreAllMocks()

@@ -84,7 +84,7 @@ export default function NewPostPage() {
 
 The submitter's `formData` is built from the form element, so inputs you don't bind to `form.values`, such as file inputs, are still sent.
 
-Holo wraps every export of a `'use server'` file. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`. Nothing is logged, because these are input mistakes, not server errors. This also applies to actions you call without `useForm()`, for example with React's `useActionState`:
+Holo wraps every action a `'use server'` file declares and exports. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`. Nothing is logged, because these are input mistakes, not server errors. This also applies to actions you call without `useForm()`, for example with React's `useActionState`:
 
 ```ts
 import { serializeValidationException } from '@holo-js/validation'
@@ -97,7 +97,7 @@ if (failure) {
 
 The action's TypeScript return type doesn't include this payload, so read it with `serializeValidationException()`, which accepts any value and returns the typed payload or `undefined`.
 
-Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, and form posts sent without JavaScript.
+Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, form posts sent without JavaScript, and actions a `'use server'` file re-exports from another module.
 
 ## Next.js: route handler
 

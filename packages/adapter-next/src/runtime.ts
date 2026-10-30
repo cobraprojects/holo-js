@@ -373,17 +373,13 @@ function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs
 
 const runningServerAction = new AsyncLocalStorage<true>()
 
-function serverReferenceExport(id: unknown): string | undefined {
-  return typeof id === 'string' && id.length === 42 ? id.slice(2) : undefined
-}
-
 function isInvokedServerAction(action: object): boolean {
   const requireNext = createRequire(resolve(process.cwd(), 'package.json'))
   const actionStore = loadNextAsyncStorage<NextActionStore>(requireNext, 'action')?.getStore()
   const store = loadNextAsyncStorage<NextWorkUnitStore>(requireNext, 'work-unit')?.getStore()
   if (!actionStore?.isAction || actionStore.isAppRoute || store?.type !== 'request' || store.phase !== 'action') return false
-  const invoked = serverReferenceExport(store.headers?.get('next-action'))
-  return invoked !== undefined && invoked === serverReferenceExport(Reflect.get(action, '$$id'))
+  const invoked = store.headers?.get('next-action')
+  return Boolean(invoked) && invoked === Reflect.get(action, '$$id')
 }
 
 function serverAction<TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>): (...args: TArgs) => Promise<TResult | ExpectedFailure> {
