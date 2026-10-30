@@ -21,6 +21,9 @@ function medianOf(values) {
 }
 
 export function selectShardTasks(tasks, { index, total }, durations) {
+  if (total > tasks.length) {
+    throw new Error(`Cannot split ${tasks.length} tasks into ${total} shards.`)
+  }
   const fallbackSeconds = medianOf(Object.values(durations))
   const secondsOf = task => durations[task.label] ?? fallbackSeconds
   const shards = Array.from({ length: total }, () => ({ labels: new Set(), seconds: 0 }))

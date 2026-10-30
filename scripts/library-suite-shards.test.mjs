@@ -29,3 +29,7 @@ test('rejects malformed or out-of-range shards', () => {
   assert.deepEqual(parseShard('2/3'), { index: 2, total: 3 })
   for (const value of ['0/3', '4/3', '1', 'a/b', '1/0']) assert.throws(() => parseShard(value), /Invalid shard/)
 })
+
+test('rejects more shards than there are tasks', () => {
+  assert.throws(() => selectShardTasks(tasksOf('packages/a'), { index: 1, total: 1000000000 }, {}), /Cannot split 1 tasks into 1000000000 shards/)
+})
