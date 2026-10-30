@@ -208,6 +208,18 @@ function transformed(output: MagicString | undefined, filename: string, inputMap
   return Object.freeze({ code: output.toString(), map: { ...encoded, file: encoded.file ?? filename } })
 }
 
+function wrapRoute(source: string, filename: string): MagicString | undefined {
+  return wrapExports(parse(source, filename), 'routeHandler', name => METHODS.has(name))
+}
+
+function wrapServerActions(source: string, filename: string): MagicString | undefined {
+  if (!source.includes('use server')) return undefined
+  const file = parse(source, filename)
+  const directives = file.statements.slice(0, prologueEnd(file.statements)).filter(isDirective)
+  if (!directives.some(directive => directive.expression.text === 'use server')) return undefined
+  return wrapExports(file, 'serverAction', () => true)
+}
+
 /**
  * Wraps the HTTP method exports of a Next.js route file with Holo's route runtime.
  * The original text is edited in place, and the returned map points back to it,
@@ -215,7 +227,7 @@ function transformed(output: MagicString | undefined, filename: string, inputMap
  * Returns undefined when the file exports no route handlers.
  */
 export function transformNextRoute(source: string, filename: string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
-  return transformed(wrapExports(parse(source, filename), 'routeHandler', name => METHODS.has(name)), filename, inputMap)
+  return transformed(wrapRoute(source, filename), filename, inputMap)
 }
 
 /**
@@ -225,17 +237,13 @@ export function transformNextRoute(source: string, filename: string, inputMap?: 
  * Returns undefined when the module has no leading `'use server'` directive or no exports to wrap.
  */
 export function transformNextServerActions(source: string, filename: string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
-  if (!source.includes('use server')) return undefined
-  const file = parse(source, filename)
-  const directives = file.statements.slice(0, prologueEnd(file.statements)).filter(isDirective)
-  if (!directives.some(directive => directive.expression.text === 'use server')) return undefined
-  return transformed(wrapExports(file, 'serverAction', () => true), filename, inputMap)
+  return transformed(wrapServerActions(source, filename), filename, inputMap)
 }
 
 export function compileNextRoute(source: string, filename: string): string {
-  return transformNextRoute(source, filename)?.code ?? source
+  return wrapRoute(source, filename)?.toString() ?? source
 }
 
 export function compileNextServerActions(source: string, filename: string): string {
-  return transformNextServerActions(source, filename)?.code ?? source
+  return wrapServerActions(source, filename)?.toString() ?? source
 }
