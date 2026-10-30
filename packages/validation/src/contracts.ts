@@ -581,7 +581,7 @@ export function isValidationException(value: unknown): value is ValidationExcept
   return value instanceof ValidationException
 }
 
-export function serializeValidationException(value: unknown): SerializedValidationException | undefined {
+function serializeValidationException(value: unknown): SerializedValidationException | undefined {
   const pending = [value]
   const seen = new Set<unknown>()
   let digest: ValidationExceptionDigestPayload | undefined
