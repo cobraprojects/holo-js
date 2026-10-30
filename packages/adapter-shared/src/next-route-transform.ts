@@ -2,18 +2,14 @@ import ts from 'typescript'
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
-type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout' | 'validationErrorsClientLayout'
+type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout'
 
 const RUNTIME_MODULES: Readonly<Record<RuntimeWrapper, { readonly specifier: string, readonly internals: string }>> = {
   routeHandler: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   serverAction: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   validationErrorsLayout: { specifier: '@holo-js/adapter-next/internal/validation-layout', internals: 'adapterNextLayoutInternals' },
-  validationErrorsClientLayout: { specifier: '@holo-js/adapter-next/internal/validation-errors', internals: 'adapterNextClientLayoutInternals' },
 }
 
-function isLayoutWrapper(wrapper: RuntimeWrapper): boolean {
-  return wrapper === 'validationErrorsLayout' || wrapper === 'validationErrorsClientLayout'
-}
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
   return ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)
@@ -153,7 +149,7 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
   const defaultName = allocate('__holoDefault')
   const runtimeName = allocate('__holoRouteRuntime')
   const declared = declaredValues(source, defaultName)
-  const localizes = isLayoutWrapper(wrapper)
+  const localizes = wrapper === 'validationErrorsLayout'
     ? (expression: ts.Expression) => !ts.isIdentifier(expression) || !declared.has(expression.text)
     : (expression: ts.Expression) => ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)
   const file = ts.factory.updateSourceFile(source, source.statements
@@ -212,8 +208,20 @@ export function compileNextServerActions(source: string, filename: string): stri
   return wrapExports(file, 'serverAction', () => true) ?? source
 }
 
-export function compileNextRootLayout(source: string, filename: string): string {
+function serverLayoutForClientLayout(clientLayoutRequest: string): string {
+  const clientLayout = JSON.stringify(clientLayoutRequest)
+  const { specifier, internals } = RUNTIME_MODULES.validationErrorsLayout
+  return [
+    `import __holoClientLayout from ${clientLayout}`,
+    `import { ${internals} as __holoLayoutRuntime } from ${JSON.stringify(specifier)}`,
+    `export * from ${clientLayout}`,
+    'export default __holoLayoutRuntime.validationErrorsLayout(__holoClientLayout)',
+    '',
+  ].join('\n')
+}
+
+export function compileNextRootLayout(source: string, filename: string, clientLayoutRequest: () => string): string {
   const file = parse(source, filename)
-  const wrapper = hasDirective(file, 'use client') ? 'validationErrorsClientLayout' : 'validationErrorsLayout'
-  return wrapExports(file, wrapper, name => name === 'default') ?? source
+  if (hasDirective(file, 'use client')) return serverLayoutForClientLayout(clientLayoutRequest())
+  return wrapExports(file, 'validationErrorsLayout', name => name === 'default') ?? source
 }

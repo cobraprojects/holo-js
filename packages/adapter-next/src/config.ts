@@ -313,7 +313,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const serverActionLoader = fileURLToPath(new URL('./server-action-loader.mjs', import.meta.url))
   const pageExtensions = nextConfig.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS
   const appLayoutFile = appLayoutPathPattern(pageExtensions)
-  const layoutLoader = { loader: fileURLToPath(new URL('./layout-loader.mjs', import.meta.url)), options: { pageExtensions } }
+  const layoutLoader = fileURLToPath(new URL('./layout-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
@@ -325,7 +325,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: USE_SERVER_DIRECTIVE }] }, loaders: [serverActionLoader] },
-        { condition: { all: [{ not: 'foreign' }, { path: appLayoutFile }] }, loaders: [layoutLoader] },
+        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: appLayoutFile }] }, loaders: [{ loader: layoutLoader, options: { pageExtensions, bundler: 'turbopack' } }] },
       ],
       ...(hasRealtime
         ? {
@@ -379,7 +379,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
         ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
-        { test: appLayoutFile, exclude: /node_modules/, use: [layoutLoader] },
+        ...(context.isServer ? [{ test: appLayoutFile, issuerLayer: 'rsc', exclude: /node_modules/, use: [{ loader: layoutLoader, options: { pageExtensions, bundler: 'webpack' } }] }] : []),
       ]
       return nextWebpackConfig
     },

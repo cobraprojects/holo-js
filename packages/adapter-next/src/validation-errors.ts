@@ -68,11 +68,3 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
   const pathname = usePathname()
   return createErrorBag<TData>(flash?.bag === bag && flash.page === validationFlashPage(pathname) ? flash.errors : {})
 }
-
-function validationErrorsClientLayout<TProps extends object>(layout: (props: TProps) => ReactNode): (props: TProps) => ReactNode {
-  return props => createElement(HoloValidationErrorsProvider, null, createElement(layout, props))
-}
-
-export const adapterNextClientLayoutInternals = {
-  validationErrorsClientLayout,
-}

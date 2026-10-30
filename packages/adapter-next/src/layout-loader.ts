@@ -1,12 +1,18 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { compileNextRootLayout } from '@holo-js/adapter-shared/build'
 import { DEFAULT_PAGE_EXTENSIONS, layoutFileNamePattern } from './app-layout-files'
 
+const CLIENT_LAYOUT_QUERY = '?holo-client-layout'
+
+type NextBundler = 'turbopack' | 'webpack'
+
 type LayoutLoaderContext = {
   cacheable?: () => void
   readonly resourcePath: string
-  getOptions?(): { readonly pageExtensions?: readonly string[] }
+  readonly resourceQuery?: string
+  getOptions?(): { readonly pageExtensions?: readonly string[], readonly bundler?: NextBundler }
 }
 
 function appDirectory(projectRoot: string): string {
@@ -28,8 +34,27 @@ function isRootLayout(file: string, projectRoot: string, layoutFile: RegExp): bo
   return true
 }
 
+function writeClientLayoutEntry(layout: string, projectRoot: string): string {
+  const name = createHash('sha256').update(relative(projectRoot, layout)).digest('hex').slice(0, 16)
+  const entry = join(projectRoot, '.holo-js', 'generated', 'next', 'client-layouts', `${name}.tsx`)
+  const source = [`'use client'`, `export * from ${JSON.stringify(layout)}`, `export { default } from ${JSON.stringify(layout)}`, ''].join('\n')
+  if (!existsSync(entry) || readFileSync(entry, 'utf8') !== source) {
+    mkdirSync(dirname(entry), { recursive: true })
+    writeFileSync(entry, source)
+  }
+  return entry
+}
+
+function clientLayoutRequest(layout: string, projectRoot: string, bundler: NextBundler): string {
+  return bundler === 'webpack' ? writeClientLayoutEntry(layout, projectRoot) : `./${basename(layout)}${CLIENT_LAYOUT_QUERY}`
+}
+
 export default function layoutLoader(this: LayoutLoaderContext, source: string): string {
   this.cacheable?.()
-  const layoutFile = layoutFileNamePattern(this.getOptions?.().pageExtensions ?? DEFAULT_PAGE_EXTENSIONS)
-  return isRootLayout(this.resourcePath, process.cwd(), layoutFile) ? compileNextRootLayout(source, this.resourcePath) : source
+  if (this.resourceQuery === CLIENT_LAYOUT_QUERY) return source
+  const options = this.getOptions?.()
+  const projectRoot = process.cwd()
+  const layoutFile = layoutFileNamePattern(options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS)
+  if (!isRootLayout(this.resourcePath, projectRoot, layoutFile)) return source
+  return compileNextRootLayout(source, this.resourcePath, () => clientLayoutRequest(this.resourcePath, projectRoot, options?.bundler ?? 'turbopack'))
 }

@@ -117,7 +117,7 @@ export function NewPostForm() {
 
 When validation fails, the page that posted the form renders again with the errors. They stay until the next successful submission, a reload, or navigation to another page. Holo passes them in a cookie that holds only the error messages, never the submitted values, and is marked `Secure` when the request uses HTTPS.
 
-When a form has more errors than fit in that cookie, each field keeps only its first message. If your root layout is marked `'use client'`, the errors show only when JavaScript is on.
+The cookie holds about 3.8 KB. When a form has more errors than that, each field keeps only its first message, and fields whose message still doesn't fit are left out.
 
 ## Next.js: route handler
 

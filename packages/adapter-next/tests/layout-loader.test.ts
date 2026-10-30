@@ -3,12 +3,6 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import layoutLoader from '../src/layout-loader'
 
-vi.mock('@holo-js/adapter-next/internal/validation-layout', () => ({
-  adapterNextLayoutInternals: {
-    validationErrorsLayout: <TProps>(layout: (props: TProps) => unknown) => (props: TProps) => ({ provided: layout(props) }),
-  },
-}))
-
 type ClassLayout<TProps> = new (props: TProps) => { render(): unknown }
 
 function renderComponent<TProps>(layout: ((props: TProps) => unknown) | ClassLayout<TProps>, props: TProps): unknown {
@@ -17,9 +11,9 @@ function renderComponent<TProps>(layout: ((props: TProps) => unknown) | ClassLay
     : (layout as (props: TProps) => unknown)(props)
 }
 
-vi.mock('@holo-js/adapter-next/internal/validation-errors', () => ({
-  adapterNextClientLayoutInternals: {
-    validationErrorsClientLayout: <TProps>(layout: (props: TProps) => unknown) => (props: TProps) => ({ providedInBrowser: renderComponent(layout, props) }),
+vi.mock('@holo-js/adapter-next/internal/validation-layout', () => ({
+  adapterNextLayoutInternals: {
+    validationErrorsLayout: <TProps>(layout: (props: TProps) => unknown) => (props: TProps) => ({ provided: renderComponent(layout, props) }),
   },
 }))
 
@@ -39,12 +33,16 @@ async function createProject(files: readonly string[]): Promise<string> {
 
 let compiledLayouts = 0
 
-async function renderLayout(root: string, file: string, source: string, pageExtensions?: readonly string[]): Promise<unknown> {
-  const path = join(root, file)
+type CompiledLayout = { readonly default: (props: { readonly title: string }) => unknown, readonly theme?: string }
+
+async function importLayout(root: string, file: string, source: string, pageExtensions?: readonly string[], bundler?: 'turbopack' | 'webpack'): Promise<CompiledLayout> {
   const compiled = join(root, file.replace(/\.tsx$/, `.compiled-${compiledLayouts += 1}.ts`))
-  await writeFile(compiled, layoutLoader.call({ resourcePath: path, getOptions: () => ({ pageExtensions }) }, source))
-  const module = await import(compiled) as { readonly default: (props: { readonly title: string }) => unknown }
-  return module.default({ title: 'Posts' })
+  await writeFile(compiled, layoutLoader.call({ resourcePath: join(root, file), getOptions: () => ({ pageExtensions, bundler }) }, source))
+  return await import(compiled) as CompiledLayout
+}
+
+async function renderLayout(root: string, file: string, source: string, pageExtensions?: readonly string[]): Promise<unknown> {
+  return (await importLayout(root, file, source, pageExtensions)).default({ title: 'Posts' })
 }
 
 describe('Next layout loader', () => {
@@ -71,11 +69,21 @@ describe('Next layout loader', () => {
     expect(await renderLayout(project, 'app/layout.tsx', 'const Root = (props: { readonly title: string }) => props.title\nexport default (Root)\n')).toEqual({ provided: 'Posts' })
   })
 
-  it('provides validation errors in the browser around a root layout marked use client', async () => {
-    const project = await createProject(['app/layout.tsx'])
+  it('provides validation errors around a root layout marked use client, rendered from the server', async () => {
+    for (const [layout, bundler] of [
+      ['export default function RootLayout(props: { readonly title: string }) { return props.title }', 'turbopack'],
+      ['export default class RootLayout { constructor(private readonly props: { readonly title: string }) {} render() { return this.props.title } }', 'turbopack'],
+      ['export default function RootLayout(props: { readonly title: string }) { return props.title }', 'webpack'],
+    ] as const) {
+      const project = await createProject(['app/layout.tsx'])
+      const source = `'use client'\n${layout}\nexport const theme = 'dark'\n`
+      await writeFile(join(project, 'app/layout.tsx'), source)
+      const compiled = await importLayout(project, 'app/layout.tsx', source, undefined, bundler)
 
-    expect(await renderLayout(project, 'app/layout.tsx', '\'use client\'\nexport default function RootLayout(props: { readonly title: string }) { return props.title }\n')).toEqual({ providedInBrowser: 'Posts' })
-    expect(await renderLayout(project, 'app/layout.tsx', '\'use client\'\nexport default class RootLayout { constructor(private readonly props: { readonly title: string }) {} render() { return this.props.title } }\n')).toEqual({ providedInBrowser: 'Posts' })
+      expect(compiled.theme).toBe('dark')
+      expect(compiled.default({ title: 'Posts' })).toEqual({ provided: 'Posts' })
+      expect(layoutLoader.call({ resourcePath: join(project, 'app/layout.tsx'), resourceQuery: '?holo-client-layout' }, source)).toBe(source)
+    }
   })
 
   it('leaves nested layouts and files outside the app directory unchanged', async () => {
