@@ -84,7 +84,7 @@ export default function NewPostPage() {
 
 The submitter's `formData` is built from the form element, so inputs you don't bind to `form.values`, such as file inputs, are still sent.
 
-A failed `validate()`, a `ValidationException` you throw, and a rate limit all leave the action the same way. Holo wraps every export of a file that starts with `'use server'`, and when the browser called the action, the wrapper returns the failure payload as the action's result instead of throwing it:
+A failed `validate()`, a `ValidationException` you throw, and a rate limit all leave the action the same way. Holo wraps every export of a file that starts with `'use server'`, except functions with a `'use cache'` directive, and when the browser called the action, the wrapper returns the failure payload as the action's result instead of throwing it:
 
 ```text
 { ok: false, status: 422, valid: false, message, bag: 'default', values, errors: { title: ['The title is required.'] } }

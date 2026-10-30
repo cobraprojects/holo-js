@@ -6,8 +6,8 @@ import ts from 'typescript'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { compileNextServerActions } from '../src/build'
 
-const runtimeImport = 'import { adapterNextRuntimeInternals as __holoServerActionRuntime } from "@holo-js/adapter-next/runtime";'
-const fakeRuntime = 'const __holoServerActionRuntime = { serverAction: (action: (...args: unknown[]) => unknown) => Object.assign((...args: unknown[]) => action(...args), { wrapped: true }) };'
+const runtimeImport = 'import { adapterNextRuntimeInternals as __holoServerActionRuntime_1 } from "@holo-js/adapter-next/runtime";'
+const fakeRuntime = 'const __holoServerActionRuntime_1 = { serverAction: (action: (...args: unknown[]) => unknown) => Object.assign((...args: unknown[]) => action(...args), { wrapped: true }) };'
 
 type LoadedAction = ((...args: unknown[]) => Promise<unknown>) & { readonly wrapped?: true }
 
@@ -32,8 +32,14 @@ describe('Next server action transform', () => {
       '\'use server\'',
       'import { archive as imported } from \'./archive.mjs\'',
       'const identity = <T>(value: T) => value',
+      'import type { Archive } from \'./archive.mjs\'',
+      'import type * as ArchiveModule from \'./archive.mjs\'',
       'const __holoServerAction_1 = \'taken\'',
-      'export { listedFirst, imported }',
+      'const __holoServerActionRuntime = \'taken\'',
+      'type Input = { id: number }',
+      'interface Shape { id: number }',
+      'export { listedFirst, imported, Input, Shape, Archive, ArchiveModule }',
+      'export async function unusual() { \'use cacheless\'; return __holoServerActionRuntime }',
       'export async function load() { return identity(1) }',
       'export const update = async () => await load()',
       'export const { destructured } = { destructured: async () => 2 }',
@@ -45,7 +51,7 @@ describe('Next server action transform', () => {
     ].join('\n'), '/app/actions.ts', { 'archive.mjs': 'export async function archive() { return \'archived\' }\n' })
 
     const expected = {
-      load: 1, update: 1, destructured: 2, default: 1, listedFirst: 1, imported: 'archived',
+      load: 1, update: 1, destructured: 2, default: 1, listedFirst: 1, imported: 'archived', unusual: 'taken',
       deletePost: 'taken', 'remove-post': 'taken', archive: 'archived', 'archive-post': 'archived',
     }
     expect(Object.keys(actions).sort()).toEqual(Object.keys(expected).sort())
@@ -96,7 +102,7 @@ describe('Next server action transform', () => {
       'export { save, remove as deletePost, remove as "remove-post" }',
     ].join('\n'), '/app/actions.ts')
     const anonymous = await loadActions('\'use server\'\nexport default async function () { return 8 }\n', '/app/anonymous.ts')
-    const aliased = await loadActions('\'use server\'\nexport const shared = async () => 9\nexport { shared as default }\n', '/app/aliased.ts')
+    const aliased = await loadActions('\'use server\'\ntype shared = () => Promise<number>\nexport const shared: shared = async () => 9\nexport { shared as default }\n', '/app/aliased.ts')
 
     expect(new Set([named.default, named.save, named.deletePost, named['remove-post']]).size).toBe(4)
     for (const action of [named.default, named.save, named.deletePost, named['remove-post'], anonymous.default]) expect(action?.wrapped).toBe(true)
@@ -123,7 +129,7 @@ describe('Next server action transform', () => {
 
   it('keeps the directive prologue before the runtime import', () => {
     expect(compileNextServerActions('"use server"\nexport default action\n', '/app/actions.ts'))
-      .toBe(`"use server";\n${runtimeImport}\nexport default __holoServerActionRuntime.serverAction(action);\n`)
+      .toBe(`"use server";\n${runtimeImport}\nexport default __holoServerActionRuntime_1.serverAction(action);\n`)
   })
 
   it('leaves modules without a top-level use server directive unchanged', () => {
