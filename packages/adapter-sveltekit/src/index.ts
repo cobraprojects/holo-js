@@ -7,11 +7,7 @@ import {
   type HoloAdapterProject,
   type HoloFrameworkOptions,
 } from '@holo-js/core'
-import {
-  type SerializedValidationException,
-  serializeValidationException as serializeValidationFailure,
-  validationInternals,
-} from '@holo-js/validation'
+import { type SerializedValidationException, validationInternals } from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
 import { cookieEncryptionInternals, responseCookieInternals, createCookieWriteUnavailableError, requestUrlInternals, sameOriginRedirectPath } from '@holo-js/kernel'
 import { reportError } from '@holo-js/kernel/error-reporting'
@@ -107,7 +103,7 @@ function isSerializedValidationException(value: unknown): value is SerializedVal
 }
 
 function serializeValidationException(error: unknown): SerializedValidationException | undefined {
-  return serializeValidationFailure(error) ?? serializeRateLimitError(error)
+  return validationInternals.serializeValidationException(error) ?? serializeRateLimitError(error)
 }
 
 function toSvelteKitValidationBody(payload: SerializedValidationException): SvelteKitErrorBody {

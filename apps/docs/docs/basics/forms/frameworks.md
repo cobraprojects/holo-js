@@ -84,20 +84,38 @@ export default function NewPostPage() {
 
 The submitter's `formData` is built from the form element, so inputs you don't bind to `form.values`, such as file inputs, are still sent.
 
-Holo wraps every action a `'use server'` file declares and exports. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`. Nothing is logged, because these are input mistakes, not server errors. This also applies to actions you call without `useForm()`, for example with React's `useActionState`:
+Holo wraps every action a `'use server'` file declares and exports. When the browser calls an action and it throws a validation or rate-limit error, the action returns the `{ ok: false, ... }` payload with its `status` (422 or 429), `errors`, and `values`, and `useForm()` shows them. Nothing is logged, because these are input mistakes, not server errors.
 
-```ts
-import { serializeValidationException } from '@holo-js/validation'
+Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, and actions a `'use server'` file re-exports from another module.
 
-const failure = serializeValidationException(await createPostAction(formData))
-if (failure) {
-  console.log(failure.status, failure.errors)
+## Next.js: native forms
+
+Without `useForm()`, pass the server action straight to `<form action>` and read the errors with `useValidationErrors()`. This works with and without JavaScript:
+
+```tsx [app/posts/new/new-post-form.tsx]
+'use client'
+
+import { useValidationErrors } from '@holo-js/adapter-next/client'
+import { createPostAction } from './actions'
+
+export function NewPostForm() {
+  const errors = useValidationErrors()
+
+  return (
+    <form action={createPostAction}>
+      <input name="title" />
+      {errors.has('title') ? <p>{errors.first('title')}</p> : null}
+
+      <textarea name="body" />
+      {errors.has('body') ? <p>{errors.first('body')}</p> : null}
+
+      <button>Save</button>
+    </form>
+  )
 }
 ```
 
-The action's TypeScript return type doesn't include this payload, so read it with `serializeValidationException()`, which accepts any value and returns the typed payload or `undefined`.
-
-Everything else still throws: `redirect()`, `notFound()`, other errors, actions called from server code, actions called inside another action, form posts sent without JavaScript, and actions a `'use server'` file re-exports from another module.
+When validation fails, the page that posted the form renders again with the errors. They stay until the next successful submission, a reload, or navigation to another page. Holo passes them in a cookie that holds only the error messages, never the submitted values, and is marked `Secure` when the request uses HTTPS.
 
 ## Next.js: route handler
 
@@ -371,16 +389,16 @@ Each adapter exports the same `useForm()` options and return value described on 
 |---|---|---|---|
 | Import from | `@holo-js/adapter-next/client` | `@holo-js/adapter-nuxt/client` | `@holo-js/adapter-sveltekit/client` |
 | `useForm(schema, options?)` | Yes | Yes | Yes |
-| `useValidationErrors(bag?)` | No | Yes | Yes |
+| `useValidationErrors(bag?)` | Yes | Yes | Yes |
 | Default `action` | The `<form action>` attribute | The `<form action>` attribute | The current page URL |
 | Default submitter | `fetch` to `action` | `fetch` to `action` | SvelteKit form action, unless you set `credentials` or `csrf` |
-| Errors from a native post | Not read | Read with `useValidationErrors()` | Read with `useValidationErrors()`, and `initialState` is filled in automatically |
+| Errors from a native post | Read with `useValidationErrors()` | Read with `useValidationErrors()` | Read with `useValidationErrors()`, and `initialState` is filled in automatically |
 
 Both `useForm()` and `useValidationErrors()` take a bag name when you have several forms. `useValidationErrors()` defaults to `'default'`.
 
 ### useValidationErrors(bag?)
 
-Returns the flashed errors for one error bag from the last native form post, as an [error bag](/basics/validation/errors#read-errors). It returns an empty bag when no errors are flashed for that name. Use it when the form must work without JavaScript.
+Returns the flashed errors for one error bag from the last native form post or Next.js form action, as an [error bag](/basics/validation/errors#read-errors). It returns an empty bag when no errors are flashed for that name. Use it when the form must work without JavaScript.
 
 ```vue [app/pages/account.vue]
 <script setup lang="ts">

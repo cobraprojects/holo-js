@@ -4,7 +4,6 @@ import { redirect } from 'next/navigation'
 import { auth } from '@holo-js/auth/next/server'
 import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
-import { serializeValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/blog'
 import {
   createPost,
@@ -22,69 +21,51 @@ import Post from '@/server/models/Post'
 import Tag from '@/server/models/Tag'
 
 export async function createPostAction(formData: FormData) {
-  try {
-    const currentAuth = await auth()
-    if (!currentAuth.authenticated || !currentAuth.user) {
-      redirect('/login')
-    }
-    await authorize('viewAny', Post)
-
-    const data = await validate(formData, postForm)
-    const status = data.status
-    await authorize('create', Post)
-    if (status === 'published') {
-      await authorize('publish', Post)
-    }
-
-    await createPost({
-      ...data,
-      authorId: currentAuth.user.id,
-      tagIds: data.tagIds.join(','),
-      ...(data.image?.size ? { image: data.image } : {}),
-    })
-
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
   }
+  await authorize('viewAny', Post)
+
+  const data = await validate(formData, postForm)
+  const status = data.status
+  await authorize('create', Post)
+  if (status === 'published') {
+    await authorize('publish', Post)
+  }
+
+  await createPost({
+    ...data,
+    authorId: currentAuth.user.id,
+    tagIds: data.tagIds.join(','),
+    ...(data.image?.size ? { image: data.image } : {}),
+  })
+
+  redirect('/admin/posts')
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
-  try {
-    const currentAuth = await auth()
-    if (!currentAuth.authenticated || !currentAuth.user) {
-      redirect('/login')
-    }
-    await authorize('viewAny', Post)
-
-    const data = await validate(formData, postForm)
-    const status = data.status
-    const post = await Post.findOrFail(id)
-    await authorize('update', post)
-    if (status === 'published') {
-      await authorize('publish', post)
-    }
-
-    await updatePost(id, {
-      ...data,
-      tagIds: data.tagIds.join(','),
-      ...(data.image?.size ? { image: data.image } : {}),
-    })
-
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
   }
+  await authorize('viewAny', Post)
+
+  const data = await validate(formData, postForm)
+  const status = data.status
+  const post = await Post.findOrFail(id)
+  await authorize('update', post)
+  if (status === 'published') {
+    await authorize('publish', post)
+  }
+
+  await updatePost(id, {
+    ...data,
+    tagIds: data.tagIds.join(','),
+    ...(data.image?.size ? { image: data.image } : {}),
+  })
+
+  redirect('/admin/posts')
 }
 
 export async function deletePostAction(id: number) {

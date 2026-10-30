@@ -5,7 +5,10 @@ import { join, resolve } from 'node:path'
 import { NextRequest } from 'next/server'
 import { resolveRequestUrl } from '@holo-js/kernel'
 import { actionAsyncStorage, type ActionStore } from 'next/dist/server/app-render/action-async-storage.external.js'
+import { workAsyncStorage, type WorkStore } from 'next/dist/server/app-render/work-async-storage.external.js'
 import { workUnitAsyncStorage, type WorkUnitStore } from 'next/dist/server/app-render/work-unit-async-storage.external.js'
+import { MutableRequestCookiesAdapter } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
+import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { field, schema, validate } from '@holo-js/validation'
 import { resetHoloRuntime } from '../../core/src/portable/holo'
@@ -102,8 +105,10 @@ describe('Next server actions', () => {
   )
   const runRequest = <TResult>(phase: string, actionId: string, callback: () => Promise<TResult>, actionStore: ActionStore = { isAction: true }) => {
     vi.spyOn(process, 'cwd').mockReturnValue(resolve(import.meta.dirname, '..'))
-    const store = { type: 'request', phase, headers: new Headers({ 'next-action': actionId }) } as unknown as WorkUnitStore
-    return actionAsyncStorage.run(actionStore, () => workUnitAsyncStorage.run(store, callback))
+    const headers = new Headers({ 'next-action': actionId })
+    const cookies = new RequestCookies(headers)
+    const store = { type: 'request', phase, headers, url: { pathname: '/login' }, cookies, userspaceMutableCookies: MutableRequestCookiesAdapter.wrap(cookies) } as unknown as WorkUnitStore
+    return workAsyncStorage.run({ route: '/login' } as WorkStore, () => actionAsyncStorage.run(actionStore, () => workUnitAsyncStorage.run(store, callback)))
   }
 
   afterEach(() => {

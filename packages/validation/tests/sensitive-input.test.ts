@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { field, schema, serializeValidationException, validate } from '../src'
+import { field, schema, validate, validationInternals } from '../src'
 
 async function captureFailure(input: Parameters<typeof validate>[0], definition: Parameters<typeof validate>[1]) {
   try {
@@ -59,7 +59,7 @@ describe('sensitive input in validation failures', () => {
       accounts: [{ login: 'ava', devices: [{ name: 'phone' }] }],
       tags: ['first'],
     }
-    const payload = serializeValidationException(error)
+    const payload = validationInternals.serializeValidationException(error)
     expect(payload?.values).toEqual(expected)
     expect((error as { readonly values: unknown }).values).toEqual(expected)
     const serialized = JSON.stringify(error)

@@ -100,3 +100,36 @@ export async function assertExampleAppFormsBrowserFlow({ baseUrl, framework }) {
     }
   })))
 }
+
+export async function assertExampleAppNextNativeFormsFlow({ baseUrl }) {
+  await Promise.all([false, true].map(async (javaScriptEnabled) => {
+    const context = await newExampleAppContext({ baseURL: baseUrl, javaScriptEnabled })
+    try {
+      const page = await context.newPage()
+      const observed = observeExampleAppPage(page, { allowRequestFailure: (_url, failure) => !javaScriptEnabled && failure === 'csp' })
+      const profileError = page.locator('[data-profile-error]')
+      const submitProfile = async (email) => {
+        await page.getByLabel('Profile email').fill(email)
+        await page.getByLabel('Profile password').fill('private-form-password')
+        await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+      }
+      await page.goto('/framework/forms', { waitUntil: javaScriptEnabled ? 'networkidle' : 'domcontentloaded' })
+
+      await submitProfile('invalid')
+      await page.locator('[data-profile-error]', { hasText: 'Email rejected for profile.' }).waitFor()
+      assert.equal(await page.locator('[data-default-error]').textContent(), '')
+      assert.ok(!(await context.cookies()).some(cookie => cookie.value.includes('private-form-password')))
+
+      await page.goto('/framework/forms', { waitUntil: javaScriptEnabled ? 'networkidle' : 'domcontentloaded' })
+      assert.equal(await profileError.textContent(), '')
+
+      await submitProfile('invalid')
+      await page.locator('[data-profile-error]', { hasText: 'Email rejected for profile.' }).waitFor()
+      await submitProfile('nora@example.com')
+      await page.locator('[data-profile-error]', { hasText: /^$/ }).waitFor({ state: 'attached' })
+      assert.deepEqual(observed.failures, [])
+    } finally {
+      await context.close()
+    }
+  }))
+}

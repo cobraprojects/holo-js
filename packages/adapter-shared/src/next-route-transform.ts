@@ -2,7 +2,13 @@ import ts from 'typescript'
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
-type RuntimeWrapper = 'routeHandler' | 'serverAction'
+type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout'
+
+const RUNTIME_MODULES: Readonly<Record<RuntimeWrapper, { readonly specifier: string, readonly internals: string }>> = {
+  routeHandler: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
+  serverAction: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
+  validationErrorsLayout: { specifier: '@holo-js/adapter-next/internal/validation-layout', internals: 'adapterNextLayoutInternals' },
+}
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
   return ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)
@@ -139,10 +145,11 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
     .flatMap(statement => wrapper === 'routeHandler' ? localizeRouteExports(statement, wraps, declared, allocate) : [statement]))
   const locals = wrappedLocals(file, wraps, defaultName)
   if (locals.size === 0) return undefined
+  const runtimeModule = RUNTIME_MODULES[wrapper]
   const runtimeImport = ts.factory.createImportDeclaration(undefined,
     ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
-      ts.factory.createImportSpecifier(false, ts.factory.createIdentifier('adapterNextRuntimeInternals'), ts.factory.createIdentifier(runtimeName)),
-    ])), ts.factory.createStringLiteral('@holo-js/adapter-next/runtime'))
+      ts.factory.createImportSpecifier(false, ts.factory.createIdentifier(runtimeModule.internals), ts.factory.createIdentifier(runtimeName)),
+    ])), ts.factory.createStringLiteral(runtimeModule.specifier))
   const reassign = (local: string) => ts.factory.createExpressionStatement(ts.factory.createAssignment(
     ts.factory.createIdentifier(local),
     ts.factory.createCallExpression(
@@ -163,18 +170,34 @@ function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (nam
     [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...[...pending].map(reassign)]))
 }
 
+function scriptKind(filename: string): ts.ScriptKind {
+  if (filename.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (/\.[cm]?ts$/.test(filename)) return ts.ScriptKind.TS
+  return ts.ScriptKind.JSX
+}
+
 function parse(source: string, filename: string): ts.SourceFile {
-  return ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, /x$/.test(filename) ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+  return ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKind(filename))
 }
 
 export function compileNextRoute(source: string, filename: string): string {
   return wrapExports(parse(source, filename), 'routeHandler', name => METHODS.has(name)) ?? source
 }
 
+function hasDirective(file: ts.SourceFile, directive: string): boolean {
+  return file.statements.slice(0, prologueEnd(file.statements)).filter(isDirective)
+    .some(statement => statement.expression.text === directive)
+}
+
 export function compileNextServerActions(source: string, filename: string): string {
   if (!source.includes('use server')) return source
   const file = parse(source, filename)
-  const directives = file.statements.slice(0, prologueEnd(file.statements)).filter(isDirective)
-  if (!directives.some(directive => directive.expression.text === 'use server')) return source
+  if (!hasDirective(file, 'use server')) return source
   return wrapExports(file, 'serverAction', () => true) ?? source
+}
+
+export function compileNextRootLayout(source: string, filename: string): string {
+  const file = parse(source, filename)
+  if (hasDirective(file, 'use client')) return source
+  return wrapExports(file, 'validationErrorsLayout', name => name === 'default') ?? source
 }

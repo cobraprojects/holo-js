@@ -853,27 +853,18 @@ Route rules protect pages. Server code that writes data should also check who is
 import { auth } from '@holo-js/auth/next/server'
 
 export async function createPostAction(formData: FormData) {
-  try {
-    const currentAuth = await auth()
-    if (!currentAuth.authenticated || !currentAuth.user) {
-      redirect('/login')
-    }
-
-    const data = await validate(formData, postForm)
-    await createPost({
-      ...data,
-      authorId: currentAuth.user.id,
-    })
-
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
   }
+
+  const data = await validate(formData, postForm)
+  await createPost({
+    ...data,
+    authorId: currentAuth.user.id,
+  })
+
+  redirect('/admin/posts')
 }
 ```
 

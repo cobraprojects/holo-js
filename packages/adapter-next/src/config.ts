@@ -51,6 +51,7 @@ const CORE_RUNTIME_CHUNK_PATH = /packages[\\/]core[\\/]dist[\\/].+\.mjs$/
 const OPTIONAL_RUNTIME_IMPORT_ISSUE = /Module not found: Can't resolve (?:'@holo-js\/storage-s3'|<dynamic>)/
 const HOLO_RUNTIME_FILESYSTEM_PATH = /(?:packages|node_modules[\\/]@holo-js)[\\/](?:core|kernel|media)[\\/]dist[\\/].+\.mjs$/
 const USE_SERVER_DIRECTIVE = /['"]use server['"]/
+const APP_LAYOUT_FILE = /(?:^|[\\/])app[\\/](?:.*[\\/])?layout\.[cm]?[jt]sx?$/
 const DYNAMIC_FILESYSTEM_ACCESS_ISSUE = /Dynamic filesystem access causes tracing of the whole project/
 
 type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
@@ -309,6 +310,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
   const serverActionLoader = fileURLToPath(new URL('./server-action-loader.mjs', import.meta.url))
+  const layoutLoader = fileURLToPath(new URL('./layout-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
@@ -320,6 +322,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: USE_SERVER_DIRECTIVE }] }, loaders: [serverActionLoader] },
+        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: APP_LAYOUT_FILE }] }, loaders: [layoutLoader] },
       ],
       ...(hasRealtime
         ? {
@@ -373,6 +376,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
         ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
+        ...(context.isServer ? [{ test: APP_LAYOUT_FILE, exclude: /node_modules/, use: [{ loader: layoutLoader }] }] : []),
       ]
       return nextWebpackConfig
     },

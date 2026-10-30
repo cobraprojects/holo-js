@@ -1,4 +1,4 @@
-import { serializeValidationException } from '@holo-js/validation'
+import { validationInternals } from '@holo-js/validation'
 import type { FormFailurePayload } from '../contracts'
 
 type SubmittedFormFailurePayload<TData> = FormFailurePayload<TData> & {
@@ -52,7 +52,7 @@ export function validationExceptionToFailure<TData>(
   error: unknown,
   fallbackValues: Partial<TData> = {},
 ): SubmittedFormFailurePayload<TData> | undefined {
-  const formFailurePayload = formFailurePayloadFromError<TData>(serializeValidationException(error) ?? error)
+  const formFailurePayload = formFailurePayloadFromError<TData>(validationInternals.serializeValidationException(error) ?? error)
   if (formFailurePayload) {
     return {
       ok: false,

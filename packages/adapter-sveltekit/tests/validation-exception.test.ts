@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { isHttpError } from '@sveltejs/kit'
 import { describe, expect, it } from 'vitest'
-import { field, isValidationException, schema, validate, serializeValidationException } from '@holo-js/validation'
+import { field, isValidationException, schema, validate, validationInternals } from '@holo-js/validation'
 import { adapterSvelteKitInternals, runWithSvelteKitRequestEvent } from '../src'
 
 describe('native validation exceptions', () => {
@@ -22,7 +22,7 @@ describe('native validation exceptions', () => {
 
     expect(isHttpError(failure, 422)).toBe(true)
     expect(isValidationException(failure)).toBe(false)
-    expect(serializeValidationException(failure)).toMatchObject({
+    expect(validationInternals.serializeValidationException(failure)).toMatchObject({
       status: 422,
       bag: 'avatar',
       values: { title: 'Profile' },

@@ -1,7 +1,7 @@
 import { createApp, createError, defineEventHandler } from 'h3'
 import { expect, it, onTestFinished } from 'vitest'
 import { requestUrlInternals } from '@holo-js/kernel'
-import { field, isValidationException, schema, serializeValidationException, validate, ValidationException, validationInternals } from '@holo-js/validation'
+import { field, isValidationException, schema, validate, ValidationException, validationInternals } from '@holo-js/validation'
 import handleValidationError from '../src/runtime/server/error'
 import { serve } from './support/http'
 
@@ -53,7 +53,7 @@ it('preserves serialized H3 validation fields and retry metadata over HTTP', asy
   const payload = exception.toJSON()
   const error = createError({ statusCode: 429, data: payload })
   expect(isValidationException(error)).toBe(false)
-  expect(serializeValidationException(error)).toEqual(payload)
+  expect(validationInternals.serializeValidationException(error)).toEqual(payload)
   const app = createApp({ onError: handleValidationError })
   app.use(defineEventHandler(() => { throw error }))
   const response = await fetch(await serve(app), { headers: { accept: 'application/json' } })

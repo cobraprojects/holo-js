@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Next.js: `useValidationErrors(bag?)` from `@holo-js/adapter-next/client` reads the validation errors of a server action passed to `<form action>`, the same hook Nuxt and SvelteKit have. It works with and without JavaScript: the page that posted the form renders again with the errors, which stay until the next successful submission, a reload, or navigation to another page. See [Framework Recipes](apps/docs/docs/basics/forms/frameworks.md#next-js-native-forms).
+
+### Changed
+
+- Next.js: a server action posted from a form without JavaScript that fails validation renders the page again with its errors. Before, it answered with an error page.
+
+### Compatibility and upgrade requirements
+
+- `serializeValidationException()` is no longer exported from `@holo-js/validation`. Handling a validation failure yourself is no longer needed: route handlers answer with a 422, `useForm()` shows the errors a server action returns, and `useValidationErrors()` shows the errors of a native form. Remove `try/catch` blocks that only turned the error into a payload. To recognize the error in your own code, use `isValidationException(error)`; `error.toJSON()` is the 422 response body.
+
 ## 0.5.0 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-044-to-050) for Next.js server actions and Redis connections that set both a `url` with a database path and a `db`. No required migrations.
