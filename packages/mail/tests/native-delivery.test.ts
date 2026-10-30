@@ -20,11 +20,14 @@ async function startSmtpServer({ rejectRecipient = false, holdAcceptance }: Smtp
   const stats = { connections: 0, closedConnections: 0 }
   const sockets = new Set<Socket>()
   const server = createServer(socket => {
-    stats.connections++
+    let greeted = false
     sockets.add(socket)
     socket.on('close', () => {
       sockets.delete(socket)
-      stats.closedConnections++
+      if (greeted) stats.closedConnections++
+    })
+    socket.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE') throw error
     })
     socket.setEncoding('utf8')
     socket.write('220 Local SMTP provider\r\n')
@@ -49,6 +52,11 @@ async function startSmtpServer({ rejectRecipient = false, holdAcceptance }: Smtp
             data.push(line.startsWith('..') ? line.slice(1) : line)
           }
         } else {
+          if (!greeted) {
+            if (!/^(EHLO|HELO) /.test(line)) return void socket.destroy()
+            greeted = true
+            stats.connections++
+          }
           commands.push(line)
           if (line === 'DATA') {
             data = []
@@ -529,6 +537,7 @@ it('reads mail attachments from the real configured filesystem disk', async () =
   const provider = await startSmtpProvider()
   const requests: Array<{ method: string | undefined, path: string | undefined, authorization: string | undefined }> = []
   const s3 = createHttpServer((request, response) => {
+    if (!request.url?.startsWith('/archive/')) return void response.writeHead(404).end()
     requests.push({ method: request.method, path: request.url, authorization: request.headers.authorization })
     response.setHeader('content-type', 'image/png')
     response.end(Buffer.from([1, 2, 3, 4]))
