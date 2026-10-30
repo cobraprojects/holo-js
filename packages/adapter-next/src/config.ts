@@ -318,7 +318,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(existingTurbopack.rules?.['*'] ? [existingTurbopack.rules['*']].flat() : []),
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
-        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: /['"]use server['"]/ }] }, loaders: [serverActionLoader] },
+        { condition: { all: [{ not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: /['"]use server['"]/ }] }, loaders: [serverActionLoader] },
       ],
       ...(hasRealtime
         ? {
@@ -371,7 +371,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(hasRealtime ? [createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer, realtimeDirectoryPatterns.absolute)] : []),
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
-        ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
+        { test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] },
       ]
       return nextWebpackConfig
     },

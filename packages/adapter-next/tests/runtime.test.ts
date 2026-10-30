@@ -14,6 +14,17 @@ afterEach(async () => {
   await resetHoloRuntime()
 })
 
+function registerServerReference<TAction>(action: TAction, hash: string): TAction {
+  return Object.defineProperty(action, '$$id', { value: `7f${hash}` })
+}
+
+function actionRequest(hash: string): NextRequest {
+  return new NextRequest('https://app.test/posts', { method: 'POST', headers: { 'next-action': `40${hash}` } })
+}
+
+const createPostHash = 'a'.repeat(40)
+const inlineActionHash = 'b'.repeat(40)
+
 describe('Next native runtime', () => {
   it('retains the request URL so its public origin and path can be resolved from Host', () => {
     const request = new NextRequest('http://localhost:43201/auth/presentation?theme=light', {
@@ -43,41 +54,40 @@ describe('Next native runtime', () => {
 
   it('returns server action validation failures to the client that called the action instead of throwing them', async () => {
     const login = schema({ email: field.string().required().email(), password: field.password().required() })
-    const action = adapterNextRuntimeInternals.serverAction(async (formData: FormData) => {
+    const action = registerServerReference(adapterNextRuntimeInternals.serverAction(async (formData: FormData) => {
       await validate(formData, login)
       return { ok: true }
-    })
+    }), createPostHash)
     const formData = new FormData()
     formData.set('email', 'invalid')
     formData.set('password', 'next-password')
-    const actionRequest = new NextRequest('https://app.test/login', { method: 'POST', headers: { 'next-action': 'abc123' } })
 
-    const result = await runWithNextRequest(actionRequest, () => action(formData))
+    const result = await runWithNextRequest(actionRequest(createPostHash), () => action(formData))
 
     expect(result).toMatchObject({ ok: false, status: 422, valid: false, values: { email: 'invalid' }, errors: { email: [expect.any(String)] } })
     expect(JSON.stringify(result)).not.toContain('next-password')
   })
 
-  it('still throws from server actions called outside a client action request, inside another action, or for other errors', async () => {
-    const failing = adapterNextRuntimeInternals.serverAction(async () => {
+  it('still throws from server actions the browser did not dispatch, inside another action, or for other errors', async () => {
+    const failing = registerServerReference(adapterNextRuntimeInternals.serverAction(async () => {
       throw ValidationException.withMessages({ title: ['Title is required.'] })
-    })
-    const actionRequest = new NextRequest('https://app.test/posts', { method: 'POST', headers: { 'next-action': 'abc123' } })
+    }), createPostHash)
 
     await expect(failing()).rejects.toBeInstanceOf(ValidationException)
     await expect(runWithNextRequest(new NextRequest('https://app.test/posts', { method: 'POST' }), () => failing())).rejects.toBeInstanceOf(ValidationException)
+    await expect(runWithNextRequest(actionRequest(inlineActionHash), () => failing())).rejects.toBeInstanceOf(ValidationException)
 
-    const outer = adapterNextRuntimeInternals.serverAction(async () => {
+    const outer = registerServerReference(adapterNextRuntimeInternals.serverAction(async () => {
       const inner = await failing().then(() => 'returned', (error: unknown) => error)
       expect(inner).toBeInstanceOf(ValidationException)
       throw inner
-    })
-    await expect(runWithNextRequest(actionRequest, () => outer())).resolves.toMatchObject({ ok: false, status: 422, errors: { title: ['Title is required.'] } })
+    }), inlineActionHash)
+    await expect(runWithNextRequest(actionRequest(inlineActionHash), () => outer())).resolves.toMatchObject({ ok: false, status: 422, errors: { title: ['Title is required.'] } })
 
-    const broken = adapterNextRuntimeInternals.serverAction(async () => {
+    const broken = registerServerReference(adapterNextRuntimeInternals.serverAction(async () => {
       throw new Error('database is down')
-    })
-    await expect(runWithNextRequest(actionRequest, () => broken())).rejects.toThrow('database is down')
+    }), createPostHash)
+    await expect(runWithNextRequest(actionRequest(createPostHash), () => broken())).rejects.toThrow('database is down')
     expect(adapterNextRuntimeInternals.serverAction('not an action')).toBe('not an action')
   })
 

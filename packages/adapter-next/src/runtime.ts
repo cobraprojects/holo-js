@@ -352,21 +352,31 @@ function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs
 
 const serverActionCalls = new AsyncLocalStorage<true>()
 
+function serverReferenceHash(id: unknown): string | undefined {
+  return typeof id === 'string' && id.length === 42 ? id.slice(2) : undefined
+}
+
+async function isDispatchedServerAction(action: object): Promise<boolean> {
+  const dispatchedHash = serverReferenceHash(await resolveNextAuthRequestAccessors().getHeader?.('next-action'))
+  return dispatchedHash !== undefined && dispatchedHash === serverReferenceHash(Reflect.get(action, '$$id'))
+}
+
 function serverAction<TAction>(action: TAction): TAction {
   if (typeof action !== 'function') return action
   const run = action as (...args: unknown[]) => unknown
-  return (async (...args: unknown[]) => {
+  const wrapped = async (...args: unknown[]) => {
     if (serverActionCalls.getStore()) return await run(...args)
     return await serverActionCalls.run(true, async () => {
       try {
         return await run(...args)
       } catch (error) {
         const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
-        if (!payload || await resolveNextAuthRequestAccessors().getHeader?.('next-action') === undefined) throw error
+        if (!payload || !(await isDispatchedServerAction(wrapped))) throw error
         return payload
       }
     })
-  }) as TAction
+  }
+  return wrapped as TAction
 }
 
 export const adapterNextRuntimeInternals = {

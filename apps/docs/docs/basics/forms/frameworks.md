@@ -92,24 +92,25 @@ A failed `validate()`, a `ValidationException` you throw, and a rate limit all l
 
 `useForm()` reads that result as field errors. Next.js doesn't log it or answer with a 500, the same as Laravel, which never reports a `ValidationException`. Other errors, `redirect()`, and `notFound()` behave as usual. The action still throws when server code calls it directly, or when another action calls it, so the outer action decides what to do. A form posted without JavaScript also still throws.
 
-If you call a server action without `useForm()`, for example with React's `useActionState`, the failure payload is the action's result, so read `ok` and `errors` from the state:
+If you call a server action without `useForm()`, for example with React's `useActionState`, the failure payload is the action's result. The action's TypeScript return type doesn't include it, so pass the result to `serializeValidationException()` from `@holo-js/validation`, which returns the typed payload or `undefined`:
 
 ```tsx [app/posts/new/page.tsx]
 'use client'
 
 import { useActionState } from 'react'
+import { serializeValidationException } from '@holo-js/validation'
 import { createPostAction } from './actions'
 
 export default function NewPostPage() {
-  const [state, formAction] = useActionState(
-    async (_previous: unknown, formData: FormData) => await createPostAction(formData),
+  const [failure, formAction] = useActionState(
+    async (_previous: unknown, formData: FormData) => serializeValidationException(await createPostAction(formData)),
     undefined,
   )
 
   return (
     <form action={formAction}>
       <input name="title" />
-      {state?.ok === false ? <p>{state.errors.title?.[0]}</p> : null}
+      {failure ? <p>{failure.errors.title?.[0]}</p> : null}
       <button>Save</button>
     </form>
   )

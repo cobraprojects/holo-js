@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation'
 
-export async function submitQuote(name: string) {
+export const submitQuote = async (name: string) => {
   if (name === 'redirect') redirect('/done')
   return { ok: true, status: 200, data: { name } }
 }
