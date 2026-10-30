@@ -1,5 +1,20 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.2 to 0.4.3
+
+Update every installed `@holo-js/*` package to `0.4.3` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#043---2026-10-30) lists the release changes.
+
+### Hydrating rows loaded outside a model query
+
+From 0.4.3, use [`Model.hydrate(row, sourceConnection?)`](/orm/querying#hydrate) to build a saved model from a row you already read from the model's table. Unlike `make()`, it skips mass assignment checks, applies the query read casts, fires `retrieved`, and returns a model with `exists()` equal to `true` and no changes. Pass only database rows, never request input.
+
+```ts
+const tenant = Tenant.make(row) // [!code --]
+const tenant = await Tenant.hydrate(row) // [!code ++]
+```
+
+When the row comes from a connection whose driver differs from the model's driver, pass that source connection, such as `await Tenant.hydrate(row, tx)`, so values such as JSON decode correctly. This controls decoding only; relations and writes use the model's own connection. Keep using `make()` for new, unsaved models.
+
 ## Upgrading from 0.4.1 to 0.4.2
 
 Update every installed `@holo-js/*` package to `0.4.2` together. Review these two behavior fixes before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#042---2026-10-29) lists the release changes.
@@ -158,12 +173,7 @@ Mass assignment rules are now checked when you assign attributes, not when you s
 
 Saving or deleting a loaded model now targets the row it was loaded from, even after its primary key changes. See [mass assignment](/orm/#mass-assignment).
 
-Because `make()` checks these rules and its model is unsaved, `make(row)` no longer turns a row you already loaded into a model: it throws a `SecurityError` for the primary key. Use [`hydrate()`](/orm/querying#hydrate), which builds a saved model from a database row without mass assignment checks, as `find()` does. Don't add the primary key to `fillable` for this.
-
-```ts
-const tenant = Tenant.make(row) // [!code --]
-const tenant = await Tenant.hydrate(row) // [!code ++]
-```
+Because `make()` checks these rules and its model is unsaved, `make(row)` no longer turns a row you already loaded into a model: it throws a `SecurityError` for the primary key. When upgrading to 0.4.3 or newer, use [`hydrate()`](#hydrating-rows-loaded-outside-a-model-query). Don't add the primary key to `fillable` for this.
 
 ### Raw SQL conditions on `update()` and `delete()`
 

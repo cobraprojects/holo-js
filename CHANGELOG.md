@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-10-30
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-042-to-043) for hydrating rows loaded outside a model query. No breaking changes or required migrations.
+
 ### Added
 
-- Add `Model.hydrate(row)` to build a saved model from a row you already loaded, for example with `tx.table()` inside a transaction on another connection. It applies casts and fires the `retrieved` event as a query does, and skips `fillable` and `guarded` because the row comes from the database. The model reports `exists()` as `true` and works with relations, policies and media. Use it instead of `make(row)`, which 0.4.0 made reject the primary key. See [Models from rows you already loaded](apps/docs/docs/orm/querying.md#models-from-rows-you-already-loaded).
+- Add `Model.hydrate(row, sourceConnection?)` to build a saved model from a row you already loaded, for example with `tx.table()` inside a transaction on another connection. It applies casts and fires the `retrieved` event as a query does, and skips `fillable` and `guarded` because the row comes from the database. The model reports `exists()` as `true` with no changes and works with relations, policies and media. Pass the source connection when its driver differs from the model's driver so values such as JSON decode correctly; relations and writes still use the model's own connection. Use it instead of `make(row)`, which 0.4.0 made reject the primary key. See [Models from rows you already loaded](apps/docs/docs/orm/querying.md#models-from-rows-you-already-loaded).
 
 ## 0.4.2 - 2026-10-29
 
