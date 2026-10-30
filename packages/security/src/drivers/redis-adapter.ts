@@ -77,6 +77,12 @@ function toRedisSocketPath(value: string): string {
     : value
 }
 
+function withoutUrlDatabasePath(target: string): string {
+  return isRedisSocketConnectionTarget(target)
+    ? target
+    : redisUrlInternals.withoutDatabasePath(target)
+}
+
 function escapeRedisGlob(value: string): string {
   return value.replace(/[\\*?[\]]/g, match => `\\${match}`)
 }
@@ -194,7 +200,7 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
       : config.clusters && config.clusters.length > 0
         ? new RedisConstructor.Cluster(resolveClusterStartupNodes(config), createRedisClusterOptions(config))
         : isRedisConnectionTarget(config.connection)
-          ? new RedisConstructor(config.connection, clientOptions)
+          ? new RedisConstructor(withoutUrlDatabasePath(config.connection), clientOptions)
           : new RedisConstructor(clientOptions)
   }
 

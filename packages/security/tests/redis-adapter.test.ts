@@ -54,7 +54,7 @@ describe('Redis rate-limit behavior', () => {
     }
   })
 
-  it('counts hits in the configured database when the URL names another one', async () => {
+  it.each(['url', 'connection'] as const)('counts hits in the configured database when the %s option is a URL naming another one', async target => {
     const service = await startRedisService()
     const port = service.ports[0]
     const client = service.clients[0]
@@ -63,7 +63,10 @@ describe('Redis rate-limit behavior', () => {
     onTestFinished(() => configuredDatabase.disconnect())
     const prefix = `holo:rate-limit:${randomUUID()}:`
     const adapter = createSecurityRedisAdapter({
-      url: `redis://127.0.0.1:${port}/0`, host: '127.0.0.1', port, db: 2, prefix, connection: 'default',
+      host: '127.0.0.1', port, db: 2, prefix,
+      ...(target === 'url'
+        ? { url: `redis://127.0.0.1:${port}/0`, connection: 'default' }
+        : { connection: `redis://127.0.0.1:${port}/0` }),
     })
     try {
       await adapter.connect()
