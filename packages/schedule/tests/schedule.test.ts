@@ -148,7 +148,7 @@ describe('next due dates', () => {
 
     expect(tasks.map(task => task.nextDueAt.toISOString())).toEqual([
       '2026-03-08T05:00:00.000Z',
-      '2026-03-09T06:30:00.000Z',
+      '2026-03-08T07:30:00.000Z',
       '2026-03-07T12:15:00.000Z',
     ])
     expect(tasks.map(task => task.timezone)).toEqual(['America/New_York', 'America/New_York', 'UTC'])
@@ -232,6 +232,7 @@ describe('next due dates', () => {
       ['*/61 * * * *', '2026-11-02T00:00:00Z', '2026-11-02T00:01:00.000Z'],
       ['0 0 */40 * *', '2026-11-02T00:00:00Z', '2026-11-10T00:00:00.000Z'],
       ['10-20/30 * * * *', '2026-11-02T00:00:00Z', '2026-11-02T00:10:00.000Z'],
+      ['1-2/59 * * * *', '2026-11-02T00:00:00Z', '2026-11-02T00:01:00.000Z'],
     ] as const
 
     for (const [expression, now, expected] of cases) {
@@ -280,6 +281,24 @@ describe('running due tasks', () => {
     await runAt(definition, new Date('2026-11-01T22:00:00Z'))
 
     expect(ran).toEqual(['utc-midnight', 'hourly', 'cairo-midnight', 'hourly'])
+  })
+
+  it('runs tasks around daylight saving changes when Laravel does', async () => {
+    const dueAt = async (time: string, now: string) => {
+      const ran: string[] = []
+      const definition = defineSchedule(schedule => schedule.call(() => ran.push(time)).cron(time).timezone('America/New_York'))
+      await runAt(definition, new Date(now))
+      return ran.length === 1
+    }
+
+    expect(await dueAt('30 2 * * *', '2026-0308T07:30:00Z'.replace('03', '03-'))).toBe(true)
+    expect(await dueAt('30 2 * * *', '2026-03-08T08:30:00Z')).toBe(false)
+    expect(await dueAt('30 3 * * *', '2026-03-08T07:30:00Z')).toBe(true)
+    expect(await dueAt('30 2 * * *', '2026-11-01T06:30:00Z')).toBe(true)
+    expect(await dueAt('30 2 * * *', '2026-11-01T07:30:00Z')).toBe(true)
+    expect(await dueAt('30 1 * * *', '2026-11-01T05:30:00Z')).toBe(true)
+    expect(await dueAt('30 1 * * *', '2026-11-01T06:30:00Z')).toBe(true)
+    expect(await dueAt('30 1 * * *', '2026-11-01T07:30:00Z')).toBe(false)
   })
 
   it('uses the default timezone for tasks without their own', async () => {

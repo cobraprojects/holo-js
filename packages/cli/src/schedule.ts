@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { relative, resolve } from 'node:path'
 import type * as ScheduleModule from '@holo-js/schedule'
 import type { ScheduleDefinition, ScheduledTaskReport } from '@holo-js/schedule'
@@ -12,6 +13,7 @@ import {
 import { resolveFirstExistingPath } from './project/runtime'
 import { resolveModuleExport, resolveRunnableCliEntrypoint } from './queue'
 import { initializeProjectRuntime } from './runtime'
+import { loadConfigWithNormalizers } from './project/load-config'
 import type { FrameworkSpawn } from './framework-run'
 import type { IoStreams, SpawnProcessLike } from './cli-types'
 
@@ -55,9 +57,17 @@ export async function loadScheduleEnvironment(projectRoot: string): Promise<Sche
   const definitionPaths = [...registry.jobs, ...registry.events, ...registry.listeners]
     .map(entry => resolve(projectRoot, entry.sourcePath))
   const { holoRuntimeInternals } = await import('@holo-js/core')
-  const importDefinition = await holoRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, schedulePath])
-  holoRuntimeInternals.setProjectDefinitionImporter(projectRoot, importDefinition)
-  const runtime = await initializeProjectRuntime(projectRoot)
+  configureConfigRuntime((await loadConfigWithNormalizers(projectRoot, { processEnv: process.env })).all)
+  let importDefinition: Awaited<ReturnType<typeof holoRuntimeInternals.loadProjectDefinitionRuntimeModules>>
+  let runtime: Awaited<ReturnType<typeof initializeProjectRuntime>>
+  try {
+    importDefinition = await holoRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, schedulePath])
+    holoRuntimeInternals.setProjectDefinitionImporter(projectRoot, importDefinition)
+    runtime = await initializeProjectRuntime(projectRoot)
+  } catch (error) {
+    resetConfigRuntime()
+    throw error
+  }
 
   try {
     const schedule = resolveModuleExport(await importDefinition(schedulePath), scheduleModule.isScheduleDefinition)

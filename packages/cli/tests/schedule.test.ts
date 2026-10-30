@@ -272,13 +272,15 @@ export default defineSchedule((schedule) => {
 })
 
 describe('schedule configuration', () => {
-  it('defines tasks after the app configuration is loaded', { timeout: 60_000 }, async () => {
+  it('loads the schedule after the app configuration, so module scope and the callback can read it', { timeout: 60_000 }, async () => {
     const root = await createProject(`
 import { config } from '@holo-js/config'
 import { defineSchedule } from '@holo-js/schedule'
 
+const zone = config('app.timezone') === 'Africa/Cairo' ? 'Asia/Tokyo' : 'UTC'
+
 export default defineSchedule((schedule) => {
-  schedule.command('privacy:maintain').dailyAt('03:00').timezone(config('app.timezone') === 'Africa/Cairo' ? 'Asia/Tokyo' : 'UTC')
+  schedule.command('privacy:maintain').dailyAt('03:00').timezone(config('app.timezone') === 'Africa/Cairo' ? zone : 'UTC')
 })
 `)
     const io = createIo(root)

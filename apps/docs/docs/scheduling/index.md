@@ -147,7 +147,7 @@ Tasks run in your app's timezone, `timezone` in `config/app.ts`. Set a different
 schedule.command('reports:send').dailyAt('09:00').timezone('America/New_York')
 ```
 
-A task that runs during a daylight saving change can run twice or not at all. When clocks spring forward, a time that doesn't exist that day is skipped. Prefer UTC for tasks where that matters.
+Around a daylight saving change, Holo follows Laravel. When clocks spring forward, a task set for a time that doesn't exist that day runs an hour later, in the first hour after the change. When clocks fall back, a task in the repeated hour runs twice, and a task in the hour after it also runs during the repeated hour. Prefer UTC for tasks where that matters.
 
 ## Prevent overlaps
 

@@ -1,4 +1,5 @@
 const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
 const MAX_SEARCH_DAYS = 366 * 9
 
 const MACROS: Readonly<Record<string, string>> = {
@@ -260,11 +261,26 @@ export function formatHourMinute(date: Date, timezone: string): string {
   return `${String(clock.hour).padStart(2, '0')}${String(clock.minute).padStart(2, '0')}`
 }
 
+function transitionHourShift(time: number, timezone: string): number | undefined {
+  const before = offsetAt(time - HOUR_MS, timezone)
+  if (before === offsetAt(time, timezone)) return undefined
+  const change = offsetAt(time + HOUR_MS, timezone) - before
+  if (change >= HOUR_MS) return -1
+  if (change <= -HOUR_MS) return 1
+  return undefined
+}
+
+function hourMatches(schedule: CronSchedule, time: number, clock: WallClock, timezone: string): boolean {
+  if (schedule.hour.values.has(clock.hour)) return true
+  const shift = transitionHourShift(time, timezone)
+  return shift !== undefined && schedule.hour.values.has(clock.hour + shift)
+}
+
 export function cronMatches(schedule: CronSchedule, date: Date, timezone: string): boolean {
   const clock = wallClock(date, timezone)
   return dayMatches(schedule, clock)
-    && schedule.hour.values.has(clock.hour)
     && schedule.minute.values.has(clock.minute)
+    && hourMatches(schedule, date.getTime(), clock, timezone)
 }
 
 function offsetAt(time: number, timezone: string): number {
@@ -288,8 +304,8 @@ export function nextCronDate(schedule: CronSchedule, after: Date, timezone: stri
       time = nextLocalMidnight(time, clock, timezone)
       continue
     }
-    if (!schedule.hour.values.has(clock.hour)) {
-      time += (60 - clock.minute) * MINUTE_MS
+    if (!hourMatches(schedule, time, clock, timezone)) {
+      time += transitionHourShift(time, timezone) === undefined ? (60 - clock.minute) * MINUTE_MS : MINUTE_MS
       continue
     }
     if (schedule.minute.values.has(clock.minute)) return new Date(time)
