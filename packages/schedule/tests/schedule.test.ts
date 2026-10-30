@@ -10,6 +10,7 @@ import {
 import {
   CronExpressionError,
   defineSchedule,
+  isScheduleDefinition,
   listScheduledTasks,
   runDueScheduledTasks,
   type ScheduleDefinition,
@@ -125,6 +126,18 @@ describe('frequencies', () => {
 })
 
 describe('definitions', () => {
+  it('recognizes only real schedule definitions', () => {
+    const marker = Symbol.for('holo-js.schedule.definition')
+    let defined = 0
+
+    expect(isScheduleDefinition(defineSchedule(() => {
+      defined += 1
+    }))).toBe(true)
+    expect(isScheduleDefinition({ [marker]: true })).toBe(false)
+    expect(isScheduleDefinition({ [marker]: true, tasks: 'none' })).toBe(false)
+    expect(defined).toBe(0)
+  })
+
   it('rejects an asynchronous schedule definition instead of losing its tasks', async () => {
     const definition = defineSchedule(async (schedule) => {
       await Promise.resolve()

@@ -96,5 +96,7 @@ export function defineSchedule(define: (schedule: Schedule) => void): ScheduleDe
 }
 
 export function isScheduleDefinition(value: unknown): value is ScheduleDefinition {
-  return typeof value === 'object' && value !== null && (value as Partial<ScheduleDefinition>)[SCHEDULE_DEFINITION] === true
+  if (typeof value !== 'object' || value === null || (value as Partial<ScheduleDefinition>)[SCHEDULE_DEFINITION] !== true) return false
+  const tasks = Object.getOwnPropertyDescriptor(value, 'tasks')
+  return typeof tasks?.get === 'function' || Array.isArray(tasks?.value)
 }
