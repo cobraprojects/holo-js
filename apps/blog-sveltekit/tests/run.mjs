@@ -651,7 +651,6 @@ try {
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
   await startBroadcastWorker(`http://127.0.0.1:${port}`)
-  // Measured on CI in #433: up to 55 s on a typical runner (Nuxt) and about 62 s on the slowest seen.
   await run('npx', ['tsx', 'tests/blog-logic.mjs'], 120000)
   database = await openExampleAppDatabase(cwd)
   await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
