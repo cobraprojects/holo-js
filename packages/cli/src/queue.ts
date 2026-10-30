@@ -13,6 +13,7 @@ import {
 import { loadProjectDatabaseDrivers } from './database-drivers'
 import {
   bundleProjectModule,
+  bundleProjectModules,
   ensureProjectConfig,
   loadProjectConfig,
   loadGeneratedProjectRegistry,
@@ -311,24 +312,21 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
   const runtime = await initializeProjectRuntime(projectRoot)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
   const modelEntries = registry?.models ?? []
-  const bundledModels: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
+  let bundledModels: Awaited<ReturnType<typeof bundleProjectModules>> | undefined
 
   try {
-    for (const entry of modelEntries) {
-      bundledModels.push(await bundleProjectModule(
-        projectRoot,
-        resolve(projectRoot, entry.sourcePath),
-      ))
-    }
+    bundledModels = await bundleProjectModules(
+      projectRoot,
+      modelEntries.map(entry => resolve(projectRoot, entry.sourcePath)),
+    )
 
-    for (let index = 0; index < modelEntries.length; index += 1) {
-      const bundledEntry = bundledModels[index]!
-      await import(`${pathToFileURL(bundledEntry.path).href}?t=${Date.now()}-model-${index}`)
+    for (const [index, bundledPath] of bundledModels.paths.entries()) {
+      await import(`${pathToFileURL(bundledPath).href}?t=${Date.now()}-model-${index}`)
     }
 
   } catch (error) {
     await runtime.shutdown().catch(() => {})
-    await Promise.all(bundledModels.map(entry => entry.cleanup()))
+    await bundledModels?.cleanup()
     throw error
   }
 
@@ -336,7 +334,7 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
     runtime,
     project,
     async cleanup() {
-      await Promise.all(bundledModels.map(entry => entry.cleanup()))
+      await bundledModels?.cleanup()
       await runtime.shutdown()
     },
   }
