@@ -13,6 +13,7 @@ const MACROS: Readonly<Record<string, string>> = {
 
 const MONTH_NAMES = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 const WEEKDAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+const ISO_WEEKDAY_NAMES = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 
 type FieldSpec = {
   readonly label: string
@@ -27,7 +28,7 @@ const FIELD_SPECS: readonly FieldSpec[] = [
   { label: 'hour', min: 0, max: 23 },
   { label: 'day of month', min: 1, max: 31 },
   { label: 'month', min: 1, max: 12, names: MONTH_NAMES, nameOffset: 1 },
-  { label: 'day of week', min: 0, max: 7, names: WEEKDAY_NAMES, nameOffset: 0 },
+  { label: 'day of week', min: 0, max: 7, names: ISO_WEEKDAY_NAMES, nameOffset: 1 },
 ]
 
 type DayRule = (clock: WallClock) => boolean
@@ -92,10 +93,6 @@ function parsePart(part: string, spec: FieldSpec, expression: string): number[] 
     if (rest.length > 0) throw new CronExpressionError(expression, `"${part}" is not a valid ${spec.label}.`)
     start = parseValue(startToken, spec, expression)
     end = endToken === undefined ? (stepToken === undefined ? start : spec.max) : parseValue(endToken, spec, expression)
-    if (spec.label === 'day of week' && endToken !== undefined) {
-      if (start === 7) start = 0
-      else if (end === 0) end = 7
-    }
     if (end < start) throw new CronExpressionError(expression, `"${part}" is a descending range.`)
   }
 
@@ -110,20 +107,22 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 
-function isWeekday(year: number, month: number, day: number): boolean {
-  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+function isWeekday(date: Date): boolean {
+  const weekday = date.getUTCDay()
   return weekday >= 1 && weekday <= 5
 }
 
-function nearestWeekday(target: number): DayRule {
-  return (clock) => {
-    const lastDay = daysInMonth(clock.year, clock.month)
-    if (target > lastDay) return false
-    const nearest = [0, -1, 1, -2, 2]
-      .map(offset => target + offset)
-      .find(day => day >= 1 && day <= lastDay && isWeekday(clock.year, clock.month, day))
-    return nearest === clock.day
+function nearestWeekday(year: number, month: number, target: number): number | undefined {
+  const rolledOver = new Date(Date.UTC(year, month - 1, target))
+  if (isWeekday(rolledOver)) return rolledOver.getUTCDate()
+  const lastDay = daysInMonth(rolledOver.getUTCFullYear(), rolledOver.getUTCMonth() + 1)
+  for (const offset of [-1, 1, -2, 2]) {
+    const day = target + offset
+    if (day < 1 || day > lastDay) continue
+    const candidate = new Date(Date.UTC(year, month - 1, day))
+    if (isWeekday(candidate) && candidate.getUTCMonth() + 1 === month) return candidate.getUTCDate()
   }
+  return undefined
 }
 
 function parseDayOfMonthRule(part: string, source: string, spec: FieldSpec, expression: string): DayRule | undefined {
@@ -131,7 +130,8 @@ function parseDayOfMonthRule(part: string, source: string, spec: FieldSpec, expr
   if (!special) return undefined
   if (source.includes(',')) throw new CronExpressionError(expression, `"${part}" can't be combined with other days of the month.`)
   if (part === 'L') return clock => clock.day === daysInMonth(clock.year, clock.month)
-  return nearestWeekday(parseValue(part.slice(0, -1), spec, expression))
+  const target = parseValue(part.slice(0, -1), spec, expression)
+  return clock => nearestWeekday(clock.year, clock.month, target) === clock.day
 }
 
 function parseDayOfWeekRule(part: string, spec: FieldSpec, expression: string): DayRule | undefined {
@@ -154,6 +154,19 @@ function parseRule(part: string, source: string, spec: FieldSpec, expression: st
   return undefined
 }
 
+function parseDayOfWeekPart(part: string, spec: FieldSpec, expression: string): number[] {
+  const literal = spec.names?.indexOf(part.toUpperCase()) ?? -1
+  const bounds = (literal >= 0 ? String(literal + (spec.nameOffset ?? 0)) : part).split('-')
+  if (bounds[0] === '7') bounds[0] = '0'
+  else if (bounds[1] === '0') bounds[1] = '7'
+  const normalized = bounds.join('-')
+  const sundayIsSeven = normalized.includes('7')
+  return parsePart(normalized, spec, expression).flatMap((value) => {
+    if (sundayIsSeven) return value === 0 ? [] : [value % 7]
+    return value === 7 ? [] : [value]
+  })
+}
+
 function parseField(source: string, spec: FieldSpec, expression: string): CronField {
   if (source === '?') return { values: new Set(parsePart('*', spec, expression)), rules: [], restricted: false }
   const values = new Set<number>()
@@ -164,9 +177,8 @@ function parseField(source: string, spec: FieldSpec, expression: string): CronFi
       rules.push(rule)
       continue
     }
-    for (const value of parsePart(part, spec, expression)) {
-      values.add(spec.label === 'day of week' && value === 7 ? 0 : value)
-    }
+    const parsed = spec.label === 'day of week' ? parseDayOfWeekPart(part, spec, expression) : parsePart(part, spec, expression)
+    for (const value of parsed) values.add(value)
   }
   return { values, rules, restricted: source !== '*' }
 }

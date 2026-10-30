@@ -175,6 +175,7 @@ describe('next due dates', () => {
       ['0 0 L * *', '2026-02-10T00:00:00Z', '2026-02-28T00:00:00.000Z'],
       ['0 0 15W * *', '2026-08-01T00:00:00Z', '2026-08-14T00:00:00.000Z'],
       ['0 0 1W * *', '2026-07-31T12:00:00Z', '2026-08-03T00:00:00.000Z'],
+      ['0 9 31W * *', '2026-10-31T23:00:00Z', '2026-11-01T09:00:00.000Z'],
       ['0 0 * * 5L', '2026-10-01T00:00:00Z', '2026-10-30T00:00:00.000Z'],
       ['0 0 * * 1#2', '2026-11-01T00:00:00Z', '2026-11-09T00:00:00.000Z'],
       ['0 0 * * MON#1', '2026-11-01T00:00:00Z', '2026-11-02T00:00:00.000Z'],
@@ -195,22 +196,33 @@ describe('next due dates', () => {
     expect(task?.nextDueAt.toISOString()).toBe('2104-02-29T00:00:00.000Z')
   })
 
-  it('accepts day-of-week ranges that end or start at Sunday, as Laravel does', async () => {
+  it('reads Sunday in day-of-week ranges the way Laravel does', async () => {
     const saturdayMorning = new Date('2026-11-07T10:00:00Z')
     const sundayMorning = new Date('2026-11-08T10:00:00Z')
     const cases = [
-      ['0 9 * * FRI-SUN', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * FRI-SUN', saturdayMorning, '2026-11-13T09:00:00.000Z'],
+      ['0 9 * * FRI-SUN', sundayMorning, '2026-11-13T09:00:00.000Z'],
+      ['0 9 * * MON-SUN', saturdayMorning, '2026-11-09T09:00:00.000Z'],
+      ['0 9 * * SAT-SUN', saturdayMorning, '2026-11-14T09:00:00.000Z'],
       ['0 9 * * 5-0', saturdayMorning, '2026-11-08T09:00:00.000Z'],
       ['0 9 * * 5-0', sundayMorning, '2026-11-13T09:00:00.000Z'],
+      ['0 9 * * 5-7', saturdayMorning, '2026-11-08T09:00:00.000Z'],
       ['0 9 * * 7-5', saturdayMorning, '2026-11-08T09:00:00.000Z'],
       ['0 9 * * 7-5', new Date('2026-11-06T10:00:00Z'), '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 0-2', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * SUN', saturdayMorning, '2026-11-08T09:00:00.000Z'],
+      ['0 9 * * 7', saturdayMorning, '2026-11-08T09:00:00.000Z'],
     ] as const
 
     for (const [expression, now, expected] of cases) {
       const definition = defineSchedule(schedule => schedule.call(() => {}).cron(expression))
       const [task] = await listScheduledTasks(definition, { now, timezone: 'UTC' })
-      expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
+      expect([expression, now.toISOString(), task?.nextDueAt.toISOString()]).toEqual([expression, now.toISOString(), expected])
     }
+    await expect(listScheduledTasks(
+      defineSchedule(schedule => schedule.call(() => {}).cron('0 9 * * SUN-SUN')),
+      { now: saturdayMorning, timezone: 'UTC' },
+    )).rejects.toThrow(CronExpressionError)
   })
 
   it('wraps steps larger than the field the way Laravel does', async () => {
