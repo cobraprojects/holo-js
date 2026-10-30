@@ -141,16 +141,28 @@ export async function isModulePackage(projectRoot: string): Promise<boolean> {
   }
 }
 
+type ProjectBundleOptions = { bundleDependencies?: boolean, external?: readonly string[] }
+
 export async function bundleProjectModule(
   projectRoot: string,
   entryPath: string,
-  options: { bundleDependencies?: boolean, external?: readonly string[] } = {},
+  options: ProjectBundleOptions = {},
 ): Promise<{ path: string, cleanup(): Promise<void> }> {
+  const bundle = await bundleProjectModules(projectRoot, [entryPath], options)
+  return { path: bundle.paths[0]!, cleanup: bundle.cleanup }
+}
+
+export async function bundleProjectModules(
+  projectRoot: string,
+  entryPaths: readonly string[],
+  options: ProjectBundleOptions = {},
+): Promise<{ paths: readonly string[], cleanup(): Promise<void> }> {
+  if (entryPaths.length === 0) return { paths: [], async cleanup() {} }
   const runtimeTempRoot = join(projectRoot, CLI_RUNTIME_ROOT)
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
   const outdir = join(tempDir, 'out')
-  const outfile = join(outdir, `${basename(entryPath, extname(entryPath))}.mjs`)
+  const outputNames = entryPaths.map((entryPath, index) => `${index}/${basename(entryPath, extname(entryPath))}`)
 
   const cleanup = async () => {
     await rm(tempDir, { recursive: true, force: true })
@@ -161,8 +173,9 @@ export async function bundleProjectModule(
     await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
       absWorkingDir: projectRoot,
       bundle: true,
-      entryPoints: [entryPath],
-      outfile,
+      entryPoints: entryPaths.map((entryPath, index) => ({ in: entryPath, out: outputNames[index]! })),
+      outdir,
+      outExtension: { '.js': '.mjs' },
       format: 'esm',
       logLevel: 'silent',
       packages: options.bundleDependencies ? 'bundle' : 'external',
@@ -178,7 +191,7 @@ export async function bundleProjectModule(
     }))
 
     return {
-      path: outfile,
+      paths: outputNames.map(name => join(outdir, `${name}.mjs`)),
       cleanup,
     }
   } catch (error) {
@@ -208,7 +221,34 @@ export async function bundleProjectModule(
       throw error
     }
 
-    throw new Error(`Failed to load ${entryPath}.`, { cause: error })
+    throw new Error(`Failed to load ${entryPaths.join(', ')}.`, { cause: error })
+  }
+}
+
+export interface ProjectModuleBatch {
+  bundle(entryPaths: readonly string[]): Promise<void>
+  import(entryPath: string): Promise<unknown>
+  cleanup(): Promise<void>
+}
+
+export function createProjectModuleBatch(projectRoot: string): ProjectModuleBatch {
+  const bundledPaths = new Map<string, string>()
+  let cleanupBundle = async () => {}
+
+  return {
+    async bundle(entryPaths) {
+      const bundle = await bundleProjectModules(projectRoot, entryPaths)
+      cleanupBundle = bundle.cleanup
+      entryPaths.forEach((entryPath, index) => bundledPaths.set(entryPath, bundle.paths[index]!))
+    },
+    async import(entryPath) {
+      const bundledPath = bundledPaths.get(entryPath)
+      if (!bundledPath) throw new Error(`${entryPath} was not bundled.`)
+      return await import(`${pathToFileURL(bundledPath).href}?t=${Date.now()}`)
+    },
+    async cleanup() {
+      await cleanupBundle()
+    },
   }
 }
 

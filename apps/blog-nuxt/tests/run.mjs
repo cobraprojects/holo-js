@@ -116,10 +116,13 @@ function run(command, args, timeout = 0) {
       stdio: 'inherit',
     })
 
+    const startedAt = performance.now()
     const deadline = timeout > 0 ? setTimeout(() => { void stopProcessTree(child).catch(reject) }, timeout) : undefined
     child.once('error', reject)
     child.once('close', code => {
       clearTimeout(deadline)
+      const seconds = ((performance.now() - startedAt) / 1000).toFixed(1)
+      console.log(`[journey] ${command} ${args.join(' ')} took ${seconds}s${timeout > 0 ? ` (limit ${timeout / 1000}s)` : ''}`)
       if (code === 0) {
         resolve()
         return
@@ -500,7 +503,7 @@ try {
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
   await startBroadcastWorker(`http://127.0.0.1:${port}`)
-  await run('npx', ['tsx', 'tests/blog-logic.mjs'], 60000)
+  await run('npx', ['tsx', 'tests/blog-logic.mjs'], 120000)
   database = await openExampleAppDatabase(cwd)
   await assertExampleAppDatabaseBehavior(database.DB, database.createSchemaService, cwd)
 

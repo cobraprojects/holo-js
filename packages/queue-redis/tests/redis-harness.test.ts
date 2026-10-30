@@ -1,5 +1,5 @@
 import type * as childProcess from 'node:child_process'
-import { createServer } from 'node:net'
+import { createServer, type Socket } from 'node:net'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { startRedisService } from '../../session/tests/support/redis'
 
@@ -36,8 +36,12 @@ function occupyFirstNodePort(flag: '--port' | '--cluster-port'): { readonly port
     if (occupied !== undefined || !args.includes(flag)) return undefined
     occupied = valueOf(args, flag)
     const port = occupied
-    const server = createServer()
-    onTestFinished(() => new Promise<void>(resolve => server.close(() => resolve())))
+    const sockets: Socket[] = []
+    const server = createServer(socket => sockets.push(socket))
+    onTestFinished(() => new Promise<void>(resolve => {
+      server.close(() => resolve())
+      for (const socket of sockets) socket.destroy()
+    }))
     return new Promise<void>((resolve, reject) => {
       server.once('error', reject)
       server.listen(port, '127.0.0.1', () => resolve())
