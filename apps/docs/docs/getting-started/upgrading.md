@@ -1,5 +1,11 @@
 # Upgrade Guide
 
+## Upgrading from 0.4.3 to 0.4.4
+
+Update every installed `@holo-js/*` package to `0.4.4` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#044---2026-10-30) lists the release changes.
+
+Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. From 0.4.4, raising every Holo pin no longer makes npm stop with `ERESOLVE ... Conflicting peer dependency`, including across minor releases.
+
 ## Upgrading from 0.4.2 to 0.4.3
 
 Update every installed `@holo-js/*` package to `0.4.3` together. No breaking changes or required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#043---2026-10-30) lists the release changes.
