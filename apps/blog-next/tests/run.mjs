@@ -117,13 +117,7 @@ function run(command, args, timeout = 0) {
     })
 
     const startedAt = performance.now()
-    let timedOut = false
-    const deadline = timeout > 0
-      ? setTimeout(() => {
-        timedOut = true
-        void stopProcessTree(child).catch(reject)
-      }, timeout)
-      : undefined
+    const deadline = timeout > 0 ? setTimeout(() => { void stopProcessTree(child).catch(reject) }, timeout) : undefined
     child.once('error', reject)
     child.once('close', code => {
       clearTimeout(deadline)
@@ -134,8 +128,7 @@ function run(command, args, timeout = 0) {
         return
       }
 
-      const reason = timedOut ? `timed out after ${timeout / 1000}s` : code
-      reject(new Error(`Command failed: ${command} ${args.join(' ')} (${reason})`))
+      reject(new Error(`Command failed: ${command} ${args.join(' ')} (${code})`))
     })
   })
 }
