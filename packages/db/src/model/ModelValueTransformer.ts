@@ -127,11 +127,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     values: Partial<ModelRecord<TTable>>,
     extraCasts: Record<string, ModelCastDefinition> = {},
     source: 'serialized' | 'database' = 'serialized',
+    dialect: SchemaDialectName = this.getSchemaDialectName(),
   ): Partial<ModelRecord<TTable>> {
     const casts = { ...this.definition.casts, ...extraCasts }
     return Object.fromEntries(
       Object.entries(values).map(([key, value]) => {
-        const normalized = this.applySchemaReadNormalization(key, value, source)
+        const normalized = this.applySchemaReadNormalization(key, value, source, dialect)
         return [key, this.isNativeJsonCast(key, casts[key]) ? normalized : this.applyCastGet(casts[key], normalized)]
       }),
     ) as Partial<ModelRecord<TTable>>
@@ -178,13 +179,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return ownEntry(this.definition.table.columns, key)?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
   }
 
-  private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database'): unknown {
+  private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database', dialect: SchemaDialectName): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
       return value
     }
 
-    const dialect = this.getSchemaDialectName()
     if (column.kind === 'json' && source === 'database' && dialect !== 'sqlite') {
       return value
     }

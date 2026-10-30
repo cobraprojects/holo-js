@@ -1,4 +1,5 @@
 import authorization, { authorizationInternals, definePolicy } from '@holo-js/authorization'
+import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import {
@@ -45,9 +46,11 @@ describe('Model.hydrate()', () => {
     authorizationInternals.resetAuthorizationRuntimeState()
   })
 
-  it('builds a persisted model from a row read in a transaction on another connection', async () => {
+  it('builds a persisted model from a row read in a transaction using a different driver', async () => {
     const defaultDb = openDatabase()
-    const platformDb = openDatabase()
+    const platformAdapter = createPostgresAdapter()
+    onTestFinished(() => platformAdapter.disconnect())
+    const platformDb = createDatabase({ adapter: platformAdapter, dialect: createDialect('postgres') })
     configureDB(createConnectionManager({
       defaultConnection: 'default',
       connections: { default: defaultDb, platform: platformDb },
@@ -67,13 +70,14 @@ describe('Model.hydrate()', () => {
         throw new Error('Expected the tenant row.')
       }
 
-      return Tenant.hydrate(row)
+      return Tenant.hydrate(row, tx)
     })
 
     expectTypeOf(tenant.toAttributes()).toEqualTypeOf<ModelRecord<typeof tenants>>()
     expect(tenant.exists()).toBe(true)
     expect(tenant.isClean()).toBe(true)
     expect(tenant.toAttributes()).toEqual({ id: 7, name: 'Acme', active: true, settings: { plan: 'pro' } })
+    expect(tenant.getRepository().getConnection()).toBe(platformDb)
     expect(retrieved).toEqual([tenant])
   })
 

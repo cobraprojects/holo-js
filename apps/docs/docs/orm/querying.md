@@ -292,12 +292,12 @@ await DB.transaction(async (tx) => {
     return
   }
 
-  const tenant = await Tenant.hydrate(row)
+  const tenant = await Tenant.hydrate(row, tx)
   await actor.policy('tenants').authorize('manageTeam', tenant)
 })
 ```
 
-The model reads the row the way a query does: it applies casts, fires the `retrieved` [event](/orm/observers), and reports `exists()` as `true` with no changes. Relations, policies, and media work as they do on a model from `find()`, and they run on the model's own connection. `fillable` and `guarded` don't apply, because the row comes from the database, not from a request. Pass it only rows you read from the model's table. To build a new, unsaved model, use [`make()`](/orm/writes#make).
+The model reads the row the way a query does: it applies casts, fires the `retrieved` [event](/orm/observers), and reports `exists()` as `true` with no changes. Pass the source connection as the second argument when its driver differs from the model's driver, so values such as JSON are decoded correctly. Without it, decoding uses the model's driver. Relations, policies, and media work as they do on a model from `find()`, and they run on the model's own connection. `fillable` and `guarded` don't apply, because the row comes from the database, not from a request. Pass it only rows you read from the model's table. To build a new, unsaved model, use [`make()`](/orm/writes#make).
 
 ## Plain JSON results
 
@@ -459,6 +459,8 @@ const settings = await Setting.where('key', 'site_name').sole()
 ### hydrate()
 
 Builds a saved model from a row of the model's table that you already loaded, applying casts and firing the `retrieved` event. Mass assignment rules don't apply. See [models from rows you already loaded](#models-from-rows-you-already-loaded).
+
+The optional second argument is the source `DatabaseContext`, such as a transaction's `tx`. It controls decoding without changing the model's connection.
 
 ```ts
 const tenant = await Tenant.hydrate(row)

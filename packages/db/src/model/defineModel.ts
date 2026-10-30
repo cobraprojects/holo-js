@@ -17,6 +17,7 @@ import {
   validateTouches,
 } from './defineModelHelpers'
 import type { ColumnInput } from '../schema/columns'
+import type { DatabaseContext } from '../core/DatabaseContext'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
 import { assertModelScopeNameAvailable, type ModelQueryBuilder } from './ModelQueryBuilder'
@@ -895,8 +896,8 @@ function createStaticModelApi<
     make(values: Partial<ModelRecord<TTable>> = {}) {
       return this.getRepository().make(values)
     },
-    hydrate(row: Partial<ModelRecord<TTable>>) {
-      return this.getRepository().retrieve(row)
+    hydrate(row: Partial<ModelRecord<TTable>>, sourceConnection?: DatabaseContext) {
+      return this.getRepository().retrieve(row, sourceConnection)
     },
     getRepository() {
       return ModelRepository.from(definition)

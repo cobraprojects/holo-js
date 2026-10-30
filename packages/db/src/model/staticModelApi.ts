@@ -12,6 +12,7 @@ import type {
   SimplePaginationMeta,
 } from '../query/types'
 import type { DriverExecutionResult } from '../core/types'
+import type { DatabaseContext } from '../core/DatabaseContext'
 import type { InferInsert, TableDefinition } from '../schema/types'
 import type {
   RelationMap,
@@ -231,7 +232,7 @@ export type StaticModelApi<
   saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
-  hydrate(row: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
+  hydrate(row: Partial<ModelRecord<TTable>>, sourceConnection?: DatabaseContext): Promise<Entity<TTable, TRelations>>
   getRepository(): ModelRepository<TTable, TScopes>
   getConnectionName(): string | undefined
   getTableName(): string

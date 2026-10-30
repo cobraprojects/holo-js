@@ -389,15 +389,16 @@ export class ModelRepository<
     return new Entity(this, this.normalizeFromStorage(values), true)
   }
 
-  async retrieve(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
-    return this.retrieveWithCasts(values, {})
+  async retrieve(values: Partial<ModelRecord<TTable>>, sourceConnection: DatabaseContext = this.getConnection()): Promise<Entity<TTable>> {
+    return this.retrieveWithCasts(values, {}, sourceConnection.getDriver() as SchemaDialectName)
   }
 
   async retrieveWithCasts(
     values: Partial<ModelRecord<TTable>>,
     casts: Record<string, ModelCastDefinition>,
+    sourceDialect?: SchemaDialectName,
   ): Promise<Entity<TTable>> {
-    const entity = new Entity(this, this.valueTransformer.normalizeFromStorage(values, casts, 'database'), true)
+    const entity = new Entity(this, this.valueTransformer.normalizeFromStorage(values, casts, 'database', sourceDialect), true)
     await this.dispatchEvent('retrieved', entity)
     return entity
   }
