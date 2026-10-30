@@ -1528,7 +1528,7 @@ describe('@holo-js/forms contracts', () => {
     expect(packageJson.exports).toHaveProperty('./internal/client')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('next')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('nuxt')
-    expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('catalog:')
+    expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('*')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
 
     const forms = await import('../src')

@@ -70,7 +70,7 @@ describe('@holo-js/events queue integration', () => {
     ) as PackageManifest
 
     expect(manifest.dependencies?.['@holo-js/queue']).toBeUndefined()
-    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('catalog:')
+    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('*')
     expect(manifest.peerDependenciesMeta?.['@holo-js/queue']?.optional).toBe(true)
     expect(manifest.devDependencies?.['@holo-js/queue']).toBe('catalog:')
   })
