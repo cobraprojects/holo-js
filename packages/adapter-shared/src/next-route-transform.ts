@@ -157,7 +157,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   const localized = new Set<string>()
   const reassign = (local: string) => `${local} = ${runtimeName}.${wrapper}(${local});`
   // Keeps the line breaks of a replaced span so the lines after it stay in place.
-  const lineBreaks = (text: string) => text.split('\n').length - 1
+  const lineBreaks = (text: string) => text.match(/\r\n|[\r\n\u2028\u2029]/g)?.length ?? 0
   const overwrite = (start: number, end: number, text: string) => {
     output.overwrite(start, end, `${text}${'\n'.repeat(Math.max(0, lineBreaks(source.slice(start, end)) - lineBreaks(text)))}`)
   }

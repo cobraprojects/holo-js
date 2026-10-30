@@ -221,6 +221,8 @@ describe('Next server action loader', () => {
       const lines = source.split('\n')
       expect(runLoader(loader, 'module.ts', source).code.split('\n')[lines.length - 1]).toBe(lines.at(-1))
     }
+    const carriageReturns = ['export {', ' GET', '} from \'./helpers\'', 'export async function POST() {}'].join('\r')
+    expect(runLoader(routeLoader, 'route.ts', carriageReturns).code.split(/\r\n|[\r\n]/)[3]).toBe('export async function POST() {}')
   })
 
   it('chains the map an earlier loader passed', () => {
