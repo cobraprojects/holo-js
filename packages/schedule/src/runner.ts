@@ -29,7 +29,7 @@ export interface ScheduledTaskListing {
 }
 
 type ScheduleLock = {
-  get(): Promise<unknown>
+  get(callback?: () => boolean): Promise<unknown>
   release(): Promise<boolean>
 }
 
@@ -85,13 +85,35 @@ async function execute(state: ScheduledTaskState, summary: string, options: Sche
   }
 }
 
-async function runTask(state: ScheduledTaskState, options: ScheduleRunOptions): Promise<ScheduledTaskReport | undefined> {
+async function isLockFree(name: string, seconds: number): Promise<boolean> {
+  const probe = await cacheLock(name, seconds)
+  return await probe.get(() => true) === true
+}
+
+async function acquireServer(name: string, options: ScheduleRunOptions, decisions: Map<string, Promise<boolean>>): Promise<boolean> {
+  let decision = decisions.get(name)
+  if (!decision) {
+    decision = cacheLock(`${name}${formatHourMinute(options.now, options.timezone)}`, ONE_SERVER_LOCK_SECONDS)
+      .then(async lock => await lock.get() === true)
+    decisions.set(name, decision)
+  }
+  return await decision
+}
+
+async function runTask(
+  state: ScheduledTaskState,
+  options: ScheduleRunOptions,
+  serverDecisions: Map<string, Promise<boolean>>,
+): Promise<ScheduledTaskReport | undefined> {
   const summary = await describeTask(state)
   const name = await mutexName(state)
 
-  if (state.onOneServer) {
-    const serverLock = await cacheLock(`${name}${formatHourMinute(options.now, options.timezone)}`, ONE_SERVER_LOCK_SECONDS)
-    if (await serverLock.get() !== true) return { summary, outcome: 'skipped-other-server' }
+  if (state.withoutOverlapping && !await isLockFree(name, state.expiresAtMinutes * 60)) {
+    return { summary, outcome: 'skipped-overlapping' }
+  }
+
+  if (state.onOneServer && !await acquireServer(name, options, serverDecisions)) {
+    return { summary, outcome: 'skipped-other-server' }
   }
 
   const overlapLock = state.withoutOverlapping ? await cacheLock(name, state.expiresAtMinutes * 60) : undefined
@@ -116,9 +138,10 @@ export async function runDueScheduledTasks(
 ): Promise<readonly ScheduledTaskReport[]> {
   const due = definition.tasks.map(stateOf).filter(state => isDue(state, options.now, options.timezone))
   const reports: ScheduledTaskReport[] = []
+  const serverDecisions = new Map<string, Promise<boolean>>()
   for (const state of due) {
     if (options.signal?.aborted) break
-    const report = await runTask(state, options).catch(async (error: unknown): Promise<ScheduledTaskReport | undefined> => ({
+    const report = await runTask(state, options, serverDecisions).catch(async (error: unknown): Promise<ScheduledTaskReport | undefined> => ({
       summary: await describeTask(state).catch(() => state.action.kind),
       outcome: 'failed',
       error: error instanceof Error ? error : new Error(String(error)),

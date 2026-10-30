@@ -213,6 +213,20 @@ describe('next due dates', () => {
     }
   })
 
+  it('wraps steps larger than the field the way Laravel does', async () => {
+    const cases = [
+      ['*/61 * * * *', '2026-11-02T00:00:00Z', '2026-11-02T00:01:00.000Z'],
+      ['0 0 */40 * *', '2026-11-02T00:00:00Z', '2026-11-10T00:00:00.000Z'],
+      ['10-20/30 * * * *', '2026-11-02T00:00:00Z', '2026-11-02T00:10:00.000Z'],
+    ] as const
+
+    for (const [expression, now, expected] of cases) {
+      const definition = defineSchedule(schedule => schedule.call(() => {}).cron(expression))
+      const [task] = await listScheduledTasks(definition, { now: new Date(now), timezone: 'UTC' })
+      expect([expression, task?.nextDueAt.toISOString()]).toEqual([expression, expected])
+    }
+  })
+
   it('reports an expression that never matches', async () => {
     const definition = defineSchedule(schedule => schedule.call(() => {}).cron('0 0 30 2 *'))
 
@@ -422,6 +436,39 @@ describe('onOneServer', () => {
     expect([first, second, nextMinute].map(reports => reports[0]?.outcome)).toEqual(['ran', 'skipped-other-server', 'ran'])
     expect(second[0]?.summary).toBe('holo privacy:maintain')
     expect(runs).toBe(2)
+  })
+  it('runs every entry sharing a mutex on the server that won it, and none on another server', async () => {
+    const ran: string[] = []
+    const define = (server: string) => defineSchedule((schedule) => {
+      schedule.call(() => ran.push(`${server}:first`)).name('digest').everyMinute().onOneServer()
+      schedule.call(() => ran.push(`${server}:second`)).name('digest').everyMinute().onOneServer()
+    })
+
+    const winner = await runAt(define('one'), MIDNIGHT_UTC)
+    const loser = await runAt(define('two'), MIDNIGHT_UTC)
+
+    expect(ran).toEqual(['one:first', 'one:second'])
+    expect(winner.map(report => report.outcome)).toEqual(['ran', 'ran'])
+    expect(loser.map(report => report.outcome)).toEqual(['skipped-other-server', 'skipped-other-server'])
+  })
+  it('leaves the minute to another server when this one skips an overlapping run', async () => {
+    const gate = deferred()
+    const ran: string[] = []
+    const define = (server: string) => defineSchedule(schedule => schedule.call(async () => {
+      ran.push(server)
+      if (server === 'one') await gate.promise
+    }).name('sync').everyMinute().withoutOverlapping().onOneServer())
+
+    const first = runAt(define('one'), MIDNIGHT_UTC)
+    await expect.poll(() => ran).toEqual(['one'])
+    const skipped = await runAt(define('two'), new Date('2026-11-02T00:01:00Z'))
+    gate.resolve()
+    await first
+    const later = await runAt(define('three'), new Date('2026-11-02T00:01:30Z'))
+
+    expect(skipped.map(report => report.outcome)).toEqual(['skipped-overlapping'])
+    expect(later.map(report => report.outcome)).toEqual(['ran'])
+    expect(ran).toEqual(['one', 'three'])
   })
 })
 

@@ -99,6 +99,8 @@ function parsePart(part: string, spec: FieldSpec, expression: string): number[] 
     if (end < start) throw new CronExpressionError(expression, `"${part}" is a descending range.`)
   }
 
+  if (step > spec.max) return [spec.min + (step % (spec.max - spec.min + 1))]
+
   const values: number[] = []
   for (let value = start; value <= end; value += step) values.push(value)
   return values
