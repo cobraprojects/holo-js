@@ -40,7 +40,7 @@
     "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/security": "catalog:"
+    "@holo-js/security": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/security": {

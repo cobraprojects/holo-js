@@ -33,7 +33,7 @@
     "@holo-js/db": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/queue": "catalog:"
+    "@holo-js/queue": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue": {

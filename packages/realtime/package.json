@@ -50,8 +50,8 @@
     "esbuild": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/auth": "catalog:",
-    "@holo-js/security": "catalog:"
+    "@holo-js/auth": "*",
+    "@holo-js/security": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/auth": {

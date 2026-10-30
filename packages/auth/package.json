@@ -90,7 +90,7 @@
     "@holo-js/adapter-shared": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/security": "catalog:",
+    "@holo-js/security": "*",
     "next": "catalog:",
     "nuxt": "catalog:",
     "react": "catalog:",

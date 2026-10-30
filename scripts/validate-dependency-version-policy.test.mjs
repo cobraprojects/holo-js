@@ -172,6 +172,22 @@ test('dependency policy validator requires package manifests to use catalog rang
   assert.match(failures[0], /catalog:/)
 })
 
+test('dependency policy requires optional Holo peers to accept any version and required peers to use the catalog', async () => {
+  const repoRoot = await createTestScaffold({
+    'packages/core/package.json': ['{"name":"@holo-js/core","peerDependencies":{"@holo-js/storage":"*","@holo-js/queue":"catalog:","next":"catalog:"},"peerDependenciesMeta":{"@holo-js/storage":{"optional":true},"@holo-js/queue":{"optional":true},"next":{"optional":true}}}'],
+    'packages/storage/package.json': ['{"name":"@holo-js/storage"}'],
+    'packages/queue/package.json': ['{"name":"@holo-js/queue"}'],
+    'packages/storage-s3/package.json': ['{"name":"@holo-js/storage-s3","peerDependencies":{"@holo-js/storage":"*"}}'],
+  })
+  await trackTestFiles(repoRoot)
+
+  const failures = await collectPackageManifestFailures(repoRoot)
+
+  assert.equal(failures.length, 2)
+  assert.ok(failures.some(failure => failure.includes('core/package.json: peerDependencies.@holo-js/queue') && failure.includes('"*"')))
+  assert.ok(failures.some(failure => failure.includes('storage-s3/package.json: peerDependencies.@holo-js/storage') && failure.includes('catalog:')))
+})
+
 test('dependency policy requires framework runtimes to be peers of published packages', async () => {
   const repoRoot = await createTestScaffold({
     'packages/adapter/package.json': ['{"name":"@holo-js/adapter","dependencies":{"svelte":"catalog:","h3":"catalog:","valibot":"catalog:"},"peerDependencies":{"nuxt":"catalog:"}}'],

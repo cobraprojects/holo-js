@@ -47,9 +47,9 @@
     "nodemailer": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "catalog:",
-    "@holo-js/queue": "catalog:",
-    "@holo-js/storage": "catalog:"
+    "@holo-js/db": "*",
+    "@holo-js/queue": "*",
+    "@holo-js/storage": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {

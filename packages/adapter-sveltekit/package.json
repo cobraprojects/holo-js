@@ -78,8 +78,8 @@
     "sirv": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/forms": "catalog:",
-    "@holo-js/realtime": "catalog:",
+    "@holo-js/forms": "*",
+    "@holo-js/realtime": "*",
     "@sveltejs/kit": "catalog:",
     "svelte": "catalog:"
   },

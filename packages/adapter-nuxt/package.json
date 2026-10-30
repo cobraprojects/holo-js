@@ -60,11 +60,11 @@
   "peerDependencies": {
     "nuxt": "catalog:",
     "vue": "catalog:",
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/forms": "catalog:",
-    "@holo-js/realtime": "catalog:",
-    "@holo-js/storage": "catalog:",
-    "@holo-js/storage-s3": "catalog:"
+    "@holo-js/broadcast": "*",
+    "@holo-js/forms": "*",
+    "@holo-js/realtime": "*",
+    "@holo-js/storage": "*",
+    "@holo-js/storage-s3": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {

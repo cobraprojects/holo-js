@@ -224,8 +224,8 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/forms": "catalog:",
-        "@holo-js/realtime": "catalog:",
+        "@holo-js/forms": "*",
+        "@holo-js/realtime": "*",
         "next": "catalog:",
         "react": "catalog:",
       },
@@ -260,11 +260,11 @@
         "vue": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/broadcast": "catalog:",
-        "@holo-js/forms": "catalog:",
-        "@holo-js/realtime": "catalog:",
-        "@holo-js/storage": "catalog:",
-        "@holo-js/storage-s3": "catalog:",
+        "@holo-js/broadcast": "*",
+        "@holo-js/forms": "*",
+        "@holo-js/realtime": "*",
+        "@holo-js/storage": "*",
+        "@holo-js/storage-s3": "*",
         "nuxt": "catalog:",
         "vue": "catalog:",
       },
@@ -309,8 +309,8 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/forms": "catalog:",
-        "@holo-js/realtime": "catalog:",
+        "@holo-js/forms": "*",
+        "@holo-js/realtime": "*",
         "@sveltejs/kit": "catalog:",
         "svelte": "catalog:",
       },
@@ -340,7 +340,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/security": "catalog:",
+        "@holo-js/security": "*",
         "next": "catalog:",
         "nuxt": "catalog:",
         "react": "catalog:",
@@ -508,7 +508,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/db": "catalog:",
+        "@holo-js/db": "*",
         "ioredis": "catalog:",
       },
       "optionalPeers": [
@@ -616,11 +616,11 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/broadcast": "catalog:",
-        "@holo-js/mail": "catalog:",
-        "@holo-js/media": "catalog:",
-        "@holo-js/queue": "catalog:",
-        "@holo-js/session": "catalog:",
+        "@holo-js/broadcast": "*",
+        "@holo-js/mail": "*",
+        "@holo-js/media": "*",
+        "@holo-js/queue": "*",
+        "@holo-js/session": "*",
       },
       "optionalPeers": [
         "@holo-js/broadcast",
@@ -674,23 +674,23 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/auth": "catalog:",
-        "@holo-js/auth-clerk": "catalog:",
-        "@holo-js/auth-social": "catalog:",
-        "@holo-js/auth-workos": "catalog:",
-        "@holo-js/authorization": "catalog:",
-        "@holo-js/broadcast": "catalog:",
-        "@holo-js/cache": "catalog:",
-        "@holo-js/events": "catalog:",
-        "@holo-js/mail": "catalog:",
-        "@holo-js/media": "catalog:",
-        "@holo-js/notifications": "catalog:",
-        "@holo-js/queue": "catalog:",
-        "@holo-js/queue-db": "catalog:",
-        "@holo-js/queue-redis": "catalog:",
-        "@holo-js/security": "catalog:",
-        "@holo-js/session": "catalog:",
-        "@holo-js/storage": "catalog:",
+        "@holo-js/auth": "*",
+        "@holo-js/auth-clerk": "*",
+        "@holo-js/auth-social": "*",
+        "@holo-js/auth-workos": "*",
+        "@holo-js/authorization": "*",
+        "@holo-js/broadcast": "*",
+        "@holo-js/cache": "*",
+        "@holo-js/events": "*",
+        "@holo-js/mail": "*",
+        "@holo-js/media": "*",
+        "@holo-js/notifications": "*",
+        "@holo-js/queue": "*",
+        "@holo-js/queue-db": "*",
+        "@holo-js/queue-redis": "*",
+        "@holo-js/security": "*",
+        "@holo-js/session": "*",
+        "@holo-js/storage": "*",
       },
       "optionalPeers": [
         "@holo-js/auth",
@@ -814,7 +814,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/queue": "catalog:",
+        "@holo-js/queue": "*",
       },
       "optionalPeers": [
         "@holo-js/queue",
@@ -906,7 +906,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/security": "catalog:",
+        "@holo-js/security": "*",
       },
       "optionalPeers": [
         "@holo-js/security",
@@ -949,9 +949,9 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/db": "catalog:",
-        "@holo-js/queue": "catalog:",
-        "@holo-js/storage": "catalog:",
+        "@holo-js/db": "*",
+        "@holo-js/queue": "*",
+        "@holo-js/storage": "*",
       },
       "optionalPeers": [
         "@holo-js/db",
@@ -993,7 +993,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/queue": "catalog:",
+        "@holo-js/queue": "*",
       },
       "optionalPeers": [
         "@holo-js/queue",
@@ -1014,7 +1014,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/db": "catalog:",
+        "@holo-js/db": "*",
       },
       "optionalPeers": [
         "@holo-js/db",
@@ -1077,8 +1077,8 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/auth": "catalog:",
-        "@holo-js/security": "catalog:",
+        "@holo-js/auth": "*",
+        "@holo-js/security": "*",
       },
       "optionalPeers": [
         "@holo-js/auth",

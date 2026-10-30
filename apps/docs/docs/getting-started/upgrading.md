@@ -40,6 +40,10 @@ The native `@sveltejs/adapter-node` 6 remains supported. It does not read runtim
 
 0.4.0 is a breaking release. Before you install it, upgrade Node.js and your framework: see [Node.js 22.18 or newer](#node-js-22-18-or-newer), [Framework peer dependencies](#framework-peer-dependencies), and [SvelteKit 3](#sveltekit-3). Then work through the sections below that apply to your app. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#040---2026-10-24) lists every change.
 
+::: tip
+With npm, upgrade straight to 0.4.4 or later. When npm updates an existing `package-lock.json` from 0.3.x to 0.4.0 through 0.4.3, it stops with `ERESOLVE ... Conflicting peer dependency`.
+:::
+
 [Realtime](/realtime/) and [Broadcast](/broadcasting/) are **Experimental** in 0.4.0. Review their [production limits](/broadcasting/production#experimental-production-limits) before relying on live updates. This label does not change runtime behavior.
 
 ### Apple callbacks and signing-key rotation

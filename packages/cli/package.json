@@ -53,11 +53,11 @@
     "yaml": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/broadcast": "catalog:",
-    "@holo-js/mail": "catalog:",
-    "@holo-js/media": "catalog:",
-    "@holo-js/session": "catalog:",
-    "@holo-js/queue": "catalog:"
+    "@holo-js/broadcast": "*",
+    "@holo-js/mail": "*",
+    "@holo-js/media": "*",
+    "@holo-js/session": "*",
+    "@holo-js/queue": "*"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {
