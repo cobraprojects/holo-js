@@ -9,7 +9,7 @@ export function isWorkspaceDependencyVersion(value: string | undefined): value i
 export function resolveHoloVersionPrefix(...dependencyMaps: readonly Readonly<Record<string, string>>[]): HoloVersionPrefix {
   const versions = dependencyMaps
     .flatMap(dependencies => Object.entries(dependencies))
-    .filter(([name, version]) => name.startsWith('@holo-js/') && version !== 'catalog:' && !isWorkspaceDependencyVersion(version))
+    .filter(([name, version]) => name.startsWith('@holo-js/') && !version.startsWith('catalog:') && !isWorkspaceDependencyVersion(version))
     .map(([, version]) => version.trim())
   if (versions.length === 0) return '^'
   if (versions.every(version => valid(version.replace(/^=\s*/, '')) !== null)) return ''

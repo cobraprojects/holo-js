@@ -66,7 +66,7 @@ describe('project Holo version prefix', () => {
   })
 
   it('ignores catalog and workspace Holo versions', () => {
-    expect(resolveHoloVersionPrefix({ '@holo-js/core': '0.4.4', '@holo-js/cli': 'catalog:', '@holo-js/db': 'workspace:*' }))
+    expect(resolveHoloVersionPrefix({ '@holo-js/core': '0.4.4', '@holo-js/cli': 'catalog:', '@holo-js/db': 'workspace:*', '@holo-js/auth': 'catalog:tools' }))
       .toBe('')
   })
 })

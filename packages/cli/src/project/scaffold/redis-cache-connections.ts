@@ -109,11 +109,11 @@ function addConnectionToObject(source: string, masked: string, open: number, mod
 
 type RedisConnectionTarget = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number, readonly db: number }
 
-const LOOPBACK_HOSTS = new Set(['localhost', '::1', '0.0.0.0', '::'])
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'])
 
 function redisHostIdentity(host: string): string {
   const normalized = host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1')
-  return LOOPBACK_HOSTS.has(normalized) || /^127\./.test(normalized) ? 'loopback' : normalized
+  return LOOPBACK_HOSTS.has(normalized) ? 'loopback' : normalized
 }
 
 function redisServerIdentity(connection: RedisConnectionTarget): string {
