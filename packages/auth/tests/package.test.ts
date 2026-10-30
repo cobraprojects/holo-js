@@ -460,6 +460,18 @@ function trackRunningTest<TArgs extends unknown[]>(body: (...args: TArgs) => voi
   }
 }
 
+const TOTP_PERIOD_MS = 30_000
+
+function freezeClockInsideTotpWindow(): number {
+  const currentCounter = 63_113_904
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(currentCounter * TOTP_PERIOD_MS + TOTP_PERIOD_MS / 2)
+  onTestFinished(() => {
+    vi.useRealTimers()
+  })
+  return currentCounter
+}
+
 const it = Object.assign(
   (name: string, body: () => void | Promise<void>, timeout?: number) => vitestIt(name, trackRunningTest(body), timeout),
   { each: <TCase>(cases: readonly TCase[]) => (name: string, body: (testCase: TCase) => void | Promise<void>, timeout?: number) => vitestIt.each([...cases])(name, trackRunningTest(body), timeout) },
@@ -795,6 +807,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('cycles remember cookies issued before MFA enrollment so they stop restoring', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -816,7 +829,6 @@ describe('@holo-js/auth package runtime', () => {
     await expect(restoreFrom(preEnrollmentCookie)).resolves.toBe(true)
 
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({ code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1) })
 
     await expect(restoreFrom(preEnrollmentCookie)).resolves.toBe(false)
@@ -828,6 +840,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('refuses MFA enrollment confirmation for a remembered user in a read-only context and keeps the enrollment retryable', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -837,7 +850,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     await loginUsing(created, { remember: true })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
     const readOnly = Object.assign(new Error('Authentication cookies cannot be set in this request context.'), { code: 'cookie_write_unavailable' })
     Object.assign(runtime.context, { canAppendResponseCookie: () => false, appendResponseCookie: () => { throw readOnly } })
 
@@ -851,6 +864,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('keeps the recovery codes and the enrollment retryable when the response cookie writer rejects at MFA refresh', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -860,7 +874,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     await loginUsing(created, { remember: true })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
     let rejectNextWrite = true
     Object.assign(runtime.context, {
       appendResponseCookie: () => {
@@ -880,6 +894,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('publishes the remember cookie only from the concurrent MFA enrollment that wins', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -891,7 +906,7 @@ describe('@holo-js/auth package runtime', () => {
     const sessionId = runtime.context.getSessionId('web')
     const preEnrollmentRecaller = runtime.context.getRememberToken?.('web')
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
     const bindings = authRuntimeInternals.getRuntimeBindings()
     const requestContext = authRuntimeInternals.createAsyncAuthContext()
     Object.assign(requestContext, { appendResponseCookie: () => undefined })
@@ -927,6 +942,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('keeps a credential that replaced this enrollment when the MFA refresh rolls back', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({
       name: 'Ava',
@@ -936,7 +952,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     await loginUsing(created, { remember: true })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000) - 1)
+    const code = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
     const replacement = Object.freeze({
       provider: 'users',
       userId: created.id,
@@ -962,6 +978,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('enrolls, challenges, rejects TOTP replay, and consumes recovery codes atomically', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -973,7 +990,6 @@ describe('@holo-js/auth package runtime', () => {
     await login({ email: 'ava@example.com', password: 'secret-secret' })
 
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     const enrollmentCode = authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter - 1)
     const recovery = await auth.multiFactor.confirmEnrollment({ code: enrollmentCode })
 
@@ -1050,6 +1066,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rejects impersonation while the actor has a pending multi-factor challenge', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const actor = await runtime.usersProvider.create({
@@ -1069,7 +1086,7 @@ describe('@holo-js/auth package runtime', () => {
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(
         enrollment.manualKey,
-        Math.floor(Date.now() / 30_000),
+        currentCounter,
       ),
     })
     await logout()
@@ -1084,6 +1101,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('invalidates a pending multi-factor challenge after five invalid attempts', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1094,7 +1112,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1116,6 +1133,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('applies the multi-factor attempt limit across newly created login challenges', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1126,7 +1144,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1149,6 +1166,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('rate limits multi-factor disable and recovery-code regeneration verification', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1159,7 +1177,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1180,6 +1197,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not return recovery codes when the verified credential changes before replacement', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const created = await runtime.usersProvider.create({
@@ -1190,7 +1208,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1204,6 +1221,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('replaces every previous recovery code after successful regeneration', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1214,7 +1232,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     const initial = await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1234,6 +1251,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('requires a configured security rate-limit store before creating a multi-factor challenge', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true, multiFactorSecurity: false })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1245,7 +1263,7 @@ describe('@holo-js/auth package runtime', () => {
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
     await auth.multiFactor.confirmEnrollment({
-      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
     await logout()
 
@@ -1256,6 +1274,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('requires atomic session operations before creating a multi-factor challenge', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1267,7 +1286,7 @@ describe('@holo-js/auth package runtime', () => {
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
     await auth.multiFactor.confirmEnrollment({
-      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
     await logout()
     const bindings = authRuntimeInternals.getRuntimeBindings()
@@ -1287,6 +1306,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('removes an incomplete challenge session when attempt initialization fails', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1298,7 +1318,7 @@ describe('@holo-js/auth package runtime', () => {
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
     await auth.multiFactor.confirmEnrollment({
-      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)),
+      code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
     await logout()
     const bindings = authRuntimeInternals.getRuntimeBindings()
@@ -1316,6 +1336,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('restores a multi-factor attempt after a transient credential-store failure', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1326,7 +1347,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1342,6 +1362,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('restores a multi-factor attempt after a transient rate-limit-store failure', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     await runtime.usersProvider.create({
@@ -1352,7 +1373,6 @@ describe('@holo-js/auth package runtime', () => {
     })
     await login({ email: 'ava@example.com', password: 'secret-secret' })
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const currentCounter = Math.floor(Date.now() / 30_000)
     await auth.multiFactor.confirmEnrollment({
       code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter),
     })
@@ -1374,11 +1394,12 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('does not restore an MFA challenge after cookie delivery fails following rotation', async () => {
+    const currentCounter = freezeClockInsideTotpWindow()
     const runtime = await configureRuntime({ multiFactor: true })
     const created = await runtime.usersProvider.create({ name: 'Ava', email: 'ava@example.com', password: null, email_verified_at: new Date() })
     await auth.loginUsing(created)
     const enrollment = await auth.multiFactor.beginEnrollment()
-    const recovery = await auth.multiFactor.confirmEnrollment({ code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, Math.floor(Date.now() / 30_000)) })
+    const recovery = await auth.multiFactor.confirmEnrollment({ code: authRuntimeInternals.multiFactor.totpAtCounter(enrollment.manualKey, currentCounter) })
     await logout()
     const pending = await auth.loginUsing(created)
     const failure = new Error('cookies unavailable')
