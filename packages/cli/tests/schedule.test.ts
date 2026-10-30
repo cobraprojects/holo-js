@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
+import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderScheduleDefinition } from '../src/project/scaffold/config-renderers'
 import { runScheduleListCommand, runScheduleRunCommand, runScheduleWorkCommand } from '../src/schedule'
@@ -297,6 +298,22 @@ describe('scaffolded schedule', () => {
     await runScheduleRunCommand(io, root)
 
     expect(io.output()).toBe('[schedule] No scheduled tasks have been defined.\n[schedule] No scheduled commands are ready to run.\n')
+  })
+
+  it('typechecks the scaffolded server/schedule.ts with unused parameters and locals reported', async () => {
+    const root = await createProject(renderScheduleDefinition())
+    const program = ts.createProgram([join(root, 'server/schedule.ts')], {
+      strict: true,
+      noUnusedLocals: true,
+      noUnusedParameters: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   })
 })
 

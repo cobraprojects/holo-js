@@ -4,6 +4,7 @@ import { renderRedisCacheConnectionLines } from '../src/project/scaffold/config-
 import {
   addRedisCacheConnection,
   assertRedisCacheConnectionsAvailable,
+  findRedisDatabaseShare,
   resolveRequiredRedisConnections,
 } from '../src/project/scaffold/redis-cache-connections'
 
@@ -176,19 +177,36 @@ describe('adding the redis cache connection', () => {
 
     const edited = addRedisCacheConnection(source, 'cjs')
 
-    expect(edited).toBe(source.replace('/* } */\n', `/* } */\n${renderRedisCacheConnectionLines('cjs').join('\n')}\n`))
+    expect(edited).toEqual([source.replace('/* } */\n', `/* } */\n${renderRedisCacheConnectionLines('cjs').join('\n')}\n`)])
   })
 
   it('adds the env name to an existing @holo-js/config import', () => {
-    const edited = addRedisCacheConnection(redisSource('esm', 'none').replace("import { defineRedisConfig } from '@holo-js/kernel'", "import { defineRedisConfig } from '@holo-js/kernel'\nimport { config } from '@holo-js/config'"), 'esm')
+    const [edited] = addRedisCacheConnection(redisSource('esm', 'none').replace("import { defineRedisConfig } from '@holo-js/kernel'", "import { defineRedisConfig } from '@holo-js/kernel'\nimport { config } from '@holo-js/config'"), 'esm') as readonly string[]
 
     expect(edited).toContain("import { env, config } from '@holo-js/config'")
     expect(edited).toContain("db: 0 }, cache: { url: env('REDIS_URL') || undefined,")
   })
 
+  it('adds the env import when @holo-js/config only imports env under another name', () => {
+    const source = redisSource('esm', 'none').replace("import { defineRedisConfig } from '@holo-js/kernel'", "import { defineRedisConfig } from '@holo-js/kernel'\nimport { env as readEnv } from '@holo-js/config'")
+    const [edited] = addRedisCacheConnection(source, 'esm') as readonly string[]
+
+    expect(edited).toContain("import { env, env as readEnv } from '@holo-js/config'")
+    expect(addRedisCacheConnection(source.replace('env as readEnv', 'readEnv as env'), 'esm')).toEqual([expect.not.stringContaining('import { env,')])
+  })
+
+  it('offers one edit per inline connections object, including type literals', () => {
+    const source = "type Options = { connections: { [name: string]: object } }\nexport default { connections: { default: {} } } satisfies Options\n"
+    const edits = addRedisCacheConnection(source, 'cjs') as readonly string[]
+
+    expect(edits).toHaveLength(2)
+    expect(edits[1]).toContain("connections: { default: {}, cache: { url: process.env.REDIS_URL || undefined,")
+    expect(edits[1]!.startsWith('type Options = { connections: { [name: string]: object } }')).toBe(true)
+  })
+
   it('fills an empty connections object', () => {
     expect(addRedisCacheConnection("import { env } from '@holo-js/config'\nexport default { connections: {} }\n", 'esm'))
-      .toBe("import { env } from '@holo-js/config'\nexport default { connections: { cache: { url: env('REDIS_URL') || undefined, host: env('REDIS_HOST', '127.0.0.1'), port: env('REDIS_PORT', 6379), username: env('REDIS_USERNAME'), password: env('REDIS_PASSWORD'), db: env('REDIS_CACHE_DB', 1) } } }\n")
+      .toEqual(["import { env } from '@holo-js/config'\nexport default { connections: { cache: { url: env('REDIS_URL') || undefined, host: env('REDIS_HOST', '127.0.0.1'), port: env('REDIS_PORT', 6379), username: env('REDIS_USERNAME'), password: env('REDIS_PASSWORD'), db: env('REDIS_CACHE_DB', 1) } } }\n"])
   })
 
   it('says why it cannot edit configs without one inline connections object', () => {
@@ -196,8 +214,8 @@ describe('adding the redis cache connection', () => {
       .toEqual({ reason: 'its connections are not written as an inline object' })
     expect(addRedisCacheConnection('export default { connections: shared }\n', 'esm'))
       .toEqual({ reason: 'its connections are not written as an inline object' })
-    expect(addRedisCacheConnection('const a = { connections: {} }\nexport default { connections: {} }\n', 'esm'))
-      .toEqual({ reason: 'it has more than one connections property' })
+    expect(addRedisCacheConnection('type Options = { connections: Record<string, object> }\nexport default { connections: shared }\n', 'esm'))
+      .toEqual({ reason: 'its connections are not written as an inline object' })
     expect(addRedisCacheConnection('export default { connections: {\n', 'esm'))
       .toEqual({ reason: 'its connections object is not closed' })
   })
@@ -211,5 +229,14 @@ describe('adding the redis cache connection', () => {
 
     expect(message).toContain("Holo can't add it to config/redis.ts because its connections are not written as an inline object.")
     expect(message).toContain('cache: {')
+  })
+
+  it('finds another connection on the same Redis server and database as the cache', () => {
+    const connection = { host: '127.0.0.1', port: 6379, db: 0 }
+    expect(findRedisDatabaseShare({ default: connection, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, db: 1 }, cache: { ...connection, db: 1 } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: { ...connection, host: 'other', db: 1 }, cache: { ...connection, db: 1 } })).toBeUndefined()
+    expect(findRedisDatabaseShare({ default: { ...connection, url: 'redis://a' }, cache: { ...connection, url: 'redis://a' } })).toBe('default')
+    expect(findRedisDatabaseShare({ default: connection })).toBeUndefined()
   })
 })

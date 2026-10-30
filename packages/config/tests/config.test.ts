@@ -1635,6 +1635,18 @@ export default defineQueueConfig({
     expect(reloaded.redis.connections.cache).toMatchObject({ db: 1 })
   })
 
+  it.each([
+    ['a config key', "module.exports = { config: { default: 'main', connections: { main: { host: 'redis.test' } } } }\n"],
+    ['an object default key', "module.exports = { default: { default: 'main', connections: { main: { host: 'redis.test' } } } }\n"],
+  ])('loads a CommonJS .cts config that holds its settings under %s', async (_shape, source) => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/redis.cts'), source)
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(loaded.redis.default).toBe('main')
+    expect(loaded.redis.connections.main).toMatchObject({ host: 'redis.test' })
+  })
+
   it('loads a .cts config written with export default', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/redis.cts'), "export default { default: 'main', connections: { main: { host: 'redis.test' } } }\n")

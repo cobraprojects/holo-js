@@ -971,7 +971,7 @@ export function createInternalCommands(
           writeLine(context.stdout, changed ? 'Installed schedule support.' : 'Schedule support is already installed.')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdScheduleFile) writeLine(context.stdout, '  - created server/schedule.ts')
-          if (!result.cacheInstalled) writeLine(context.stdout, '  - run "holo install cache" before using withoutOverlapping() or onOneServer()')
+          if (!result.cacheInstalled) writeLine(context.stdout, '  - run "holo install cache" before using withoutOverlapping() or onOneServer(); onOneServer() needs a store every server shares, such as --driver redis or --driver database')
           if (!result.queueInstalled) writeLine(context.stdout, '  - run "holo install queue" before scheduling jobs')
           if (changed) writeLine(context.stdout, '  - run "holo schedule:work", or "holo schedule:run" every minute from cron')
           await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)

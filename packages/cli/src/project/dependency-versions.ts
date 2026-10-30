@@ -14,8 +14,8 @@ export function resolveHoloVersionPrefix(...dependencyMaps: readonly Readonly<Re
     .filter(([name, version]) => name.startsWith('@holo-js/') && version !== 'catalog:' && !isWorkspaceDependencyVersion(version))
     .map(([, version]) => version.trim())
   if (versions.length === 0) return '^'
-  if (versions.every(version => valid(version) === version)) return ''
-  if (versions.every(version => version.startsWith('~') && valid(version.slice(1)) !== null)) return '~'
+  if (versions.every(version => valid(version) !== null)) return ''
+  if (versions.every(version => version.startsWith('~') && valid(version.slice(1).trim()) !== null)) return '~'
   return '^'
 }
 

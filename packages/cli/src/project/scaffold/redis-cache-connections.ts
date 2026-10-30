@@ -3,7 +3,13 @@ import type { ConfigModuleFormat } from './types'
 
 const SCAFFOLDED_REDIS_CONNECTIONS = ['default', 'cache'] as const
 
-const ESM_ENV_IMPORT_PATTERN = /import\s*\{[^}]*\benv\b[^}]*\}\s*from\s*['"]@holo-js\/config['"]/
+const CONFIG_NAMED_IMPORTS_PATTERN = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/config\2/g
+
+// True when an import from @holo-js/config binds the local name env, as `env` or `something as env`.
+function importsEnvBinding(source: string): boolean {
+  return [...source.matchAll(CONFIG_NAMED_IMPORTS_PATTERN)].some(match => match[1]!.split(',')
+    .some(specifier => specifier.trim().split(/\s+as\s+/).at(-1)?.trim() === 'env'))
+}
 
 export type RedisConfigSnapshot = {
   readonly path: string
@@ -63,43 +69,55 @@ function addEnvImport(source: string): string {
   return `${source.slice(0, at)}${REDIS_CONFIG_ENV_IMPORT}\n${firstImport ? '' : '\n'}${source.slice(at)}`
 }
 
-// Adds the scaffolded "cache" connection to the inline connections object of an existing Redis config. Returns
-// why it can't when the file has no single inline connections object to edit.
-export function addRedisCacheConnection(source: string, moduleFormat: ConfigModuleFormat): string | { readonly reason: string } {
+// Returns one edited copy of an existing Redis config per inline `connections: { ... }` object, each with the
+// scaffolded "cache" connection added to that object, or why there is nothing to edit. Type declarations can also
+// have a connections key, so the caller keeps the first copy whose reloaded config resolves the connection.
+export function addRedisCacheConnection(source: string, moduleFormat: ConfigModuleFormat): readonly string[] | { readonly reason: string } {
   const masked = maskNonCode(source)
-  const properties = [...masked.matchAll(/\bconnections\s*:/g)]
-  const inline = properties.flatMap(match => {
-    const open = masked.slice(match.index + match[0].length).search(/\S/) + match.index + match[0].length
-    return masked[open] === '{' ? [open] : []
-  })
-  if (properties.length !== 1 || inline.length !== 1) {
-    return { reason: properties.length > 1 ? 'it has more than one connections property' : 'its connections are not written as an inline object' }
-  }
+  const inline = [...masked.matchAll(/\bconnections\s*:\s*\{/g)].map(match => match.index + match[0].length - 1)
+  if (inline.length === 0) return { reason: 'its connections are not written as an inline object' }
 
-  const open = inline[0]!
+  const edits = inline.flatMap(open => {
+    const edited = addConnectionToObject(source, masked, open, moduleFormat)
+    return edited === undefined ? [] : [moduleFormat === 'esm' && !importsEnvBinding(source) ? addEnvImport(edited) : edited]
+  })
+  return edits.length > 0 ? edits : { reason: 'its connections object is not closed' }
+}
+
+function addConnectionToObject(source: string, masked: string, open: number, moduleFormat: ConfigModuleFormat): string | undefined {
   let close = open
   for (let depth = 0; close < masked.length; close += 1) {
     if (masked[close] === '{') depth += 1
     else if (masked[close] === '}' && --depth === 0) break
   }
-  if (close >= masked.length) return { reason: 'its connections object is not closed' }
+  if (close >= masked.length) return undefined
 
   const lastCode = masked.slice(0, close).trimEnd().length - 1
   const separator = lastCode === open || masked[lastCode] === ',' ? '' : ','
   const lineStart = source.lastIndexOf('\n', close) + 1
   const closingIndent = source.slice(lineStart, close)
   const connectionLines = renderRedisCacheConnectionLines(moduleFormat).map(line => line.slice(4))
-  let edited: string
   if (/^\s*$/.test(closingIndent) && lineStart > open) {
     const propertyIndent = `${closingIndent}  `
-    edited = `${source.slice(0, lastCode + 1)}${separator}${source.slice(lastCode + 1, lineStart)}${connectionLines.map(line => `${propertyIndent}${line}`).join('\n')}\n${source.slice(lineStart)}`
-  } else {
-    const inlineConnection = `${connectionLines.map(line => line.trim()).join(' ').replace(/, \},$/, ' }')}`
-    const rest = source.slice(lastCode + 1)
-    edited = `${source.slice(0, lastCode + 1)}${separator} ${inlineConnection}${/^\s/.test(rest) ? '' : ' '}${rest}`
+    return `${source.slice(0, lastCode + 1)}${separator}${source.slice(lastCode + 1, lineStart)}${connectionLines.map(line => `${propertyIndent}${line}`).join('\n')}\n${source.slice(lineStart)}`
   }
 
-  return moduleFormat === 'esm' && !ESM_ENV_IMPORT_PATTERN.test(source) ? addEnvImport(edited) : edited
+  const inlineConnection = `${connectionLines.map(line => line.trim()).join(' ').replace(/, \},$/, ' }')}`
+  const rest = source.slice(lastCode + 1)
+  return `${source.slice(0, lastCode + 1)}${separator} ${inlineConnection}${/^\s/.test(rest) ? '' : ' '}${rest}`
+}
+
+type RedisConnectionTarget = { readonly url?: string, readonly socketPath?: string, readonly host: string, readonly port: number, readonly db: number }
+
+// Names the connection that uses the same Redis server and database as the cache connection. A cache flush deletes
+// that whole database, so it must not hold another connection's data.
+export function findRedisDatabaseShare(connections: Readonly<Record<string, RedisConnectionTarget>>, name = 'cache'): string | undefined {
+  const server = (connection: RedisConnectionTarget) => connection.url ?? connection.socketPath ?? `${connection.host}:${connection.port}`
+  const cache = connections[name]
+  if (!cache) return undefined
+  return Object.entries(connections).find(([other, connection]) => (
+    other !== name && server(connection) === server(cache) && connection.db === cache.db
+  ))?.[0]
 }
 
 export function assertRedisCacheConnectionsAvailable(options: {
@@ -132,7 +150,7 @@ export function assertRedisCacheConnectionsAvailable(options: {
       + `Add this connection to the connections object in config/redis.ts:\n\n${renderRedisCacheConnectionLines(moduleFormat).join('\n')}`,
       'REDIS_CACHE_DB selects the database (default 1). Use a database that holds no queue or session data.',
     )
-    if (moduleFormat === 'esm' && redisConfig && !ESM_ENV_IMPORT_PATTERN.test(redisConfig.source)) {
+    if (moduleFormat === 'esm' && redisConfig && !importsEnvBinding(redisConfig.source)) {
       sections.push(
         `The connection uses env(), so also add this import at the top of config/redis.ts:\n\n${REDIS_CONFIG_ENV_IMPORT}`,
       )

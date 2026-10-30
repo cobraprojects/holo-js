@@ -74,6 +74,7 @@ import {
 import {
   addRedisCacheConnection,
   assertRedisCacheConnectionsAvailable,
+  findRedisDatabaseShare,
   resolveRequiredRedisConnections,
   type RedisConfigSnapshot,
 } from './scaffold/redis-cache-connections'
@@ -777,6 +778,7 @@ export async function installScheduleIntoProject(
   projectRoot: string,
 ): Promise<ScheduleInstallResult> {
   await loadProjectConfig(projectRoot, { required: true })
+  const updatedPackageJson = await upsertSchedulePackageDependency(projectRoot)
   const schedulePath = await resolveFirstExistingPath(projectRoot, SCHEDULE_FILE_NAMES)
 
   if (!schedulePath) {
@@ -784,7 +786,6 @@ export async function installScheduleIntoProject(
     await writeTextFile(resolve(projectRoot, 'server/schedule.ts'), renderScheduleDefinition())
   }
 
-  const updatedPackageJson = await upsertSchedulePackageDependency(projectRoot)
   const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   return {
     updatedPackageJson,
@@ -830,17 +831,30 @@ export async function installSecurityIntoProject(
   }
 }
 
-// Adds the "cache" connection to an existing Redis config, then loads the config again to check that it resolves.
-// Restores the file and returns the reason when the connection can't be added.
+// Adds the "cache" connection to an existing Redis config, then loads the config again to check that it resolves
+// on a database no other connection uses. Restores the file and returns the reason when it can't.
 async function addRedisCacheConnectionToConfig(projectRoot: string, redisConfig: RedisConfigSnapshot): Promise<string | undefined> {
-  const edited = addRedisCacheConnection(redisConfig.source, resolveConfigModuleFormat(redisConfig.path, redisConfig.source))
-  if (typeof edited !== 'string') return edited.reason
+  const edits = addRedisCacheConnection(redisConfig.source, resolveConfigModuleFormat(redisConfig.path, redisConfig.source))
+  if ('reason' in edits) return edits.reason
 
-  await writeTextFile(redisConfig.path, edited)
-  const reloaded = await loadConfigWithNormalizers(projectRoot, { preferCache: false, processEnv: process.env })
-    .then(config => config.redis.connections.cache ? undefined : 'the connection was missing after the edit', (error: unknown) => `the edited file didn't load: ${error instanceof Error ? error.message : String(error)}`)
-  if (reloaded) await writeTextFile(redisConfig.path, redisConfig.source)
-  return reloaded
+  let reason = 'the connection was missing after the edit'
+  for (const edited of edits) {
+    await writeTextFile(redisConfig.path, edited)
+    const loaded = await loadConfigWithNormalizers(projectRoot, { preferCache: false, processEnv: process.env })
+      .catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
+    if (loaded instanceof Error) {
+      reason = `the edited file didn't load: ${loaded.message}`
+      continue
+    }
+    const cache = loaded.redis.connections.cache
+    if (!cache) continue
+    const sharing = findRedisDatabaseShare(loaded.redis.connections)
+    if (!sharing) return undefined
+    reason = `the "${sharing}" connection already uses Redis database ${cache.db}, and a cache flush would delete its data. Set REDIS_CACHE_DB to a database that holds nothing else`
+    break
+  }
+  await writeTextFile(redisConfig.path, redisConfig.source)
+  return reason
 }
 
 export async function installCacheIntoProject(
@@ -875,6 +889,8 @@ export async function installCacheIntoProject(
     )
   }
 
+  // Fails on a missing or invalid package.json before any project file changes.
+  await readPackageJsonDependencyState(projectRoot)
   let updatedRedisConfig = false
   if (driver === 'redis') {
     const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)

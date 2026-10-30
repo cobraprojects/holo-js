@@ -4298,7 +4298,7 @@ export default defineCacheConfig({
     expect(first.stdout).toContain('Installed schedule support.')
     expect(first.stdout).toContain('  - updated package.json')
     expect(first.stdout).toContain('  - created server/schedule.ts')
-    expect(first.stdout).toContain('  - run "holo install cache" before using withoutOverlapping() or onOneServer()')
+    expect(first.stdout).toContain('  - run "holo install cache" before using withoutOverlapping() or onOneServer(); onOneServer() needs a store every server shares, such as --driver redis or --driver database')
     expect(first.stdout).toContain('  - run "holo install queue" before scheduling jobs')
     expect(first.stdout).toContain('  - run "holo schedule:work", or "holo schedule:run" every minute from cron')
     expect(await readFile(join(projectRoot, 'server/schedule.ts'), 'utf8')).toBe(renderScheduleDefinition())
@@ -4308,6 +4308,21 @@ export default defineCacheConfig({
     expect(second.status, second.stderr || second.stdout).toBe(0)
     expect(second.stdout).toContain('Schedule support is already installed.')
     expect(second.stdout).not.toContain('schedule:work')
+  }, 30_000)
+
+  it('leaves no schedule file or Redis config edit behind when package.json is invalid', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const redisSource = "import { defineRedisConfig } from '@holo-js/kernel'\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', db: 0 } } })\n"
+    await writeProjectFile(projectRoot, 'config/redis.ts', redisSource)
+    await writeFile(join(projectRoot, 'package.json'), '{ not json')
+
+    await expect(projectInternals.installScheduleIntoProject(projectRoot)).rejects.toThrow()
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow()
+
+    await expect(readFile(join(projectRoot, 'server/schedule.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(redisSource)
   }, 30_000)
 
   it('installs schedule support at the exact Holo version and keeps an existing schedule file', async () => {
@@ -10517,6 +10532,58 @@ export default defineRedisConfig({
     expect(loaded.redis.connections.default).toMatchObject({ db: 0 })
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=1')
     await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: false })
+  }, 30_000)
+
+  it('adds the cache connection when a type declaration in config/redis.ts also has a connections key', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', '')
+    await writeProjectFile(projectRoot, 'config/redis.ts', `import { env as readEnv } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
+
+type Options = { connections: { [name: string]: { host: string } } }
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: { host: readEnv('REDIS_HOST', '127.0.0.1'), db: 0 },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: true })
+
+    const source = await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')
+    expect(source).toContain("import { env, env as readEnv } from '@holo-js/config'")
+    expect(source).toContain('type Options = { connections: { [name: string]: { host: string } } }')
+    expect((await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: {} })).redis.connections.cache).toMatchObject({ db: 1 })
+  }, 30_000)
+
+  it('refuses to put the cache connection on a Redis database another connection uses', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', 'REDIS_DB=1\n')
+    const source = `import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: { host: '127.0.0.1', db: env('REDIS_DB', 0) },
+  },
+})
+`
+    await writeProjectFile(projectRoot, 'config/redis.ts', source)
+
+    const failure = await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' }).then(() => undefined, (error: unknown) => error)
+
+    expect((failure as Error).message).toContain('Holo can\'t add it to config/redis.ts because the "default" connection already uses Redis database 1, and a cache flush would delete its data. Set REDIS_CACHE_DB to a database that holds nothing else.')
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(source)
+    await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    await writeProjectFile(projectRoot, '.env', 'REDIS_DB=1\nREDIS_CACHE_DB=2\n')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: true })
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=2')
   }, 30_000)
 
   it('refuses a redis cache install when it cannot add the cache connection, and leaves the redis config as it was', async () => {

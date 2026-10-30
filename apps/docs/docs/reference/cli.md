@@ -220,7 +220,7 @@ What each target creates:
 | `security` | `config/security.ts`, `config/cors.ts` |
 | `cache` | `config/cache.ts` (and `config/redis.ts` for Redis, or the `cache` connection in an existing one) |
 | `media` | `config/media.ts` and the media table migration |
-| `schedule` | `server/schedule.ts`. Says when `cache` or `queue` is missing, since `withoutOverlapping()`, `onOneServer()`, and scheduled jobs need them. |
+| `schedule` | `server/schedule.ts`. Says when `cache` or `queue` is missing, since `withoutOverlapping()`, `onOneServer()` (with a store every server shares, such as Redis or the database), and scheduled jobs need them. |
 
 ```bash
 npx holo install queue --driver redis
