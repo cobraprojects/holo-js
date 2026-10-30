@@ -10858,8 +10858,51 @@ export default defineQueueConfig({
       table: 'jobs',
       queue: 'default',
     },
+    recording: {
+      driver: 'recording',
+      queue: 'default',
+    },
   },
 })
+`)
+    const recordedDispatchesPath = join(actualFlushProjectRoot, 'recorded-dispatches.log')
+    await writeProjectFile(actualFlushProjectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  name: 'Recording App',
+  plugins: ['holo-plugin-recording-queue'],
+})
+`)
+    await writeProjectFile(actualFlushProjectRoot, 'node_modules/holo-plugin-recording-queue/package.json', JSON.stringify({ name: 'holo-plugin-recording-queue', type: 'module', holo: { plugin: './plugin.mjs' } }))
+    await writeProjectFile(actualFlushProjectRoot, 'node_modules/holo-plugin-recording-queue/plugin.mjs', "export default { id: 'recording-queue', contributes: { queue: { drivers: { recording: { runtime: './driver.mjs' } } } } }\n")
+    await writeProjectFile(actualFlushProjectRoot, 'node_modules/holo-plugin-recording-queue/driver.mjs', `
+import { appendFileSync } from 'node:fs'
+import { config } from '@holo-js/config'
+import { DB } from '@holo-js/db'
+
+export default {
+  driver: 'recording',
+  create(connection) {
+    const appName = config('app.name')
+    return {
+      name: connection.name,
+      driver: 'recording',
+      mode: 'sync',
+      async dispatch(job) {
+        appendFileSync(${JSON.stringify(recordedDispatchesPath)}, \`\${appName} \${job.name}\\n\`)
+        return { jobId: job.id, synchronous: true }
+      },
+      async clear() {
+        return 0
+      },
+      async close() {
+        const [row] = await DB.table('failed_jobs').where('id', 'failed-4').get()
+        appendFileSync(${JSON.stringify(recordedDispatchesPath)}, \`closed with failed-4 \${row ? 'kept' : 'removed'}\\n\`)
+      },
+    }
+  },
+}
 `)
     const actualRuntime = await initializeHolo(actualFlushProjectRoot)
     try {
@@ -10920,6 +10963,22 @@ export default defineQueueConfig({
     const actualForgetIo = createIo(actualFlushProjectRoot)
     await runQueueForgetCommand(actualForgetIo.io, actualFlushProjectRoot, 'missing')
     expect(actualForgetIo.read().stdout).toContain('Failed job missing was not found.')
+
+    const pluginRetryRuntime = await initializeHolo(actualFlushProjectRoot)
+    try {
+      await DB.connection().executeCompiled({
+        sql: 'INSERT INTO "failed_jobs" (id, job_id, job, connection, queue, payload, exception, failed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        bindings: ['failed-4', 'job-4', 'reports.record', 'recording', 'default', '{"id":"job-4","name":"reports.record","connection":"recording","queue":"default","payload":{"ok":true},"attempts":0,"maxAttempts":1,"createdAt":500}', 'boom', 500],
+        source: 'test:queue:failed-jobs:plugin-retry',
+      })
+    } finally {
+      await pluginRetryRuntime.shutdown()
+    }
+
+    const pluginRetryIo = createIo(actualFlushProjectRoot)
+    await runQueueRetryCommand(pluginRetryIo.io, actualFlushProjectRoot, 'failed-4')
+    expect(pluginRetryIo.read().stdout).toContain('Retried 1 failed job(s).')
+    await expect(readFile(recordedDispatchesPath, 'utf8')).resolves.toBe('Recording App reports.record\nclosed with failed-4 removed\n')
   }, 120000)
 
   it('generates cache table migrations with default and configured database cache tables', async () => {

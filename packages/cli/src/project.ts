@@ -84,6 +84,7 @@ import {
 } from './project/registry'
 import {
   bundleProjectModule,
+  bundleProjectModules,
   findProjectRoot,
   resolveProjectPackageImportSpecifier,
 } from './project/runtime'
@@ -196,6 +197,7 @@ export function upsertProjectRegistration(
 
 export {
   bundleProjectModule,
+  bundleProjectModules,
   defaultProjectConfig,
   discoverAppCommands,
   ensureGeneratedSchemaPlaceholder,

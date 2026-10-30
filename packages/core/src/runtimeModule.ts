@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { tmpdir } from 'node:os'
@@ -189,6 +189,7 @@ async function pathExists(path: string): Promise<boolean> {
 
 const NUXT_BUILD_DIRECTORY = '.nuxt'
 export const NUXT_TSCONFIG_SNAPSHOT_PATH = '.holo-js/generated/nuxt-tsconfig.json'
+const TSCONFIG_PATHS_CACHE_PATH = '.holo-js/generated/tsconfig-paths.json'
 const DEFAULT_LOADER_PATHS = { '~/*': ['./*'], '@/*': ['./*'] }
 
 type JsonObject = Record<string, unknown>
@@ -323,20 +324,48 @@ function tsconfigError(projectRoot: string, message: string): Error {
   return new Error(`[@holo-js/core] Cannot load ${join(projectRoot, 'tsconfig.json')} for bundling: ${message}`)
 }
 
-async function parseProjectTsconfigPaths(projectRoot: string): Promise<{
+interface ProjectTsconfigPaths {
   readonly paths: JsonObject
   readonly baseUrl?: string
   readonly extends: readonly string[]
-}> {
+}
+
+function isProjectTsconfigPaths(value: unknown): value is ProjectTsconfigPaths {
+  return isRecord(value)
+    && isRecord(value.paths)
+    && Array.isArray(value.extends)
+    && (value.baseUrl === undefined || typeof value.baseUrl === 'string')
+}
+
+function fileFingerprint(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+async function readCachedProjectTsconfigPaths(projectRoot: string): Promise<ProjectTsconfigPaths | undefined> {
+  const cache = await readTsconfigFile(join(projectRoot, TSCONFIG_PATHS_CACHE_PATH))
+  if (!cache || cache.projectRoot !== projectRoot || !isRecord(cache.inputs) || !isProjectTsconfigPaths(cache.result)) return undefined
+  const fresh = Object.entries(cache.inputs).every(([path, fingerprint]) => fileFingerprint(path) === fingerprint)
+  return fresh ? cache.result : undefined
+}
+
+async function resolveProjectTsconfigPaths(projectRoot: string): Promise<ProjectTsconfigPaths> {
   const ts = await import('typescript')
   const nuxtDirectory = join(projectRoot, NUXT_BUILD_DIRECTORY)
   const insideNuxt = (path: string) => isInside(resolve(path), nuxtDirectory)
+  const inputs: Record<string, string | null> = {}
+  const record = (path: string) => {
+    inputs[path] = fileFingerprint(path)
+  }
   const describe = (diagnostic: Diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
   const extendedConfigCache = new Map<string, ExtendedConfigCacheEntry>()
   const parsed = ts.parseJsonConfigFileContent({ extends: './tsconfig.json' }, {
     useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
-    fileExists: path => insideNuxt(path) || ts.sys.fileExists(path),
-    readFile: path => insideNuxt(path) ? '{}' : ts.sys.readFile(path),
+    fileExists: path => insideNuxt(path) || (record(path), ts.sys.fileExists(path)),
+    readFile: path => insideNuxt(path) ? '{}' : (record(path), ts.sys.readFile(path)),
     readDirectory: () => [],
   }, projectRoot, undefined, undefined, undefined, undefined, extendedConfigCache)
   const error = parsed.errors.find(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error && diagnostic.code !== NO_INPUTS_FOUND_DIAGNOSTIC)
@@ -348,11 +377,20 @@ async function parseProjectTsconfigPaths(projectRoot: string): Promise<{
   const options = parsed.options
   const pathsBase = options.baseUrl ?? (typeof options.pathsBasePath === 'string' ? options.pathsBasePath : projectRoot)
   const paths = options.paths ? absoluteCompilerOptions({ paths: options.paths }, pathsBase).paths : {}
-  return {
+  const result: ProjectTsconfigPaths = {
     paths: isRecord(paths) ? paths : {},
     baseUrl: options.baseUrl,
     extends: typeof extendedConfigPath === 'string' ? [extendedConfigPath] : extendedConfigPath ?? [],
   }
+  const cachePath = join(projectRoot, TSCONFIG_PATHS_CACHE_PATH)
+  await mkdir(dirname(cachePath), { recursive: true })
+    .then(() => writeFile(cachePath, `${JSON.stringify({ projectRoot, inputs, result }, null, 2)}\n`, 'utf8'))
+    .catch(() => {})
+  return result
+}
+
+async function parseProjectTsconfigPaths(projectRoot: string): Promise<ProjectTsconfigPaths> {
+  return await readCachedProjectTsconfigPaths(projectRoot) ?? await resolveProjectTsconfigPaths(projectRoot)
 }
 
 async function nuxtLoaderPaths(projectRoot: string, snapshotPath: string | undefined): Promise<JsonObject> {

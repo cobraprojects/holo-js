@@ -16,6 +16,10 @@
 - Holo's runtime bundles of policies, abilities, and other discovered files carry inline source maps. V8 coverage now counts those source files instead of reporting them as unmeasured, and with `--enable-source-maps` an error thrown in them points at the source line instead of the deleted bundle in `.holo-js/runtime`. See [Coverage and stack traces](apps/docs/docs/testing/index.md#coverage-and-stack-traces).
 - A CommonJS `config/*.cts` file whose export has a `default` key, such as `config/redis.cts` with `default: 'main'`, is loaded again. Before, it was ignored and Holo used the built-in defaults.
 
+### Changed
+
+- `holo queue:*` commands start faster, which helps when cron or a supervisor runs `holo queue:work --once`. Project discovery and the queue worker now bundle all models, migrations, jobs, events, listeners, channels and policies in one esbuild build instead of one build per file. Nuxt projects no longer load the `typescript` package on every command: Holo caches the resolved `tsconfig.json` `paths` and `extends` in `.holo-js/generated/tsconfig-paths.json` and resolves them again when any config in the chain changes. `queue:failed`, `queue:retry`, `queue:forget` and `queue:flush` no longer boot the whole application, only the queue and the database. In the Nuxt example app, `queue:work --once` drops from about 720 ms to 420 ms, and the failed-job commands from about 435 ms to 185 ms.
+
 ## 0.4.4 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.
