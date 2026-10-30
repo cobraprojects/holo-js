@@ -39,10 +39,10 @@ async function createProject(files: readonly string[]): Promise<string> {
 
 let compiledLayouts = 0
 
-async function renderLayout(root: string, file: string, source: string): Promise<unknown> {
+async function renderLayout(root: string, file: string, source: string, pageExtensions?: readonly string[]): Promise<unknown> {
   const path = join(root, file)
   const compiled = join(root, file.replace(/\.tsx$/, `.compiled-${compiledLayouts += 1}.ts`))
-  await writeFile(compiled, layoutLoader.call({ resourcePath: path }, source))
+  await writeFile(compiled, layoutLoader.call({ resourcePath: path, getOptions: () => ({ pageExtensions }) }, source))
   const module = await import(compiled) as { readonly default: (props: { readonly title: string }) => unknown }
   return module.default({ title: 'Posts' })
 }
@@ -84,5 +84,14 @@ describe('Next layout loader', () => {
 
     expect(await renderLayout(project, 'app/admin/layout.tsx', source)).toBe('Posts')
     expect(await renderLayout(project, 'components/layout.tsx', source)).toBe('Posts')
+  })
+
+  it('finds root layouts by the page extensions the Next config sets', async () => {
+    const source = 'export default function Layout(props: { readonly title: string }) { return props.title }\n'
+    const project = await createProject(['app/layout.page.tsx', 'app/admin/layout.page.tsx', 'app/docs/layout.tsx'])
+
+    expect(await renderLayout(project, 'app/layout.page.tsx', source, ['page.tsx'])).toEqual({ provided: 'Posts' })
+    expect(await renderLayout(project, 'app/admin/layout.page.tsx', source, ['page.tsx'])).toBe('Posts')
+    expect(await renderLayout(project, 'app/docs/layout.tsx', source, ['page.tsx'])).toBe('Posts')
   })
 })
