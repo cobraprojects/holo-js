@@ -1621,6 +1621,28 @@ export default defineQueueConfig({
     ])
   })
 
+  it.each(['cts', 'cjs'])('loads a CommonJS .%s config whose export has a default key, and reloads it after an edit', async (extension) => {
+    const root = await createProject()
+    const configPath = join(root, `config/redis.${extension}`)
+    await writeFile(configPath, "module.exports = { default: 'main', connections: { main: { host: 'redis.test', db: 2 } } }\n")
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(loaded.redis.default).toBe('main')
+    expect(loaded.redis.connections.main).toMatchObject({ host: 'redis.test', db: 2 })
+
+    await writeFile(configPath, "module.exports = { default: 'main', connections: { main: { host: 'redis.test', db: 2 }, cache: { host: 'redis.test', db: 1 } } }\n")
+    const reloaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(reloaded.redis.connections.cache).toMatchObject({ db: 1 })
+  })
+
+  it('loads a .cts config written with export default', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/redis.cts'), "export default { default: 'main', connections: { main: { host: 'redis.test' } } }\n")
+
+    const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(loaded.redis.default).toBe('main')
+  })
+
   it('loads process env overrides even when env files are missing', async () => {
     const root = await createProject()
 

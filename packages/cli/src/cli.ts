@@ -927,6 +927,7 @@ export function createInternalCommands(
 
           const changed = result.createdCacheConfig
             || result.createdRedisConfig
+            || result.updatedRedisConfig
             || result.updatedPackageJson
             || result.updatedEnv
             || result.updatedEnvExample
@@ -934,6 +935,7 @@ export function createInternalCommands(
           writeLine(context.stdout, changed ? 'Installed cache support.' : 'Cache support is already installed.')
           if (result.createdCacheConfig) writeLine(context.stdout, '  - created config/cache.ts')
           if (result.createdRedisConfig) writeLine(context.stdout, '  - created config/redis.ts')
+          if (result.updatedRedisConfig) writeLine(context.stdout, '  - added the "cache" connection to config/redis.ts')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')

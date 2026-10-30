@@ -87,8 +87,15 @@ let configImportNonce = 0
 async function importConfigModule(filePath: string, importKey?: string): Promise<unknown> {
   const key = importKey ?? String(++configImportNonce)
   const extension = extname(filePath)
-  if (extension === '.ts' || extension === '.mts' || extension === '.cts') {
+  if (extension === '.ts' || extension === '.mts') {
     return importConfig.import(filePath)
+  }
+
+  if (extension === '.cts') {
+    // jiti returns a CommonJS file's module.exports itself. Wrap it as import() wraps a .cjs file, so an export
+    // with its own default key, such as a Redis config's default connection, isn't read as a module namespace.
+    const exports = await importConfig.import(filePath)
+    return isObject(exports) && exports.__esModule === true ? exports : { default: exports }
   }
 
   if (extension === '.js' || extension === '.cjs') {

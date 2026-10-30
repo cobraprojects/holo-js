@@ -69,8 +69,10 @@ import {
   syncBroadcastAuthSupportAfterAuthInstall,
 } from './scaffold/config-renderers'
 import {
+  addRedisCacheConnection,
   assertRedisCacheConnectionsAvailable,
   resolveRequiredRedisConnections,
+  type RedisConfigSnapshot,
 } from './scaffold/redis-cache-connections'
 import {
   detectProjectFrameworkDescriptor,
@@ -803,6 +805,19 @@ export async function installSecurityIntoProject(
   }
 }
 
+// Adds the "cache" connection to an existing Redis config, then loads the config again to check that it resolves.
+// Restores the file and returns the reason when the connection can't be added.
+async function addRedisCacheConnectionToConfig(projectRoot: string, redisConfig: RedisConfigSnapshot): Promise<string | undefined> {
+  const edited = addRedisCacheConnection(redisConfig.source, resolveConfigModuleFormat(redisConfig.path, redisConfig.source))
+  if (typeof edited !== 'string') return edited.reason
+
+  await writeTextFile(redisConfig.path, edited)
+  const reloaded = await loadConfigWithNormalizers(projectRoot, { preferCache: false, processEnv: process.env })
+    .then(config => config.redis.connections.cache ? undefined : 'the connection was missing after the edit', (error: unknown) => `the edited file didn't load: ${error instanceof Error ? error.message : String(error)}`)
+  if (reloaded) await writeTextFile(redisConfig.path, redisConfig.source)
+  return reloaded
+}
+
 export async function installCacheIntoProject(
   projectRoot: string,
   options: {
@@ -835,15 +850,20 @@ export async function installCacheIntoProject(
     )
   }
 
+  let updatedRedisConfig = false
   if (driver === 'redis') {
     const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES)
     const redisConfigSource = redisConfigPath ? await readTextFile(redisConfigPath) : undefined
-    assertRedisCacheConnectionsAvailable({
-      redisConfig: redisConfigPath && redisConfigSource !== undefined
-        ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
-        : undefined,
-      requiredConnections: resolveRequiredRedisConnections(loadedCacheConfig?.drivers),
-    })
+    const redisConfig = redisConfigPath && redisConfigSource !== undefined
+      ? { path: redisConfigPath, source: redisConfigSource, connections: Object.keys(loadedConfig.redis.connections) }
+      : undefined
+    const requiredConnections = resolveRequiredRedisConnections(loadedCacheConfig?.drivers)
+    assertRedisCacheConnectionsAvailable({ redisConfig, requiredConnections: requiredConnections.filter(name => name !== 'cache') })
+    if (redisConfig && requiredConnections.includes('cache') && !redisConfig.connections.includes('cache')) {
+      const cannotAddReason = await addRedisCacheConnectionToConfig(projectRoot, redisConfig)
+      if (cannotAddReason) assertRedisCacheConnectionsAvailable({ redisConfig, requiredConnections, cannotAddReason })
+      updatedRedisConfig = true
+    }
   }
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -878,6 +898,7 @@ export async function installCacheIntoProject(
     updatedPackageJson: await upsertCachePackageDependencies(projectRoot, driver),
     createdCacheConfig: !cacheConfigPath,
     createdRedisConfig,
+    updatedRedisConfig,
     updatedEnv: nextEnv.changed,
     updatedEnvExample: nextEnvExample.changed,
     databaseDriver: driver === 'database',

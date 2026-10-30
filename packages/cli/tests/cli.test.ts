@@ -10311,6 +10311,7 @@ export default defineJob({
       updatedPackageJson: true,
       createdCacheConfig: true,
       createdRedisConfig: false,
+      updatedRedisConfig: false,
       updatedEnv: true,
       updatedEnvExample: true,
       databaseDriver: false,
@@ -10326,6 +10327,7 @@ export default defineJob({
       updatedPackageJson: false,
       createdCacheConfig: false,
       createdRedisConfig: false,
+      updatedRedisConfig: false,
       updatedEnv: false,
       updatedEnvExample: false,
       databaseDriver: false,
@@ -10340,6 +10342,7 @@ export default defineJob({
       updatedPackageJson: true,
       createdCacheConfig: true,
       createdRedisConfig: true,
+      updatedRedisConfig: false,
       updatedEnv: true,
       updatedEnvExample: true,
       databaseDriver: false,
@@ -10381,6 +10384,7 @@ export default defineCacheConfig({
       updatedPackageJson: true,
       createdCacheConfig: false,
       createdRedisConfig: false,
+      updatedRedisConfig: false,
       updatedEnv: true,
       updatedEnvExample: true,
       databaseDriver: true,
@@ -10415,7 +10419,7 @@ export default defineCacheConfig({
     })).rejects.toThrow('Unsupported cache driver: bad.')
   }, 30_000)
 
-  it('refuses a redis cache install when the existing redis config has no cache connection', async () => {
+  it('adds the cache connection to an existing redis config that only has the default connection', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeProjectFile(projectRoot, '.env', '')
@@ -10430,17 +10434,65 @@ export default defineRedisConfig({
       host: '127.0.0.1',
       port: 6379,
       db: 0,
-    },
+    }
   },
 })
 `)
 
-    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('does not define the "cache" Redis connection')
-    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow('cache: {')
-    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).rejects.toThrow("import { env } from '@holo-js/config'")
-    await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).not.toContain('cache: {')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({
+      createdCacheConfig: true,
+      createdRedisConfig: false,
+      updatedRedisConfig: true,
+    })
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(`\nimport { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_CACHE_DB', 1),
+    },
+  },
+})
+`)
+    const loaded = await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: {} })
+    expect(loaded.redis.connections.cache).toMatchObject({ db: 1 })
+    expect(loaded.redis.connections.default).toMatchObject({ db: 0 })
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_CACHE_DB=1')
+    await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: false })
+  }, 30_000)
+
+  it('refuses a redis cache install when it cannot add the cache connection, and leaves the redis config as it was', async () => {
+    for (const source of [
+      `import { defineRedisConfig } from '@holo-js/kernel'\nconst connections = { default: { host: '127.0.0.1' } }\nexport default defineRedisConfig({ default: 'default', connections })\n`,
+      `import { defineRedisConfig } from '@holo-js/kernel'\nconst env = { host: '127.0.0.1' }\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: env.host } } })\n`,
+    ]) {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      await writeProjectFile(projectRoot, '.env', '')
+      await writeProjectFile(projectRoot, 'config/redis.ts', source)
+
+      const failure = await projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' }).then(() => undefined, (error: unknown) => error)
+
+      expect(failure).toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('does not define the "cache" Redis connection')
+      expect((failure as Error).message).toMatch(/Holo can't add it to config\/redis\.ts because (its connections are not written as an inline object|the edited file didn't load)/)
+      expect((failure as Error).message).toContain('cache: {')
+      expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(source)
+      await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('')
+    }
   }, 30_000)
 
   it('installs the redis cache store when the existing redis config defines the cache connection', async () => {
@@ -10541,7 +10593,7 @@ export default defineRedisConfig({
     it.each(redisConfigFormats.flatMap(format => [true, false].map(importEnv => ({ ...format, importEnv }))).filter(
       ({ moduleFormat, importEnv }) => !(moduleFormat === 'cjs' && importEnv),
     ))(
-      'refuses a redis cache install without a cache connection in a .$extension config (env imported: $importEnv)',
+      'adds the cache connection to a .$extension config (env imported: $importEnv)',
       async ({ extension, moduleFormat, importEnv }) => {
         const projectRoot = await createTempProject()
         tempDirs.push(projectRoot)
@@ -10549,28 +10601,28 @@ export default defineRedisConfig({
         await writeProjectFile(projectRoot, '.env.example', '')
         await writeProjectFile(projectRoot, `config/redis.${extension}`, redisConfigSource(moduleFormat, { importEnv, extraConnections: [] }))
 
-        const message = await refusalMessage(projectRoot)
+        await expect(projectInternals.installCacheIntoProject(projectRoot, { driver: 'redis' })).resolves.toMatchObject({ updatedRedisConfig: true })
 
-        expect(message).toContain('cache: {')
+        const source = await readFile(join(projectRoot, `config/redis.${extension}`), 'utf8')
         if (moduleFormat === 'cjs') {
-          expect(message).toContain('db: Number(process.env.REDIS_CACHE_DB || 1),')
-          expect(message).not.toContain('require(')
-          expect(message).not.toContain('also add this import')
-        } else if (importEnv) {
-          expect(message).not.toContain('also add this import')
+          expect(source).toContain('db: Number(process.env.REDIS_CACHE_DB || 1) }')
+          expect(source).not.toContain('@holo-js/config')
         } else {
-          expect(message).toContain(envImportLineFor(moduleFormat))
+          expect(source.split(envImportLineFor(moduleFormat))).toHaveLength(2)
+          expect(source).toContain("db: env('REDIS_CACHE_DB', 1) }")
         }
-        await expect(readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+        const loaded = await loadConfigDirectory(projectRoot, { preferCache: false, processEnv: { REDIS_CACHE_DB: '3' } })
+        expect(loaded.redis.connections.cache).toMatchObject({ db: 3 })
+        expect(loaded.cache.drivers.redis).toMatchObject({ connection: 'cache' })
       },
       30_000,
     )
 
     it.each([
-      { store: 'none', redis: 'default-only', outcome: 'refuses', snippet: true, missing: '"cache"' },
+      { store: 'none', redis: 'default-only', outcome: 'installs' },
       { store: 'none', redis: 'default-and-cache', outcome: 'installs' },
       { store: 'none', redis: 'absent', outcome: 'installs' },
-      { store: 'cache', redis: 'default-only', outcome: 'refuses', snippet: true, missing: '"cache"' },
+      { store: 'cache', redis: 'default-only', outcome: 'installs' },
       { store: 'omitted', redis: 'default-only', outcome: 'installs' },
       { store: 'sessions', redis: 'default-only', outcome: 'refuses', snippet: false, missing: '"sessions"' },
       { store: 'cache', redis: 'default-and-cache', outcome: 'installs' },

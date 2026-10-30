@@ -284,6 +284,7 @@ export type CacheInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdCacheConfig: boolean
   readonly createdRedisConfig: boolean
+  readonly updatedRedisConfig: boolean
   readonly updatedEnv: boolean
   readonly updatedEnvExample: boolean
   readonly databaseDriver: boolean
