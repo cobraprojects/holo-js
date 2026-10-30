@@ -67,9 +67,9 @@ test('fails when npm cannot upgrade the previous lockfile because optional Holo 
   assert.match(failures[0], /Conflicting peer dependency: @holo-js\/session@0\.2\.0/)
 })
 
-test('passes when optional Holo peers accept any version, for patch and minor releases', async () => {
+test('passes when optional Holo peers use an open-ended floor, for patch and minor releases', async () => {
   const upstream = await startPublishedRegistry()
-  const root = await createRepo('*')
+  const root = await createRepo('>=0.1.0')
   const resolved = []
 
   const failures = await validatePackageUpgrade({ root, upstream, managers: ['npm'], log: message => resolved.push(message) })
@@ -83,7 +83,7 @@ test('passes when optional Holo peers accept any version, for patch and minor re
 
 test('passes when Bun upgrades a lockfile across patch and minor releases', async () => {
   const upstream = await startPublishedRegistry()
-  const root = await createRepo('*')
+  const root = await createRepo('>=0.1.0')
   const resolved = []
 
   const failures = await validatePackageUpgrade({ root, upstream, managers: ['bun'], log: message => resolved.push(message) })

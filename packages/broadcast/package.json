@@ -67,7 +67,7 @@
     "ws": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "*",
+    "@holo-js/db": ">=0.4.0",
     "ioredis": "catalog:"
   },
   "peerDependenciesMeta": {

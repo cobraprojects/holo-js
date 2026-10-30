@@ -53,11 +53,11 @@
     "yaml": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/broadcast": "*",
-    "@holo-js/mail": "*",
-    "@holo-js/media": "*",
-    "@holo-js/session": "*",
-    "@holo-js/queue": "*"
+    "@holo-js/broadcast": ">=0.4.0",
+    "@holo-js/mail": ">=0.4.0",
+    "@holo-js/media": ">=0.4.0",
+    "@holo-js/session": ">=0.4.0",
+    "@holo-js/queue": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "@holo-js/broadcast": {

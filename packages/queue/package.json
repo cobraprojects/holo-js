@@ -40,7 +40,7 @@
     "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "*"
+    "@holo-js/db": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "@holo-js/db": {

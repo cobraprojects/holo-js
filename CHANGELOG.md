@@ -8,7 +8,7 @@ See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-fr
 
 ### Fixed
 
-- npm can upgrade every `@holo-js/*` package together with your existing `package-lock.json`. Before, raising the pins across a minor release, such as 0.3.28 to 0.4.2, stopped with `ERESOLVE ... Conflicting peer dependency`, and deleting the lockfile was the only workaround. Optional peers between Holo packages, such as `@holo-js/core` on `@holo-js/storage`, now accept any version, so npm upgrades each package through your own pins. Peers that a package requires, such as `@holo-js/db-postgres` on `@holo-js/db`, and framework peers such as `next` keep their minimum versions. Each release now checks that npm and Bun upgrade a lockfile from the previous release to the next patch and minor release.
+- npm can upgrade every `@holo-js/*` package together with your existing `package-lock.json`. Before, raising the pins across a minor release stopped with `ERESOLVE ... Conflicting peer dependency`, and deleting the lockfile was the only workaround. Optional peers between Holo packages, such as `@holo-js/core` on `@holo-js/storage`, now require 0.4.0 or later instead of the exact current release, so later upgrades succeed while npm still refuses to mix in a 0.3.x package. Peers that a package requires, such as `@holo-js/db-postgres` on `@holo-js/db`, and framework peers such as `next` keep their minimum versions. Each release now checks that npm and Bun upgrade a lockfile from the previous release to the next patch and minor release.
 
 ## 0.4.3 - 2026-10-30
 
