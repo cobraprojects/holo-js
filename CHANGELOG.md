@@ -6,6 +6,10 @@
 
 - Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
 
+### Changed
+
+- `holo queue:*` commands start faster, which helps when cron or a supervisor runs `holo queue:work --once`. Project discovery and the queue worker now bundle all models, migrations, jobs, events, listeners, channels and policies in one esbuild build instead of one build per file. Nuxt projects no longer load the `typescript` package on every command: Holo caches the resolved `tsconfig.json` `paths` and `extends` in `.holo-js/generated/tsconfig-paths.json` and resolves them again when any config in the chain changes. `queue:failed`, `queue:retry`, `queue:forget` and `queue:flush` no longer boot the whole application, only the queue and the database. In the Nuxt example app, `queue:work --once` drops from about 720 ms to 420 ms, and the failed-job commands from about 435 ms to 185 ms.
+
 ## 0.4.4 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.
