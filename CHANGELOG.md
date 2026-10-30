@@ -6,6 +6,10 @@
 
 - Add task scheduling with the new `@holo-js/schedule` package. Declare tasks in `server/schedule.ts` with `defineSchedule()`: `schedule.command('privacy:maintain')` runs a Holo command, `schedule.job(SendDigest, payload)` dispatches a job, and `schedule.call(fn)` runs a function. Tasks use Laravel's frequency methods, such as `daily()`, `dailyAt('02:00')`, `everyFiveMinutes()`, `weekdays()`, `cron()`, and `timezone()`, and can use `withoutOverlapping()` and `onOneServer()`, which take cache locks. Run the scheduler from one `* * * * *` cron entry with `holo schedule:run`, or keep `holo schedule:work` running. `holo schedule:list` shows each task's next due time. See [Task Scheduling](apps/docs/docs/scheduling/index.md).
 
+### Changed
+
+- Next.js server actions called from the browser return the `{ ok: false, ... }` payload when they throw a validation or rate-limit error. Before, Next.js answered with a 500 and logged every `ValidationException` as a server error. `useForm()` shows the field errors as before. Client code that caught the thrown error from an action now receives the payload as the return value. `redirect()`, other errors, actions called from server code or from inside another action, and form posts sent without JavaScript still throw. See [Framework Recipes](apps/docs/docs/basics/forms/frameworks.md#next-js-server-action).
+
 ## 0.4.4 - 2026-10-30
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-043-to-044). No breaking changes or required migrations.

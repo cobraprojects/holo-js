@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
@@ -156,17 +157,27 @@ function isMissingNextRequestScope(error: unknown): boolean {
   return error instanceof Error && error.message.includes('outside a request scope')
 }
 
+type NextWorkUnitStore = {
+  readonly type?: string
+  readonly phase?: string
+  readonly headers?: Headers
+}
+
 type WorkUnitStorageModule = {
-  readonly workUnitAsyncStorage: { getStore(): { readonly phase?: string } | undefined }
+  readonly workUnitAsyncStorage: { getStore(): NextWorkUnitStore | undefined }
+}
+
+function loadNextWorkUnitStorage(requireNext: (id: string) => unknown): WorkUnitStorageModule['workUnitAsyncStorage'] | undefined {
+  try {
+    return (requireNext('next/dist/server/app-render/work-unit-async-storage.external.js') as WorkUnitStorageModule).workUnitAsyncStorage
+  } catch {
+    return undefined
+  }
 }
 
 function nextCookiesMutableInCurrentPhase(requireNext: (id: string) => unknown): boolean {
-  try {
-    const { workUnitAsyncStorage } = requireNext('next/dist/server/app-render/work-unit-async-storage.external.js') as WorkUnitStorageModule
-    return workUnitAsyncStorage.getStore()?.phase === 'action'
-  } catch {
-    return true
-  }
+  const workUnitAsyncStorage = loadNextWorkUnitStorage(requireNext)
+  return !workUnitAsyncStorage || workUnitAsyncStorage.getStore()?.phase === 'action'
 }
 
 function isReadonlyNextCookieStore(error: unknown): boolean {
@@ -334,13 +345,20 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
   }
 }
 
+type ExpectedFailure = NonNullable<ReturnType<typeof serializeValidationException> | ReturnType<typeof serializeRateLimitError>>
+
+function serializeExpectedFailure(error: unknown): ExpectedFailure {
+  const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
+  if (!payload) throw error
+  return payload
+}
+
 function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs) => Response | Promise<Response>): (...args: TArgs) => Promise<Response> {
   return async (...args) => {
     try {
       return await handler(...args)
     } catch (error) {
-      const payload = serializeValidationException(error) ?? serializeRateLimitError(error)
-      if (!payload) throw error
+      const payload = serializeExpectedFailure(error)
       return Response.json(payload, {
         status: payload.status,
         ...(payload.retryAfterSeconds === undefined ? {} : { headers: { 'Retry-After': String(payload.retryAfterSeconds) } }),
@@ -349,8 +367,34 @@ function routeHandler<TArgs extends readonly unknown[]>(handler: (...args: TArgs
   }
 }
 
+const runningServerAction = new AsyncLocalStorage<true>()
+
+function serverReferenceExport(id: unknown): string | undefined {
+  return typeof id === 'string' && id.length === 42 ? id.slice(2) : undefined
+}
+
+function isInvokedServerAction(action: object): boolean {
+  const store = loadNextWorkUnitStorage(createRequire(resolve(process.cwd(), 'package.json')))?.getStore()
+  if (store?.type !== 'request' || store.phase !== 'action') return false
+  const invoked = serverReferenceExport(store.headers?.get('next-action'))
+  return invoked !== undefined && invoked === serverReferenceExport(Reflect.get(action, '$$id'))
+}
+
+function serverAction<TArgs extends readonly unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>): (...args: TArgs) => Promise<TResult | ExpectedFailure> {
+  const invoke = async (...args: TArgs): Promise<TResult | ExpectedFailure> => {
+    if (runningServerAction.getStore() || !isInvokedServerAction(invoke)) return await action(...args)
+    try {
+      return await runningServerAction.run(true, () => action(...args))
+    } catch (error) {
+      return serializeExpectedFailure(error)
+    }
+  }
+  return invoke
+}
+
 export const adapterNextRuntimeInternals = {
   routeHandler,
+  serverAction,
   safeDecodeCookieSegment,
   parseResponseCookie,
   parseRequestCookies,

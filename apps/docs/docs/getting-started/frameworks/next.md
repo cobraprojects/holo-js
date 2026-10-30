@@ -113,6 +113,8 @@ export async function createPost(formData: FormData) {
 }
 ```
 
+Holo wraps each export of a `'use server'` file. If an action called from the browser throws a validation or rate-limit error, it returns the failure payload instead of answering with a 500, and the error isn't logged. See [Framework Recipes](/basics/forms/frameworks#next-js-server-action).
+
 For real forms, validate the input first with [Forms](/basics/forms/server). The [Framework Recipes](/basics/forms/frameworks) page shows a complete Next.js form.
 
 ## Read the current user

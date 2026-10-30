@@ -10,6 +10,7 @@ export default defineConfig({
     realtime: 'src/realtime.ts',
     'validation-loader': 'src/validation-loader.ts',
     'route-loader': 'src/route-loader.ts',
+    'server-action-loader': 'src/server-action-loader.ts',
     'realtime-definition-loader': 'src/realtime-definition-loader.ts',
     runtime: 'src/runtime.ts',
   },
