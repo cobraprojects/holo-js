@@ -76,6 +76,7 @@
   },
   "devDependencies": {
     "@holo-js/realtime": "catalog:",
+    "@jridgewell/trace-mapping": "catalog:",
     "@types/node": "catalog:",
     "next": "catalog:",
     "tsup": "catalog:",
