@@ -8,6 +8,7 @@ import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, typ
 
 type BrowserDocument = { cookie: string }
 type FlashCookie = { readonly flash: string, readonly seen: boolean }
+type Navigation = { addEventListener(type: 'navigate', listener: (event: { readonly destination: { readonly url: string } }) => void): void }
 
 // A hook that shows a failure marks its cookie seen instead of deleting it, so the server still clears
 // it on the next successful submission, and a page load that finds a seen cookie knows it is stale.
@@ -57,6 +58,13 @@ function clearFlashCookie(): void {
   if (document) document.cookie = `${VALIDATION_FLASH_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`
 }
 
+function forget(): void {
+  shownPath = undefined
+  shownLocation = undefined
+  clearFlashCookie()
+  show('')
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -79,6 +87,12 @@ function startDocument(): void {
   if (cookie.seen) clearFlashCookie()
   // Posted without JavaScript: the server rendered these errors into this page.
   else if (shown && cookie.flash === shown) markFlashCookieSeen()
+  // Leaving the page drops its errors, even while no call is mounted. A server action's refresh
+  // stays on the same address.
+  const navigation = (globalThis as { readonly navigation?: Navigation }).navigation
+  navigation?.addEventListener('navigate', (event) => {
+    if (shownLocation !== undefined && new URL(event.destination.url).pathname !== shownLocation) forget()
+  })
 }
 
 startDocument()
@@ -106,14 +120,10 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
     mountedCalls++
     return () => {
       mountedCalls--
-      // Leaving the page unmounts every call, and Next has moved to the new address by the next task.
-      // Calls that unmount on the same page, such as a collapsed summary, keep the errors.
+      // Without navigation events: leaving the page unmounts every call, and Next has moved to the new
+      // address by the next task. Calls that unmount on the same page, such as a collapsed summary, keep the errors.
       setTimeout(() => {
-        if (mountedCalls > 0 || shownPath === undefined || locationPath() === shownLocation) return
-        shownPath = undefined
-        shownLocation = undefined
-        clearFlashCookie()
-        show('')
+        if (mountedCalls === 0 && shownPath !== undefined && locationPath() !== shownLocation) forget()
       })
     }
   }, [])

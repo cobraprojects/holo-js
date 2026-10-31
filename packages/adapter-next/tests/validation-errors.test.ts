@@ -298,6 +298,35 @@ describe('useValidationErrors() in Next', () => {
     expect(reopened.errors.has('title')).toBe(true)
   })
 
+  it('drops the errors of a page left while no call was mounted', async () => {
+    const listeners: Array<(event: { destination: { url: string } }) => void> = []
+    const location = { pathname: '/posts/new', protocol: 'http:' }
+    const navigate = (pathname: string) => {
+      for (const listener of listeners) listener({ destination: { url: `http://blog.test${pathname}` } })
+      location.pathname = pathname
+    }
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: location })
+    Object.defineProperty(globalThis, 'navigation', { configurable: true, value: { addEventListener: (_type: 'navigate', listener: (typeof listeners)[number]) => listeners.push(listener) } })
+    onTestFinished(() => {
+      Reflect.deleteProperty(globalThis, 'location')
+      Reflect.deleteProperty(globalThis, 'navigation')
+    })
+    const browser = installBrowserCookies()
+    const summary = await openPage('/posts/new')
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    await summary.refresh()
+    await summary.close()
+
+    navigate('/posts/new')
+    expect(browser.header()).not.toBe('')
+    navigate('/posts')
+    navigate('/posts/new')
+    const reopened = await openPage('/posts/new')
+
+    expect(reopened.errors.flatten()).toEqual({})
+    expect(browser.header()).toBe('')
+  })
+
   it('keeps the errors of a large form within the browser cookie limit', async () => {
     const browser = installBrowserCookies()
     const page = await openPage('/posts/new')
