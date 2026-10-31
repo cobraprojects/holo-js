@@ -248,7 +248,9 @@ field.number().digits(3)
 field.number().minDigits(2).maxDigits(4).max(2000)
 ```
 
-Digit rules accept nonnegative finite integers. Zero (including JavaScript's `-0`) has one digit; negative and fractional numbers, `NaN`, and infinities fail. Holo parses numeric request strings using the existing number-field rules before counting, so leading zeros and exponent spelling do not affect the result. For example, `'00123'` and `'1.23e2'` both become `123`, and `1e21` has 22 digits. Counts describe the parsed JavaScript number's decimal magnitude; precision already lost in a JavaScript number cannot be recovered.
+`digits(3)` accepts `123` and rejects `12` and `1234`. Its default error is "This field must have exactly 3 digits."
+
+Digit rules accept nonnegative finite integers. Zero (including JavaScript's `-0`) has one digit; negative and fractional numbers, `NaN`, and infinities fail. Holo parses numeric request strings using the existing number-field rules before counting, so leading zeros and exponent spelling do not affect the result. For example, `'00123'` and `'1.23e2'` both become `123`, and `1e21` has 22 digits. Counts use the parsed JavaScript number's canonical decimal representation, with scientific notation expanded: `1e23` has 24 digits. Precision already lost in a JavaScript number cannot be recovered.
 
 `count` must be a nonnegative safe integer; invalid counts and use on non-number fields throw `ValidationContractError` when declaring the rule. `digits(0)` and `maxDigits(0)` reject every present number; `minDigits(0)` accepts every nonnegative finite integer. Missing and null values follow the usual `optional()`, `nullable()`, and `default()` rules.
 
@@ -258,9 +260,21 @@ Serialized `FieldDefinition.rules` use the camelCase names `digits`, `minDigits`
 
 Requires at least `count` digits, using the same numeric and argument rules as `digits()`.
 
+```ts
+field.number().minDigits(3)
+```
+
+Accepts `123` and `1234`; rejects `12`. The default error is "This field must have at least 3 digits."
+
 ### `maxDigits(count, message?)`
 
 Requires at most `count` digits, using the same numeric and argument rules as `digits()`.
+
+```ts
+field.number().maxDigits(3)
+```
+
+Accepts `12` and `123`; rejects `1234`. The default error is "This field must have at most 3 digits."
 
 ### `integer(message?)`
 

@@ -28,10 +28,14 @@ describe('numeric digit constraints', () => {
     [1e15, 16],
     [1e21, 22],
     [1e23, 24],
+    [1e23 - 2 ** 24, 23],
+    [1e23 + 2 ** 24, 24],
     [Number.MAX_VALUE, 309],
   ])('counts the decimal magnitude of %s as %s digits', async (value, count) => {
     const validator = field.number().digits(count)
     expect(await validator['~standard'].validate(value)).toEqual({ value })
+    expect(await field.number().minDigits(count)['~standard'].validate(value)).toEqual({ value })
+    expect(await field.number().maxDigits(count)['~standard'].validate(value)).toEqual({ value })
     expect((await field.number().digits(count + 1)['~standard'].validate(value)).issues).toBeDefined()
   })
 

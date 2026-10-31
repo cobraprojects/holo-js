@@ -38,14 +38,15 @@ export function maxAction(definition: FieldDefinition, value: number, message?: 
 export function digitsAction(name: 'digits' | 'minDigits' | 'maxDigits', count: number, message?: string) {
   const qualifier = name === 'minDigits' ? 'at least' : name === 'maxDigits' ? 'at most' : 'exactly'
   const fallback = message ?? `This field must have ${qualifier} ${count} ${pluralize(count, 'digit', 'digits')}.`
-  const minimum = name === 'maxDigits' || count <= 1 ? 0 : 10 ** (count - 1)
-  const maximum = name === 'minDigits' ? Number.POSITIVE_INFINITY : 10 ** count
-
-  return v.check((input: unknown) => typeof input === 'number'
-    && Number.isInteger(input)
-    && input >= minimum
-    && input < maximum
-    && (name === 'minDigits' || count > 0), fallback)
+  return v.check((input: unknown) => {
+    if (typeof input !== 'number' || !Number.isInteger(input) || input < 0) return false
+    const decimal = input.toString()
+    const exponentIndex = decimal.indexOf('e')
+    const digits = exponentIndex === -1 ? decimal.length : Number(decimal.slice(exponentIndex + 1)) + 1
+    if (name === 'minDigits') return digits >= count
+    if (name === 'maxDigits') return digits <= count
+    return digits === count
+  }, fallback)
 }
 
 function defaultMaxMessage(kind: FieldKind, value: number): string {

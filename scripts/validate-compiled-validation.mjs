@@ -31,7 +31,7 @@ export const schema = form({
   assert.deepEqual(variants.compiled.schema.fields, variants.original.schema.fields)
   const valid = { email: 'reader@example.com', password: '12345678', passwordConfirmation: '12345678', name: 'Alice', profile: { id: null } }
   const inputs = [{}, valid, { ...valid, email: 'invalid' }, { ...valid, name: '  ' }, { ...valid, passwordConfirmation: 'different' }, { ...valid, count: '11' }, { ...valid, count: '3', enabled: 'on' }, { ...valid, profile: { website: 'invalid', id: 'invalid' } }, { ...valid, email: 42 }, { ...valid, count: 1.5 }, { ...valid, name: 'x'.repeat(20) }]
-  for (const value of [0, -0, 12, 123, 1234, -123, 12.3, 1e21, Number.MAX_VALUE, NaN, Infinity, -Infinity, undefined, null, '123', '123abc']) {
+  for (const value of [0, -0, 12, 123, 1234, -123, 12.3, 1e21, 1e23, 1e23 - 2 ** 24, 1e23 + 2 ** 24, Number.MAX_VALUE, NaN, Infinity, -Infinity, undefined, null, '123', '123abc']) {
     inputs.push({ ...valid, digits: value, minDigits: value, maxDigits: value, zeroDigits: value })
   }
   for (const input of inputs) {
