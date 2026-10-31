@@ -1,4 +1,23 @@
+import remapping, { type SourceMapInput } from '@jridgewell/remapping'
+import MagicString from 'magic-string'
 import ts from 'typescript'
+
+export type NextModuleSourceMap = {
+  readonly version: 3
+  readonly file?: string | null
+  readonly sources: readonly (string | null)[]
+  readonly sourcesContent?: readonly (string | null)[]
+  readonly names: readonly string[]
+  readonly mappings: string
+}
+
+export type NextModuleTransform = {
+  readonly code: string
+  readonly map: NextModuleSourceMap
+}
+
+/** A source map from an earlier loader, as an object or JSON text. */
+export type NextModuleInputSourceMap = string | NextModuleSourceMap
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
@@ -9,7 +28,6 @@ const RUNTIME_MODULES: Readonly<Record<RuntimeWrapper, { readonly specifier: str
   serverAction: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   validationErrorsLayout: { specifier: '@holo-js/adapter-next/internal/validation-layout', internals: 'adapterNextLayoutInternals' },
 }
-
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
   return ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)
@@ -50,6 +68,16 @@ function isDeclaredValue(statement: ts.Statement): statement is ts.FunctionDecla
   return (ts.isFunctionDeclaration(statement) && Boolean(statement.body)) || ts.isClassDeclaration(statement)
 }
 
+function unparenthesized(expression: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(expression) ? unparenthesized(expression.expression) : expression
+}
+
+function exportedIdentifier(statement: ts.Statement): ts.Identifier | undefined {
+  if (!ts.isExportAssignment(statement) || statement.isExportEquals) return undefined
+  const expression = unparenthesized(statement.expression)
+  return ts.isIdentifier(expression) ? expression : undefined
+}
+
 function declaredValues(file: ts.SourceFile, defaultName: string): ReadonlySet<string> {
   return new Set(file.statements.flatMap((statement) => {
     if (isDeclaredValue(statement)) return [statement.name?.text ?? defaultName]
@@ -78,108 +106,117 @@ function wrappedLocals(file: ts.SourceFile, wraps: (name: string) => boolean, de
         if (!element.isTypeOnly) add((element.propertyName ?? element.name).text, element.name.text)
       }
     }
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals && ts.isIdentifier(statement.expression)) {
-      add(statement.expression.text, 'default')
-    }
+    const identifier = exportedIdentifier(statement)
+    if (identifier) add(identifier.text, 'default')
   }
   return locals
 }
 
-function reassignable(statement: ts.Statement, locals: ReadonlySet<string>, defaultName: string): ts.Statement {
-  if (ts.isFunctionDeclaration(statement) && statement.body && !statement.name && locals.has(defaultName)) {
-    return ts.factory.updateFunctionDeclaration(statement, statement.modifiers, statement.asteriskToken,
-      ts.factory.createIdentifier(defaultName), statement.typeParameters, statement.parameters, statement.type, statement.body)
-  }
-  if (ts.isClassDeclaration(statement) && !statement.name && locals.has(defaultName)) {
-    return ts.factory.updateClassDeclaration(statement, statement.modifiers, ts.factory.createIdentifier(defaultName),
-      statement.typeParameters, statement.heritageClauses, statement.members)
-  }
-  if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
-    && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
-    return ts.factory.updateVariableStatement(statement, statement.modifiers,
-      ts.factory.createVariableDeclarationList(statement.declarationList.declarations, ts.NodeFlags.Let))
-  }
-  return statement
+function statementEnd(source: string, node: ts.Node): string {
+  return source[node.end - 1] === ';' ? '' : ';'
 }
 
-function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => boolean, declared: ReadonlySet<string>, allocate: NameAllocator): readonly ts.Statement[] {
-  if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) return [statement]
+function keywordEnd(statement: ts.FunctionDeclaration | ts.ClassDeclaration): number {
+  if (ts.isFunctionDeclaration(statement) && statement.asteriskToken) return statement.asteriskToken.end
+  const keyword = ts.isFunctionDeclaration(statement) ? ts.SyntaxKind.FunctionKeyword : ts.SyntaxKind.ClassKeyword
+  return statement.getChildren().find(child => child.kind === keyword)!.end
+}
+
+function localizedDefault(statement: ts.Statement, localizes: (expression: ts.Expression) => boolean): ts.ExportAssignment | undefined {
+  if (!ts.isExportAssignment(statement) || statement.isExportEquals) return undefined
+  return localizes(unparenthesized(statement.expression)) ? statement : undefined
+}
+
+function moduleExportName(name: ts.ModuleExportName): string {
+  return ts.isIdentifier(name) ? name.text : JSON.stringify(name.text)
+}
+
+// Rebuilt from parsed values, since raw text can hold line continuations that would add lines when copied.
+function importSource(moduleSpecifier: ts.StringLiteral, attributes: ts.ImportAttributes | undefined): string {
+  const entries = attributes?.elements.map(attribute => `${moduleExportName(attribute.name)}: ${
+    ts.isStringLiteral(attribute.value) ? JSON.stringify(attribute.value.text) : attribute.value.getText()}`)
+  const keyword = attributes?.token === ts.SyntaxKind.AssertKeyword ? 'assert' : 'with'
+  return ` from ${JSON.stringify(moduleSpecifier.text)}${entries ? ` ${keyword} { ${entries.join(', ')} }` : ''}`
+}
+
+type RouteExport = {
+  readonly local: string
+  readonly text: string
+}
+
+function localizeRouteExports(statement: ts.Statement, wraps: (name: string) => boolean, declared: ReadonlySet<string>, allocate: NameAllocator): readonly RouteExport[] | undefined {
+  if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) return undefined
   const { moduleSpecifier } = statement
   const handlers = statement.exportClause.elements.filter(element => !element.isTypeOnly && wraps(element.name.text)
     && (moduleSpecifier || !declared.has((element.propertyName ?? element.name).text)))
-  if (handlers.length === 0) return [statement]
+  if (handlers.length === 0) return undefined
+  const from = moduleSpecifier && ts.isStringLiteral(moduleSpecifier) ? importSource(moduleSpecifier, statement.attributes) : ''
   const remaining = statement.exportClause.elements.filter(element => !handlers.includes(element))
   return [
-    ...(remaining.length ? [ts.factory.updateExportDeclaration(statement, statement.modifiers, false,
-      ts.factory.updateNamedExports(statement.exportClause, remaining), moduleSpecifier, statement.attributes)] : []),
-    ...handlers.flatMap((handler) => {
+    ...(remaining.length ? [{ local: '', text: `export { ${remaining.map(element => element.getText()).join(', ')} }${from};` }] : []),
+    ...handlers.map((handler) => {
       const source = handler.propertyName ?? handler.name
-      const imported = moduleSpecifier || !ts.isIdentifier(source) ? ts.factory.createIdentifier(allocate(`__holoImported${handler.name.text}`)) : source
-      const local = ts.factory.createIdentifier(allocate(`__holoExported${handler.name.text}`))
-      return [
-        ...(moduleSpecifier ? [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
-          ts.factory.createImportSpecifier(false, source, imported),
-        ])), moduleSpecifier)] : []),
-        ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
-          ts.factory.createVariableDeclaration(local, undefined, undefined, imported),
-        ], ts.NodeFlags.Let)),
-        ts.factory.createExportDeclaration(undefined, false, ts.factory.createNamedExports([
-          ts.factory.createExportSpecifier(false, local, handler.name),
-        ])),
-      ]
+      const imported = moduleSpecifier || !ts.isIdentifier(source) ? allocate(`__holoImported${handler.name.text}`) : source.text
+      const local = allocate(`__holoExported${handler.name.text}`)
+      const importText = moduleSpecifier ? `import { ${moduleExportName(source)} as ${imported} }${from}; ` : ''
+      return { local, text: `${importText}let ${local} = ${imported}; export { ${local} as ${moduleExportName(handler.name)} };` }
     }),
   ]
 }
 
-function localizeDefaultExport(statement: ts.Statement, defaultName: string, localizes: (expression: ts.Expression) => boolean): readonly ts.Statement[] {
-  if (!ts.isExportAssignment(statement) || statement.isExportEquals) return [statement]
-  let expression = statement.expression
-  while (ts.isParenthesizedExpression(expression)) expression = expression.expression
-  if (!localizes(expression)) return [ts.factory.updateExportAssignment(statement, statement.modifiers, expression)]
-  return [
-    ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
-      ts.factory.createVariableDeclaration(defaultName, undefined, undefined, expression),
-    ], ts.NodeFlags.Let)),
-    ts.factory.updateExportAssignment(statement, statement.modifiers, ts.factory.createIdentifier(defaultName)),
-  ]
-}
-
-function wrapExports(source: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): string | undefined {
-  const allocate = nameAllocator(source)
+function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name: string) => boolean): MagicString | undefined {
+  const source = file.text
+  const allocate = nameAllocator(file)
   const defaultName = allocate('__holoDefault')
   const runtimeName = allocate('__holoRouteRuntime')
-  const declared = declaredValues(source, defaultName)
+  const declared = declaredValues(file, defaultName)
+  const output = new MagicString(source)
+  const locals = new Set(wrappedLocals(file, wraps, defaultName))
+  const localized = new Set<string>()
   const localizes = wrapper === 'validationErrorsLayout'
     ? (expression: ts.Expression) => !ts.isIdentifier(expression) || !declared.has(expression.text)
     : (expression: ts.Expression) => ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)
-  const file = ts.factory.updateSourceFile(source, source.statements
-    .flatMap(statement => localizeDefaultExport(statement, defaultName, localizes))
-    .flatMap(statement => wrapper === 'serverAction' ? [statement] : localizeRouteExports(statement, wraps, declared, allocate)))
-  const locals = wrappedLocals(file, wraps, defaultName)
-  if (locals.size === 0) return undefined
-  const runtimeModule = RUNTIME_MODULES[wrapper]
-  const runtimeImport = ts.factory.createImportDeclaration(undefined,
-    ts.factory.createImportClause(false, undefined, ts.factory.createNamedImports([
-      ts.factory.createImportSpecifier(false, ts.factory.createIdentifier(runtimeModule.internals), ts.factory.createIdentifier(runtimeName)),
-    ])), ts.factory.createStringLiteral(runtimeModule.specifier))
-  const reassign = (local: string) => ts.factory.createExpressionStatement(ts.factory.createAssignment(
-    ts.factory.createIdentifier(local),
-    ts.factory.createCallExpression(
-      ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier(runtimeName), wrapper),
-      undefined,
-      [ts.factory.createIdentifier(local)],
-    ),
-  ))
-  const pending = new Set(locals)
-  const statements = file.statements.flatMap((statement): readonly ts.Statement[] => {
-    if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression) && pending.delete(statement.expression.text)) {
-      return [reassign(statement.expression.text), statement]
+  const reassign = (local: string) => `${local} = ${runtimeName}.${wrapper}(${local});`
+  // Keeps the line breaks of a replaced span so the lines after it stay in place.
+  const lineBreaks = (text: string) => text.match(/\r\n|[\r\n\u2028\u2029]/g)?.length ?? 0
+  const overwrite = (start: number, end: number, text: string) => {
+    output.overwrite(start, end, `${text}${'\n'.repeat(Math.max(0, lineBreaks(source.slice(start, end)) - lineBreaks(text)))}`)
+  }
+  for (const statement of file.statements) {
+    const assignment = wraps('default') ? localizedDefault(statement, localizes) : undefined
+    if (assignment) {
+      overwrite(assignment.getStart(), assignment.expression.getStart(), `let ${defaultName} = `)
+      output.appendLeft(assignment.end, `${statementEnd(source, assignment)} ${reassign(defaultName)} export default ${defaultName};`)
+      localized.add(defaultName)
+      continue
     }
-    return [reassignable(statement, locals, defaultName)]
-  })
-  const insertAt = prologueEnd(statements)
-  return ts.createPrinter().printFile(ts.factory.updateSourceFile(file,
-    [...statements.slice(0, insertAt), runtimeImport, ...statements.slice(insertAt), ...[...pending].map(reassign)]))
+    const routeExports = wrapper === 'serverAction' ? undefined : localizeRouteExports(statement, wraps, declared, allocate)
+    if (routeExports) {
+      overwrite(statement.getStart(), statement.end, routeExports.map(entry => entry.text).join(' '))
+      for (const entry of routeExports) if (entry.local) locals.add(entry.local)
+    }
+  }
+  if (locals.size === 0 && localized.size === 0) return undefined
+  const pending = new Set([...locals].filter(local => !localized.has(local)))
+  for (const statement of file.statements) {
+    const identifier = exportedIdentifier(statement)
+    if (identifier && pending.delete(identifier.text)) {
+      output.prependRight(statement.getStart(), `${reassign(identifier.text)} `)
+    }
+    if (isDeclaredValue(statement) && !statement.name && locals.has(defaultName)) {
+      output.appendLeft(keywordEnd(statement), ` ${defaultName}`)
+    }
+    if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
+      && statement.declarationList.declarations.some(declaration => boundNames(declaration.name).some(name => locals.has(name)))) {
+      const keyword = statement.declarationList.getStart()
+      output.overwrite(keyword, keyword + 'const'.length, 'let  ')
+    }
+  }
+  // Imports are hoisted, so appending this one leaves every original line where it was.
+  const runtimeModule = RUNTIME_MODULES[wrapper]
+  const runtimeImport = `import { ${runtimeModule.internals} as ${runtimeName} } from ${JSON.stringify(runtimeModule.specifier)};`
+  output.append(`\n${[runtimeImport, ...[...pending].map(reassign)].join('\n')}\n`)
+  return output
 }
 
 function scriptKind(filename: string): ts.ScriptKind {
@@ -192,36 +229,81 @@ function parse(source: string, filename: string): ts.SourceFile {
   return ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKind(filename))
 }
 
-export function compileNextRoute(source: string, filename: string): string {
-  return wrapExports(parse(source, filename), 'routeHandler', name => METHODS.has(name)) ?? source
-}
-
 function hasDirective(file: ts.SourceFile, directive: string): boolean {
   return file.statements.slice(0, prologueEnd(file.statements)).filter(isDirective)
     .some(statement => statement.expression.text === directive)
 }
 
-export function compileNextServerActions(source: string, filename: string): string {
-  if (!source.includes('use server')) return source
-  const file = parse(source, filename)
-  if (!hasDirective(file, 'use server')) return source
-  return wrapExports(file, 'serverAction', () => true) ?? source
+function transformed(output: MagicString | undefined, filename: string, inputMap: NextModuleInputSourceMap | undefined): NextModuleTransform | undefined {
+  if (!output) return undefined
+  const map = output.generateMap({ source: filename, includeContent: true, hires: 'boundary' }).toString()
+  const chained = inputMap ? remapping([map, inputMap as SourceMapInput], () => null).toString() : map
+  const encoded = JSON.parse(chained) as NextModuleSourceMap
+  return Object.freeze({ code: output.toString(), map: { ...encoded, file: encoded.file ?? filename } })
 }
 
-function serverLayoutForClientLayout(clientLayoutRequest: string): string {
+function wrapRoute(source: string, filename: string): MagicString | undefined {
+  return wrapExports(parse(source, filename), 'routeHandler', name => METHODS.has(name))
+}
+
+function wrapServerActions(source: string, filename: string): MagicString | undefined {
+  if (!source.includes('use server')) return undefined
+  const file = parse(source, filename)
+  if (!hasDirective(file, 'use server')) return undefined
+  return wrapExports(file, 'serverAction', () => true)
+}
+
+function serverLayoutForClientLayout(source: string, clientLayoutRequest: string): MagicString {
   const clientLayout = JSON.stringify(clientLayoutRequest)
   const { specifier, internals } = RUNTIME_MODULES.validationErrorsLayout
-  return [
+  return new MagicString(source).overwrite(0, source.length, [
     `import __holoClientLayout from ${clientLayout}`,
     `import { ${internals} as __holoLayoutRuntime } from ${JSON.stringify(specifier)}`,
     `export * from ${clientLayout}`,
     'export default __holoLayoutRuntime.validationErrorsLayout(__holoClientLayout)',
     '',
-  ].join('\n')
+  ].join('\n'))
 }
 
-export function compileNextRootLayout(source: string, filename: string, clientLayoutRequest: () => string): string {
+function wrapRootLayout(source: string, filename: string, clientLayoutRequest: () => string): MagicString | undefined {
   const file = parse(source, filename)
-  if (hasDirective(file, 'use client')) return serverLayoutForClientLayout(clientLayoutRequest())
-  return wrapExports(file, 'validationErrorsLayout', name => name === 'default') ?? source
+  if (hasDirective(file, 'use client')) return serverLayoutForClientLayout(source, clientLayoutRequest())
+  return wrapExports(file, 'validationErrorsLayout', name => name === 'default')
+}
+
+/**
+ * Wraps the HTTP method exports of a Next.js route file with Holo's route runtime.
+ * The original text is edited in place, and the returned map points back to it,
+ * chained through `inputMap` when an earlier loader passed one.
+ * Returns undefined when the file exports no route handlers.
+ */
+export function transformNextRoute(source: string, filename: string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
+  return transformed(wrapRoute(source, filename), filename, inputMap)
+}
+
+/**
+ * Wraps every export of a `'use server'` module with Holo's server-action runtime.
+ * The original text is edited in place, and the returned map points back to it,
+ * chained through `inputMap` when an earlier loader passed one.
+ * Returns undefined when the module has no leading `'use server'` directive or no exports to wrap.
+ */
+export function transformNextServerActions(source: string, filename: string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
+  return transformed(wrapServerActions(source, filename), filename, inputMap)
+}
+
+/**
+ * Wraps the default export of a Next.js root layout with Holo's validation errors provider.
+ * A `'use client'` layout is replaced by a server layout that imports it through `clientLayoutRequest`.
+ * Returns undefined when the layout has no default export to wrap.
+ */
+export function transformNextRootLayout(source: string, filename: string, clientLayoutRequest: () => string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
+  return transformed(wrapRootLayout(source, filename, clientLayoutRequest), filename, inputMap)
+}
+
+export function compileNextRoute(source: string, filename: string): string {
+  return wrapRoute(source, filename)?.toString() ?? source
+}
+
+export function compileNextServerActions(source: string, filename: string): string {
+  return wrapServerActions(source, filename)?.toString() ?? source
 }

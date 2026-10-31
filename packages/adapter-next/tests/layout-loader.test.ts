@@ -37,7 +37,7 @@ type CompiledLayout = { readonly default: (props: { readonly title: string }) =>
 
 async function importLayout(root: string, file: string, source: string, pageExtensions?: readonly string[], bundler?: 'turbopack' | 'webpack'): Promise<CompiledLayout> {
   const compiled = join(root, file.replace(/\.tsx$/, `.compiled-${compiledLayouts += 1}.ts`))
-  await writeFile(compiled, layoutLoader.call({ resourcePath: join(root, file), getOptions: () => ({ pageExtensions, bundler }) }, source))
+  await writeFile(compiled, layoutLoader.call({ resourcePath: join(root, file), getOptions: () => ({ pageExtensions, bundler }) }, source)!)
   return await import(compiled) as CompiledLayout
 }
 
@@ -112,6 +112,17 @@ describe('Next layout loader', () => {
 
     expect(dependencies).toHaveLength(1)
     expect(await readFile(dependencies[0] ?? '', 'utf8')).toContain(JSON.stringify(join(project, 'app/layout.tsx')))
+  })
+
+  it('keeps every line of a root layout in place and passes a source map pointing back to it', async () => {
+    const project = await createProject(['app/layout.tsx'])
+    const source = ['import type { ReactNode } from \'react\'', '', 'export default function RootLayout(props: { readonly children: ReactNode }) {', '  return props.children', '}', ''].join('\n')
+    let output: { readonly code: string, readonly map?: unknown } | undefined
+
+    layoutLoader.call({ resourcePath: join(project, 'app/layout.tsx'), callback: (_error, code, map) => { output = { code, map } } }, source)
+
+    expect(output?.code.split('\n').slice(0, 5)).toEqual(source.split('\n').slice(0, 5))
+    expect(output?.map).toMatchObject({ version: 3, sources: [join(project, 'app/layout.tsx')] })
   })
 
   it('watches only the possible parent layout files, so adding or removing one rebuilds the layout', async () => {

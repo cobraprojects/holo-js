@@ -1,16 +1,15 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
-import { compileNextRootLayout } from '@holo-js/adapter-shared/build'
+import { type NextModuleInputSourceMap, transformNextRootLayout } from '@holo-js/adapter-shared/build'
 import { DEFAULT_PAGE_EXTENSIONS, layoutFileNamePattern } from './app-layout-files'
+import { type ModuleTransformLoaderContext, runModuleTransform } from './module-transform-loader'
 
 const CLIENT_LAYOUT_QUERY = '?holo-client-layout'
 
 type NextBundler = 'turbopack' | 'webpack'
 
-type LayoutLoaderContext = {
-  cacheable?: () => void
-  readonly resourcePath: string
+type LayoutLoaderContext = ModuleTransformLoaderContext & {
   readonly resourceQuery?: string
   addDependency?(file: string): void
   addMissingDependency?(file: string): void
@@ -66,18 +65,17 @@ function writeClientLayoutEntry(layout: string, projectRoot: string): string {
   return entry
 }
 
-
-export default function layoutLoader(this: LayoutLoaderContext, source: string): string {
-  this.cacheable?.()
-  if (this.resourceQuery === CLIENT_LAYOUT_QUERY) return source
+export default function layoutLoader(this: LayoutLoaderContext, source: string, inputMap?: NextModuleInputSourceMap | null): string | undefined {
   const options = this.getOptions?.()
   const projectRoot = process.cwd()
   const dependencies = { existing: (file: string) => this.addDependency?.(file), missing: (file: string) => this.addMissingDependency?.(file) }
-  if (!isRootLayout(this.resourcePath, projectRoot, options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS, dependencies)) return source
-  return compileNextRootLayout(source, this.resourcePath, () => {
+  const wrapsLayout = this.resourceQuery !== CLIENT_LAYOUT_QUERY
+    && isRootLayout(this.resourcePath, projectRoot, options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS, dependencies)
+  const clientLayoutRequest = () => {
     if (options?.bundler !== 'webpack') return `./${basename(this.resourcePath)}${CLIENT_LAYOUT_QUERY}`
     const entry = writeClientLayoutEntry(this.resourcePath, projectRoot)
     this.addDependency?.(entry)
     return entry
-  })
+  }
+  return runModuleTransform(this, (code, filename, map) => wrapsLayout ? transformNextRootLayout(code, filename, clientLayoutRequest, map) : undefined, source, inputMap)
 }

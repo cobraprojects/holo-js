@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import type { NextModuleInputSourceMap } from '@holo-js/adapter-shared/build'
 import routeLoader from '../src/route-loader'
 import serverActionLoader from '../src/server-action-loader'
 
@@ -15,12 +17,37 @@ vi.mock('@holo-js/adapter-next/runtime', () => ({
   },
 }))
 
+type LoaderOutput = { readonly code: string, readonly map?: unknown }
+
+function runLoader(loader: typeof serverActionLoader, resourcePath: string, source: string, inputMap?: NextModuleInputSourceMap): LoaderOutput {
+  let output: LoaderOutput | undefined
+  const returned = loader.call({
+    resourcePath,
+    callback: (_error: null, code: string, map?: unknown) => { output = { code, map } },
+  }, source, inputMap)
+  expect(returned).toBeUndefined()
+  return output!
+}
+
+function position(text: string, needle: string): { readonly line: number, readonly column: number } {
+  const index = text.indexOf(needle)
+  expect(index).toBeGreaterThanOrEqual(0)
+  const before = text.slice(0, index).split('\n')
+  return { line: before.length, column: before.at(-1)!.length }
+}
+
+function expectMapped(output: LoaderOutput, source: string, needle: string, resourcePath: string): void {
+  const generated = position(output.code, needle)
+  const original = originalPositionFor(new TraceMap(output.map as string), generated)
+  expect(original).toMatchObject({ source: resourcePath, ...position(source, needle) })
+}
+
 async function importCompiled(filename: string, source: string, loader = serverActionLoader): Promise<Record<string, unknown>> {
   const directory = await mkdtemp(join(import.meta.dirname, '.server-actions-'))
   onTestFinished(() => rm(directory, { recursive: true, force: true }))
   const file = join(directory, filename)
   await writeFile(join(directory, 'helpers.ts'), 'export async function shared() { return \'shared\' }\n')
-  await writeFile(file, loader.call({ resourcePath: file }, source))
+  await writeFile(file, loader.call({ resourcePath: file }, source)!)
   return await import(file) as Record<string, unknown>
 }
 
@@ -44,7 +71,7 @@ describe('Next server action loader', () => {
     ].join('\n')
 
     const module = await importCompiled('actions.ts', source)
-    const compiled = serverActionLoader.call({ resourcePath: 'actions.ts' }, source)
+    const compiled = serverActionLoader.call({ resourcePath: 'actions.ts' }, source)!
 
     expect(compiled.trimStart().startsWith('// actions\n\'use server\'')).toBe(true)
     expect(Object.keys(module).sort()).toEqual(['alias', 'current', 'default', 'early', 'later', 'pick', 'remove', 'save', 'shared'])
@@ -111,12 +138,117 @@ describe('Next server action loader', () => {
     expect(module.dynamic).toBe('force-dynamic')
   })
 
+  it('appends the runtime import, so a shebang, a terminated directive, and every column stay in place', async () => {
+    const actions = ['\'use server\';', 'export const save = async () => { return \'saved\' }'].join('\n')
+    const route = ['#!/usr/bin/env node', 'export const GET = async () => \'got\''].join('\n')
+
+    for (const [source, loader] of [[actions, serverActionLoader], [route, routeLoader]] as const) {
+      const lines = loader.call({ resourcePath: 'module.ts' }, source)!.split('\n')
+      expect(lines.slice(0, 2).map(line => line.replace('let  ', 'const'))).toEqual(source.split('\n'))
+      expect(lines[2]).toMatch(/^import \{ adapterNextRuntimeInternals as __holoRouteRuntime \} from /)
+    }
+    expect(await (((await importCompiled('terminated-actions.ts', actions)).save) as () => Promise<unknown>)()).toEqual({ wrapped: 'saved' })
+    expect(await (((await importCompiled('route.ts', route, routeLoader)).GET) as () => Promise<unknown>)()).toEqual({ route: 'got' })
+  })
+
   it('leaves modules without a leading use server directive unchanged', () => {
     for (const source of [
       'export async function save() { \'use server\'; return 1 }',
       'import \'./setup\'\n\'use server\'\nexport async function save() { return 1 }',
     ]) {
       expect(serverActionLoader.call({ resourcePath: 'page.tsx' }, source)).toBe(source)
+    }
+  })
+
+  it('keeps every line and column of a use server module in place and maps each position back to it', () => {
+    const resourcePath = join(import.meta.dirname, 'app', 'ai-actions.ts')
+    const source = [
+      '// AI actions',
+      '\'use server\'',
+      '',
+      'import { shared } from \'./helpers\'',
+      '',
+      'export async function aiMessage(kind: string) {',
+      '  switch (kind) {',
+      '    case \'a\': case \'b\': return shared()',
+      '  }',
+      '  throw new Error(`unknown ${kind}`)',
+      '}',
+      '',
+      'export const remove = async () => \'removed\'',
+      'export default async function () { return aiMessage(\'a\') }',
+    ].join('\n')
+
+    const output = runLoader(serverActionLoader, resourcePath, source)
+    const lines = output.code.split('\n')
+
+    expect(lines.slice(0, source.split('\n').length).map(line => line.replace('export let  ', 'export const').replace('function __holoDefault (', 'function ('))).toEqual(source.split('\n'))
+    for (const needle of ['aiMessage(kind', 'switch (kind)', 'return shared()', 'throw new Error', 'remove = async', 'return aiMessage(']) {
+      expectMapped(output, source, needle, resourcePath)
+    }
+    expect(output.map).toMatchObject({ version: 3, file: resourcePath, sources: [resourcePath], sourcesContent: [source] })
+  })
+
+  it('maps route handlers, including localized re-exports, back to their original lines', () => {
+    const resourcePath = join(import.meta.dirname, 'app', 'api', 'route.ts')
+    const source = [
+      'import { shared } from \'./helpers\'',
+      '',
+      'export { shared as GET } from \'./helpers\'',
+      '',
+      'export async function POST(request: Request) {',
+      '  if (!request.ok) throw new Error(\'bad request\')',
+      '  return shared()',
+      '}',
+      'export const DELETE = async () => \'deleted\'',
+    ].join('\n')
+
+    const output = runLoader(routeLoader, resourcePath, source)
+
+    expect(output.code.split('\n')).toHaveLength(source.split('\n').length + 5)
+    for (const needle of ['POST(request', 'throw new Error', 'return shared()', 'DELETE = async']) {
+      expectMapped(output, source, needle, resourcePath)
+    }
+    const reExport = position(output.code, '__holoExportedGET =')
+    expect(originalPositionFor(new TraceMap(output.map as string), reExport)).toMatchObject({ line: 3 })
+  })
+
+  it('keeps the lines after a replaced statement that spans several lines in place', () => {
+    const route = ['export {', '  shared as GET, shared /* kept', '  comment */ as other', '} from \'./hel\\', 'pers\'', 'export async function POST() { throw new Error(\'x\') }'].join('\n')
+    const actions = ['\'use server\'', 'export default', '(async () => 1)', 'export async function save() { throw new Error(\'x\') }'].join('\n')
+
+    for (const [source, loader] of [[route, routeLoader], [actions, serverActionLoader]] as const) {
+      const lines = source.split('\n')
+      expect(runLoader(loader, 'module.ts', source).code.split('\n')[lines.length - 1]).toBe(lines.at(-1))
+    }
+    const carriageReturns = ['export {', ' GET', '} from \'./helpers\'', 'export async function POST() {}'].join('\r')
+    expect(runLoader(routeLoader, 'route.ts', carriageReturns).code.split(/\r\n|[\r\n]/)[3]).toBe('export async function POST() {}')
+  })
+
+  it('chains the map an earlier loader passed', () => {
+    const resourcePath = join(import.meta.dirname, 'app', 'actions.ts')
+    const original = ['\'use server\'', 'export async function save() {', '  throw new Error(\'save failed\')', '}'].join('\n')
+    const source = `// banner\n${original}`
+    const inputMap: NextModuleInputSourceMap = {
+      version: 3,
+      sources: [resourcePath],
+      sourcesContent: [original],
+      names: [],
+      mappings: `;${['AAAA', 'AACA', 'AACA', 'AACA'].join(';')}`,
+    }
+
+    const output = runLoader(serverActionLoader, resourcePath, source, inputMap)
+
+    const generated = position(output.code, 'throw new Error')
+    expect(originalPositionFor(new TraceMap(output.map as string), generated)).toMatchObject({ source: resourcePath, line: 3 })
+  })
+
+  it('passes an unchanged module and its incoming map through the loader callback', () => {
+    const source = 'export async function save() { return 1 }'
+    const inputMap: NextModuleInputSourceMap = { version: 3, sources: ['page.tsx'], names: [], mappings: 'AAAA' }
+
+    for (const loader of [serverActionLoader, routeLoader]) {
+      expect(runLoader(loader, 'page.tsx', source, inputMap)).toEqual({ code: source, map: inputMap })
     }
   })
 })
