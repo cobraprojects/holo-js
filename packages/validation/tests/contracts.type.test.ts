@@ -12,6 +12,21 @@ import {
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
+  it('preserves concrete number inference through digit constraints', async () => {
+    const contract = schema({
+      exact: field.number().digits(3),
+      minimum: field.number().minDigits(2).optional(),
+      maximum: field.number().nullable().maxDigits(4),
+    })
+    expectTypeOf<InferSchemaData<typeof contract.fields>>().toEqualTypeOf<{
+      exact: number
+      minimum: number | undefined
+      maximum: number | null
+    }>()
+    const result = await safeParse({ exact: 123, maximum: null }, contract)
+    expectTypeOf(result.data).toEqualTypeOf<{ exact: number, minimum: number | undefined, maximum: number | null } | undefined>()
+  })
+
   it('preserves file inference through image aspect ratio constraints', () => {
     const avatar = field.file().imageAspectRatio('1:1').optional()
     const cover = field.file().required().image().imageAspectRatio(['16:9', '3:2'])
