@@ -39,6 +39,7 @@ Rules are grouped by the field types they apply to. Rules marked "all fields" wo
 **Number fields**
 
 - [`min()`](#min-value-message), [`max()`](#max-value-message), and [`size()`](#size-value-message), comparing the number itself
+- [`digits()`](#digits-count-message), [`minDigits()`](#mindigits-count-message), and [`maxDigits()`](#maxdigits-count-message), counting decimal digits
 - [`integer()`](#integer-message)
 - [`in()`](#in-values-message)
 
@@ -237,6 +238,29 @@ field.string().regex(/^[a-z0-9-]+$/, 'Use lowercase letters, numbers, and dashes
 ```
 
 ## Number rules
+
+### `digits(count, message?)`
+
+Requires exactly `count` decimal digits on a number field. `minDigits()` and `maxDigits()` set inclusive lower and upper digit counts. Each rule preserves the `number` output type and checks independently of `min()`, `max()`, and `size()`, which compare numeric values.
+
+```ts
+field.number().digits(3)
+field.number().minDigits(2).maxDigits(4).max(2000)
+```
+
+Digit rules accept nonnegative finite integers. Zero (including JavaScript's `-0`) has one digit; negative and fractional numbers, `NaN`, and infinities fail. Holo parses numeric request strings using the existing number-field rules before counting, so leading zeros and exponent spelling do not affect the result. For example, `'00123'` and `'1.23e2'` both become `123`, and `1e21` has 22 digits. Counts describe the parsed JavaScript number's decimal magnitude; precision already lost in a JavaScript number cannot be recovered.
+
+`count` must be a nonnegative safe integer; invalid counts and use on non-number fields throw `ValidationContractError` when declaring the rule. `digits(0)` and `maxDigits(0)` reject every present number; `minDigits(0)` accepts every nonnegative finite integer. Missing and null values follow the usual `optional()`, `nullable()`, and `default()` rules.
+
+Serialized `FieldDefinition.rules` use the camelCase names `digits`, `minDigits`, and `maxDigits`, with `args: [count]` and an optional `message`. All three appear in `SUPPORTED_RULE_FAMILIES`. Pass a custom message to provide localized text.
+
+### `minDigits(count, message?)`
+
+Requires at least `count` digits, using the same numeric and argument rules as `digits()`.
+
+### `maxDigits(count, message?)`
+
+Requires at most `count` digits, using the same numeric and argument rules as `digits()`.
 
 ### `integer(message?)`
 

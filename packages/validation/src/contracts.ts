@@ -121,6 +121,28 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     return this.clone(normalizeRule('size', [value], message))
   }
 
+  digits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('digits', count, message)
+  }
+
+  minDigits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('minDigits', count, message)
+  }
+
+  maxDigits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('maxDigits', count, message)
+  }
+
+  private digitRule(name: 'digits' | 'minDigits' | 'maxDigits', count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    if (this.field.definition.kind !== 'number') {
+      throw new ValidationContractError(`${name} is only supported for number fields.`)
+    }
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new ValidationContractError(`${name} must be a nonnegative safe integer.`)
+    }
+    return this.clone(normalizeRule(name, [count], message))
+  }
+
   email(message?: string): ValidationFieldBuilder<TOutput> {
     return this.clone(normalizeRule('email', [], message))
   }
