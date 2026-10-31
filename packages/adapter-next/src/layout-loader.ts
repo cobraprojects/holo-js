@@ -11,6 +11,7 @@ type NextBundler = 'turbopack' | 'webpack'
 
 type LayoutLoaderContext = ModuleTransformLoaderContext & {
   readonly resourceQuery?: string
+  readonly rootContext?: string
   addDependency?(file: string): void
   addMissingDependency?(file: string): void
   getOptions?(): { readonly pageExtensions?: readonly string[], readonly bundler?: NextBundler }
@@ -67,7 +68,7 @@ function writeClientLayoutEntry(layout: string, projectRoot: string): string {
 
 export default function layoutLoader(this: LayoutLoaderContext, source: string, inputMap?: NextModuleInputSourceMap | null): string | undefined {
   const options = this.getOptions?.()
-  const projectRoot = process.cwd()
+  const projectRoot = this.rootContext ?? process.cwd()
   const dependencies = { existing: (file: string) => this.addDependency?.(file), missing: (file: string) => this.addMissingDependency?.(file) }
   const wrapsLayout = this.resourceQuery !== CLIENT_LAYOUT_QUERY
     && isRootLayout(this.resourcePath, projectRoot, options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS, dependencies)

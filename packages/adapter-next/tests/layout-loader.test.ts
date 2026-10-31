@@ -114,6 +114,16 @@ describe('Next layout loader', () => {
     expect(await readFile(dependencies[0] ?? '', 'utf8')).toContain(JSON.stringify(join(project, 'app/layout.tsx')))
   })
 
+  it('finds root layouts in the project the bundler builds, even when started from another directory', async () => {
+    const project = await createProject(['app/layout.tsx'])
+    vi.spyOn(process, 'cwd').mockReturnValue(join(project, '..'))
+    const source = 'export default function RootLayout(props: { readonly title: string }) { return props.title }\n'
+    const compiled = join(project, 'app/layout.compiled-root-context.ts')
+    await writeFile(compiled, layoutLoader.call({ resourcePath: join(project, 'app/layout.tsx'), rootContext: project }, source)!)
+
+    expect((await import(compiled) as CompiledLayout).default({ title: 'Posts' })).toEqual({ provided: 'Posts' })
+  })
+
   it('keeps every line of a root layout in place and passes a source map pointing back to it', async () => {
     const project = await createProject(['app/layout.tsx'])
     const source = ['import type { ReactNode } from \'react\'', '', 'export default function RootLayout(props: { readonly children: ReactNode }) {', '  return props.children', '}', ''].join('\n')
