@@ -6,6 +6,11 @@ import { VALIDATION_FLASH_ELEMENT_ID } from './validation-flash'
 
 const writtenRequests = new WeakSet<object>()
 
+/** The server render has no document; see useRequestValidationFlash(). */
+export function documentValidationFlash(): string {
+  return ''
+}
+
 /**
  * The flash a form posted without JavaScript left for this server render. The render writes
  * it into the page once, so the browser hydrates with the same errors.

@@ -80,9 +80,7 @@ async function verifyForm(browser, url) {
 }
 
 async function showsNameError(page) {
-  // The form and a separate component both call useValidationErrors() and must agree.
   await page.getByRole('alert').filter({ hasText: 'Name is required' }).waitFor()
-  await page.getByRole('status').filter({ hasText: 'Fix the name' }).waitFor()
 }
 
 async function verifyValidationErrors(browser, url, bundler) {
@@ -90,6 +88,15 @@ async function verifyValidationErrors(browser, url, bundler) {
   const withJavaScript = await browser.newPage()
   await withJavaScript.goto(errorsPage)
   await withJavaScript.getByRole('alert').filter({ hasText: 'No errors' }).waitFor()
+  await withJavaScript.getByRole('button', { name: 'Save' }).click()
+  await showsNameError(withJavaScript)
+  // A call that mounts after the post agrees with the one that was already mounted.
+  await withJavaScript.getByRole('status').filter({ hasText: 'Fix the name' }).waitFor()
+  await withJavaScript.getByRole('textbox', { name: 'Name' }).fill('Ada')
+  await withJavaScript.getByRole('button', { name: 'Save' }).click()
+  await withJavaScript.getByRole('alert').filter({ hasText: 'No errors' }).waitFor()
+  await withJavaScript.getByRole('status').filter({ hasText: 'Nothing to fix' }).waitFor()
+  await withJavaScript.getByRole('textbox', { name: 'Name' }).fill('')
   await withJavaScript.getByRole('button', { name: 'Save' }).click()
   await showsNameError(withJavaScript)
   await withJavaScript.reload()

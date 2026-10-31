@@ -2,16 +2,20 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { usePathname } from 'next/navigation.js'
 import type { ValidationErrorBag } from '@holo-js/validation'
 import { DEFAULT_VALIDATION_BAG, createErrorBag } from '@holo-js/validation/internal/error-bag'
-import { useRequestValidationFlash } from '@holo-js/adapter-next/internal/request-validation-flash'
+import { documentValidationFlash, useRequestValidationFlash } from '@holo-js/adapter-next/internal/request-validation-flash'
 import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, type ValidationFlash } from './validation-flash'
 
 type BrowserDocument = { cookie: string }
 
-// One flash per document, shared by every useValidationErrors() call. `path` is unset until a
-// call mounts on a page; a page that mounts without a server-rendered flash drops leftover cookies.
-type DocumentFlash = { value: string, path: string | undefined }
+type CookieChange = { readonly name: string }
+type CookieStore = {
+  addEventListener(type: 'change', listener: (event: { readonly changed?: readonly CookieChange[], readonly deleted?: readonly CookieChange[] }) => void): void
+}
 
-let documentFlash: DocumentFlash | undefined
+// One flash per document, shared by every useValidationErrors() call. `path` is the page the flash
+// was read on, unset until a call mounts.
+let shown = ''
+let shownPath: string | undefined
 let mountedCalls = 0
 const listeners = new Set<() => void>()
 
@@ -40,11 +44,30 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-function show(flash: DocumentFlash, value: string): void {
-  if (flash.value === value) return
-  flash.value = value
+function show(flash: string): void {
+  if (shown === flash) return
+  shown = flash
   for (const listener of listeners) listener()
 }
+
+/**
+ * Runs once when a page first loads the hook, before any of its forms can post: a cookie found now
+ * was left by an earlier page load, unless the server rendered its errors into this page.
+ */
+function startDocument(): void {
+  if (!browserDocument()) return
+  shown = documentValidationFlash()
+  shownPath = undefined
+  if (!shown) clearFlashCookie()
+  // A server action's response sets the cookie; components that don't rerender still update.
+  const cookieStore = (globalThis as { readonly cookieStore?: CookieStore }).cookieStore
+  cookieStore?.addEventListener('change', (event) => {
+    const changes = [...event.changed ?? [], ...event.deleted ?? []]
+    if (shownPath !== undefined && changes.some(change => change.name === VALIDATION_FLASH_COOKIE)) show(readFlashCookie())
+  })
+}
+
+startDocument()
 
 function readableValidationFlash(value: string): ValidationFlash | undefined {
   const flash = parseValidationFlash(value)
@@ -60,7 +83,7 @@ function readableValidationFlash(value: string): ValidationFlash | undefined {
 export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAULT_VALIDATION_BAG): ValidationErrorBag<TData> {
   const pathname = usePathname()
   const requestFlash = useRequestValidationFlash()
-  const value = useSyncExternalStore(subscribe, () => (documentFlash ??= { value: requestFlash, path: undefined }).value, () => requestFlash)
+  const value = useSyncExternalStore(subscribe, () => shown, () => requestFlash)
 
   useEffect(() => {
     mountedCalls++
@@ -68,29 +91,25 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
       mountedCalls--
       // Leaving the page unmounts every call; a remount in the same commit keeps the errors.
       setTimeout(() => {
-        if (mountedCalls > 0 || !documentFlash) return
-        documentFlash.path = undefined
-        show(documentFlash, '')
+        if (mountedCalls > 0 || shownPath === undefined) return
+        shownPath = undefined
         clearFlashCookie()
+        show('')
       })
     }
   }, [])
 
-  // Runs after every render, so a router refresh after a server action reads the new cookie.
+  // Also runs after every render, for browsers without cookie change events.
   useEffect(() => {
-    const flash = documentFlash ??= { value: requestFlash, path: undefined }
-    if (flash.path === undefined) {
-      flash.path = pathname
-      if (!flash.value) clearFlashCookie()
-      return
-    }
-    if (flash.path !== pathname) {
-      flash.path = pathname
-      clearFlashCookie()
-    }
-    show(flash, readFlashCookie())
+    if (shownPath !== undefined && shownPath !== pathname) clearFlashCookie()
+    shownPath = pathname
+    show(readFlashCookie())
   })
 
   const flash = useMemo(() => readableValidationFlash(value), [value])
   return createErrorBag<TData>(flash?.bag === bag && flash.page === validationFlashPage(pathname) ? flash.errors : {})
+}
+
+export const adapterNextValidationErrorsInternals = {
+  startDocument,
 }

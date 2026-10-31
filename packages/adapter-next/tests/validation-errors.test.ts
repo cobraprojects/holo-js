@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { requestUrlInternals } from '@holo-js/kernel'
 import { field, schema, validate, type ValidationErrorBag } from '@holo-js/validation'
 import { useValidationErrors } from '../src/client'
+import { adapterNextValidationErrorsInternals } from '../src/use-validation-errors'
 import { adapterNextRuntimeInternals } from '../src/runtime'
 
 const actionId = `40${'c'.repeat(40)}`
@@ -47,9 +48,12 @@ const changePassword = Object.defineProperty(adapterNextRuntimeInternals.serverA
 }), '$$id', { value: actionId })
 
 type CookieJar = { readonly receive: (setCookies: readonly string[]) => void, readonly header: () => string }
+type CookieChangeListener = (event: { readonly changed?: readonly { name: string }[], readonly deleted?: readonly { name: string }[] }) => void
 
-function installBrowserCookies(): CookieJar {
+// Loads a page: installs the browser's cookies, with cookie change events when `cookieStore` is set.
+function installBrowserCookies({ cookieStore = false } = {}): CookieJar {
   const jar = new Map<string, string>()
+  const changeListeners: CookieChangeListener[] = []
   const write = (setCookie: string) => {
     const [pair = '', ...attributes] = setCookie.split(';').map(part => part.trim())
     const separator = pair.indexOf('=')
@@ -58,11 +62,15 @@ function installBrowserCookies(): CookieJar {
       || (/^expires=/i.test(attribute) && Date.parse(attribute.slice('expires='.length)) <= Date.now()))
     if (expired) jar.delete(name)
     else jar.set(name, pair.slice(separator + 1))
+    for (const listener of changeListeners) listener(expired ? { deleted: [{ name }] } : { changed: [{ name }] })
   }
   const header = () => [...jar].map(([name, value]) => `${name}=${value}`).join('; ')
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { get cookie() { return header() }, set cookie(value: string) { write(value) } } })
+  if (cookieStore) Object.defineProperty(globalThis, 'cookieStore', { configurable: true, value: { addEventListener: (_type: 'change', listener: CookieChangeListener) => changeListeners.push(listener) } })
+  adapterNextValidationErrorsInternals.startDocument()
   onTestFinished(() => {
     Reflect.deleteProperty(globalThis, 'document')
+    Reflect.deleteProperty(globalThis, 'cookieStore')
   })
   return { receive: setCookies => setCookies.forEach(write), header }
 }
@@ -203,6 +211,26 @@ describe('useValidationErrors() in Next', () => {
     expect(inserted.map(callback => callback()).filter(Boolean)).toEqual([])
   })
 
+  it('updates calls whose components do not rerender after a server action', async () => {
+    const browser = installBrowserCookies({ cookieStore: true })
+    const page = await openPage('/posts/new')
+
+    await act(async () => browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies))
+    expect(page.errors.has('title')).toBe(true)
+
+    await act(async () => browser.receive((await submit(() => createPost({ title: 'Hello', password: 'next-password' }), { withJavaScript: true, cookie: browser.header() })).setCookies))
+    expect(page.errors.flatten()).toEqual({})
+  })
+
+  it('shows the errors to a call that first mounts after the form was posted', async () => {
+    const browser = installBrowserCookies()
+
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    const page = await openPage('/posts/new')
+
+    expect(page.errors.has('title')).toBe(true)
+  })
+
   it('reads only the requested error bag', async () => {
     const browser = installBrowserCookies()
     const defaultBag = await openPage('/posts/new')
@@ -235,6 +263,7 @@ describe('useValidationErrors() in Next', () => {
     const browser = installBrowserCookies()
     browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
 
+    adapterNextValidationErrorsInternals.startDocument()
     const reloaded = await openPage('/posts/new')
     await reloaded.refresh()
     expect(reloaded.errors.flatten()).toEqual({})

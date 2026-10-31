@@ -16,6 +16,10 @@ function readHydrationFlash(): string {
 }
 
 /** The flash the server render wrote into the page, so hydration shows the same errors. */
-export function useRequestValidationFlash(): string {
+export function documentValidationFlash(): string {
   return hydrationFlash ??= readHydrationFlash()
+}
+
+export function useRequestValidationFlash(): string {
+  return documentValidationFlash()
 }
