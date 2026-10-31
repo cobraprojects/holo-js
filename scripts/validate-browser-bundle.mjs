@@ -99,6 +99,13 @@ async function verifyValidationErrors(browser, url, bundler) {
   await withJavaScript.getByRole('textbox', { name: 'Name' }).fill('')
   await withJavaScript.getByRole('button', { name: 'Save' }).click()
   await showsNameError(withJavaScript)
+  // Leaving the page drops its errors, so they don't reappear on the way back.
+  await withJavaScript.getByRole('button', { name: 'Done' }).click()
+  await withJavaScript.getByRole('heading', { name: 'Redirect complete' }).waitFor()
+  await withJavaScript.goBack()
+  await withJavaScript.getByRole('alert').filter({ hasText: 'No errors' }).waitFor()
+  await withJavaScript.getByRole('button', { name: 'Save' }).click()
+  await showsNameError(withJavaScript)
   await withJavaScript.reload()
   await withJavaScript.getByRole('alert').filter({ hasText: 'No errors' }).waitFor()
   await withJavaScript.close()

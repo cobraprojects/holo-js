@@ -100,17 +100,22 @@ async function submit<TResult>(action: () => Promise<TResult>, request: { readon
 
 // Browsers with the Navigation API; install before installBrowserCookies(), which loads the page.
 function installNavigationEvents(pathname: string): (pathname: string) => void {
-  const listeners: Array<(event: { destination: { url: string } }) => void> = []
+  const listeners: Array<() => void> = []
   const location = { pathname, protocol: 'http:' }
+  const navigation = {
+    currentEntry: { url: `http://blog.test${pathname}` },
+    addEventListener: (_type: 'currententrychange', listener: () => void) => listeners.push(listener),
+  }
   Object.defineProperty(globalThis, 'location', { configurable: true, value: location })
-  Object.defineProperty(globalThis, 'navigation', { configurable: true, value: { addEventListener: (_type: 'navigate', listener: (typeof listeners)[number]) => listeners.push(listener) } })
+  Object.defineProperty(globalThis, 'navigation', { configurable: true, value: navigation })
   onTestFinished(() => {
     Reflect.deleteProperty(globalThis, 'location')
     Reflect.deleteProperty(globalThis, 'navigation')
   })
   return (next) => {
-    for (const listener of listeners) listener({ destination: { url: `http://blog.test${next}` } })
     location.pathname = next
+    navigation.currentEntry = { url: `http://blog.test${next}` }
+    for (const listener of listeners) listener()
   }
 }
 

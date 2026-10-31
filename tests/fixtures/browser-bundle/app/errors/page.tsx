@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { memo, useState } from 'react'
 import { useValidationErrors } from '@holo-js/adapter-next/client'
 import { saveName } from '../actions'
@@ -18,12 +19,14 @@ const ErrorSummary = memo(function ErrorSummary() {
 
 export default function Errors() {
   const [posted, setPosted] = useState(false)
+  const router = useRouter()
   return (
     <form action={saveName} onSubmit={() => setPosted(true)}>
       <label>Name<input name="name" /></label>
       <NameError />
       {posted ? <ErrorSummary /> : null}
       <button>Save</button>
+      <button type="button" onClick={() => router.push('/done')}>Done</button>
     </form>
   )
 }

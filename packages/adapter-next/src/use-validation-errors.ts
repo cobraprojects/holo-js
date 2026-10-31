@@ -8,7 +8,10 @@ import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, typ
 
 type BrowserDocument = { cookie: string }
 type FlashCookie = { readonly flash: string, readonly seen: boolean }
-type Navigation = { addEventListener(type: 'navigate', listener: (event: { readonly destination: { readonly url: string } }) => void): void }
+type Navigation = {
+  readonly currentEntry: { readonly url: string | null } | null
+  addEventListener(type: 'currententrychange', listener: () => void): void
+}
 
 // A hook that shows a failure marks its cookie seen instead of deleting it, so the server still clears
 // it on the next successful submission, and a page load that finds a seen cookie knows it is stale.
@@ -88,12 +91,13 @@ function startDocument(): void {
   if (cookie.seen) clearFlashCookie()
   // Posted without JavaScript: the server rendered these errors into this page.
   else if (shown && cookie.flash === shown) markFlashCookieSeen()
-  // Leaving the page drops its errors, even while no call is mounted. A server action's refresh
-  // stays on the same address.
+  // Leaving the page drops its errors, even while no call is mounted. The event fires only once the
+  // page changed, not for downloads or canceled navigations, and a server action's refresh keeps the address.
   const navigation = (globalThis as { readonly navigation?: Navigation }).navigation
   navigationEvents = Boolean(navigation)
-  navigation?.addEventListener('navigate', (event) => {
-    if (shownLocation !== undefined && new URL(event.destination.url).pathname !== shownLocation) forget()
+  navigation?.addEventListener('currententrychange', () => {
+    const url = navigation.currentEntry?.url
+    if (shownLocation !== undefined && url && new URL(url).pathname !== shownLocation) forget()
   })
 }
 
