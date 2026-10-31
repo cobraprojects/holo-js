@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-10-31
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-051-to-052). No required migrations.
+
 ### Fixed
 
 - Next.js: validation errors from native form posts load only on the pages that call `useValidationErrors()`. Since 0.5.1, Holo wrapped every root layout with a validation errors provider, so every page loaded the provider, the error cookie code and `@holo-js/validation`, even in apps that never call the hook. That was about 12 to 14 KB gzip more on a page without forms. Root layouts are no longer wrapped: the hook reads the errors itself, and a page or app that doesn't call it ships the same JavaScript as on 0.5.0. Errors still show with and without JavaScript, and apps don't need to change anything. `transformNextRootLayout()` is removed from `@holo-js/adapter-shared/build`.

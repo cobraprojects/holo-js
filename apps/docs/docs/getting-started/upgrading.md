@@ -1,5 +1,11 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.1 to 0.5.2
+
+Update every installed `@holo-js/*` package to `0.5.2` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#052---2026-10-31) lists the release changes.
+
+0.5.2 fixes Next.js page size: pages that don't call [`useValidationErrors()`](/basics/forms/frameworks#next-js-native-forms) no longer load the validation errors provider and `@holo-js/validation`.
+
 ## Upgrading from 0.5.0 to 0.5.1
 
 Update every installed `@holo-js/*` package to `0.5.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. Review the removal below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#051---2026-10-31) lists the release changes.
