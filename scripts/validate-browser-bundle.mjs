@@ -87,7 +87,31 @@ if (!process.argv.includes('--reuse')) {
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module', dependencies }, null, 2))
   run('npm', ['install', '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund'])
 }
-run('node', ['node_modules/next/dist/bin/next', 'build', '--webpack'])
+// Every root layout renders the validation errors provider, so it must stay free of
+// @holo-js/validation, and useValidationErrors() must ship only to pages that call it.
+const validationCode = 'ValidationContractError'
+// The FNV-1a prime in validationFlashPage(), which only useValidationErrors() runs in the browser.
+const validationErrorsHookCode = /16777619|0x1000193/
+
+async function routeJavaScript(page) {
+  const html = await readFile(join(consumer, '.next/server/app', page), 'utf8')
+  const files = [...new Set([...html.matchAll(/src="\/_next\/(static\/[^"?]+\.js)/g)].map(match => match[1]))]
+  const contents = await Promise.all(files.map(file => readFile(join(consumer, '.next', file))))
+  return { gzipBytes: contents.reduce((total, content) => total + gzipSync(content).length, 0), source: contents.join('\n') }
+}
+
+async function verifyRouteJavaScript(bundler) {
+  run('node', ['node_modules/next/dist/bin/next', 'build', `--${bundler}`])
+  const [form, plain, errors] = await Promise.all(['index.html', 'done.html', 'errors.html'].map(routeJavaScript))
+  assert.ok(form.source.includes(validationCode), `${bundler}: the useForm() page lost its validation code, so the guard below checks nothing`)
+  assert.match(errors.source, validationErrorsHookCode, `${bundler}: the useValidationErrors() page lost the hook, so the guards below check nothing`)
+  assert.ok(!plain.source.includes(validationCode), `${bundler}: a page without forms ships @holo-js/validation through the root layout`)
+  assert.doesNotMatch(plain.source, validationErrorsHookCode, `${bundler}: a page without forms ships useValidationErrors()`)
+  assert.doesNotMatch(form.source, validationErrorsHookCode, `${bundler}: a page that imports only useForm() ships useValidationErrors()`)
+  return { form: form.gzipBytes, plain: plain.gzipBytes, validationErrors: errors.gzipBytes }
+}
+
+const routeGzipBytes = { turbopack: await verifyRouteJavaScript('turbopack'), webpack: await verifyRouteJavaScript('webpack') }
 const files = await javascriptFiles(join(consumer, '.next/static'))
 const chunks = await Promise.all(files.map(async (file) => {
   const content = await readFile(file)
@@ -100,6 +124,7 @@ const report = {
   compilerIncluded,
   bytes: chunks.reduce((total, chunk) => total + chunk.bytes, 0),
   gzipBytes: chunks.reduce((total, chunk) => total + chunk.gzipBytes, 0),
+  routeGzipBytes,
   chunks,
 }
 await writeFile(join(consumer, 'bundle-report.json'), `${JSON.stringify(report, null, 2)}\n`)

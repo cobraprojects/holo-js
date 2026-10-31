@@ -1,13 +1,14 @@
 'use client'
 
-import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation.js'
-import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
-import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, type ValidationFlash } from './validation-flash'
+import { VALIDATION_FLASH_COOKIE } from './validation-flash-cookie'
 
 type BrowserDocument = { cookie: string }
 
-const ValidationFlashContext = createContext<ValidationFlash | undefined>(undefined)
+// Every root layout renders this provider, so it only tracks the raw flash and leaves
+// parsing and @holo-js/validation to useValidationErrors(), which ships only where it's used.
+export const ValidationFlashContext = createContext('')
 
 function browserDocument(): BrowserDocument | undefined {
   return (globalThis as { readonly document?: BrowserDocument }).document
@@ -21,17 +22,6 @@ function readFlashCookie(): string {
     return decodeURIComponent(cookie.slice(prefix.length))
   } catch {
     return ''
-  }
-}
-
-function readableValidationFlash(value: string): ValidationFlash | undefined {
-  const flash = parseValidationFlash(value)
-  if (!flash) return undefined
-  try {
-    createErrorBag(flash.errors)
-    return flash
-  } catch {
-    return undefined
   }
 }
 
@@ -59,12 +49,5 @@ export function HoloValidationErrorsProvider({ initial = '', children }: { reado
     setFlash(readFlashCookie())
   })
 
-  const value = useMemo(() => readableValidationFlash(flash), [flash])
-  return createElement(ValidationFlashContext.Provider, { value }, children)
-}
-
-export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAULT_VALIDATION_BAG): ValidationErrorBag<TData> {
-  const flash = useContext(ValidationFlashContext)
-  const pathname = usePathname()
-  return createErrorBag<TData>(flash?.bag === bag && flash.page === validationFlashPage(pathname) ? flash.errors : {})
+  return createElement(ValidationFlashContext.Provider, { value: flash }, children)
 }

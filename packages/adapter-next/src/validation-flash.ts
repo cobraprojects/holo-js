@@ -1,4 +1,4 @@
-export const VALIDATION_FLASH_COOKIE = 'holo_form_failure'
+export { VALIDATION_FLASH_COOKIE } from './validation-flash-cookie'
 
 const MAX_FLASH_COOKIE_BYTES = 3_800
 
