@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-10-31
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-050-to-051) for the removal of `serializeValidationException()`. No required migrations.
+
 ### Added
 
+- Validation: `digits(count)`, `minDigits(count)`, and `maxDigits(count)` on number fields check how many decimal digits a value has, such as `field.number().digits(3)`. They accept nonnegative integers only, and run independently of `min()`, `max()`, and `size()`. See [Validation rules](apps/docs/docs/basics/validation/rules.md#digits-count-message).
 - Next.js: `useValidationErrors(bag?)` from `@holo-js/adapter-next/client` reads the validation errors of a server action passed to `<form action>`, the same hook Nuxt and SvelteKit have. It works with and without JavaScript: the page that posted the form renders again with the errors, which stay until the next successful submission, a reload, or navigation to another page. See [Framework Recipes](apps/docs/docs/basics/forms/frameworks.md#next-js-native-forms).
 
 ### Changed

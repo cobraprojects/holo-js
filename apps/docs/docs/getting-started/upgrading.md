@@ -1,6 +1,10 @@
 # Upgrade Guide
 
-## Upgrading from 0.5.0 to the next release
+## Upgrading from 0.5.0 to 0.5.1
+
+Update every installed `@holo-js/*` package to `0.5.1` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. Review the removal below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#051---2026-10-31) lists the release changes.
+
+0.5.1 adds the [`digits()`, `minDigits()`, and `maxDigits()`](/basics/validation/rules#digits-count-message) number rules, and [`useValidationErrors()`](/basics/forms/frameworks#next-js-native-forms) for Next.js server actions posted from forms.
 
 ### `serializeValidationException()` is removed
 
