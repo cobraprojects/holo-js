@@ -62,10 +62,11 @@ function installBrowserCookies(): CookieJar {
   return { receive: setCookies => setCookies.forEach(write), header }
 }
 
-async function submit<TResult>(action: () => Promise<TResult>, request: { readonly cookie?: string, readonly withJavaScript: boolean, readonly pathname?: string, readonly render?: () => ReactNode }) {
+async function submit<TResult>(action: () => Promise<TResult>, request: { readonly cookie?: string, readonly withJavaScript: boolean, readonly pathname?: string, readonly protocol?: 'http' | 'https', readonly render?: () => ReactNode }) {
   const pathname = request.pathname ?? '/posts/new'
   const headers = new Headers({
     origin: 'https://blog.test',
+    'x-forwarded-proto': request.protocol ?? 'http',
     ...(request.withJavaScript ? { 'next-action': actionId } : {}),
     ...(request.cookie ? { cookie: request.cookie } : {}),
   })
@@ -259,9 +260,12 @@ describe('useValidationErrors() in Next', () => {
     expect(page.errors.has('title')).toBe(true)
   })
 
-  it('marks the error cookie Secure from the trusted request scheme, not from the Origin header', async () => {
+  it('marks the error cookie Secure from the request scheme, not from the Origin header', async () => {
     const plain = await submit(() => createPost({ title: '' }), { withJavaScript: true })
     expect(plain.setCookies.join()).not.toMatch(/secure/i)
+
+    const servedOverHttps = await submit(() => createPost({ title: '' }), { withJavaScript: true, protocol: 'https' })
+    expect(servedOverHttps.setCookies.join()).toMatch(/secure/i)
 
     requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https' }))
     onTestFinished(() => requestUrlInternals.configureForwardedRequestResolver(undefined))

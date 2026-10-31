@@ -378,10 +378,11 @@ async function actionCookies(): Promise<NextActionCookieStore> {
 }
 
 function isSecureRequest(store: NextWorkUnitStore): boolean {
+  const protocol = store.headers?.get('x-forwarded-proto') === 'https' ? 'https' : 'http'
   try {
-    return resolveRequestUrl({ url: 'http://localhost/', headers: store.headers }).protocol === 'https:'
+    return resolveRequestUrl({ url: `${protocol}://localhost/`, headers: store.headers }).protocol === 'https:'
   } catch {
-    return false
+    return protocol === 'https'
   }
 }
 
