@@ -7,11 +7,17 @@ import { documentValidationFlash, useRequestValidationFlash } from '@holo-js/ada
 import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, type ValidationFlash } from './validation-flash'
 
 type BrowserDocument = { cookie: string }
+type FlashCookie = { readonly flash: string, readonly seen: boolean }
 
-// One flash per document, shared by every useValidationErrors() call. `path` is the page the flash
-// was read on, unset until a call mounts.
+// A hook that shows a failure marks its cookie seen instead of deleting it, so the server still clears
+// it on the next successful submission, and a page load that finds a seen cookie knows it is stale.
+const SEEN = '~'
+
+// One flash per document, shared by every useValidationErrors() call. `shownPath` and `shownLocation`
+// are the page it was read on, unset until a call mounts.
 let shown = ''
 let shownPath: string | undefined
+let shownLocation: string | undefined
 let mountedCalls = 0
 const listeners = new Set<() => void>()
 
@@ -19,15 +25,31 @@ function browserDocument(): BrowserDocument | undefined {
   return (globalThis as { readonly document?: BrowserDocument }).document
 }
 
-function readFlashCookie(): string {
+function locationPath(): string | undefined {
+  return (globalThis as { readonly location?: { readonly pathname: string } }).location?.pathname
+}
+
+function rawFlashCookie(): string {
   const prefix = `${VALIDATION_FLASH_COOKIE}=`
-  const cookie = browserDocument()?.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(prefix))
-  if (!cookie) return ''
+  return browserDocument()?.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(prefix))?.slice(prefix.length) ?? ''
+}
+
+function readFlashCookie(): FlashCookie {
+  const raw = rawFlashCookie()
+  const seen = raw.startsWith(SEEN)
   try {
-    return decodeURIComponent(cookie.slice(prefix.length))
+    return { flash: decodeURIComponent(seen ? raw.slice(SEEN.length) : raw), seen }
   } catch {
-    return ''
+    return { flash: '', seen }
   }
+}
+
+function markFlashCookieSeen(): void {
+  const document = browserDocument()
+  const raw = rawFlashCookie()
+  if (!document || !raw || raw.startsWith(SEEN)) return
+  const secure = (globalThis as { readonly location?: { readonly protocol: string } }).location?.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${VALIDATION_FLASH_COOKIE}=${SEEN}${raw}; Path=/; SameSite=Lax${secure}`
 }
 
 function clearFlashCookie(): void {
@@ -46,15 +68,17 @@ function show(flash: string): void {
   for (const listener of listeners) listener()
 }
 
-/**
- * Runs once when a page first loads the hook, before any of its forms can post: a cookie found now
- * was left by an earlier page load, unless the server rendered its errors into this page.
- */
+/** Runs when a page first loads the hook. */
 function startDocument(): void {
   if (!browserDocument()) return
   shown = documentValidationFlash()
   shownPath = undefined
-  if (!shown) clearFlashCookie()
+  shownLocation = undefined
+  const cookie = readFlashCookie()
+  // Shown on an earlier page load, which this one replaced.
+  if (cookie.seen) clearFlashCookie()
+  // Posted without JavaScript: the server rendered these errors into this page.
+  else if (shown && cookie.flash === shown) markFlashCookieSeen()
 }
 
 startDocument()
@@ -82,10 +106,12 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
     mountedCalls++
     return () => {
       mountedCalls--
-      // Leaving the page unmounts every call; a remount in the same commit keeps the errors.
+      // Leaving the page unmounts every call, and Next has moved to the new address by the next task.
+      // Calls that unmount on the same page, such as a collapsed summary, keep the errors.
       setTimeout(() => {
-        if (mountedCalls > 0 || shownPath === undefined) return
+        if (mountedCalls > 0 || shownPath === undefined || locationPath() === shownLocation) return
         shownPath = undefined
+        shownLocation = undefined
         clearFlashCookie()
         show('')
       })
@@ -95,7 +121,10 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
   useEffect(() => {
     if (shownPath !== undefined && shownPath !== pathname) clearFlashCookie()
     shownPath = pathname
-    show(readFlashCookie())
+    shownLocation = locationPath()
+    const cookie = readFlashCookie()
+    if (cookie.flash && !cookie.seen) markFlashCookieSeen()
+    show(cookie.flash)
   })
 
   const flash = useMemo(() => readableValidationFlash(value), [value])

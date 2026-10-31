@@ -112,7 +112,9 @@ async function openPage(pathname: string, bag?: string) {
   await act(async () => {
     renderer = create(tree())
   })
+  let mounted = true
   onTestFinished(async () => {
+    if (!mounted) return
     await act(async () => renderer.unmount())
     // Leaving the page resets the document's errors on the next task.
     await new Promise(resolve => setTimeout(resolve))
@@ -124,6 +126,11 @@ async function openPage(pathname: string, bag?: string) {
     },
     async refresh() {
       await act(async () => renderer.update(tree()))
+    },
+    async close() {
+      mounted = false
+      await act(async () => renderer.unmount())
+      await new Promise(resolve => setTimeout(resolve))
     },
     async navigate(path: string) {
       currentPath = path
@@ -246,14 +253,18 @@ describe('useValidationErrors() in Next', () => {
     expect(page.errors.flatten()).toEqual({})
   })
 
-  it('drops errors left over from an earlier page load and clears them on navigation', async () => {
+  it('drops errors shown before a reload and clears them on navigation', async () => {
     const browser = installBrowserCookies()
+    const page = await openPage('/posts/new')
     browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    await page.refresh()
+    expect(page.errors.has('title')).toBe(true)
+    await page.close()
 
     adapterNextValidationErrorsInternals.startDocument()
     const reloaded = await openPage('/posts/new')
-    await reloaded.refresh()
     expect(reloaded.errors.flatten()).toEqual({})
+    expect(browser.header()).toBe('')
 
     browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
     await reloaded.refresh()
@@ -263,6 +274,28 @@ describe('useValidationErrors() in Next', () => {
     await reloaded.navigate('/posts/new')
     expect(reloaded.errors.flatten()).toEqual({})
     expect(browser.header()).toBe('')
+  })
+
+  it('shows the errors to a hook loaded after the form was posted', async () => {
+    const browser = installBrowserCookies()
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+
+    adapterNextValidationErrorsInternals.startDocument()
+    const page = await openPage('/posts/new')
+
+    expect(page.errors.has('title')).toBe(true)
+  })
+
+  it('keeps the errors when every call unmounts without leaving the page', async () => {
+    const browser = installBrowserCookies()
+    const summary = await openPage('/posts/new')
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    await summary.refresh()
+    await summary.close()
+
+    const reopened = await openPage('/posts/new')
+
+    expect(reopened.errors.has('title')).toBe(true)
   })
 
   it('keeps the errors of a large form within the browser cookie limit', async () => {
