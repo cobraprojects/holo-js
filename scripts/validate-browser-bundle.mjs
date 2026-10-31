@@ -146,8 +146,9 @@ if (!process.argv.includes('--reuse')) {
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module', dependencies }, null, 2))
   run('npm', ['install', '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund'])
 }
-// useValidationErrors() must cost nothing on pages that don't call it. Byte counts are compared
-// raw: gzip of the same code moves by a few bytes with chunk boundaries and minified names.
+// useValidationErrors() must cost nothing on pages that don't call it. Pages are compared by the modules
+// they ship: bytes of the same modules move with chunk boundaries and minified names, which differ
+// between machines, so they are only reported.
 const baselineAdapterVersion = process.env.HOLO_BROWSER_BUNDLE_BASELINE_ADAPTER ?? '0.5.0'
 const routes = { form: 'index.html', plain: 'done.html' }
 
@@ -206,6 +207,13 @@ async function withBaselineAdapter(build) {
   }
 }
 
+// useForm() moved from the client entry to its own module, which the entry re-exports.
+const useFormModule = /@holo-js[\\/]adapter-next[\\/]dist[\\/](?:client|internal[\\/]use-form)\.mjs$/
+
+function baselineModules(sources) {
+  return [...new Set(sources.map(source => source.replace(useFormModule, '@holo-js/adapter-next/<useForm>')))].sort()
+}
+
 const hookModule = /@holo-js[\\/]adapter-next[\\/]dist[\\/]internal[\\/]use-validation-errors\.mjs$/
 const errorBagModule = /@holo-js[\\/]validation[\\/]dist[\\/]internal[\\/]error-bag\.mjs$/
 
@@ -213,7 +221,7 @@ async function verifyRouteJavaScript(bundler) {
   const baseline = await withBaselineAdapter(() => withoutHookPage(() => buildRoutes(bundler)))
   const unused = await withoutHookPage(() => buildRoutes(bundler))
   for (const route of Object.keys(routes)) {
-    assert.equal(unused[route].bytes, baseline[route].bytes, `${bundler}: ${routes[route]} ships ${unused[route].bytes - baseline[route].bytes} more bytes than with @holo-js/adapter-next@${baselineAdapterVersion}, in an app that never calls useValidationErrors()`)
+    assert.deepEqual(baselineModules(unused[route].sources), baselineModules(baseline[route].sources), `${bundler}: ${routes[route]} ships other modules than with @holo-js/adapter-next@${baselineAdapterVersion}, in an app that never calls useValidationErrors()`)
   }
   const used = await buildRoutes(bundler, { ...routes, validationErrors: 'errors.html' })
   assert.ok(used.validationErrors.sources.some(source => hookModule.test(source)), `${bundler}: the useValidationErrors() page lost the hook, so the check below checks nothing`)
