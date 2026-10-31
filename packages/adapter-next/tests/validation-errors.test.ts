@@ -98,6 +98,22 @@ async function submit<TResult>(action: () => Promise<TResult>, request: { readon
   return { ...result, setCookies }
 }
 
+// Browsers with the Navigation API; install before installBrowserCookies(), which loads the page.
+function installNavigationEvents(pathname: string): (pathname: string) => void {
+  const listeners: Array<(event: { destination: { url: string } }) => void> = []
+  const location = { pathname, protocol: 'http:' }
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: location })
+  Object.defineProperty(globalThis, 'navigation', { configurable: true, value: { addEventListener: (_type: 'navigate', listener: (typeof listeners)[number]) => listeners.push(listener) } })
+  onTestFinished(() => {
+    Reflect.deleteProperty(globalThis, 'location')
+    Reflect.deleteProperty(globalThis, 'navigation')
+  })
+  return (next) => {
+    for (const listener of listeners) listener({ destination: { url: `http://blog.test${next}` } })
+    location.pathname = next
+  }
+}
+
 async function openPage(pathname: string, bag?: string) {
   let errors: ValidationErrorBag<Record<string, unknown>> | undefined
   let renderer!: ReactTestRenderer
@@ -287,6 +303,7 @@ describe('useValidationErrors() in Next', () => {
   })
 
   it('keeps the errors when every call unmounts without leaving the page', async () => {
+    installNavigationEvents('/posts/new')
     const browser = installBrowserCookies()
     const summary = await openPage('/posts/new')
     browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
@@ -298,19 +315,21 @@ describe('useValidationErrors() in Next', () => {
     expect(reopened.errors.has('title')).toBe(true)
   })
 
+  it('drops the errors with the last call in browsers without navigation events', async () => {
+    const browser = installBrowserCookies()
+    const summary = await openPage('/posts/new')
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)
+    await summary.refresh()
+    await summary.close()
+
+    const reopened = await openPage('/posts/new')
+
+    expect(reopened.errors.flatten()).toEqual({})
+    expect(browser.header()).toBe('')
+  })
+
   it('drops the errors of a page left while no call was mounted', async () => {
-    const listeners: Array<(event: { destination: { url: string } }) => void> = []
-    const location = { pathname: '/posts/new', protocol: 'http:' }
-    const navigate = (pathname: string) => {
-      for (const listener of listeners) listener({ destination: { url: `http://blog.test${pathname}` } })
-      location.pathname = pathname
-    }
-    Object.defineProperty(globalThis, 'location', { configurable: true, value: location })
-    Object.defineProperty(globalThis, 'navigation', { configurable: true, value: { addEventListener: (_type: 'navigate', listener: (typeof listeners)[number]) => listeners.push(listener) } })
-    onTestFinished(() => {
-      Reflect.deleteProperty(globalThis, 'location')
-      Reflect.deleteProperty(globalThis, 'navigation')
-    })
+    const navigate = installNavigationEvents('/posts/new')
     const browser = installBrowserCookies()
     const summary = await openPage('/posts/new')
     browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies)

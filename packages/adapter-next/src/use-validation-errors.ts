@@ -20,6 +20,7 @@ let shown = ''
 let shownPath: string | undefined
 let shownLocation: string | undefined
 let mountedCalls = 0
+let navigationEvents = false
 const listeners = new Set<() => void>()
 
 function browserDocument(): BrowserDocument | undefined {
@@ -90,6 +91,7 @@ function startDocument(): void {
   // Leaving the page drops its errors, even while no call is mounted. A server action's refresh
   // stays on the same address.
   const navigation = (globalThis as { readonly navigation?: Navigation }).navigation
+  navigationEvents = Boolean(navigation)
   navigation?.addEventListener('navigate', (event) => {
     if (shownLocation !== undefined && new URL(event.destination.url).pathname !== shownLocation) forget()
   })
@@ -120,10 +122,10 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
     mountedCalls++
     return () => {
       mountedCalls--
-      // Without navigation events: leaving the page unmounts every call, and Next has moved to the new
-      // address by the next task. Calls that unmount on the same page, such as a collapsed summary, keep the errors.
+      // Without navigation events nothing can tell a later navigation apart, so the errors go with the
+      // last call rather than reappear on a page the user left. A remount in the same commit keeps them.
       setTimeout(() => {
-        if (mountedCalls === 0 && shownPath !== undefined && locationPath() !== shownLocation) forget()
+        if (mountedCalls === 0 && shownPath !== undefined && !navigationEvents) forget()
       })
     }
   }, [])
