@@ -19,6 +19,7 @@ import {
   appendIssues,
   assignNestedValue,
   assertFiniteNumber,
+  assertDigitCount,
   assertNonEmptyArray,
   buildErrorTree,
   cloneDefinition,
@@ -119,6 +120,26 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
   size(value: number, message?: string): ValidationFieldBuilder<TOutput> {
     assertFiniteNumber(value, 'size')
     return this.clone(normalizeRule('size', [value], message))
+  }
+
+  digits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('digits', count, message)
+  }
+
+  minDigits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('minDigits', count, message)
+  }
+
+  maxDigits(count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    return this.digitRule('maxDigits', count, message)
+  }
+
+  private digitRule(name: 'digits' | 'minDigits' | 'maxDigits', count: number, message?: string): ValidationFieldBuilder<TOutput> {
+    if (this.field.definition.kind !== 'number') {
+      throw new ValidationContractError(`${name} is only supported for number fields.`)
+    }
+    assertDigitCount(count, name)
+    return this.clone(normalizeRule(name, [count], message))
   }
 
   email(message?: string): ValidationFieldBuilder<TOutput> {

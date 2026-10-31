@@ -21,6 +21,7 @@ type CompiledField = {
 
 const primitives = new Set(['string', 'password', 'number', 'boolean', 'date'])
 const flags = new Set(['required', 'optional', 'nullable', 'confirmed', 'today', 'beforeToday', 'todayOrBefore', 'beforeOrToday', 'afterToday', 'todayOrAfter', 'afterOrToday'])
+const digitRules = new Set(['digits', 'minDigits', 'maxDigits'])
 const formats = new Set(['email', 'url', 'uuid', 'integer'])
 
 function literal(node: ts.Expression): Literal | undefined {
@@ -44,10 +45,11 @@ function parseRule(name: string, nodes: readonly ts.Expression[]): Rule | undefi
   if (values.some(value => value === undefined)) return undefined
   const args = values as Literal[]
   const noArgument = flags.has(name) || formats.has(name)
-  const numeric = name === 'min' || name === 'max' || name === 'size'
+  const numeric = name === 'min' || name === 'max' || name === 'size' || digitRules.has(name)
   if (!noArgument && !numeric && name !== 'default') return undefined
   if (args.length > (noArgument ? 1 : 2)) return undefined
   if (numeric && (typeof args[0] !== 'number' || !Number.isFinite(args[0]))) return undefined
+  if (digitRules.has(name) && (typeof args[0] !== 'number' || !Number.isSafeInteger(args[0]) || args[0] < 0)) return undefined
   if (name === 'default' && args.length === 0) return undefined
   const message = args[noArgument ? 0 : 1]
   if (message !== undefined && (typeof message !== 'string' || !message.trim())) return undefined
@@ -71,8 +73,10 @@ function compileField(node: ts.Expression, fieldName: string, runtime: string, d
         rules: rules.reverse(),
         ...(member.name.text === 'password' ? { sensitive: true } : {}),
       }
+      if (kind !== 'number' && rules.some(rule => digitRules.has(rule.name))) return undefined
       const actions: string[] = []
       for (const rule of definition.rules) {
+        if (digitRules.has(rule.name)) actions.push(`${runtime}.digitsAction(${JSON.stringify(rule.name)}, ${JSON.stringify(rule.args[0])}, ${JSON.stringify(rule.message)})`)
         if (formats.has(rule.name)) actions.push(`${runtime}.${rule.name}Action(${JSON.stringify(rule.message)})`)
         if (rule.name === 'min' || rule.name === 'max' || rule.name === 'size') {
           const action = rule.name === 'size' ? 'exactSizeAction' : `${rule.name}Action`

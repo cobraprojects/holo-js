@@ -11,6 +11,10 @@ export const schema = form({
   password: f.password().min(8).confirmed(),
   name: f.string().min(3).max(12),
   count: f.number().integer().min(1).max(10).default(2),
+  digits: f.number().digits(3, 'Three digits.').min(200).optional(),
+  minDigits: f.number().minDigits(3).max(2000).optional(),
+  maxDigits: f.number().maxDigits(3).optional(),
+  zeroDigits: f.number().maxDigits(0).optional(),
   enabled: f.boolean().default(false),
   profile: { website: f.string().url().optional(), id: f.string().uuid().nullable() },
 })`
@@ -27,6 +31,9 @@ export const schema = form({
   assert.deepEqual(variants.compiled.schema.fields, variants.original.schema.fields)
   const valid = { email: 'reader@example.com', password: '12345678', passwordConfirmation: '12345678', name: 'Alice', profile: { id: null } }
   const inputs = [{}, valid, { ...valid, email: 'invalid' }, { ...valid, name: '  ' }, { ...valid, passwordConfirmation: 'different' }, { ...valid, count: '11' }, { ...valid, count: '3', enabled: 'on' }, { ...valid, profile: { website: 'invalid', id: 'invalid' } }, { ...valid, email: 42 }, { ...valid, count: 1.5 }, { ...valid, name: 'x'.repeat(20) }]
+  for (const value of [0, -0, 12, 123, 1234, -123, 12.3, 1e21, 1e23, 1e23 - 2 ** 24, 1e23 + 2 ** 24, Number.MAX_VALUE, NaN, Infinity, -Infinity, undefined, null, '123', '123abc']) {
+    inputs.push({ ...valid, digits: value, minDigits: value, maxDigits: value, zeroDigits: value })
+  }
   for (const input of inputs) {
     assert.deepEqual(await variants.compiled.schema['~standard'].validate(input), await variants.original.schema['~standard'].validate(input), JSON.stringify(input))
   }
@@ -37,6 +44,12 @@ export const schema = form({
   assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({name:field.string(,)})`), undefined)
   for (const value of ['1e999', '-1e999', '-0']) {
     assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.number().default(${value})})`), undefined)
+  }
+  for (const name of ['digits', 'minDigits', 'maxDigits']) {
+    for (const count of ['-1', '1.5', '9007199254740992', 'null', "'3'"]) {
+      assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.number().${name}(${count})})`), undefined)
+    }
+    assert.equal(compile(`import {field,schema} from '@holo-js/validation'; export const form = schema({count:field.string().${name}(3)})`), undefined)
   }
   const simple = `import {field,schema} from '@holo-js/validation'; export const form = schema({email:field.string().required().email()})`
   const bundled = await build({ stdin: { contents: compile(simple), resolveDir: directory }, bundle: true, platform: 'browser', format: 'esm', minify: true, write: false, nodePaths })

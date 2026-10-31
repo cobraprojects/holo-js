@@ -1,3 +1,5 @@
+publicPackages = ["@holo-js/validation"]
+
 entry = [
   "packages/cli/tests/global-setup.ts",
 ]

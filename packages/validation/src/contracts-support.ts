@@ -117,6 +117,12 @@ export function assertFiniteNumber(value: number, label: string): void {
   }
 }
 
+export function assertDigitCount(value: unknown, label: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new ValidationContractError(`${label} must be a nonnegative safe integer.`)
+  }
+}
+
 export function assertNonEmptyArray<TValue>(value: readonly TValue[], label: string): void {
   if (value.length === 0) {
     throw new ValidationContractError(`${label} must contain at least one value.`)
