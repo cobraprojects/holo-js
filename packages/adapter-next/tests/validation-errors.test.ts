@@ -1,11 +1,12 @@
 import 'next/dist/server/node-environment'
 import { resolve } from 'node:path'
-import { createElement, type ReactNode } from 'react'
+import { createElement, memo, type ReactNode } from 'react'
 import { renderToString } from 'react-dom/server'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { actionAsyncStorage } from 'next/dist/server/app-render/action-async-storage.external.js'
 import { workAsyncStorage, type WorkStore } from 'next/dist/server/app-render/work-async-storage.external.js'
 import { workUnitAsyncStorage, type WorkUnitStore } from 'next/dist/server/app-render/work-unit-async-storage.external.js'
+import { LayoutRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime'
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime'
 import { ServerInsertedHTMLContext } from 'next/dist/shared/lib/server-inserted-html.shared-runtime'
 import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies'
@@ -48,12 +49,10 @@ const changePassword = Object.defineProperty(adapterNextRuntimeInternals.serverA
 }), '$$id', { value: actionId })
 
 type CookieJar = { readonly receive: (setCookies: readonly string[]) => void, readonly header: () => string }
-type CookieChangeListener = (event: { readonly changed?: readonly { name: string }[], readonly deleted?: readonly { name: string }[] }) => void
 
-// Loads a page: installs the browser's cookies, with cookie change events when `cookieStore` is set.
-function installBrowserCookies({ cookieStore = false } = {}): CookieJar {
+// Loads a page: installs the browser's cookies and starts the hook's document.
+function installBrowserCookies(): CookieJar {
   const jar = new Map<string, string>()
-  const changeListeners: CookieChangeListener[] = []
   const write = (setCookie: string) => {
     const [pair = '', ...attributes] = setCookie.split(';').map(part => part.trim())
     const separator = pair.indexOf('=')
@@ -62,15 +61,12 @@ function installBrowserCookies({ cookieStore = false } = {}): CookieJar {
       || (/^expires=/i.test(attribute) && Date.parse(attribute.slice('expires='.length)) <= Date.now()))
     if (expired) jar.delete(name)
     else jar.set(name, pair.slice(separator + 1))
-    for (const listener of changeListeners) listener(expired ? { deleted: [{ name }] } : { changed: [{ name }] })
   }
   const header = () => [...jar].map(([name, value]) => `${name}=${value}`).join('; ')
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { get cookie() { return header() }, set cookie(value: string) { write(value) } } })
-  if (cookieStore) Object.defineProperty(globalThis, 'cookieStore', { configurable: true, value: { addEventListener: (_type: 'change', listener: CookieChangeListener) => changeListeners.push(listener) } })
   adapterNextValidationErrorsInternals.startDocument()
   onTestFinished(() => {
     Reflect.deleteProperty(globalThis, 'document')
-    Reflect.deleteProperty(globalThis, 'cookieStore')
   })
   return { receive: setCookies => setCookies.forEach(write), header }
 }
@@ -106,11 +102,13 @@ async function openPage(pathname: string, bag?: string) {
   let errors: ValidationErrorBag<Record<string, unknown>> | undefined
   let renderer!: ReactTestRenderer
   let currentPath = pathname
-  function Page() {
+  // Memoized like a component whose props don't change, so only the router refresh rerenders it.
+  const Page = memo(function Page() {
     errors = useValidationErrors(bag)
     return null
-  }
-  const tree = () => createElement(PathnameContext.Provider, { value: currentPath }, createElement(Page))
+  })
+  // Next gives the layout router context a new value on every refresh.
+  const tree = () => createElement(PathnameContext.Provider, { value: currentPath }, createElement(LayoutRouterContext.Provider, { value: { url: currentPath } as never }, createElement(Page)))
   await act(async () => {
     renderer = create(tree())
   })
@@ -209,17 +207,6 @@ describe('useValidationErrors() in Next', () => {
     await submit(() => createPost({ title: 'Hello', password: 'next-password' }), { withJavaScript: false, render })
 
     expect(inserted.map(callback => callback()).filter(Boolean)).toEqual([])
-  })
-
-  it('updates calls whose components do not rerender after a server action', async () => {
-    const browser = installBrowserCookies({ cookieStore: true })
-    const page = await openPage('/posts/new')
-
-    await act(async () => browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true })).setCookies))
-    expect(page.errors.has('title')).toBe(true)
-
-    await act(async () => browser.receive((await submit(() => createPost({ title: 'Hello', password: 'next-password' }), { withJavaScript: true, cookie: browser.header() })).setCookies))
-    expect(page.errors.flatten()).toEqual({})
   })
 
   it('shows the errors to a call that first mounts after the form was posted', async () => {

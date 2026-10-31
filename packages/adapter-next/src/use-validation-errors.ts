@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useContext, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { usePathname } from 'next/navigation.js'
+import { LayoutRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime.js'
 import type { ValidationErrorBag } from '@holo-js/validation'
 import { DEFAULT_VALIDATION_BAG, createErrorBag } from '@holo-js/validation/internal/error-bag'
 import { documentValidationFlash, useRequestValidationFlash } from '@holo-js/adapter-next/internal/request-validation-flash'
 import { VALIDATION_FLASH_COOKIE, parseValidationFlash, validationFlashPage, type ValidationFlash } from './validation-flash'
 
 type BrowserDocument = { cookie: string }
-
-type CookieChange = { readonly name: string }
-type CookieStore = {
-  addEventListener(type: 'change', listener: (event: { readonly changed?: readonly CookieChange[], readonly deleted?: readonly CookieChange[] }) => void): void
-}
 
 // One flash per document, shared by every useValidationErrors() call. `path` is the page the flash
 // was read on, unset until a call mounts.
@@ -59,12 +55,6 @@ function startDocument(): void {
   shown = documentValidationFlash()
   shownPath = undefined
   if (!shown) clearFlashCookie()
-  // A server action's response sets the cookie; components that don't rerender still update.
-  const cookieStore = (globalThis as { readonly cookieStore?: CookieStore }).cookieStore
-  cookieStore?.addEventListener('change', (event) => {
-    const changes = [...event.changed ?? [], ...event.deleted ?? []]
-    if (shownPath !== undefined && changes.some(change => change.name === VALIDATION_FLASH_COOKIE)) show(readFlashCookie())
-  })
 }
 
 startDocument()
@@ -82,6 +72,9 @@ function readableValidationFlash(value: string): ValidationFlash | undefined {
 
 export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAULT_VALIDATION_BAG): ValidationErrorBag<TData> {
   const pathname = usePathname()
+  // Next gives this context a new value whenever the router applies a refresh, such as the one after
+  // a server action sets the error cookie, so even memoized components rerender and read it.
+  useContext(LayoutRouterContext)
   const requestFlash = useRequestValidationFlash()
   const value = useSyncExternalStore(subscribe, () => shown, () => requestFlash)
 
@@ -99,7 +92,6 @@ export function useValidationErrors<TData = Record<string, unknown>>(bag = DEFAU
     }
   }, [])
 
-  // Also runs after every render, for browsers without cookie change events.
   useEffect(() => {
     if (shownPath !== undefined && shownPath !== pathname) clearFlashCookie()
     shownPath = pathname
