@@ -21,6 +21,12 @@
       "types": "./dist/internal/compiled.d.ts",
       "import": "./dist/internal/compiled.mjs",
       "default": "./dist/internal/compiled.mjs"
+    },
+    "./internal/error-bag": {
+      "@holo-js/source": "./src/internal/error-bag.ts",
+      "types": "./dist/internal/error-bag.d.ts",
+      "import": "./dist/internal/error-bag.mjs",
+      "default": "./dist/internal/error-bag.mjs"
     }
   },
   "main": "./dist/index.mjs",

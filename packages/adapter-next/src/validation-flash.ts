@@ -1,4 +1,7 @@
-export { VALIDATION_FLASH_COOKIE } from './validation-flash-cookie'
+export const VALIDATION_FLASH_COOKIE = 'holo_form_failure'
+
+// The server render writes the flash it showed here, so hydration shows the same errors.
+export const VALIDATION_FLASH_ELEMENT_ID = '__holo_validation_flash'
 
 const MAX_FLASH_COOKIE_BYTES = 3_800
 

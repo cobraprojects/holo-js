@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Next.js: pages no longer ship `@holo-js/validation` or `useValidationErrors()` when they don't use them. Since 0.5.1, the validation errors provider that wraps every root layout imported `@holo-js/validation`, so every page loaded it, about 12 to 14 KB gzip more on a page without forms. Pages that import only `useForm()` also loaded the `useValidationErrors()` hook. The provider now keeps only the error cookie's raw value, `@holo-js/adapter-next/client` re-exports each hook from its own module, and the package declares `"sideEffects": false`, so bundlers drop the hooks a page doesn't import. Each page still loads the provider, about 400 to 700 bytes gzip.
+- Next.js: validation errors from native form posts load only on the pages that call `useValidationErrors()`. Since 0.5.1, Holo wrapped every root layout with a validation errors provider, so every page loaded the provider, the error cookie code and `@holo-js/validation`, even in apps that never call the hook. That was about 12 to 14 KB gzip more on a page without forms. Root layouts are no longer wrapped: the hook reads the errors itself, and a page or app that doesn't call it ships the same JavaScript as on 0.5.0. Errors still show with and without JavaScript, and apps don't need to change anything. `transformNextRootLayout()` is removed from `@holo-js/adapter-shared/build`.
 
 ## 0.5.1 - 2026-10-31
 

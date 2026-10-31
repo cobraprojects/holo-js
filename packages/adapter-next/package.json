@@ -35,23 +35,29 @@
       "import": "./dist/internal/use-form.mjs",
       "default": "./dist/internal/use-form.mjs"
     },
-    "./internal/validation-errors": {
-      "@holo-js/source": "./src/validation-errors.ts",
-      "types": "./dist/internal/validation-errors.d.ts",
-      "import": "./dist/internal/validation-errors.mjs",
-      "default": "./dist/internal/validation-errors.mjs"
+    "./internal/request-validation-flash": {
+      "types": "./dist/internal/request-validation-flash.d.ts",
+      "edge-light": {
+        "@holo-js/source": "./src/request-validation-flash.ts",
+        "default": "./dist/internal/request-validation-flash.mjs"
+      },
+      "worker": {
+        "@holo-js/source": "./src/request-validation-flash.ts",
+        "default": "./dist/internal/request-validation-flash.mjs"
+      },
+      "browser": {
+        "@holo-js/source": "./src/request-validation-flash.browser.ts",
+        "default": "./dist/internal/request-validation-flash.browser.mjs"
+      },
+      "@holo-js/source": "./src/request-validation-flash.ts",
+      "import": "./dist/internal/request-validation-flash.mjs",
+      "default": "./dist/internal/request-validation-flash.mjs"
     },
     "./internal/use-validation-errors": {
       "@holo-js/source": "./src/use-validation-errors.ts",
       "types": "./dist/internal/use-validation-errors.d.ts",
       "import": "./dist/internal/use-validation-errors.mjs",
       "default": "./dist/internal/use-validation-errors.mjs"
-    },
-    "./internal/validation-layout": {
-      "@holo-js/source": "./src/validation-layout.ts",
-      "types": "./dist/internal/validation-layout.d.ts",
-      "import": "./dist/internal/validation-layout.mjs",
-      "default": "./dist/internal/validation-layout.mjs"
     },
     "./realtime": {
       "@holo-js/source": "./src/realtime.ts",

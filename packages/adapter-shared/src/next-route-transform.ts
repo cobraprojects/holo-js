@@ -21,12 +21,11 @@ export type NextModuleInputSourceMap = string | NextModuleSourceMap
 
 const METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
-type RuntimeWrapper = 'routeHandler' | 'serverAction' | 'validationErrorsLayout'
+type RuntimeWrapper = 'routeHandler' | 'serverAction'
 
 const RUNTIME_MODULES: Readonly<Record<RuntimeWrapper, { readonly specifier: string, readonly internals: string }>> = {
   routeHandler: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
   serverAction: { specifier: '@holo-js/adapter-next/runtime', internals: 'adapterNextRuntimeInternals' },
-  validationErrorsLayout: { specifier: '@holo-js/adapter-next/internal/validation-layout', internals: 'adapterNextLayoutInternals' },
 }
 
 function isDirective(statement: ts.Statement): statement is ts.ExpressionStatement & { readonly expression: ts.StringLiteral } {
@@ -173,9 +172,7 @@ function wrapExports(file: ts.SourceFile, wrapper: RuntimeWrapper, wraps: (name:
   const output = new MagicString(source)
   const locals = new Set(wrappedLocals(file, wraps, defaultName))
   const localized = new Set<string>()
-  const localizes = wrapper === 'validationErrorsLayout'
-    ? (expression: ts.Expression) => !ts.isIdentifier(expression) || !declared.has(expression.text)
-    : (expression: ts.Expression) => ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)
+  const localizes = (expression: ts.Expression) => ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)
   const reassign = (local: string) => `${local} = ${runtimeName}.${wrapper}(${local});`
   // Keeps the line breaks of a replaced span so the lines after it stay in place.
   const lineBreaks = (text: string) => text.match(/\r\n|[\r\n\u2028\u2029]/g)?.length ?? 0
@@ -253,24 +250,6 @@ function wrapServerActions(source: string, filename: string): MagicString | unde
   return wrapExports(file, 'serverAction', () => true)
 }
 
-function serverLayoutForClientLayout(source: string, clientLayoutRequest: string): MagicString {
-  const clientLayout = JSON.stringify(clientLayoutRequest)
-  const { specifier, internals } = RUNTIME_MODULES.validationErrorsLayout
-  return new MagicString(source).overwrite(0, source.length, [
-    `import __holoClientLayout from ${clientLayout}`,
-    `import { ${internals} as __holoLayoutRuntime } from ${JSON.stringify(specifier)}`,
-    `export * from ${clientLayout}`,
-    'export default __holoLayoutRuntime.validationErrorsLayout(__holoClientLayout)',
-    '',
-  ].join('\n'))
-}
-
-function wrapRootLayout(source: string, filename: string, clientLayoutRequest: () => string): MagicString | undefined {
-  const file = parse(source, filename)
-  if (hasDirective(file, 'use client')) return serverLayoutForClientLayout(source, clientLayoutRequest())
-  return wrapExports(file, 'validationErrorsLayout', name => name === 'default')
-}
-
 /**
  * Wraps the HTTP method exports of a Next.js route file with Holo's route runtime.
  * The original text is edited in place, and the returned map points back to it,
@@ -289,15 +268,6 @@ export function transformNextRoute(source: string, filename: string, inputMap?: 
  */
 export function transformNextServerActions(source: string, filename: string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
   return transformed(wrapServerActions(source, filename), filename, inputMap)
-}
-
-/**
- * Wraps the default export of a Next.js root layout with Holo's validation errors provider.
- * A `'use client'` layout is replaced by a server layout that imports it through `clientLayoutRequest`.
- * Returns undefined when the layout has no default export to wrap.
- */
-export function transformNextRootLayout(source: string, filename: string, clientLayoutRequest: () => string, inputMap?: NextModuleInputSourceMap): NextModuleTransform | undefined {
-  return transformed(wrapRootLayout(source, filename, clientLayoutRequest), filename, inputMap)
 }
 
 export function compileNextRoute(source: string, filename: string): string {

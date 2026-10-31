@@ -3,7 +3,6 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import { DEFAULT_PAGE_EXTENSIONS, appLayoutPathPattern } from './app-layout-files'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
@@ -311,9 +310,6 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const validationLoader = fileURLToPath(new URL('./validation-loader.mjs', import.meta.url))
   const routeLoader = fileURLToPath(new URL('./route-loader.mjs', import.meta.url))
   const serverActionLoader = fileURLToPath(new URL('./server-action-loader.mjs', import.meta.url))
-  const pageExtensions = nextConfig.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS
-  const appLayoutFile = appLayoutPathPattern(pageExtensions)
-  const layoutLoader = fileURLToPath(new URL('./layout-loader.mjs', import.meta.url))
   const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const realtimeDirectoryPatterns = hasRealtime ? resolveRealtimeDefinitionPatterns(nextConfig, process.cwd()) : { absolute: [], turbopackRelative: [] }
   const mergedTurbopack: TurbopackConfig = {
@@ -325,7 +321,6 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         { condition: { all: ['browser', { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }] }, loaders: [validationLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /(?:^|[\\/])app[\\/].*[\\/]route\.[cm]?[jt]s$/ }] }, loaders: [routeLoader] },
         { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: /\.[cm]?[jt]sx?$/ }, { content: USE_SERVER_DIRECTIVE }] }, loaders: [serverActionLoader] },
-        { condition: { all: [{ not: 'browser' }, { not: 'foreign' }, { path: appLayoutFile }] }, loaders: [{ loader: layoutLoader, options: { pageExtensions, bundler: 'turbopack' } }] },
       ],
       ...(hasRealtime
         ? {
@@ -379,7 +374,6 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         ...(!context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: validationLoader }] }] : []),
         ...(context.isServer ? [{ test: /[\\/]app[\\/].*[\\/]route\.[cm]?[jt]s$/, exclude: /node_modules/, use: [{ loader: routeLoader }] }] : []),
         ...(context.isServer ? [{ test: /\.[cm]?[jt]sx?$/, exclude: /node_modules/, use: [{ loader: serverActionLoader }] }] : []),
-        ...(context.isServer ? [{ test: appLayoutFile, issuerLayer: 'rsc', exclude: /node_modules/, use: [{ loader: layoutLoader, options: { pageExtensions, bundler: 'webpack' } }] }] : []),
       ]
       return nextWebpackConfig
     },

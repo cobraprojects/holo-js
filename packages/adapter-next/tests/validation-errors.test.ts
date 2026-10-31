@@ -7,6 +7,7 @@ import { actionAsyncStorage } from 'next/dist/server/app-render/action-async-sto
 import { workAsyncStorage, type WorkStore } from 'next/dist/server/app-render/work-async-storage.external.js'
 import { workUnitAsyncStorage, type WorkUnitStore } from 'next/dist/server/app-render/work-unit-async-storage.external.js'
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime'
+import { ServerInsertedHTMLContext } from 'next/dist/shared/lib/server-inserted-html.shared-runtime'
 import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies'
 import { MutableRequestCookiesAdapter } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -14,8 +15,6 @@ import { requestUrlInternals } from '@holo-js/kernel'
 import { field, schema, validate, type ValidationErrorBag } from '@holo-js/validation'
 import { useValidationErrors } from '../src/client'
 import { adapterNextRuntimeInternals } from '../src/runtime'
-import { HoloValidationErrorsProvider } from '../src/validation-errors'
-import { adapterNextLayoutInternals } from '../src/validation-layout'
 
 const actionId = `40${'c'.repeat(40)}`
 const postForm = schema({ title: field.string().required(), password: field.password().required().min(12) })
@@ -35,6 +34,12 @@ const profileForm = schema({ bio: field.string().required('x'.repeat(4000)), ema
 
 const saveProfile = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
   await validate({}, profileForm)
+}), '$$id', { value: actionId })
+
+const scriptMessageForm = schema({ title: field.string().required('</script><b>Title is required') })
+
+const saveWithScriptMessage = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
+  await validate({}, scriptMessageForm)
 }), '$$id', { value: actionId })
 
 const changePassword = Object.defineProperty(adapterNextRuntimeInternals.serverAction(async () => {
@@ -89,7 +94,7 @@ async function submit<TResult>(action: () => Promise<TResult>, request: { readon
   return { ...result, setCookies }
 }
 
-async function openPage(pathname: string, bag?: string, initial?: string) {
+async function openPage(pathname: string, bag?: string) {
   let errors: ValidationErrorBag<Record<string, unknown>> | undefined
   let renderer!: ReactTestRenderer
   let currentPath = pathname
@@ -97,12 +102,14 @@ async function openPage(pathname: string, bag?: string, initial?: string) {
     errors = useValidationErrors(bag)
     return null
   }
-  const tree = () => createElement(PathnameContext.Provider, { value: currentPath }, createElement(HoloValidationErrorsProvider, { initial }, createElement(Page)))
+  const tree = () => createElement(PathnameContext.Provider, { value: currentPath }, createElement(Page))
   await act(async () => {
     renderer = create(tree())
   })
   onTestFinished(async () => {
     await act(async () => renderer.unmount())
+    // Leaving the page resets the document's errors on the next task.
+    await new Promise(resolve => setTimeout(resolve))
   })
   return {
     get errors() {
@@ -142,28 +149,58 @@ describe('useValidationErrors() in Next', () => {
   it('shows the errors of a form action submitted with JavaScript on the page that posted it', async () => {
     const browser = installBrowserCookies()
     const page = await openPage('/posts/new')
-    const other = await openPage('/posts')
+    const sameForm = await openPage('/posts/new')
 
     const response = await submit(() => createPost({ title: '', password: 'next-password' }), { withJavaScript: true })
     browser.receive(response.setCookies)
     await page.refresh()
-    await other.refresh()
 
     expect(response.value).toMatchObject({ ok: false, status: 422 })
     expect(page.errors.first('title')).toEqual(expect.any(String))
     expect(page.errors.has('password')).toBe(false)
-    expect(other.errors.flatten()).toEqual({})
+    expect(sameForm.errors.first('title')).toBe(page.errors.first('title'))
     expect(response.setCookies.join()).not.toContain('next-password')
   })
 
-  it('renders the errors of a form posted without JavaScript in the same response', async () => {
-    const WrappedLayout = adapterNextLayoutInternals.validationErrorsLayout(() => createElement(TitleError))
+  it('ignores the errors of a form posted from another page', async () => {
+    const browser = installBrowserCookies()
+    const page = await openPage('/posts')
 
-    const response = await submit(() => createPost({ title: '', password: 'next-password' }), { withJavaScript: false, render: () => createElement(WrappedLayout) })
+    browser.receive((await submit(() => createPost({ title: '' }), { withJavaScript: true, pathname: '/posts/new' })).setCookies)
+    await page.refresh()
+
+    expect(page.errors.flatten()).toEqual({})
+  })
+
+  it('renders the errors of a form posted without JavaScript in the same response', async () => {
+    const response = await submit(() => createPost({ title: '', password: 'next-password' }), { withJavaScript: false, render: () => createElement(TitleError) })
 
     expect(response.value).toMatchObject({ ok: false, status: 422 })
     expect(response.html).toContain('This field is required.')
     expect(response.html).not.toContain('next-password')
+  })
+
+  it('writes the server-rendered errors into the page once, so hydration shows them too', async () => {
+    const inserted: Array<() => ReactNode> = []
+    const render = () => createElement(ServerInsertedHTMLContext.Provider, { value: (callback: () => ReactNode) => inserted.push(callback) }, createElement(TitleError), createElement(TitleError))
+
+    await submit(saveWithScriptMessage, { withJavaScript: false, render })
+    const html = renderToString(createElement('div', null, ...inserted.map(callback => callback())))
+
+    expect(html.match(/id="__holo_validation_flash"/g)).toHaveLength(1)
+    expect(html).not.toContain('</script><b>')
+    expect(html).toContain('Title is required')
+    const flash = JSON.parse(JSON.parse(/<script[^>]*>(.*)<\/script>/.exec(html)?.[1] ?? '""') as string) as { errors: Record<string, string[]> }
+    expect(flash.errors.title).toEqual(['</script><b>Title is required'])
+  })
+
+  it('writes nothing into a page that no failed form posted to', async () => {
+    const inserted: Array<() => ReactNode> = []
+    const render = () => createElement(ServerInsertedHTMLContext.Provider, { value: (callback: () => ReactNode) => inserted.push(callback) }, createElement(TitleError))
+
+    await submit(() => createPost({ title: 'Hello', password: 'next-password' }), { withJavaScript: false, render })
+
+    expect(inserted.map(callback => callback()).filter(Boolean)).toEqual([])
   })
 
   it('reads only the requested error bag', async () => {
