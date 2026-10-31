@@ -10,6 +10,7 @@ import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.share
 import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies'
 import { MutableRequestCookiesAdapter } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { requestUrlInternals } from '@holo-js/kernel'
 import { field, schema, validate, type ValidationErrorBag } from '@holo-js/validation'
 import { useValidationErrors } from '../src/client'
 import { adapterNextRuntimeInternals } from '../src/runtime'
@@ -256,5 +257,15 @@ describe('useValidationErrors() in Next', () => {
 
     expect(response.setCookies.every(cookie => cookie.length < 4096)).toBe(true)
     expect(page.errors.has('title')).toBe(true)
+  })
+
+  it('marks the error cookie Secure from the trusted request scheme, not from the Origin header', async () => {
+    const plain = await submit(() => createPost({ title: '' }), { withJavaScript: true })
+    expect(plain.setCookies.join()).not.toMatch(/secure/i)
+
+    requestUrlInternals.configureForwardedRequestResolver(() => ({ protocol: 'https' }))
+    onTestFinished(() => requestUrlInternals.configureForwardedRequestResolver(undefined))
+    const behindHttpsProxy = await submit(() => createPost({ title: '' }), { withJavaScript: true })
+    expect(behindHttpsProxy.setCookies.join()).toMatch(/secure/i)
   })
 })

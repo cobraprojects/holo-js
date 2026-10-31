@@ -109,6 +109,12 @@ export function NewPostForm() {
       <textarea name="body" />
       {errors.has('body') ? <p>{errors.first('body')}</p> : null}
 
+      <select name="status" defaultValue="draft">
+        <option value="draft">Draft</option>
+        <option value="published">Published</option>
+      </select>
+      {errors.has('status') ? <p>{errors.first('status')}</p> : null}
+
       <button>Save</button>
     </form>
   )

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
-import { createCookieWriteUnavailableError } from '@holo-js/kernel'
+import { createCookieWriteUnavailableError, resolveRequestUrl } from '@holo-js/kernel'
 import { captureErrorReporter } from '@holo-js/kernel/error-reporting'
 import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
 import { validationInternals, type SerializedValidationException } from '@holo-js/validation'
@@ -377,6 +377,14 @@ async function actionCookies(): Promise<NextActionCookieStore> {
   return await cookies() as NextActionCookieStore
 }
 
+function isSecureRequest(store: NextWorkUnitStore): boolean {
+  try {
+    return resolveRequestUrl({ url: 'http://localhost/', headers: store.headers }).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 async function flashValidationErrors(store: NextWorkUnitStore, failure: SerializedValidationException): Promise<void> {
   const flash = serializeValidationFlash({ bag: failure.bag, page: validationFlashPage(store.url?.pathname ?? '/'), errors: failure.errors })
   if (!flash) return
@@ -385,7 +393,7 @@ async function flashValidationErrors(store: NextWorkUnitStore, failure: Serializ
   cookies.set(VALIDATION_FLASH_COOKIE, flash, {
     path: '/',
     sameSite: 'lax',
-    secure: store.headers?.get('origin')?.startsWith('https:') ?? false,
+    secure: isSecureRequest(store),
   })
 }
 

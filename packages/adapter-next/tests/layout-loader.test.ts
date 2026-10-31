@@ -113,4 +113,13 @@ describe('Next layout loader', () => {
     expect(dependencies).toHaveLength(1)
     expect(await readFile(dependencies[0] ?? '', 'utf8')).toContain(JSON.stringify(join(project, 'app/layout.tsx')))
   })
+
+  it('watches the directories above a layout so adding or removing a parent layout rebuilds it', async () => {
+    const project = await createProject(['app/layout.tsx', 'app/admin/layout.tsx'])
+    const watched: string[] = []
+
+    layoutLoader.call({ resourcePath: join(project, 'app/admin/layout.tsx'), addContextDependency: directory => watched.push(directory) }, 'export default function Layout() { return null }\n')
+
+    expect(watched).toEqual([join(project, 'app')])
+  })
 })
