@@ -8,17 +8,18 @@ import {
   type SchemaInputShape,
   type StandardSchemaV1Issue,
   type SupportedRuleFamily,
-  type ValidationErrorBag,
   type ValidationField,
   type ValidationFieldBuilderLike,
   ValidationContractError,
   type WebFileLike,
   type FieldRule,
 } from './contracts-types'
+import { UNSAFE_PATH_SEGMENTS, buildErrorTree, createErrorBag, createObjectContainer, hasOwnContainerValue, isPlainObject } from './error-bag'
+
+export { buildErrorTree, createErrorBag, isPlainObject }
 
 const repeatedFormValues = new WeakSet<unknown[]>()
 
-const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
 const MAX_INPUT_VARIABLES = 1_000
 const MAX_UPLOADED_FILES = 1_000
@@ -36,10 +37,6 @@ const INVALID_FIELD_NAME = 'The request contains an invalid field name.'
 const INVALID_LIST_INDEX = 'The request contains an invalid list index.'
 
 type ArrayIndexes = Map<unknown[], Set<number>>
-
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
 
 export function isFieldDefinition(value: unknown): value is FieldDefinition {
   return isPlainObject(value)
@@ -176,84 +173,6 @@ export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition['it
       rules: Object.freeze([]),
     }),
   })
-}
-
-function createObjectContainer(): Record<string, unknown> {
-  return Object.create(null) as Record<string, unknown>
-}
-
-function hasOwnContainerValue(container: Record<string, unknown> | unknown[], key: string | number): boolean {
-  return Object.prototype.hasOwnProperty.call(container, key)
-}
-
-function assertSafePathSegment(segment: string, path: string): void {
-  if (UNSAFE_PATH_SEGMENTS.has(segment)) {
-    throw new ValidationContractError(`Unsafe path segment "${segment}" in "${path}".`)
-  }
-}
-
-function pathSegments(path: string): readonly string[] {
-  const segments = path.split('.').map(segment => segment.trim()).filter(Boolean)
-  for (const segment of segments) {
-    assertSafePathSegment(segment, path)
-  }
-
-  return segments
-}
-
-export function buildErrorTree(flattened: Record<string, readonly string[]>): Record<string, unknown> {
-  const root = createObjectContainer()
-
-  for (const [path, messages] of Object.entries(flattened)) {
-    const segments = pathSegments(path)
-    if (segments.length === 0) {
-      continue
-    }
-
-    let cursor: Record<string, unknown> = root
-    for (const [index, segment] of segments.entries()) {
-      if (index === segments.length - 1) {
-        cursor[segment] = Object.freeze([...messages])
-        continue
-      }
-
-      const existing = hasOwnContainerValue(cursor, segment) ? cursor[segment] : undefined
-      if (!isPlainObject(existing)) {
-        cursor[segment] = createObjectContainer()
-      }
-
-      cursor = cursor[segment] as Record<string, unknown>
-    }
-  }
-
-  return root
-}
-
-export function createErrorBag<TShape>(
-  flattened: Record<string, readonly string[]> = {},
-): ValidationErrorBag<TShape> {
-  const normalized = Object.freeze(Object.fromEntries(
-    Object.entries(flattened).map(([key, messages]) => [key, Object.freeze([...messages])]),
-  )) as Record<string, readonly string[]>
-  const tree = buildErrorTree(normalized)
-
-  return Object.freeze(Object.assign(tree, {
-    has(path: string) {
-      return Boolean(normalized[path]?.length)
-    },
-    get(path: string) {
-      return normalized[path] ?? Object.freeze([])
-    },
-    first(path: string) {
-      return normalized[path]?.[0]
-    },
-    flatten() {
-      return normalized
-    },
-    toJSON() {
-      return normalized
-    },
-  })) as ValidationErrorBag<TShape>
 }
 
 export function normalizeIssuePath(issue: { readonly path?: readonly unknown[] }): string {

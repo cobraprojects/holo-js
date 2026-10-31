@@ -2,6 +2,8 @@ import { writeFileSync } from 'node:fs'
 import { withHolo } from '@holo-js/adapter-next/config'
 
 export default withHolo({
+  // The bundle check reads which modules each page ships from the source maps.
+  productionBrowserSourceMaps: true,
   webpack(config, { isServer }) {
     if (!isServer) {
       config.plugins.push({

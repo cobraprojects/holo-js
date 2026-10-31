@@ -41,6 +41,7 @@ import {
   markDefinitionSensitive,
   parseByteSize,
 } from './contracts-support'
+import { DEFAULT_VALIDATION_BAG } from './error-bag'
 import { createFieldStandardValidate, createSchemaStandardValidate, flatToStandardIssues, summarizeErrors, validateInternal } from './contracts-runtime'
 
 import { makeCompiledFieldSchema, resolveCompiledSchema } from './contracts-compiler'
@@ -336,8 +337,8 @@ export function defineSchema<TShape extends SchemaInputShape>(
 
 export const schema = defineSchema
 export { createErrorBag }
+export { DEFAULT_VALIDATION_BAG }
 
-export const DEFAULT_VALIDATION_BAG = 'default'
 const validationMetadataSymbol: unique symbol = Symbol('holo.validation.metadata')
 const validationValuesSymbol: unique symbol = Symbol('holo.validation.values')
 let validationExceptionThrower: (<TData>(exception: ValidationException<TData>) => void) | undefined
