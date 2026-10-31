@@ -55,7 +55,7 @@ async function withProductionServer(verify) {
   } finally {
     await browser?.close()
     server.kill('SIGTERM')
-    await new Promise(resolvePromise => server.exitCode !== null ? resolvePromise() : server.once('exit', resolvePromise))
+    await new Promise(resolvePromise => server.exitCode !== null || server.signalCode !== null ? resolvePromise() : server.once('exit', resolvePromise))
   }
 }
 
@@ -197,8 +197,8 @@ async function withBaselineAdapter(build) {
   const [tarball] = (await readdir(packed)).filter(file => file.endsWith('.tgz'))
   run('tar', ['-xzf', join(packed, tarball), '-C', packed])
   await rename(installed, local)
-  await rename(join(packed, 'package'), installed)
   try {
+    await rename(join(packed, 'package'), installed)
     return await build()
   } finally {
     await rm(installed, { recursive: true, force: true })
