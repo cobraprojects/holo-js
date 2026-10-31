@@ -19,6 +19,7 @@ import {
   appendIssues,
   assignNestedValue,
   assertFiniteNumber,
+  assertDigitCount,
   assertNonEmptyArray,
   buildErrorTree,
   cloneDefinition,
@@ -137,9 +138,7 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     if (this.field.definition.kind !== 'number') {
       throw new ValidationContractError(`${name} is only supported for number fields.`)
     }
-    if (!Number.isSafeInteger(count) || count < 0) {
-      throw new ValidationContractError(`${name} must be a nonnegative safe integer.`)
-    }
+    assertDigitCount(count, name)
     return this.clone(normalizeRule(name, [count], message))
   }
 

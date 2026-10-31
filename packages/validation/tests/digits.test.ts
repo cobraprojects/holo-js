@@ -28,6 +28,7 @@ describe('numeric digit constraints', () => {
     [1e15, 16],
     [1e21, 22],
     [1e23, 24],
+    [1e210, 211],
     [1e23 - 2 ** 24, 23],
     [1e23 + 2 ** 24, 24],
     [Number.MAX_VALUE, 309],
@@ -108,6 +109,16 @@ describe('numeric digit constraints', () => {
       minimum: ['This field must have at least 2 digits.'],
       maximum: ['This field must have at most 1 digit.'],
     })
+  })
+
+  it.each(rules)('rejects invalid %s counts in restored metadata', async (name) => {
+    for (const count of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '3', null, undefined]) {
+      const restored: FieldBuilderInput<number> = {
+        kind: 'field',
+        definition: { kind: 'number', rules: [{ name, args: [count] }] },
+      }
+      await expect(safeParse({ value: 123 }, schema({ value: restored }))).rejects.toBeInstanceOf(ValidationContractError)
+    }
   })
 
   it('validates serialized field rules through the public schema path', async () => {

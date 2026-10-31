@@ -1,7 +1,7 @@
 import * as v from 'valibot'
 import { exactSizeAction, digitsAction, minAction, maxAction, asPipeItem, stringSchema, numberSchema, booleanSchema, dateSchema, emailAction, urlAction, uuidAction, integerAction } from './compiler-actions'
 import type { FieldRule, FieldDefinition, SchemaInputShape, SupportedRuleFamily, WebFileLike } from './contracts-types'
-import { declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
+import { assertDigitCount, declaredListLimit, isFieldDefinition, isValidationFieldBuilderLike, isValidationField, normalizeFieldBuilder, isWebFileLike } from './contracts-support'
 
 import { createExecutionNode, createOrderedSchemaFactory, executeCustomRule, createFieldExecutionSchema, createShapeExecutionSchema, type ExecutionNode, type FieldExecution, type CompiledSchema } from './contracts-execution'
 
@@ -123,9 +123,12 @@ function compileFieldPipeline(definition: FieldDefinition, executionFor?: (datas
       }
       case 'digits':
       case 'minDigits':
-      case 'maxDigits':
-        if (typeof rule.args[0] === 'number') actions.push(asPipeItem(digitsAction(rule.name, rule.args[0], rule.message)))
+      case 'maxDigits': {
+        const count = rule.args[0]
+        assertDigitCount(count, rule.name)
+        actions.push(asPipeItem(digitsAction(rule.name, count, rule.message)))
         break
+      }
       case 'email':
         actions.push(asPipeItem(emailAction(rule.message)))
         break
