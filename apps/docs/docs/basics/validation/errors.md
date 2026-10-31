@@ -38,7 +38,8 @@ You don't need to catch `ValidationException` yourself. Holo handles it in each 
 | Framework | Where you throw | What the client gets |
 |---|---|---|
 | Next.js | Route handler (`app/**/route.ts`) | 422 JSON response |
-| Next.js | Server action called from the browser | The action returns the failure payload, and `useForm()` shows the field errors |
+| Next.js | Server action called by `useForm()` | The action returns the failure payload, and `useForm()` shows the field errors |
+| Next.js | Server action passed to `<form action>` | The page renders again with the errors for [`useValidationErrors()`](/basics/forms/frameworks#next-js-native-forms) |
 | Nuxt | `server/api/**` or a request that doesn't accept HTML | 422 JSON response |
 | Nuxt | `server/routes/**` from a native HTML form post | 303 redirect back to the form, with errors flashed for [`useValidationErrors()`](/basics/forms/frameworks#native-forms-in-nuxt) |
 | SvelteKit | `+server.ts` | 422 JSON response |
@@ -172,19 +173,16 @@ export async function POST(request: Request) {
 }
 ```
 
-Use `isValidationException()` to narrow a live `ValidationException` and access its error bag methods. Framework HTTP errors and serialized payloads are not live exceptions.
-
-At integration and transport boundaries, use `serializeValidationException(error)`. It returns a `SerializedValidationException` or `undefined`, recognizing live exceptions, framework wrappers, serialized payloads, and server error digests. Read field messages from `payload.errors`; the payload also retains `bag`, `values`, `status`, and retry metadata. Digest-only errors have empty values when the framework did not transmit them:
+You don't need to catch a `ValidationException` to send it back: Holo turns it into the 422 response or the page's errors, as the table [above](#how-each-framework-responds) shows. When your own code must handle it, for example to answer a failed login with a 401 instead, narrow it with `isValidationException()`. `error.errors` is its [error bag](#read-errors), and `error.toJSON()` is the 422 response body:
 
 ```ts
-import { serializeValidationException } from '@holo-js/validation'
+import { isValidationException } from '@holo-js/validation'
 
 try {
-  await savePost(formData)
+  await auth.guard('api').login(input)
 } catch (error) {
-  const payload = serializeValidationException(error)
-  if (payload) {
-    return payload
+  if (isValidationException(error)) {
+    return Response.json({ ok: false, status: 401, message: 'Invalid credentials.' }, { status: 401 })
   }
 
   throw error

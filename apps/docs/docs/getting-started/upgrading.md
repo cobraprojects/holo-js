@@ -1,5 +1,33 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.0 to the next release
+
+### `serializeValidationException()` is removed
+
+`@holo-js/validation` no longer exports `serializeValidationException()`. You no longer need to turn a validation failure into a payload yourself:
+
+- Route handlers answer with a 422 when `validate()` throws.
+- `useForm()` shows the errors a server action returns.
+- A server action passed to `<form action>` shows its errors through [`useValidationErrors()`](/basics/forms/frameworks#next-js-native-forms), with or without JavaScript.
+
+Remove `try/catch` blocks that only returned the payload:
+
+```ts
+export async function createPostAction(formData: FormData) {
+  try { // [!code --]
+    const data = await validate(formData, postForm)
+    await Post.create(data)
+    redirect('/posts')
+  } catch (error) { // [!code --]
+    const payload = serializeValidationException(error) // [!code --]
+    if (payload) return payload // [!code --]
+    throw error // [!code --]
+  } // [!code --]
+}
+```
+
+To handle the error in your own code, narrow it with `isValidationException(error)`. `error.errors` is its error bag, and `error.toJSON()` is the 422 response body. See [Error Messages](/basics/validation/errors#add-errors-from-your-own-logic).
+
 ## Upgrading from 0.4.4 to 0.5.0
 
 Update every installed `@holo-js/*` package to `0.5.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. Review the two behavior changes below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#050---2026-10-30) lists the release changes.
@@ -10,7 +38,7 @@ Update every installed `@holo-js/*` package to `0.5.0` together. Change the vers
 
 When the browser calls a server action and it throws a validation or rate-limit error, the action now returns the `{ ok: false, ... }` payload instead of answering with a 500. Forms that use `useForm()` show the field errors as before and need no change.
 
-If your client code calls an action directly and catches the thrown error, read the returned value instead. The action's TypeScript return type doesn't include the payload, so read it with `serializeValidationException()`:
+If your client code calls an action directly and catches the thrown error, read the returned value instead. The action's TypeScript return type doesn't include the payload, so in 0.5.0 read it with `serializeValidationException()`. The next release removes that function ([upgrade section](#serializevalidationexception-is-removed)):
 
 ```ts
 try { // [!code --]
@@ -1098,11 +1126,9 @@ Forms helpers such as `validate()` and `useForm()` accept these schemas directly
 
 #### Read validation errors across framework boundaries
 
-If you use `isValidationException(error)` to recognize a serialized response or framework-wrapped error, switch to `serializeValidationException(error)` from `@holo-js/validation`. It returns the failure payload, or `undefined` for unrelated errors:
+If you use `isValidationException(error)` to recognize a serialized response or framework-wrapped error, switch to `serializeValidationException(error)` from `@holo-js/validation`. Releases after 0.5.0 remove it ([upgrade section](#serializevalidationexception-is-removed)). It returns the failure payload, or `undefined` for unrelated errors:
 
 ```ts
-import { serializeValidationException } from '@holo-js/validation'
-
 const payload = serializeValidationException(error)
 if (payload) {
   return payload

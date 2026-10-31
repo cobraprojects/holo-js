@@ -158,38 +158,19 @@ export async function updatePost(id: number, input: PostInput) {
 
 ```ts [Next.js]
 // app/admin/actions.ts — add these imports and actions
-import { serializeValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/blog'
 import { createPost, updatePost } from '@/server/lib/blog'
 
 export async function createPostAction(formData: FormData) {
-  try {
-    const data = await validate(formData, postForm)
-    await createPost(data)
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
-  }
+  const data = await validate(formData, postForm)
+  await createPost(data)
+  redirect('/admin/posts')
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
-  try {
-    const data = await validate(formData, postForm)
-    await updatePost(id, data)
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
-  }
+  const data = await validate(formData, postForm)
+  await updatePost(id, data)
+  redirect('/admin/posts')
 }
 ```
 
@@ -277,7 +258,7 @@ export const actions = {
 
 When validation fails, each framework sends the errors back differently:
 
-- **Next.js**: the action catches the validation error and returns `error.toJSON()`. `useForm()` reads that result and shows the errors. Other errors, including Next.js's own redirect, are re-thrown.
+- **Next.js**: Holo wraps the actions a `'use server'` file exports. When one called from the browser throws a validation error, the wrapper returns its payload instead. `useForm()` reads that result and shows the errors. Other errors, including Next.js's own redirect, are re-thrown.
 - **Nuxt**: Holo turns the thrown validation error into a JSON response with status `422`. The page's `submitter` returns that JSON to `useForm()`.
 - **SvelteKit**: Holo sends the errors back to the form page after the post, where `useValidationErrors()` reads them.
 

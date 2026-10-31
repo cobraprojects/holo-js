@@ -1,6 +1,5 @@
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
-import { serializeValidationException } from '@holo-js/validation'
 
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
@@ -38,13 +37,7 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    const payload = serializeValidationException(error)
-    if (!payload) {
-      throw error
-    }
-
-    setResponseStatus(event, payload.status)
-    return payload
+    throw error
   }
 
   return resendSuccessResponse()

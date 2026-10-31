@@ -106,7 +106,7 @@ globalThis.submitNativeConcurrentForms = async () => {
 }
 
 `)
-execFileSync('bun', ['build', entry, '--target=browser', '--outfile', bundle], { cwd: root, stdio: 'pipe' })
+execFileSync('bun', ['build', entry, '--target=browser', '--define', 'process.env.NODE_ENV="production"', '--define', 'process.env={}', '--outfile', bundle], { cwd: root, stdio: 'pipe' })
 const javascript = await readFile(bundle)
 const server = createServer((request, response) => {
   if (request.url === '/client.js') {

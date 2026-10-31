@@ -1,5 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { isValidationException, serializeValidationException, ValidationException, type SerializedValidationException, validationInternals } from '../src'
+import { isValidationException, ValidationException, type SerializedValidationException, validationInternals } from '../src'
+
+const { serializeValidationException } = validationInternals
 
 describe('validation failure serialization', () => {
   it('returns one public payload contract for live, serialized, wrapped and digest errors', () => {

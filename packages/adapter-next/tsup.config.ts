@@ -7,10 +7,13 @@ export default defineConfig({
     index: 'src/index.ts',
     config: 'src/config.ts',
     client: 'src/client.ts',
+    'internal/validation-errors': 'src/validation-errors.ts',
+    'internal/validation-layout': 'src/validation-layout.ts',
     realtime: 'src/realtime.ts',
     'validation-loader': 'src/validation-loader.ts',
     'route-loader': 'src/route-loader.ts',
     'server-action-loader': 'src/server-action-loader.ts',
+    'layout-loader': 'src/layout-loader.ts',
     'realtime-definition-loader': 'src/realtime-definition-loader.ts',
     runtime: 'src/runtime.ts',
   },
@@ -19,7 +22,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['@holo-js/realtime', '@holo-js/realtime/client', 'react', 'next/headers.js', 'next/navigation.js'],
+  external: ['@holo-js/realtime', '@holo-js/realtime/client', '@holo-js/adapter-next/internal/validation-errors', 'react', 'next/headers.js', 'next/navigation.js'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

@@ -1,7 +1,6 @@
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
 
-import { validationExceptionResponse } from '../../../../server/lib/validation-response'
 
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
@@ -36,11 +35,6 @@ export async function POST() {
         status: 429,
         errors: { _root: [error.message] },
       }, { status: 429 })
-    }
-
-    const response = validationExceptionResponse(error)
-    if (response) {
-      return response
     }
 
     throw error

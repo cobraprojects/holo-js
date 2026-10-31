@@ -117,7 +117,6 @@ Resending works only for a signed-in user, and it sends the link to that user's 
 // app/api/verify-email/resend/route.ts
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
-import { serializeValidationException } from '@holo-js/validation'
 
 export async function POST() {
   const current = await user()
@@ -133,9 +132,7 @@ export async function POST() {
       return Response.json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
     }
 
-    const payload = serializeValidationException(error)
-    if (!payload) throw error
-    return Response.json(payload, { status: payload.status })
+    throw error
   }
 
   return Response.json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })
@@ -146,7 +143,6 @@ export async function POST() {
 // server/api/verify-email/resend.post.ts
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
-import { serializeValidationException } from '@holo-js/validation'
 
 export default defineEventHandler(async (event) => {
   const current = await user()
@@ -164,10 +160,7 @@ export default defineEventHandler(async (event) => {
       return { ok: false, status: 429, errors: { _root: [error.message] } }
     }
 
-    const payload = serializeValidationException(error)
-    if (!payload) throw error
-    setResponseStatus(event, payload.status)
-    return payload
+    throw error
   }
 
   return { ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } }
@@ -179,7 +172,6 @@ export default defineEventHandler(async (event) => {
 
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
-import { serializeValidationException } from '@holo-js/validation'
 
 export async function POST() {
   const current = await user()
@@ -195,9 +187,7 @@ export async function POST() {
       return Response.json({ ok: false, status: 429, errors: { _root: [error.message] } }, { status: 429 })
     }
 
-    const payload = serializeValidationException(error)
-    if (!payload) throw error
-    return Response.json(payload, { status: payload.status })
+    throw error
   }
 
   return Response.json({ ok: true, status: 200, data: { message: 'A fresh verification email has been sent.' } })

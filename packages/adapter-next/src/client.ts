@@ -14,6 +14,8 @@ import {
 } from '@holo-js/forms/internal/client'
 import { createNextRenderableError, normalizeNextClientHttpError, renderNextClientHttpErrorPage } from './client-errors'
 
+export { useValidationErrors } from '@holo-js/adapter-next/internal/validation-errors'
+
 export {
   type ClientCsrfOptions,
   type ClientSubmitContext,

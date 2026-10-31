@@ -1,6 +1,6 @@
 import type { H3Error, H3Event } from 'h3'
 import { send, setHeader, setResponseStatus } from '#imports'
-import { serializeValidationException } from '@holo-js/validation'
+import { validationInternals } from '@holo-js/validation'
 import { serializeRateLimitError, serializeRequestBodyTooLargeError } from '@holo-js/adapter-shared/server-errors'
 import {
   applyFormFailureRedirect,
@@ -10,7 +10,7 @@ import {
 
 export default async function handleValidationError(error: H3Error, event: H3Event): Promise<void> {
   const bodyTooLarge = serializeRequestBodyTooLargeError(error)
-  const payload = bodyTooLarge ?? serializeValidationException(error) ?? serializeRateLimitError(error)
+  const payload = bodyTooLarge ?? validationInternals.serializeValidationException(error) ?? serializeRateLimitError(error)
   if (!payload) {
     return
   }

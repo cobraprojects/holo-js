@@ -607,4 +607,23 @@ export default defineConfig({
       process.chdir(previousCwd)
     }
   })
+
+  it('runs the root layout loader for layouts named by the configured page extensions', async () => {
+    const root = await createProject()
+    const previousCwd = process.cwd()
+    process.chdir(root)
+
+    try {
+      type LayoutRule = { readonly test?: RegExp, readonly issuerLayer?: string, readonly use?: readonly { readonly loader: string, readonly options?: unknown }[] }
+      const config = withHolo({ pageExtensions: ['page.tsx', 'page.ts'] })
+      const webpack = (config as { readonly webpack?: unknown }).webpack as (config: Record<string, unknown>, context: { readonly isServer: boolean }) => { module: { rules: LayoutRule[] } }
+      const layoutRule = webpack({}, { isServer: true }).module.rules.find(rule => rule.use?.[0]?.loader.includes('layout-loader'))
+      expect(layoutRule?.test?.test('app/layout.page.tsx')).toBe(true)
+      expect(layoutRule?.test?.test('app/layout.tsx')).toBe(false)
+      expect(layoutRule?.issuerLayer).toBe('rsc')
+      expect(layoutRule?.use?.[0]?.options).toEqual({ pageExtensions: ['page.tsx', 'page.ts'], bundler: 'webpack' })
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
 })

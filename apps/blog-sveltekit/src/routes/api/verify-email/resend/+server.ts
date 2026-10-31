@@ -1,6 +1,5 @@
 import { resendEmailVerification, user } from '@holo-js/auth'
 import { rateLimit, SecurityRateLimitError } from '@holo-js/security'
-import { serializeValidationException } from '@holo-js/validation'
 
 import type { RequestHandler } from './$types'
 
@@ -38,12 +37,7 @@ export const POST: RequestHandler = async () => {
       }, { status: 429 })
     }
 
-    const payload = serializeValidationException(failure)
-    if (!payload) {
-      throw failure
-    }
-
-    return Response.json(payload, { status: payload.status })
+    throw failure
   }
 
   return resendSuccessResponse()

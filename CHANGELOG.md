@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Next.js: `useValidationErrors(bag?)` from `@holo-js/adapter-next/client` reads the validation errors of a server action passed to `<form action>`, the same hook Nuxt and SvelteKit have. It works with and without JavaScript: the page that posted the form renders again with the errors, which stay until the next successful submission, a reload, or navigation to another page. See [Framework Recipes](apps/docs/docs/basics/forms/frameworks.md#next-js-native-forms).
+
+### Changed
+
+- Next.js: a server action posted from a form without JavaScript that fails validation renders the page again with its errors. Before, it answered with an error page.
+
+### Compatibility and upgrade requirements
+
+- `serializeValidationException()` is no longer exported from `@holo-js/validation`. Handling a validation failure yourself is no longer needed: route handlers answer with a 422, `useForm()` shows the errors a server action returns, and `useValidationErrors()` shows the errors of a native form. Remove `try/catch` blocks that only turned the error into a payload. To recognize the error in your own code, use `isValidationException(error)`; `error.toJSON()` is the 422 response body.
+
 ### Fixed
 
 - In Next.js apps, errors thrown in `'use server'` modules and `app/**/route.ts` handlers point at the right source lines again, and V8 coverage (`NODE_V8_COVERAGE` with `experimental.serverSourceMaps`) counts the right lines. Since 0.5.0, Holo reprinted these files to wrap their exports and passed no source map, so blank lines disappeared, statements were reformatted, and positions shifted. Holo now edits the original text in place and appends its runtime import and most wrapping lines after your code. Only the lines that declare or export a wrapped function change, every other line keeps its line and column, and the loaders pass a source map to Turbopack and webpack, chained with any map an earlier loader passed. Files that end lines with a lone `\r`, U+2028, or U+2029 instead of `\n` still map to the wrong lines, because the map counts lines only at `\n`. `@holo-js/adapter-shared/build` adds `transformNextServerActions()` and `transformNextRoute()`, which return the code with its map. See [Coverage and stack traces](apps/docs/docs/testing/index.md#coverage-and-stack-traces).

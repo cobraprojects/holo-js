@@ -157,54 +157,36 @@ import { authorize } from '@holo-js/authorization'
 import Post from '@/server/models/Post'
 
 export async function createPostAction(formData: FormData) {
-  try {
-    const currentAuth = await auth()
-    if (!currentAuth.authenticated || !currentAuth.user) {
-      redirect('/login')
-    }
-
-    const data = await validate(formData, postForm)
-    await authorize('create', Post)
-    if (data.status === 'published') {
-      await authorize('publish', Post)
-    }
-
-    await createPost({
-      ...data,
-      authorId: currentAuth.user.id,
-    })
-
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
   }
+
+  const data = await validate(formData, postForm)
+  await authorize('create', Post)
+  if (data.status === 'published') {
+    await authorize('publish', Post)
+  }
+
+  await createPost({
+    ...data,
+    authorId: currentAuth.user.id,
+  })
+
+  redirect('/admin/posts')
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
-  try {
-    const data = await validate(formData, postForm)
-    const post = await Post.findOrFail(id)
-    await authorize('update', post)
-    if (data.status === 'published') {
-      await authorize('publish', post)
-    }
-
-    await updatePost(id, data)
-
-    redirect('/admin/posts')
-  } catch (error) {
-    const payload = serializeValidationException(error)
-    if (payload) {
-      return payload
-    }
-
-    throw error
+  const data = await validate(formData, postForm)
+  const post = await Post.findOrFail(id)
+  await authorize('update', post)
+  if (data.status === 'published') {
+    await authorize('publish', post)
   }
+
+  await updatePost(id, data)
+
+  redirect('/admin/posts')
 }
 
 export async function deletePostAction(id: number, formData: FormData) {

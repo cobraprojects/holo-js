@@ -434,6 +434,7 @@ export { compileBrowserValidation } from './validation-transform'
 export {
   compileNextRoute,
   compileNextServerActions,
+  transformNextRootLayout,
   transformNextRoute,
   transformNextServerActions,
   type NextModuleInputSourceMap,
