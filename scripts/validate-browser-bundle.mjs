@@ -67,6 +67,11 @@ async function verifyForm() {
     await page.getByRole('button', { name: 'Submit' }).click()
     await page.locator('#__holo_next_client_http_error__').filter({ hasText: '403' }).waitFor()
     assert.equal(await page.title(), '403: This page could not be accessed.')
+    // The packaged hook and provider are separate modules; they must share one context.
+    await page.goto(new URL('/errors', url).href)
+    await page.getByRole('alert').filter({ hasText: 'No errors' }).waitFor()
+    await page.getByRole('button', { name: 'Save' }).click()
+    await page.getByRole('alert').filter({ hasText: 'Name is required' }).waitFor()
   } finally {
     await browser?.close()
     server.kill('SIGTERM')
@@ -133,4 +138,4 @@ assert.equal(compilerIncluded, false, 'Production browser compilation includes t
 assert.doesNotMatch(modules, /node_modules[\\/](?:tsup|esbuild|@nuxt[\\/]kit|nitropack)[\\/]/)
 if (!registryVersion) await verifyBrowserExports(join(consumer, 'local-packages'), consumer)
 await verifyForm()
-console.log('Packaged production form validation, submission, redirect, and HTTP error handling passed')
+console.log('Packaged production form validation, submission, redirect, HTTP error handling, and useValidationErrors() passed')
