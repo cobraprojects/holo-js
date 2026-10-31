@@ -114,12 +114,19 @@ describe('Next layout loader', () => {
     expect(await readFile(dependencies[0] ?? '', 'utf8')).toContain(JSON.stringify(join(project, 'app/layout.tsx')))
   })
 
-  it('watches the directories above a layout so adding or removing a parent layout rebuilds it', async () => {
-    const project = await createProject(['app/layout.tsx', 'app/admin/layout.tsx'])
-    const watched: string[] = []
+  it('watches only the possible parent layout files, so adding or removing one rebuilds the layout', async () => {
+    const project = await createProject(['app/layout.tsx', 'app/admin/reports/layout.tsx'])
+    const existing: string[] = []
+    const missing: string[] = []
 
-    layoutLoader.call({ resourcePath: join(project, 'app/admin/layout.tsx'), addContextDependency: directory => watched.push(directory) }, 'export default function Layout() { return null }\n')
+    layoutLoader.call({
+      resourcePath: join(project, 'app/admin/reports/layout.tsx'),
+      addDependency: file => existing.push(file),
+      addMissingDependency: file => missing.push(file),
+      getOptions: () => ({ pageExtensions: ['tsx', 'js'] }),
+    }, 'export default function Layout() { return null }\n')
 
-    expect(watched).toEqual([join(project, 'app')])
+    expect(existing).toEqual([join(project, 'app/layout.tsx')])
+    expect(missing).toEqual([join(project, 'app/admin/layout.tsx'), join(project, 'app/admin/layout.js'), join(project, 'app/layout.js')])
   })
 })

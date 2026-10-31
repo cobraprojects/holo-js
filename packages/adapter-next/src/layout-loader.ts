@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { compileNextRootLayout } from '@holo-js/adapter-shared/build'
 import { DEFAULT_PAGE_EXTENSIONS, layoutFileNamePattern } from './app-layout-files'
@@ -13,7 +13,7 @@ type LayoutLoaderContext = {
   readonly resourcePath: string
   readonly resourceQuery?: string
   addDependency?(file: string): void
-  addContextDependency?(directory: string): void
+  addMissingDependency?(file: string): void
   getOptions?(): { readonly pageExtensions?: readonly string[], readonly bundler?: NextBundler }
 }
 
@@ -27,12 +27,30 @@ function isInside(directory: string, parent: string): boolean {
   return path === '' || (!path.startsWith('..') && !path.startsWith(sep))
 }
 
-function isRootLayout(file: string, projectRoot: string, layoutFile: RegExp, watchDirectory: (directory: string) => void): boolean {
+type LayoutDependencies = {
+  readonly existing: (file: string) => void
+  readonly missing: (file: string) => void
+}
+
+function hasLayout(directory: string, pageExtensions: readonly string[], dependencies: LayoutDependencies): boolean {
+  let found = false
+  for (const extension of pageExtensions) {
+    const candidate = join(directory, `layout.${extension}`)
+    if (existsSync(candidate)) {
+      dependencies.existing(candidate)
+      found = true
+    } else {
+      dependencies.missing(candidate)
+    }
+  }
+  return found
+}
+
+function isRootLayout(file: string, projectRoot: string, pageExtensions: readonly string[], dependencies: LayoutDependencies): boolean {
   const app = appDirectory(projectRoot)
-  if (!layoutFile.test(basename(file)) || !isInside(dirname(file), app)) return false
+  if (!layoutFileNamePattern(pageExtensions).test(basename(file)) || !isInside(dirname(file), app)) return false
   for (let directory = dirname(dirname(file)); isInside(directory, app); directory = dirname(directory)) {
-    watchDirectory(directory)
-    if (readdirSync(directory).some(entry => layoutFile.test(entry))) return false
+    if (hasLayout(directory, pageExtensions, dependencies)) return false
   }
   return true
 }
@@ -54,8 +72,8 @@ export default function layoutLoader(this: LayoutLoaderContext, source: string):
   if (this.resourceQuery === CLIENT_LAYOUT_QUERY) return source
   const options = this.getOptions?.()
   const projectRoot = process.cwd()
-  const layoutFile = layoutFileNamePattern(options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS)
-  if (!isRootLayout(this.resourcePath, projectRoot, layoutFile, directory => this.addContextDependency?.(directory))) return source
+  const dependencies = { existing: (file: string) => this.addDependency?.(file), missing: (file: string) => this.addMissingDependency?.(file) }
+  if (!isRootLayout(this.resourcePath, projectRoot, options?.pageExtensions ?? DEFAULT_PAGE_EXTENSIONS, dependencies)) return source
   return compileNextRootLayout(source, this.resourcePath, () => {
     if (options?.bundler !== 'webpack') return `./${basename(this.resourcePath)}${CLIENT_LAYOUT_QUERY}`
     const entry = writeClientLayoutEntry(this.resourcePath, projectRoot)
