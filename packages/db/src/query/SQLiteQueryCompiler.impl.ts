@@ -54,28 +54,40 @@ function convertLikePatternToGlob(pattern: string): string {
   return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
 }
 
+function splitSchemaTable(tableName: string): { readonly schemaName: string, readonly schema: string, readonly table: string } {
+  const separator = tableName.indexOf('.')
+  if (separator === -1) {
+    return { schemaName: 'main', schema: '', table: tableName }
+  }
+
+  const schemaName = tableName.slice(0, separator)
+  return { schemaName, schema: `"${schemaName.replaceAll('"', '""')}".`, table: tableName.slice(separator + 1) }
+}
+
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
+    const { schema, table } = splitSchemaTable(tableName)
     return {
       probe: {
-        sql: 'SELECT 1 AS "present" FROM "sqlite_master" WHERE "type" = \'table\' AND "name" = \'sqlite_sequence\'',
+        sql: `SELECT 1 AS "present" FROM ${schema}"sqlite_master" WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
         bindings: [],
         source: `query:select:${tableName}`,
       },
       reset: {
-        sql: 'DELETE FROM "sqlite_sequence" WHERE "name" = ? COLLATE NOCASE',
-        bindings: [tableName],
+        sql: `DELETE FROM ${schema}"sqlite_sequence" WHERE "name" = ? COLLATE NOCASE`,
+        bindings: [table],
         source: `query:delete:${tableName}`,
       },
     }
   }
 
   override compileReferencingTables(tableName: string): CompiledStatement {
+    const { schemaName, schema, table } = splitSchemaTable(tableName)
     return {
-      sql: 'SELECT DISTINCT "tables"."name" AS "name" FROM "sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name") AS "keys" WHERE "tables"."type" = \'table\' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)',
-      bindings: [tableName, tableName],
+      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${schema}"sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
+      bindings: [schemaName, table, table],
       source: `query:select:${tableName}`,
     }
   }

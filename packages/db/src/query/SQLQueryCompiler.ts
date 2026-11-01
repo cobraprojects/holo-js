@@ -246,7 +246,7 @@ export class SQLQueryCompiler {
     const metadata = this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan))
 
     return this.withMetadata({
-      sql: `${this.compileInsertPrefix(plan)} ${this.quoteIdentifier(plan.source.tableName)} (${columns}) ${query}${this.compileInsertSuffix(plan)}`,
+      sql: `${this.compileInsertPrefix(plan)} ${this.compileTableReference(plan.source.tableName)} (${columns}) ${query}${this.compileInsertSuffix(plan)}`,
       bindings,
       unsafe: unsafe ? true : undefined,
       source: `query:insert:${plan.source.tableName}`,
@@ -258,7 +258,7 @@ export class SQLQueryCompiler {
 
   protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {
     return this.withMetadata({
-      sql: this.compileTruncateSql(this.quoteIdentifier(plan.source.tableName)),
+      sql: this.compileTruncateSql(this.compileTableReference(plan.source.tableName)),
       bindings: [],
       source: `query:delete:${plan.source.tableName}`,
     }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))

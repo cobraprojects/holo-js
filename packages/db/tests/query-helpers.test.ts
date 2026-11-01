@@ -206,6 +206,18 @@ describe('query builder helpers', () => {
       .rejects.toThrow('insertUsing() needs a source query on the same database connection as "default".')
   })
 
+  it('writes to schema-qualified tables', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, total INTEGER)')
+
+    await DB.table('main.tickets').insertUsing(['total'], DB.table('orders').select('total').where('status', 'paid'))
+    expect(await DB.table('main.tickets').orderBy('id').pluck('total')).toEqual([100, 500])
+
+    await DB.table('main.tickets').truncate()
+    await DB.table('tickets').insert({ total: 1 })
+    expect(await DB.table('main.tickets').pluck('id')).toEqual([1])
+  })
+
   it('refuses to truncate a table that other tables reference', async () => {
     const adapter = await seedOrders()
     await adapter.execute('CREATE TABLE order_lines (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE)')
