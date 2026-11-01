@@ -96,6 +96,143 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(name).orderBy('id').pluck('name')).toEqual(['Original', 'Second'])
     })
 
+    it('restricts enum columns to their allowed values and replaces them on change()', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      const checkDefinitions = async (tableName = name): Promise<string[]> => {
+        if (driver === 'postgres') {
+          const result = await adapter.query<{ conname: string, definition: string }>(
+            'SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid = $1::regclass AND contype = \'c\' ORDER BY conname',
+            [tableName],
+          )
+          return result.rows.map(row => `${row.conname}: ${row.definition}`)
+        }
+        if (driver === 'sqlite') {
+          const result = await adapter.query<{ sql: string }>('SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?', [name])
+          return [...result.rows[0]!.sql.matchAll(/CONSTRAINT "[^"]+" CHECK \([^)]+\)\)/g)].map(match => match[0])
+        }
+        return []
+      }
+      await schema.createTable(name, table => {
+        table.id()
+        table.enum('status', ['active', 'disabled'] as const).default('active')
+        table.enum('tier', ['free', 'pro'] as const).nullable()
+      })
+
+      await db.table(name).insert({ tier: null })
+      await expect(db.table(name).insert({ status: 'banned' })).rejects.toThrow()
+      await expect(db.table(name).insert({ tier: 'enterprise' })).rejects.toThrow()
+      expect(await db.table(name).pluck('status')).toEqual(['active'])
+      expect(await checkDefinitions()).toEqual({
+        postgres: [
+          `${name}_status_check: CHECK ((status = ANY (ARRAY['active'::text, 'disabled'::text])))`,
+          `${name}_tier_check: CHECK ((tier = ANY (ARRAY['free'::text, 'pro'::text])))`,
+        ],
+        sqlite: [
+          `CONSTRAINT "${name}_status_check" CHECK ("status" IN ('active', 'disabled'))`,
+          `CONSTRAINT "${name}_tier_check" CHECK ("tier" IN ('free', 'pro'))`,
+        ],
+        mysql: [],
+      }[driver])
+
+      await schema.table(name, table => { table.enum('status', ['active', 'disabled', 'banned'] as const).default('active').change() })
+      await db.table(name).insert({ status: 'banned' })
+      await expect(schema.table(name, table => { table.enum('status', ['active'] as const).default('active').change() })).rejects.toThrow()
+      await expect(db.table(name).insert({ status: 'suspended' })).rejects.toThrow()
+      expect(await db.table(name).orderBy('id').pluck('status')).toEqual(['active', 'banned'])
+      if (driver === 'sqlite') {
+        return
+      }
+
+      await schema.table(name, table => { table.renameColumn('status', 'state') })
+      await schema.table(name, table => { table.enum('state', ['active', 'disabled', 'banned', 'archived'] as const).default('active').change() })
+      await db.table(name).insert({ state: 'archived' })
+      await expect(db.table(name).insert({ state: 'suspended' })).rejects.toThrow()
+      expect(await db.table(name).orderBy('id').pluck('state')).toEqual(['active', 'banned', 'archived'])
+      if (driver === 'postgres') {
+        const moved = `${name}_moved`
+        await schema.renameTable(name, moved)
+        expect((await checkDefinitions(moved)).map(definition => definition.split(':')[0])).toEqual([`${moved}_state_check`, `${moved}_tier_check`])
+        await schema.renameTable(moved, name)
+        expect((await checkDefinitions()).map(definition => definition.split(':')[0])).toEqual([`${name}_state_check`, `${name}_tier_check`])
+      }
+    })
+
+    it.runIf(driver === 'postgres')('replaces only enum checks, across qualified, long, and custom-schema table names', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
+      const customSchema = `holo_enum_schema_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      const longAlpha = 'subscription_lifecycle_state_alpha'
+      const longBeta = 'subscription_lifecycle_state_beta'
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await adapter.execute(`DROP SCHEMA IF EXISTS "${customSchema}" CASCADE`)
+      })
+      const checkNames = async (tableName: string): Promise<string[]> => (await adapter.query<{ conname: string }>(
+        'SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = \'c\' ORDER BY conname',
+        [tableName],
+      )).rows.map(row => row.conname)
+      await schema.createTable(name, table => {
+        table.id()
+        table.integer('amount').default(1)
+        table.integer('quantity').default(0)
+        table.enum('status', ['draft', 'published'] as const).default('draft')
+        table.enum(longAlpha, ['on', 'off'] as const).default('on')
+        table.enum(longBeta, ['on', 'off'] as const).default('on')
+      })
+      await adapter.execute(`ALTER TABLE "${name}" ADD CHECK (amount > 0)`)
+      await adapter.execute(`ALTER TABLE "${name}" ADD CONSTRAINT "${name}_total_check" CHECK (quantity >= 0)`)
+
+      await schema.table(name, table => { table.integer('amount').default(2).change() })
+      await expect(db.table(name).insert({ amount: -1 })).rejects.toThrow()
+      await schema.table(`public.${name}`, table => { table.enum('status', ['draft', 'published', 'archived'] as const).default('draft').change() })
+      await schema.table(name, table => { table.enum(longBeta, ['on', 'off', 'paused'] as const).default('on').change() })
+      await db.table(name).insert({ status: 'archived', [longBeta]: 'paused' })
+      await expect(db.table(name).insert({ [longAlpha]: 'paused' })).rejects.toThrow()
+      await schema.table(`public.${name}`, table => { table.string('status').default('draft').change() })
+      await db.table(name).insert({ status: 'anything' })
+      await schema.table(`public.${name}`, table => { table.enum('status', ['draft', 'archived', 'anything'] as const).default('draft').change() })
+      await expect(db.table(name).insert({ status: 'other' })).rejects.toThrow()
+      await schema.table(name, table => { table.string('status').default('draft').change() })
+      await db.table(name).insert({ status: 'other' })
+      expect(await checkNames(name)).toHaveLength(4)
+      expect(await checkNames(name)).toContain(`${name}_amount_check`)
+      await schema.table(name, table => { table.renameColumn('amount', 'total') })
+      expect(await checkNames(name)).toEqual(expect.arrayContaining([`${name}_amount_check`, `${name}_total_check`]))
+
+      await adapter.execute(`CREATE SCHEMA "${customSchema}"`)
+      await schema.createTable(`${customSchema}.orders`, table => {
+        table.id()
+        table.enum('state', ['open', 'closed'] as const).default('open')
+      })
+      await schema.renameTable(`${customSchema}.orders`, 'purchases')
+      expect(await checkNames(`${customSchema}.purchases`)).toEqual(['purchases_state_check'])
+      await schema.table(`${customSchema}.purchases`, table => { table.string('state').default('open').change() })
+      expect(await checkNames(`${customSchema}.purchases`)).toEqual([])
+    })
+
+    it.runIf(driver === 'mysql')('registers a table renamed out of another database under its new location', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const tenant = `holo_tenant_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      const purchases = `holo_purchases_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(async () => {
+        await schema.dropTable(purchases)
+        await adapter.execute(`DROP DATABASE IF EXISTS \`${tenant}\``)
+      })
+      await adapter.execute(`CREATE DATABASE \`${tenant}\``)
+      await schema.createTable(`${tenant}.orders`, table => {
+        table.id()
+        table.enum('state', ['open', 'closed'] as const).default('open')
+      })
+
+      await schema.renameTable(`${tenant}.orders`, purchases)
+
+      expect(await schema.hasTable(purchases)).toBe(true)
+      expect(db.getSchemaRegistry().get(purchases)?.columns.state?.enumValues).toEqual(['open', 'closed'])
+      expect(db.getSchemaRegistry().has(`${tenant}.purchases`)).toBe(false)
+    })
+
     it('creates and drops indexes and preserves index names across column renames', async () => {
       const { db, schema, table } = await openDatabase(driver)
       const name = table.tableName.split('.').at(-1)!

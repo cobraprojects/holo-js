@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierSegment, sanitizeIdentifierForGeneratedName } from './identifiers'
 import type { TableIndexDefinition } from './types'
@@ -85,4 +86,16 @@ export function resolveGeneratedForeignKeyName(
   assertValidIdentifierSegment(resolvedName, 'Foreign key name')
   assertNameLength(resolvedName, 'Foreign key', DEFAULT_INDEX_NAME_LENGTH_POLICY)
   return resolvedName
+}
+
+export function resolveGeneratedCheckName(tableName: string, columnName: string): string {
+  const unqualifiedTableName = tableName.split('.').at(-1)!
+  const checkName = `${unqualifiedTableName}_${columnName}_check`
+  if (checkName.length <= DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes) {
+    return checkName
+  }
+
+  const hash = createHash('sha256').update(checkName).digest('hex').slice(0, 8)
+  const prefixLength = DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes - `_${hash}_check`.length
+  return `${checkName.slice(0, prefixLength)}_${hash}_check`
 }

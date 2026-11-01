@@ -1,5 +1,6 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { resolveGeneratedCheckName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
 import type { ColumnDefinition } from './types'
 
@@ -16,14 +17,26 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
     return compileDialectDefaultLiteral('postgres', value)
   }
 
-  override compileAlterColumn(tableName: string, column: ColumnDefinition): Array<{ sql: string, source: string }> {
+  override compileAlterColumn(
+    tableName: string,
+    column: ColumnDefinition,
+    previousColumn?: ColumnDefinition,
+  ): Array<{ sql: string, source: string }> {
     this.assertSupportedAlterColumnDefinition(column)
     const tableIdentifier = this.compileIdentifierPath(tableName)
     const columnIdentifier = this.quoteIdentifier(column.name)
-    const statements: Array<{ sql: string, source: string }> = [{
+    const statements: Array<{ sql: string, source: string }> = []
+    if (column.kind === 'enum' || previousColumn?.kind === 'enum') {
+      statements.push({
+        sql: `ALTER TABLE ${tableIdentifier} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(resolveGeneratedCheckName(tableName, column.name))}`,
+        source: `schema:alterColumn:${tableName}:${column.name}:dropCheck`,
+      })
+    }
+
+    statements.push({
       sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} TYPE ${this.compileColumnType(column)}`,
       source: `schema:alterColumn:${tableName}:${column.name}:type`,
-    }]
+    })
 
     statements.push({
       sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} ${column.nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`,
@@ -45,6 +58,14 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
       statements.push({
         sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} DROP DEFAULT`,
         source: `schema:alterColumn:${tableName}:${column.name}:default`,
+      })
+    }
+
+    const enumCheck = this.compileEnumCheckConstraint(tableName, column)
+    if (enumCheck) {
+      statements.push({
+        sql: `ALTER TABLE ${tableIdentifier} ADD ${enumCheck}`,
+        source: `schema:alterColumn:${tableName}:${column.name}:check`,
       })
     }
 
