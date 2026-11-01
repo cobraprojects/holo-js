@@ -71,6 +71,28 @@ const result = await DB.table('subscribers').insertOrIgnore([
 // result.affectedRows is the number of rows actually inserted
 ```
 
+### insertUsing()
+
+`insertUsing(columns, query)` inserts the rows that another query selects, in one statement. The query's selected columns fill `columns` in order.
+
+```ts
+await DB.table('archived_orders').insertUsing(
+  ['id', 'total'],
+  DB.table('orders').select('id', 'total').where('created_at', '<', cutoff),
+)
+```
+
+### insertOrIgnoreUsing()
+
+`insertOrIgnoreUsing(columns, query)` works like `insertUsing()`, but skips rows that would violate a unique constraint.
+
+```ts
+await DB.table('archived_orders').insertOrIgnoreUsing(
+  ['id', 'total'],
+  DB.table('orders').select('id', 'total'),
+)
+```
+
 ## Insert or update (upsert)
 
 ### upsert()
@@ -93,6 +115,28 @@ await DB.table('products').upsert(
 | `values` | one row or an array of rows; every row must have the same columns |
 | `uniqueBy` | the columns that identify an existing row — they need a unique index or primary key |
 | `updateColumns` | the columns to overwrite on an existing row; leave empty to keep existing rows unchanged |
+
+## Update or insert
+
+### updateOrInsert()
+
+`updateOrInsert(attributes, values = {})` updates the rows that match `attributes`. When none match, it inserts one row with `attributes` and `values` merged. It returns a `boolean`.
+
+```ts
+await DB.table('users').updateOrInsert(
+  { email: 'ava@example.com' },
+  { name: 'Ava', votes: 1 },
+)
+```
+
+Pass a function to choose the values based on whether a matching row exists:
+
+```ts
+await DB.table('users').updateOrInsert(
+  { email: 'ava@example.com' },
+  exists => exists ? { name: 'Ava' } : { name: 'Ava', votes: 1 },
+)
+```
 
 ## Update rows
 
@@ -156,7 +200,25 @@ await DB.table('posts')
 await DB.table('products').where('id', 7).decrement('stock', 3)
 ```
 
-The column must be numeric, or the call throws.
+### incrementEach()
+
+`incrementEach(columns, extra = {})` adds to several numeric columns in one `UPDATE`. Pass each column with its amount.
+
+```ts
+await DB.table('users')
+  .where('id', 7)
+  .incrementEach({ votes: 5, balance: 100 }, { last_voted_at: new Date() })
+```
+
+### decrementEach()
+
+`decrementEach(columns, extra = {})` subtracts from several numeric columns at once.
+
+```ts
+await DB.table('products').where('id', 7).decrementEach({ stock: 2, reserved: 2 })
+```
+
+The columns must be numeric, or the call throws.
 
 The database computes the new value (`stock = stock + ?`) in the `UPDATE` itself, so combining it with a `where` guards against races without locking:
 
@@ -182,6 +244,16 @@ await DB.table('sessions')
   .where('expires_at', '<', new Date())
   .delete()
 ```
+
+### truncate()
+
+`truncate()` removes every row in the table and resets its auto-increment counter. It ignores `where` clauses.
+
+```ts
+await DB.table('import_staging').truncate()
+```
+
+On PostgreSQL it runs `TRUNCATE ... RESTART IDENTITY CASCADE`, which also empties tables whose foreign keys reference this one. On MySQL it runs `TRUNCATE TABLE`. On SQLite it runs `DELETE FROM` and does not reset the auto-increment counter.
 
 ## Locking rows
 
@@ -217,12 +289,18 @@ SQLite has no row locks: these methods are accepted but add nothing to the query
 | `insert(values)` | insert one row or many |
 | `insertGetId(values)` | insert one row and return its ID |
 | `insertOrIgnore(values)` | insert, skipping rows that hit a unique constraint |
+| `insertUsing(columns, query)` | insert the rows another query selects |
+| `insertOrIgnoreUsing(columns, query)` | insert selected rows, skipping unique conflicts |
+| `updateOrInsert(attributes, values = {})` | update matching rows, or insert one |
 | `upsert(values, uniqueBy, updateColumns = [])` | insert or update on conflict |
 | `update(values)` | update matching rows; supports `column->path` keys |
 | `updateJson(path, value)` | set one path inside a JSON column |
 | `increment(column, amount = 1, extra = {})` | add to a numeric column |
 | `decrement(column, amount = 1, extra = {})` | subtract from a numeric column |
+| `incrementEach(columns, extra = {})` | add to several numeric columns |
+| `decrementEach(columns, extra = {})` | subtract from several numeric columns |
 | `delete()` | delete matching rows |
+| `truncate()` | delete every row and reset the auto-increment counter |
 | `lockForUpdate()` / `sharedLock()` / `lock(mode)` | lock selected rows in a transaction |
 
 ## Next steps

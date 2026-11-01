@@ -65,20 +65,20 @@ Every query builder method, grouped by what it does. Each name links to its entr
 **Read rows**
 
 - [get()](#get), [first()](#first), [find()](#find), [sole()](#sole)
-- [value()](#value), [valueOrFail()](#valueorfail), [soleValue()](#solevalue), [pluck()](#pluck)
-- [exists()](#exists), [doesntExist()](#doesntexist)
-- [count()](#count), [sum()](#sum), [avg()](#avg), [min()](#min), [max()](#max)
+- [value()](#value), [valueOrFail()](#valueorfail), [soleValue()](#solevalue), [pluck()](#pluck), [implode()](#implode)
+- [exists()](#exists), [doesntExist()](#doesntexist), [existsOr()](#existsor), [doesntExistOr()](#doesntexistor)
+- [count()](#count), [sum()](#sum), [avg()](#avg), [average()](#average), [min()](#min), [max()](#max)
 - [paginate()](/database/pagination#paginate), [simplePaginate()](/database/pagination#simplepaginate), [cursorPaginate()](/database/pagination#cursorpaginate)
-- [chunk()](/database/query-builder/chunking#chunk), [chunkById()](/database/query-builder/chunking#chunkbyid), [chunkByIdDesc()](/database/query-builder/chunking#chunkbyiddesc), [lazy()](/database/query-builder/chunking#lazy), [cursor()](/database/query-builder/chunking#cursor)
+- [chunk()](/database/query-builder/chunking#chunk), [chunkById()](/database/query-builder/chunking#chunkbyid), [chunkByIdDesc()](/database/query-builder/chunking#chunkbyiddesc), [each()](/database/query-builder/chunking#each), [eachById()](/database/query-builder/chunking#eachbyid), [lazy()](/database/query-builder/chunking#lazy), [lazyById()](/database/query-builder/chunking#lazybyid), [lazyByIdDesc()](/database/query-builder/chunking#lazybyiddesc), [cursor()](/database/query-builder/chunking#cursor)
 
 **Write rows**
 
-- [insert()](/database/query-builder/writes#insert), [insertOrIgnore()](/database/query-builder/writes#insertorignore), [insertGetId()](/database/query-builder/writes#insertgetid), [upsert()](/database/query-builder/writes#upsert)
-- [update()](/database/query-builder/writes#update), [updateJson()](/database/query-builder/writes#updatejson), [increment()](/database/query-builder/writes#increment), [decrement()](/database/query-builder/writes#decrement), [delete()](/database/query-builder/writes#delete)
+- [insert()](/database/query-builder/writes#insert), [insertOrIgnore()](/database/query-builder/writes#insertorignore), [insertGetId()](/database/query-builder/writes#insertgetid), [insertUsing()](/database/query-builder/writes#insertusing), [insertOrIgnoreUsing()](/database/query-builder/writes#insertorignoreusing), [upsert()](/database/query-builder/writes#upsert), [updateOrInsert()](/database/query-builder/writes#updateorinsert)
+- [update()](/database/query-builder/writes#update), [updateJson()](/database/query-builder/writes#updatejson), [increment()](/database/query-builder/writes#increment), [decrement()](/database/query-builder/writes#decrement), [incrementEach()](/database/query-builder/writes#incrementeach), [decrementEach()](/database/query-builder/writes#decrementeach), [delete()](/database/query-builder/writes#delete), [truncate()](/database/query-builder/writes#truncate)
 
 **Debug, cache, and raw SQL**
 
-- [toSQL()](#tosql), [debug()](#debug), [dump()](#dump), [cache()](#cache)
+- [toSQL()](#tosql), [toRawSql()](#torawsql), [debug()](#debug), [dump()](#dump), [cache()](#cache)
 - [unsafeQuery()](/database/query-builder/joins-and-subqueries#unsafequery), [unsafeExecute()](/database/query-builder/joins-and-subqueries#unsafeexecute)
 
 ## Start a query
@@ -231,6 +231,15 @@ const titles = await DB.table('posts')
 // ['Hello World', 'Second Post', ...]
 ```
 
+### implode()
+
+`implode(column, glue = '')` joins one column from every matching row into a string.
+
+```ts
+const tags = await DB.table('tags').orderBy('name').implode('name', ', ')
+// 'news, release, tips'
+```
+
 ## Check if rows exist
 
 ### exists()
@@ -251,6 +260,28 @@ const taken = await DB.table('users')
 const isFree = await DB.table('users')
   .where('email', 'ava@example.com')
   .doesntExist()
+```
+
+### existsOr()
+
+`existsOr(callback)` returns `true` when at least one row matches. Otherwise it returns the result of the callback.
+
+```ts
+const found = await DB.table('invoices')
+  .where('number', number)
+  .existsOr(() => {
+    throw new Error(`Invoice ${number} not found`)
+  })
+```
+
+### doesntExistOr()
+
+`doesntExistOr(callback)` returns `true` when no row matches. Otherwise it returns the result of the callback.
+
+```ts
+const free = await DB.table('users')
+  .where('email', email)
+  .doesntExistOr(() => 'taken')
 ```
 
 ## Aggregates
@@ -281,6 +312,14 @@ const revenue = await DB.table('orders').where('status', 'paid').sum('total')
 const averageOrder = await DB.table('orders').avg('total')
 ```
 
+### average()
+
+`average()` is another name for `avg()`.
+
+```ts
+const averageOrder = await DB.table('orders').average('total')
+```
+
 ### min()
 
 `min()` returns the lowest value of one column. It returns `null` when no rows match.
@@ -297,7 +336,7 @@ const cheapest = await DB.table('products').min('price')
 const priciest = await DB.table('products').max('price')
 ```
 
-`count()` and `sum()` return a `number`. `avg()`, `min()`, and `max()` return `number | null`.
+`count()` and `sum()` return a `number`. `avg()`, `average()`, `min()`, and `max()` return `number | null`.
 
 To compute aggregates per group, select them as columns instead. See [Grouping](/database/query-builder/selects-and-filters#grouping-and-having).
 
@@ -356,6 +395,15 @@ console.log(query.toSQL())
 // { sql: 'SELECT * FROM "users" WHERE "active" = ? ORDER BY "name" ASC', bindings: [true], ... }
 ```
 
+### toRawSql()
+
+`toRawSql()` returns the SQL with the bindings written into it as literals. Use it to read or copy a query while debugging. Don't run the output; run the query itself, which sends the bindings separately.
+
+```ts
+console.log(DB.table('users').where('name', 'Ava').toRawSql())
+// SELECT * FROM "users" WHERE "name" = 'Ava'
+```
+
 ### debug()
 
 `debug()` returns the same output as `toSQL()`, plus the connection name and scheduling details. Sensitive bindings are redacted.
@@ -396,11 +444,13 @@ const categories = await DB.table('categories')
 | `sole()` | the only row; throws otherwise |
 | `value(column)` / `valueOrFail(column)` / `soleValue(column)` | one column value |
 | `pluck(column)` | array of one column's values |
+| `implode(column, glue = '')` | one column's values joined into a string |
 | `exists()` / `doesntExist()` | `boolean` |
+| `existsOr(callback)` / `doesntExistOr(callback)` | `true`, or the callback's result |
 | `count()` / `sum(column)` | `number` |
-| `avg(column)` / `min(column)` / `max(column)` | `number \| null` |
+| `avg(column)` / `average(column)` / `min(column)` / `max(column)` | `number \| null` |
 | `paginate()` / `simplePaginate()` / `cursorPaginate()` | a page of rows — see [Pagination](/database/pagination) |
-| `chunk()` / `chunkById()` / `lazy()` / `cursor()` | batches or a stream — see [Chunking](/database/query-builder/chunking) |
+| `chunk()` / `chunkById()` / `each()` / `eachById()` / `lazy()` / `lazyById()` / `lazyByIdDesc()` / `cursor()` | batches or a stream — see [Chunking](/database/query-builder/chunking) |
 
 ## Next steps
 
