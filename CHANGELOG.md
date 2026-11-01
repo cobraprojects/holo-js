@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-11-01
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-055-to-056). No required migrations.
+
 ### Fixed
 
 - CLI: `holo migrate`, `holo migrate:fresh` and `holo migrate:rollback` regenerate the model and auth types after they update the generated schema. Before, a model whose table a migration had just created kept its untyped registry entry, and `auth.user()` kept an untyped user, until you ran `holo prepare` again.
@@ -21,7 +25,7 @@ See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-fr
 - Database: `whereLike()` ignores case on PostgreSQL (`ILIKE`), as in Laravel. Before, it was case-sensitive there. Pass `true` as the third argument for a case-sensitive match on every database.
 - Database: `where(column, null)` compiles to `IS NULL` and `where(column, '!=', null)` to `IS NOT NULL`, as in Laravel. Before, they compiled to `= NULL` and `!= NULL`, which never match.
 - Database: on SQLite, `Date` values bound to columns that the schema doesn't define are stored as ISO strings. Before, the driver threw an error.
-- Database: `whereJsonDoesntContain()` and other negated JSON contains checks keep rows whose JSON path is missing.
+- Database: `whereNot()` around `whereJsonContains()` keeps rows whose JSON path is missing, the same as the new `whereJsonDoesntContain()`. Before, it dropped them.
 
 ### Compatibility and upgrade requirements
 
