@@ -2617,7 +2617,7 @@ export class ModelRepository<
     selectors?: readonly string[],
   ): readonly ModelDefinitionLike[] {
     const references = listMorphModels()
-    if (!selectors || selectors.length === 0) {
+    if (!selectors) {
       return references
     }
 
@@ -3156,7 +3156,7 @@ export class ModelRepository<
     actualType: string,
     selectors?: readonly string[],
   ): boolean {
-    if (!selectors || selectors.length === 0) {
+    if (!selectors) {
       return true
     }
 

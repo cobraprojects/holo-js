@@ -293,5 +293,7 @@ describe('where clauses', () => {
 
     expect(await DB.table(holidays).whereToday('holidays.day').pluck('id')).toEqual([1])
     expect(await DB.table(holidays).whereBeforeToday('holidays.day').pluck('id')).toEqual([2])
+    expect(await DB.table(holidays).wherePast('day').pluck('id')).toEqual([2])
+    expect(await DB.table(holidays).whereNowOrFuture('day').pluck('id')).toEqual([1])
   })
 })

@@ -733,7 +733,7 @@ const orders = await DB.table('orders').where('priority', true).orWhereTime('cre
 
 ## Relative dates
 
-Compare columns to the current time or today's date. "Today" runs from midnight to midnight in the application timezone (`app.timezone`), so timestamps are compared as moments in time. Columns declared with `column.date()` are compared by calendar date. Pass one column or a list. With a list, the `where…` methods need every column to match, and the `orWhere…` methods add one `OR` condition per column.
+Compare columns to the current time or today's date. "Today" runs from midnight to midnight in the application timezone (`app.timezone`), so timestamps are compared as moments in time. Columns declared with `column.date()` are compared by calendar date against today, so `wherePast()` keeps dates before today and `whereNowOrFuture()` keeps today and later. Pass one column or a list. With a list, the `where…` methods need every column to match, and the `orWhere…` methods add one `OR` condition per column.
 
 ```ts
 const upcoming = await DB.table('events').whereFuture('starts_at').get()

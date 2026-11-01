@@ -1180,8 +1180,11 @@ export class TableQueryBuilder<
     operator: '<' | '<=' | '>' | '>=',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const now = new Date()
+    const today = formatCalendarDate(now, getApplicationTimezone())
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereDatePart(boolean, 'instant', column, operator, now), this)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.getSourceColumnDefinition(column)?.kind === 'date'
+        ? query.whereDatePart(boolean, 'date', column, operator, today)
+        : query.whereDatePart(boolean, 'instant', column, operator, now), this)
   }
 
   private whereRelativeToToday(
