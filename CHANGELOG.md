@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- Database: `enum()` columns on PostgreSQL and SQLite get a `CHECK` constraint named `<table>_<column>_check`, so the database rejects values outside the list. Before, they were plain `TEXT` columns that accepted any string, and only the TypeScript type limited the values. A nullable enum still accepts `NULL`. Redeclaring an enum column with `change()` replaces the allowed values, so adding a value needs no raw SQL. On PostgreSQL, renaming the table or the column renames the constraint. See [Migrations](apps/docs/docs/database/migrations.md#enum).
+
+### Compatibility and upgrade requirements
+
+- Enum columns created before this release on PostgreSQL and SQLite have no constraint and keep accepting any string. To enforce the list, redeclare each one with `change()` in a new migration, after fixing rows that hold other values. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#enum-columns-are-enforced-on-postgresql-and-sqlite).
+
 ## 0.5.2 - 2026-10-31
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-051-to-052). No required migrations.

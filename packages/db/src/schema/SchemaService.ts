@@ -4,7 +4,7 @@ import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
-import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
@@ -14,6 +14,7 @@ import { TableMutationBuilder } from './TableMutationBuilder'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import type { DDLStatement } from './ddl'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
@@ -75,6 +76,10 @@ type SQLiteForeignKeyRow = {
   on_delete: string
 }
 
+type SQLiteTableSqlRow = {
+  sql: string
+}
+
 type SQLiteSchemaObjectRow = {
   type: 'index' | 'trigger'
   name: string
@@ -92,6 +97,16 @@ type PostgresColumnRow = {
 type PostgresIndexRow = {
   name: string
   definition: string
+}
+
+type PostgresConstraintRow = {
+  name: string
+  is_check: boolean
+}
+
+type CheckConstraintRename = {
+  readonly from: string
+  readonly to: string
 }
 
 type PostgresForeignKeyRow = {
@@ -159,8 +174,20 @@ export class SchemaService {
   ): Promise<void> {
     assertValidIdentifierPath(fromTableName, 'Table name')
     assertValidIdentifierPath(toTableName, 'Table name')
-    await this.execute(this.createCompiler().compile(renameTableOperation(fromTableName, toTableName)))
-    this.renameRegisteredTable(fromTableName, toTableName)
+    const destinationTableName = this.resolveRenamedTablePath(fromTableName, toTableName)
+    const registered = this.findRegisteredTable(fromTableName)
+    const enumColumnNames = Object.values(registered?.columns ?? {})
+      .filter(column => column.kind === 'enum')
+      .map(column => column.name)
+    await this.executeRename(
+      this.createCompiler().compile(renameTableOperation(fromTableName, toTableName)),
+      destinationTableName,
+      enumColumnNames.map(columnName => ({
+        from: resolveGeneratedCheckName(fromTableName, columnName),
+        to: resolveGeneratedCheckName(destinationTableName, columnName),
+      })),
+    )
+    this.renameRegisteredTable(registered, destinationTableName)
   }
 
   async table(
@@ -623,7 +650,8 @@ export class SchemaService {
           await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
         } else {
           this.assertAlterCapability('altering columns')
-          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
+          const previousDefinition = this.findRegisteredTable(tableName)?.columns[definition.name]
+          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition, previousDefinition))
           if (this.isPostgres()) {
             await this.connection.transaction(async (tx) => {
               await new SchemaService(tx).execute(statements)
@@ -642,9 +670,16 @@ export class SchemaService {
         return
       case 'renameColumn':
         this.assertAlterCapability('renaming columns')
-        await this.execute(this.createCompiler().compile(
-          renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName),
-        ))
+        await this.executeRename(
+          this.createCompiler().compile(renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName)),
+          tableName,
+          this.findRegisteredTable(tableName)?.columns[operation.fromColumnName]?.kind === 'enum'
+            ? [{
+                from: resolveGeneratedCheckName(tableName, operation.fromColumnName),
+                to: resolveGeneratedCheckName(tableName, operation.toColumnName),
+              }]
+            : [],
+        )
         this.updateRegisteredTable(
           tableName,
           table => this.renameRegisteredColumn(table, operation.fromColumnName, operation.toColumnName),
@@ -696,6 +731,84 @@ export class SchemaService {
     }
   }
 
+  private async executeRename(
+    statements: DDLStatement[],
+    tableName: string,
+    checkRenames: readonly CheckConstraintRename[],
+  ): Promise<void> {
+    if (!this.isPostgres() || checkRenames.length === 0) {
+      await this.execute(statements)
+      return
+    }
+
+    await this.connection.transaction(async (tx) => {
+      const service = new SchemaService(tx)
+      await service.execute(statements)
+      await service.renamePostgresEnumChecks(tableName, checkRenames)
+    })
+  }
+
+  private findRegisteredTable(tableName: string): TableDefinition | undefined {
+    const registry = this.connection.getSchemaRegistry()
+    const defaultSchema = this.connection.getSchemaName() ?? (this.isPostgres() ? 'public' : undefined)
+    const segments = tableName.split('.')
+    const equivalentName = !defaultSchema ? undefined
+      : segments.length === 1 ? `${defaultSchema}.${tableName}`
+        : segments.length === 2 && segments[0] === defaultSchema ? segments[1]! : undefined
+
+    return registry.get(tableName) ?? (equivalentName ? registry.get(equivalentName) : undefined)
+  }
+
+  private resolveRenamedTablePath(fromTableName: string, toTableName: string): string {
+    const fromSegments = fromTableName.split('.')
+    if (this.isMySQL() || toTableName.includes('.') || fromSegments.length === 1) {
+      return toTableName
+    }
+
+    return [...fromSegments.slice(0, -1), toTableName].join('.')
+  }
+
+  private async renamePostgresEnumChecks(
+    tableName: string,
+    checkRenames: readonly CheckConstraintRename[],
+  ): Promise<void> {
+    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
+    const tableIdentifier = tableName.split('.').map(quote).join('.')
+    const result = await this.connection.introspectCompiled<PostgresConstraintRow>({
+      sql: 'SELECT conname AS name, contype = \'c\' AS is_check FROM pg_constraint WHERE conrelid = to_regclass($1)',
+      bindings: [tableIdentifier],
+      source: `schema:introspect:checks:${tableName}`,
+    })
+    const existingCheckNames = new Set(result.rows.filter(row => row.is_check).map(row => row.name))
+    const reservedNames = new Set([...result.rows.map(row => row.name), ...checkRenames.map(({ to }) => to)])
+    const reserveTemporaryName = (): string => {
+      let suffix = 0
+      while (reservedNames.has(`__holo_check_rename_${suffix}`)) {
+        suffix += 1
+      }
+
+      const name = `__holo_check_rename_${suffix}`
+      reservedNames.add(name)
+      return name
+    }
+    const pendingRenames = checkRenames
+      .filter(({ from, to }) => from !== to && existingCheckNames.has(from))
+      .map(rename => ({ ...rename, temporary: reserveTemporaryName() }))
+    const renameConstraint = (from: string, to: string) => this.connection.executeCompiled({
+      sql: `ALTER TABLE ${tableIdentifier} RENAME CONSTRAINT ${quote(from)} TO ${quote(to)}`,
+      source: `schema:renameCheck:${tableName}:${from}:${to}`,
+    })
+
+    for (const { from, temporary } of pendingRenames) {
+      await renameConstraint(from, temporary)
+    }
+
+    for (const { to, temporary } of pendingRenames) {
+      await renameConstraint(temporary, to)
+    }
+  }
+
+
   private async rebuildSqliteTableForAlteredColumn(
     tableName: string,
     column: AnyColumnDefinition,
@@ -735,12 +848,22 @@ export class SchemaService {
       bindings: [tableName],
       source: `schema:sqliteRebuild:objects:${tableName}`,
     })
-    const temporaryDefinition = defineTable(temporaryTableName, rebuilt.columns)
-    const compiler = this.createCompiler()
     const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
+    const compiler = new SQLiteSchemaCompiler(quote)
     const columns = Object.keys(rebuilt.columns).map(quote).join(', ')
 
-    await this.execute(compiler.compile(createTableOperation(temporaryDefinition)))
+    const currentTable = await this.connection.introspectCompiled<SQLiteTableSqlRow>({
+      sql: 'SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?',
+      bindings: [tableName],
+      source: `schema:sqliteRebuild:table:${tableName}`,
+    })
+    const currentSql = (currentTable.rows[0]?.sql ?? '').replace(/'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g, ' ')
+    const uncheckedEnumColumns = new Set(Object.values(registered.columns)
+      .filter(definition => definition.kind === 'enum' && definition.name !== column.name)
+      .filter(definition => !new RegExp(`CHECK\\s*\\(\\s*["\`[]?${definition.name}["\`\\]]?\\s+IN\\s*\\(`, 'i').test(currentSql))
+      .map(definition => definition.name))
+
+    await this.connection.executeCompiled(compiler.compileRebuildTable(rebuilt, temporaryTableName, uncheckedEnumColumns))
     await this.connection.executeCompiled({
       sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
       source: `schema:sqliteRebuild:copy:${tableName}`,
@@ -787,26 +910,24 @@ export class SchemaService {
     tableName: string,
     update: (table: TableDefinition) => TableDefinition,
   ): void {
-    const registry = this.connection.getSchemaRegistry()
-    const existing = registry.get(tableName)
+    const existing = this.findRegisteredTable(tableName)
     if (!existing) {
       return
     }
 
-    mutateSchemaRegistry(this.connection, [tableName], () => {
-      registry.replace(update(existing))
+    mutateSchemaRegistry(this.connection, [existing.tableName], () => {
+      this.connection.getSchemaRegistry().replace(update(existing))
     })
   }
 
-  private renameRegisteredTable(fromTableName: string, toTableName: string): void {
-    const registry = this.connection.getSchemaRegistry()
-    const existing = registry.get(fromTableName)
+  private renameRegisteredTable(existing: TableDefinition | undefined, toTableName: string): void {
     if (!existing) {
       return
     }
 
-    mutateSchemaRegistry(this.connection, [fromTableName, toTableName], () => {
-      registry.delete(fromTableName)
+    const registry = this.connection.getSchemaRegistry()
+    mutateSchemaRegistry(this.connection, [existing.tableName, toTableName], () => {
+      registry.delete(existing.tableName)
       registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
     })
   }

@@ -7,7 +7,7 @@ import type { AnyColumnDefinition, ColumnDefinition, TableDefinition, TableIndex
 export class MySQLSchemaCompiler extends SQLSchemaCompiler {
   protected override compileTableDefinitions(table: TableDefinition): string[] {
     const columns = Object.values(table.columns)
-    const definitions = columns.map(column => this.compileColumn({ ...column, references: undefined }))
+    const definitions = columns.map(column => this.compileColumn(table.tableName, { ...column, references: undefined }))
 
     for (const column of columns) {
       if (column.references) {
@@ -34,6 +34,10 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
 
   protected override getDialectLabel(): string {
     return 'MySQL'
+  }
+
+  protected override compileEnumCheckConstraint(): undefined {
+    return undefined
   }
 
   protected override compileColumnType(column: ColumnDefinition): string {
