@@ -57,6 +57,7 @@ Thumbs.db
 # Testing
 coverage
 .nyc_output
+.vitest
 .vitest-builds
 .holo-test-typecheck-*
 .holo-test-example-app-*
