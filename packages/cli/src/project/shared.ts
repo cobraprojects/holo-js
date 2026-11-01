@@ -30,6 +30,7 @@ export type DiscoveredAppCommand = {
   readonly aliases?: readonly string[]
   readonly description: string
   readonly usage?: string
+  readonly loadFailed?: true
   load(): Promise<HoloAppCommand>
 }
 
@@ -57,6 +58,7 @@ export type GeneratedCommandRegistryEntry = {
   readonly aliases: readonly string[]
   readonly description: string
   readonly usage?: string
+  readonly loadFailed?: true
 }
 
 export type GeneratedJobRegistryEntry = {

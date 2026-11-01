@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- CLI: commands, jobs, listeners and other app files that the `holo` CLI loads can import package subpaths from packages without an `exports` map, such as `next/headers`. Before, Node could not find these imports, so `holo` failed with `Cannot find module '…/node_modules/next/headers'` whenever such an import was anywhere in the imported files. The same fix applies to app modules that Holo loads at runtime.
+- CLI: a command file that fails to load no longer breaks the other `holo` commands. Before, one broken file in `server/commands` made every command that discovers the app fail, including `holo migrate`, `holo migrate:fresh --seed`, `holo make:seeder` and `holo schedule:list`. Now `holo list` shows the broken command with `Failed to load:` and the error, and running it reports the error.
+
 ## 0.5.3 - 2026-11-01
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-052-to-053). No required migrations. Enum columns created before this release stay unconstrained until you redeclare them.

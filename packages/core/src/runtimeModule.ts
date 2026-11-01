@@ -5,7 +5,7 @@ import * as nodeModule from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { BuildOptions, BuildResult, Plugin } from 'esbuild'
+import type { BuildOptions, BuildResult, OnResolveArgs, OnResolveResult, Plugin } from 'esbuild'
 import type { Diagnostic, ExtendedConfigCacheEntry } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
@@ -529,6 +529,51 @@ function bridgeRuntimeModuleInstances(): Plugin {
   }
 }
 
+const PACKAGE_SUBPATH_SPECIFIER = /^((?:@[^/:]+\/)?[^@./:][^/:]*)\/./
+
+async function hasExportsMap(packageManifestPath: string): Promise<boolean> {
+  const manifest = JSON.parse(await readFile(packageManifestPath, 'utf8')) as { exports?: unknown }
+  return manifest.exports !== undefined && manifest.exports !== null
+}
+
+async function resolveLegacyPackageSubpath({ path, resolveDir }: OnResolveArgs): Promise<OnResolveResult | undefined> {
+  const packageName = PACKAGE_SUBPATH_SPECIFIER.exec(path)?.[1]
+  if (!packageName || !resolveDir || nodeModule.isBuiltin(path)) return undefined
+
+  const importerRequire = nodeModule.createRequire(join(resolveDir, 'index.js'))
+  try {
+    if (await hasExportsMap(importerRequire.resolve(`${packageName}/package.json`))) return undefined
+    return { path: pathToFileURL(importerRequire.resolve(path)).href, external: true }
+  } catch {
+    return undefined
+  }
+}
+
+const PACKAGE_SUBPATH_PROBE = Symbol('holo-package-subpath-probe')
+
+function createPackageSubpathResolutionPlugin(): Plugin {
+  return {
+    name: 'holo-package-subpath-resolution',
+    setup(build) {
+      build.onResolve({ filter: PACKAGE_SUBPATH_SPECIFIER }, async (args) => {
+        if (args.pluginData === PACKAGE_SUBPATH_PROBE) return undefined
+        const resolved = await build.resolve(args.path, {
+          importer: args.importer,
+          kind: args.kind,
+          resolveDir: args.resolveDir,
+          pluginData: PACKAGE_SUBPATH_PROBE,
+        })
+        if (!resolved.external || resolved.path !== args.path) return undefined
+        return await resolveLegacyPackageSubpath(args)
+      })
+    },
+  }
+}
+
+export const packageSubpathResolutionInternals = {
+  createPackageSubpathResolutionPlugin,
+}
+
 registerRuntimeModuleInstance('@holo-js/config', holoConfigModule)
 registerRuntimeModuleInstance('@holo-js/db', holoDbModule)
 registerRuntimeModuleInstance('@holo-js/kernel', holoKernelModule)
@@ -557,7 +602,7 @@ async function bundleRuntimeModule(
       logLevel: 'silent',
       packages: 'external',
       platform: 'node',
-      plugins: [bridgeRuntimeModuleInstances()],
+      plugins: [bridgeRuntimeModuleInstances(), createPackageSubpathResolutionPlugin()],
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: 'inline',

@@ -112,6 +112,43 @@ function resolveBroadcastExportEntry(
   return undefined
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function bundleCommandModules(
+  modules: ProjectModuleBatch,
+  commandFiles: readonly string[],
+  bundleErrors = new Map<string, string>(),
+): Promise<ReadonlyMap<string, string>> {
+  try {
+    await modules.bundle(commandFiles)
+  } catch (error) {
+    const [onlyFile] = commandFiles
+    if (commandFiles.length === 1 && onlyFile) {
+      bundleErrors.set(onlyFile, errorMessage(error))
+      return bundleErrors
+    }
+
+    const middle = Math.ceil(commandFiles.length / 2)
+    await bundleCommandModules(modules, commandFiles.slice(0, middle), bundleErrors)
+    await bundleCommandModules(modules, commandFiles.slice(middle), bundleErrors)
+  }
+
+  return bundleErrors
+}
+
+async function importCommandModule(
+  modules: ProjectModuleBatch,
+  filePath: string,
+): Promise<{ readonly moduleValue: unknown } | { readonly loadError: string }> {
+  try {
+    return { moduleValue: await modules.import(filePath) }
+  } catch (error) {
+    return { loadError: errorMessage(error) }
+  }
+}
+
 export async function prepareProjectDiscovery(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
@@ -170,7 +207,6 @@ async function discoverProjectRegistry(
     ...modelFiles,
     ...migrationFiles,
     ...seederFiles,
-    ...commandFiles,
     ...jobFiles,
     ...eventFiles,
     ...listenerFiles,
@@ -182,6 +218,7 @@ async function discoverProjectRegistry(
   if (hasGeneratedSchema) {
     await modules.import(generatedSchemaPath)
   }
+  const commandBundleErrors = await bundleCommandModules(modules, commandFiles)
 
   const models: GeneratedModelRegistryEntry[] = []
   for (const filePath of modelFiles) {
@@ -251,10 +288,23 @@ async function discoverProjectRegistry(
   assertUniqueEntries('seeder', seeders)
 
   const commands: GeneratedCommandRegistryEntry[] = []
+  const failedCommands: GeneratedCommandRegistryEntry[] = []
   for (const filePath of commandFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await modules.import(filePath)
-    const command = resolveCommandExport(moduleValue)
+    const bundleError = commandBundleErrors.get(filePath)
+    const loaded = bundleError === undefined ? await importCommandModule(modules, filePath) : { loadError: bundleError }
+    if ('loadError' in loaded) {
+      failedCommands.push({
+        sourcePath: relativePath,
+        name: deriveCommandNameFromPath(commandsRoot, filePath),
+        aliases: [],
+        description: `Failed to load: ${loaded.loadError}`,
+        loadFailed: true,
+      })
+      continue
+    }
+
+    const command = resolveCommandExport(loaded.moduleValue)
     if (!command) {
       throw new Error(`Discovered command "${relativePath}" does not export a Holo command.`)
     }
@@ -270,6 +320,7 @@ async function discoverProjectRegistry(
   }
   assertUniqueEntries('command', commands)
   assertUniqueCommandTokens(commands)
+  commands.push(...failedCommands)
 
   const jobs: GeneratedJobRegistryEntry[] = []
   const queueDiscovery = jobFiles.length > 0
@@ -583,20 +634,35 @@ async function discoverProjectRegistry(
   return registry
 }
 
+function withoutShadowedFailedCommands(
+  entries: readonly GeneratedCommandRegistryEntry[],
+): GeneratedCommandRegistryEntry[] {
+  const tokens = new Set(entries.filter(entry => !entry.loadFailed).flatMap(entry => [entry.name, ...entry.aliases]))
+  return entries.filter((entry) => {
+    if (!entry.loadFailed) return true
+    if (tokens.has(entry.name)) return false
+    tokens.add(entry.name)
+    return true
+  })
+}
+
 export async function discoverAppCommands(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
 ): Promise<DiscoveredAppCommand[]> {
-  const registry = await loadGeneratedProjectRegistry(projectRoot)
-    ?? await prepareProjectDiscovery(projectRoot, config)
+  const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
+  const registry = cachedRegistry && !cachedRegistry.commands.some(entry => entry.loadFailed)
+    ? cachedRegistry
+    : await prepareProjectDiscovery(projectRoot, config)
 
-  return [...registry.commands]
+  return withoutShadowedFailedCommands(registry.commands)
     .map(entry => ({
       sourcePath: entry.sourcePath,
       name: entry.name,
       aliases: entry.aliases,
       description: entry.description,
       ...(entry.usage ? { usage: entry.usage } : {}),
+      ...(entry.loadFailed ? { loadFailed: entry.loadFailed } : {}),
       async load() {
         const moduleValue = await importProjectModule(projectRoot, resolve(projectRoot, entry.sourcePath))
         const command = resolveCommandExport(moduleValue)

@@ -2400,14 +2400,15 @@ export async function runCli(input: readonly string[], io: IoStreams): Promise<n
     if (!canSkipAppDiscovery) {
       const initialProject = await loadProject()
       const pluginCommands = await (await loadProjectPluginsModule()).loadProjectPluginCommands(projectRoot)
-      const appCommands = [
+      const discoveredCommands = [
         ...pluginCommands,
         ...(await (await loadProjectDiscoveryModule()).discoverAppCommands(projectRoot, initialProject.config)),
       ]
-        .map(entry => createAppCommandDefinition(entry))
 
-      for (const appCommand of appCommands) {
+      for (const discoveredCommand of discoveredCommands) {
+        const appCommand = createAppCommandDefinition(discoveredCommand)
         const duplicate = findCommandConflict(registry, appCommand)
+        if (duplicate && discoveredCommand.loadFailed) continue
         if (duplicate) {
           throw new Error(
             `App command "${appCommand.name}" conflicts with ${duplicate.command.source} command `

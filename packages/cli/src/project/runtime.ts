@@ -169,7 +169,7 @@ export async function bundleProjectModules(
   }
 
   try {
-    const { projectTsconfigInternals } = await import('@holo-js/core')
+    const { packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
     await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
       absWorkingDir: projectRoot,
       bundle: true,
@@ -186,6 +186,7 @@ export async function bundleProjectModules(
       plugins: [
         createSourceModuleUrlPlugin(),
         createHoloPackageBundlerPlugin(projectRoot),
+        ...(options.bundleDependencies ? [] : [packageSubpathResolutionInternals.createPackageSubpathResolutionPlugin()]),
       ],
       external: [...(options.external ?? [])],
     }))
@@ -233,12 +234,12 @@ export interface ProjectModuleBatch {
 
 export function createProjectModuleBatch(projectRoot: string): ProjectModuleBatch {
   const bundledPaths = new Map<string, string>()
-  let cleanupBundle = async () => {}
+  const cleanups: Array<() => Promise<void>> = []
 
   return {
     async bundle(entryPaths) {
       const bundle = await bundleProjectModules(projectRoot, entryPaths)
-      cleanupBundle = bundle.cleanup
+      cleanups.push(bundle.cleanup)
       entryPaths.forEach((entryPath, index) => bundledPaths.set(entryPath, bundle.paths[index]!))
     },
     async import(entryPath) {
@@ -247,7 +248,7 @@ export function createProjectModuleBatch(projectRoot: string): ProjectModuleBatc
       return await import(`${pathToFileURL(bundledPath).href}?t=${Date.now()}`)
     },
     async cleanup() {
-      await cleanupBundle()
+      await Promise.all(cleanups.splice(0).map(cleanup => cleanup()))
     },
   }
 }

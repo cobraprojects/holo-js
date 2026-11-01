@@ -53,6 +53,8 @@ Command names and aliases must be unique. If one clashes with a built-in command
 
 Holo discovers `.ts`, `.mts`, `.cts`, `.js`, `.mjs`, and `.cjs` files. The command can be the default export or a named export.
 
+Holo loads every command file to read its name and description. If a command file fails to load, for example because a module it imports is missing, the other commands still work. `holo list` shows the failed command under its file path name with `Failed to load:` and the error, and running it prints the same error. If another command already uses that name, `holo` leaves the failed command out. Once the file loads again, its custom `name` and `aliases` work again.
+
 ## Arguments and flags
 
 `run` receives a context object. Positional arguments are in `context.args` and flags are in `context.flags`:
@@ -127,6 +129,8 @@ export default defineCommand({
 When the callback finishes (or throws), Holo shuts the services down and closes the connections. The callback's return value is returned from `withRuntime()` with its type.
 
 You can call `withRuntime()` more than once. Nested calls reuse the same connections.
+
+A command can import the same app modules as your routes, including modules that import framework packages. For example, a service that imports `next/headers` loads in a command too.
 
 ### The runtime object
 
