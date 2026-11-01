@@ -5,6 +5,7 @@ import { getApplicationTimezone } from '../applicationTimezone'
 import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
+import { getRootDatabaseContext } from '../core/contextOwnership'
 import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
@@ -2869,8 +2870,8 @@ export class TableQueryBuilder<
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     ignoreConflicts: boolean,
   ): Promise<DriverExecutionResult> {
-    if (query.getConnectionName() !== this.connection.getConnectionName()) {
-      throw new SecurityError(`insertUsing() needs a source query on connection "${this.connection.getConnectionName()}", received one on "${query.getConnectionName()}".`)
+    if (getRootDatabaseContext(query.getConnection()) !== getRootDatabaseContext(this.connection)) {
+      throw new SecurityError(`insertUsing() needs a source query on the same database connection as "${this.connection.getConnectionName()}".`)
     }
 
     const result = await this.connection.executeCompiled(this.getCompiler().compile(

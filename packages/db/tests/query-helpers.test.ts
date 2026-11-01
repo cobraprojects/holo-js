@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
-import { DB, MySQLQueryCompiler, PostgresQueryCompiler, SQLiteQueryCompiler, configureDB, createConnectionManager, createDialect, createSelectQueryPlan, createTableSource, resetDB } from '../src'
+import { DB, MySQLQueryCompiler, createDatabase, PostgresQueryCompiler, SQLiteQueryCompiler, configureDB, createConnectionManager, createDialect, createSelectQueryPlan, createTableSource, resetDB } from '../src'
 import { createInsertUsingQueryPlan, createTruncateQueryPlan, withPredicate } from '../src/query/ast'
 
 async function seedOrders(): Promise<ReturnType<typeof createSQLiteAdapter>> {
@@ -189,7 +189,11 @@ describe('query builder helpers', () => {
     }))
 
     await expect(DB.table('archive').insertUsing(['id'], DB.connection('reporting').table('orders').select('id')))
-      .rejects.toThrow('insertUsing() needs a source query on connection "default", received one on "reporting".')
+      .rejects.toThrow('insertUsing() needs a source query on the same database connection as "default".')
+
+    const separate = createDatabase({ adapter: other, dialect: createDialect('sqlite') })
+    await expect(DB.table('archive').insertUsing(['id'], separate.table('orders').select('id')))
+      .rejects.toThrow('insertUsing() needs a source query on the same database connection as "default".')
   })
 
   it('refuses to truncate a table that other tables reference', async () => {
