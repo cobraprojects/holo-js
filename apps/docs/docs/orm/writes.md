@@ -21,7 +21,7 @@ The payload is typed from your table. `create()` requires every column that has 
 
 Each method is described in the [method reference](#method-reference) at the bottom of this page. Relation writes such as `attach()` and `createRelated()` are on the [relationship pages](/orm/relationships/).
 
-**Create:** [create()](#create), [createMany()](#createmany), [createQuietly()](#createquietly), [createManyQuietly()](#createmanyquietly), [make()](#make), [firstOrCreate()](#firstorcreate), [firstOrNew()](#firstornew), [updateOrCreate()](#updateorcreate), [upsert()](#upsert)
+**Create:** [create()](#create), [createMany()](#createmany), [createQuietly()](#createquietly), [createManyQuietly()](#createmanyquietly), [make()](#make), [firstOrCreate()](#firstorcreate), [createOrFirst()](#createorfirst), [firstOrNew()](#firstornew), [updateOrCreate()](#updateorcreate), [upsert()](#upsert)
 
 **Update:** [update()](#update), [updateJson()](#updatejson), [increment()](#increment), [decrement()](#decrement), [incrementEach()](#incrementeach), [decrementEach()](#decrementeach), [fill()](#fill), [forceFill()](#forcefill), [set()](#set), [save()](#save), [push()](#push), [saveQuietly()](#savequietly), [saveMany()](#savemany)
 
@@ -147,7 +147,16 @@ const tag = await Tag.firstOrCreate(
 
 If two requests race and the table has a unique index on the matched columns, `firstOrCreate()` catches the duplicate-key error and returns the row the other request created.
 
-`firstOrNew()` does the same but returns an unsaved instance when nothing matches:
+`createOrFirst()` tries the insert first. When a unique index rejects it, it returns the existing row instead. Use it when the row usually doesn't exist yet. It needs a unique index on the matched columns. Inside a transaction, the insert runs in a savepoint, so a rejected insert doesn't abort the transaction:
+
+```ts
+const tag = await Tag.createOrFirst(
+  { slug: 'typescript' },
+  { name: 'TypeScript' },
+)
+```
+
+`firstOrNew()` does the same as `firstOrCreate()` but returns an unsaved instance when nothing matches:
 
 ```ts
 const tag = await Tag.firstOrNew({ slug: 'typescript' }, { name: 'TypeScript' })
@@ -434,6 +443,14 @@ Returns the first row that matches the first argument. If none matches, creates 
 
 ```ts
 const tag = await Tag.firstOrCreate({ slug: 'typescript' }, { name: 'TypeScript' })
+```
+
+### createOrFirst()
+
+Creates a row from both arguments. If a unique index rejects the insert, returns the existing row that matches the first argument instead.
+
+```ts
+const tag = await Tag.createOrFirst({ slug: 'typescript' }, { name: 'TypeScript' })
 ```
 
 ### firstOrNew()

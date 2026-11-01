@@ -19,7 +19,7 @@ Model-specific methods are described in the [method reference](#method-reference
 
 **Start a query:** [query()](#query), [newQuery()](#newquery), [newModelQuery()](#newmodelquery), [newQueryWithoutScopes()](#newquerywithoutscopes), [newQueryWithoutRelationships()](#newquerywithoutrelationships), [from()](/database/query-builder/selects-and-filters)
 
-**Retrieve models:** [all()](#all), [get()](#get), [first()](#first), [firstOrFail()](#firstorfail), [find()](#find), [findMany()](#findmany), [findOrFail()](#findorfail), [firstWhere()](#firstwhere), [sole()](#sole), [hydrate()](#hydrate)
+**Retrieve models:** [all()](#all), [get()](#get), [first()](#first), [firstOrFail()](#firstorfail), [find()](#find), [findMany()](#findmany), [findOrFail()](#findorfail), [firstWhere()](#firstwhere), [findOr()](#findor), [firstOr()](#firstor), [findOrNew()](#findornew), [whereKey()](#wherekey), [whereKeyNot()](#wherekeynot), [sole()](#sole), [hydrate()](#hydrate)
 
 **Retrieve plain JSON:** [getJson()](#getjson), [firstJson()](#firstjson), [findOrFailJson()](#findorfailjson), [soleJson()](#solejson)
 
@@ -33,9 +33,9 @@ Model-specific methods are described in the [method reference](#method-reference
 
 **Order, limit, and lock:** [orderBy()](/database/query-builder/selects-and-filters#orderby), [orderByDesc()](/database/query-builder/selects-and-filters#orderbydesc), [latest()](/database/query-builder/selects-and-filters#latest), [oldest()](/database/query-builder/selects-and-filters#oldest), [inRandomOrder()](/database/query-builder/selects-and-filters#inrandomorder), [reorder()](/database/query-builder/selects-and-filters#reorder), [limit()](/database/query-builder/selects-and-filters#limit), [offset()](/database/query-builder/selects-and-filters#offset), [skip()](/database/query-builder/selects-and-filters#skip), [take()](/database/query-builder/selects-and-filters#take), [forPage()](/database/query-builder/selects-and-filters#forpage), [lock()](/database/query-builder/selects-and-filters#lock), [lockForUpdate()](/database/query-builder/selects-and-filters#lockforupdate), [sharedLock()](/database/query-builder/selects-and-filters#sharedlock)
 
-**Eager loading:** [with()](#with), [withCount()](#withcount), [withExists()](#withexists), [withSum()](#withsum), [withAvg()](#withavg), [withMin()](#withmin), [withMax()](#withmax), [withWhereHas()](#withwherehas)
+**Eager loading:** [with()](#with), [withCount()](#withcount), [withExists()](#withexists), [withSum()](#withsum), [withAvg()](#withavg), [withMin()](#withmin), [withMax()](#withmax), [withAggregate()](#withaggregate), [withWhereHas()](#withwherehas)
 
-**Filter by relation:** [has()](#has), [orHas()](#orhas), [whereHas()](#wherehas), [orWhereHas()](#orwherehas), [doesntHave()](#doesnthave), [orDoesntHave()](#ordoesnthave), [whereDoesntHave()](#wheredoesnthave), [orWhereDoesntHave()](#orwheredoesnthave), [whereRelation()](#whererelation), [orWhereRelation()](#orwhererelation), [whereMorphRelation()](#wheremorphrelation), [orWhereMorphRelation()](#orwheremorphrelation), [whereBelongsTo()](#wherebelongsto), [orWhereBelongsTo()](#orwherebelongsto), [whereMorphedTo()](#wheremorphedto), [orWhereMorphedTo()](#orwheremorphedto), [whereNotMorphedTo()](#wherenotmorphedto), [orWhereNotMorphedTo()](#orwherenotmorphedto)
+**Filter by relation:** [has()](#has), [orHas()](#orhas), [whereHas()](#wherehas), [orWhereHas()](#orwherehas), [doesntHave()](#doesnthave), [orDoesntHave()](#ordoesnthave), [whereDoesntHave()](#wheredoesnthave), [orWhereDoesntHave()](#orwheredoesnthave), [whereRelation()](#whererelation), [orWhereRelation()](#orwhererelation), [whereDoesntHaveRelation()](#wheredoesnthaverelation), [orWhereDoesntHaveRelation()](#orwheredoesnthaverelation), [hasMorph()](#hasmorph), [orHasMorph()](#orhasmorph), [doesntHaveMorph()](#doesnthavemorph), [orDoesntHaveMorph()](#ordoesnthavemorph), [whereHasMorph()](#wherehasmorph), [orWhereHasMorph()](#orwherehasmorph), [whereDoesntHaveMorph()](#wheredoesnthavemorph), [orWhereDoesntHaveMorph()](#orwheredoesnthavemorph), [whereMorphRelation()](#wheremorphrelation), [orWhereMorphRelation()](#orwheremorphrelation), [whereMorphDoesntHaveRelation()](#wheremorphdoesnthaverelation), [orWhereMorphDoesntHaveRelation()](#orwheremorphdoesnthaverelation), [whereBelongsTo()](#wherebelongsto), [orWhereBelongsTo()](#orwherebelongsto), [whereAttachedTo()](#whereattachedto), [orWhereAttachedTo()](#orwhereattachedto), [whereMorphedTo()](#wheremorphedto), [orWhereMorphedTo()](#orwheremorphedto), [whereNotMorphedTo()](#wherenotmorphedto), [orWhereNotMorphedTo()](#orwherenotmorphedto)
 
 **Soft deletes:** [withTrashed()](#withtrashed), [onlyTrashed()](#onlytrashed), [withoutTrashed()](#withouttrashed)
 
@@ -448,6 +448,48 @@ Like `find()`, but throws `ModelNotFoundException` when no row matches.
 const post = await Post.findOrFail(1)
 ```
 
+### findOr()
+
+Returns one model by primary key, or the result of the callback when no row matches.
+
+```ts
+const post = await Post.findOr(id, () => Post.make({ title: 'Untitled' }))
+```
+
+### firstOr()
+
+Returns the first matching model, or the result of the callback when nothing matches.
+
+```ts
+const post = await Post.where('slug', slug).firstOr(() => {
+  throw new Error(`No post for ${slug}`)
+})
+```
+
+### findOrNew()
+
+Returns one model by primary key, or a new unsaved model when no row matches.
+
+```ts
+const settings = await Setting.findOrNew(userId)
+```
+
+### whereKey()
+
+Filters by primary key. Pass one key or a list.
+
+```ts
+const posts = await Post.whereKey([1, 2, 3]).get()
+```
+
+### whereKeyNot()
+
+Filters out one primary key or a list of them.
+
+```ts
+const others = await Post.whereKeyNot(post.get('id')).get()
+```
+
 ### firstWhere()
 
 Shorthand for `where(column, operator, value).first()`.
@@ -568,6 +610,15 @@ Adds a `{relation}_max_{column}` attribute with the largest value of a related c
 const authors = await Author.withMax('books', 'pages').get()
 ```
 
+### withAggregate()
+
+Adds a `{relation}_{function}_{column}` attribute using the aggregate function you name: `count`, `exists`, `sum`, `avg`, `min`, or `max`. `withSum()`, `withAvg()`, `withMin()`, `withMax()`, `withCount()`, and `withExists()` are shortcuts for it. With `count` and `exists`, pass `'*'` as the column; the attribute is named `{relation}_count` or `{relation}_exists`.
+
+```ts
+const authors = await Author.withAggregate('books', 'pages', 'sum').get()
+// author.toJSON().books_sum_pages
+```
+
 ### withWhereHas()
 
 Keeps only models that have a matching related row, and eager loads that same filtered relation.
@@ -671,6 +722,99 @@ const authors = await Author
   .get()
 ```
 
+### whereDoesntHaveRelation()
+
+Shorthand for `whereDoesntHave()` with one column condition on the related model.
+
+```ts
+const authors = await Author.whereDoesntHaveRelation('posts', 'status', 'published').get()
+```
+
+### orWhereDoesntHaveRelation()
+
+Adds an `or` version of `whereDoesntHaveRelation()`.
+
+```ts
+const authors = await Author
+  .where('vip', true)
+  .orWhereDoesntHaveRelation('posts', 'status', 'published')
+  .get()
+```
+
+### hasMorph()
+
+Keeps rows whose `morphTo` relation points at an existing model of one of the given types.
+
+```ts
+const comments = await Comment.hasMorph('commentable', [Post, Video]).get()
+```
+
+### orHasMorph()
+
+Adds an `or` version of `hasMorph()`.
+
+```ts
+const comments = await Comment.where('pinned', true).orHasMorph('commentable', Post).get()
+```
+
+### doesntHaveMorph()
+
+Keeps rows whose `morphTo` relation does not point at an existing model of the given types.
+
+```ts
+const comments = await Comment.doesntHaveMorph('commentable', Post).get()
+```
+
+### orDoesntHaveMorph()
+
+Adds an `or` version of `doesntHaveMorph()`.
+
+```ts
+const comments = await Comment.where('pinned', true).orDoesntHaveMorph('commentable', Post).get()
+```
+
+### whereHasMorph()
+
+Like `hasMorph()`, with a constraint on the related model.
+
+```ts
+const comments = await Comment
+  .whereHasMorph('commentable', [Post, Video], query => query.where('status', 'published'))
+  .get()
+```
+
+### orWhereHasMorph()
+
+Adds an `or` version of `whereHasMorph()`.
+
+```ts
+const comments = await Comment
+  .where('pinned', true)
+  .orWhereHasMorph('commentable', Post, query => query.where('status', 'published'))
+  .get()
+```
+
+### whereDoesntHaveMorph()
+
+Like `doesntHaveMorph()`, with a constraint on the related model.
+
+```ts
+const comments = await Comment
+  .whereDoesntHaveMorph('commentable', Post, query => query.where('status', 'draft'))
+  .get()
+```
+
+### orWhereDoesntHaveMorph()
+
+Adds an `or` version of `whereDoesntHaveMorph()`.
+
+```ts
+const comments = await Comment
+  .where('pinned', true)
+  .orWhereDoesntHaveMorph('commentable', Post, query => query.where('status', 'draft'))
+  .get()
+```
+
 ### whereMorphRelation()
 
 Like `whereRelation()`, for a `morphTo` relation. Pass the model types the relation may point at.
@@ -692,6 +836,27 @@ const comments = await Comment
   .get()
 ```
 
+### whereMorphDoesntHaveRelation()
+
+Like `whereDoesntHaveRelation()`, for a `morphTo` relation. Pass the model types the relation may point at.
+
+```ts
+const comments = await Comment
+  .whereMorphDoesntHaveRelation('commentable', [Post, Video], 'status', 'draft')
+  .get()
+```
+
+### orWhereMorphDoesntHaveRelation()
+
+Adds an `or` version of `whereMorphDoesntHaveRelation()`.
+
+```ts
+const comments = await Comment
+  .where('flagged', true)
+  .orWhereMorphDoesntHaveRelation('commentable', Post, 'status', 'draft')
+  .get()
+```
+
 ### whereBelongsTo()
 
 Keeps rows whose `belongsTo` relation points at the given model. Pass the relation name when the model has more than one `belongsTo` relation to that model.
@@ -706,6 +871,23 @@ Adds an `or` version of `whereBelongsTo()`.
 
 ```ts
 const posts = await Post.where('pinned', true).orWhereBelongsTo(author, 'author').get()
+```
+
+### whereAttachedTo()
+
+Keeps rows attached to the given model, or to any model in a list, through a many-to-many relation. Pass the relation name when the model has more than one many-to-many relation to that model.
+
+```ts
+const posts = await Post.whereAttachedTo(tag).get()
+const tagged = await Post.whereAttachedTo([news, tips], 'tags').get()
+```
+
+### orWhereAttachedTo()
+
+Adds an `or` version of `whereAttachedTo()`.
+
+```ts
+const posts = await Post.where('pinned', true).orWhereAttachedTo(tag).get()
 ```
 
 ### whereMorphedTo()
