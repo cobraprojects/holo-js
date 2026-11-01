@@ -282,4 +282,16 @@ describe('where clauses', () => {
     expect(await query().whereToday('startsAt').pluck('id')).toEqual([5])
     expect(await query().whereBeforeToday('startsAt').pluck('id')).toEqual([6])
   })
+
+  it('compares qualified date columns by calendar date', async () => {
+    const adapter = await seedOrders()
+    const holidays = defineTable('holidays', { id: column.id(), day: column.date() })
+    await adapter.execute('CREATE TABLE holidays (id INTEGER PRIMARY KEY, day TEXT)')
+    await adapter.execute(`INSERT INTO holidays VALUES (1, '2025-02-20'), (2, '2025-02-19')`)
+    configureConfigRuntime({ app: { timezone: 'America/New_York' } } as never)
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2025-02-20T17:00:00Z') })
+
+    expect(await DB.table(holidays).whereToday('holidays.day').pluck('id')).toEqual([1])
+    expect(await DB.table(holidays).whereBeforeToday('holidays.day').pluck('id')).toEqual([2])
+  })
 })

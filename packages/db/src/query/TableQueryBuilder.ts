@@ -615,6 +615,16 @@ export class TableQueryBuilder<
     return this.source.table?.columns[column]
   }
 
+  private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
+    const separator = column.lastIndexOf('.')
+    if (separator === -1) return this.getColumnDefinition(column)
+
+    const qualifier = column.slice(0, separator)
+    return qualifier === this.source.tableName || qualifier === this.source.alias
+      ? this.getColumnDefinition(column.slice(separator + 1))
+      : undefined
+  }
+
   private assertJsonRootColumn(column: string, methodName: string): void {
     const columnDefinition = this.getColumnDefinition(column)
     if (columnDefinition && columnDefinition.kind !== 'json') {
@@ -1186,7 +1196,7 @@ export class TableQueryBuilder<
     const startOfTomorrow = startOfDayInTimezone(now, timeZone, 1)
     return (typeof columns === 'string' ? [columns] : columns)
       .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => {
-        if (query.getColumnDefinition(column)?.kind === 'date') {
+        if (query.getSourceColumnDefinition(column)?.kind === 'date') {
           return query.whereDatePart(boolean, 'date', column, operator, today)
         }
 
