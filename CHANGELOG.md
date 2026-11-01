@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- `holo install cache` writes only the stores the chosen driver needs. Before, `config/cache.ts` always had a `redis` store pointing at a `cache` Redis connection, even with the default `file` driver or `--driver database`. That connection was often missing from `config/redis.ts`, and because the store existed, `holo prepare` added `@holo-js/cache-redis` and `ioredis` to `package.json` again on every install. Now `file` writes the `file` and `memory` stores, `--driver database` adds a `database` store, and only `--driver redis` adds the `redis` store, the `cache` Redis connection and `@holo-js/cache-redis`. Existing apps that don't use Redis for cache can delete the `redis` store from `config/cache.ts`; the next `holo prepare` then removes `@holo-js/cache-redis`, and also removes `ioredis` if nothing else uses Redis.
+
 ## 0.5.2 - 2026-10-31
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-051-to-052). No required migrations.

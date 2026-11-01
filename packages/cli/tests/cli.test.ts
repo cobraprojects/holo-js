@@ -4255,8 +4255,11 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain("default: env('CACHE_DRIVER', 'file')")
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('CACHE_PREFIX=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache": "${expectedHoloPackageRange}"`)
-    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-redis": "${expectedHoloPackageRange}"`)
+    expect(Object.keys((await loadConfigDirectory(projectRoot, { preferCache: false })).cache.drivers).sort()).toEqual(['file', 'memory'])
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).not.toContain('"@holo-js/cache-redis"')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).not.toContain('"@holo-js/cache-db"')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).not.toContain('"ioredis"')
+    await expect(readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 
     const second = runCliProcess(projectRoot, ['install', 'cache'])
     expect(second.status).toBe(0)
@@ -4398,6 +4401,10 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_PORT=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-redis": "${expectedHoloPackageRange}"`)
+    const loaded = await loadConfigDirectory(projectRoot, { preferCache: false })
+    expect(Object.keys(loaded.cache.drivers).sort()).toEqual(['file', 'memory', 'redis'])
+    expect(loaded.cache.drivers.redis).toMatchObject({ connection: 'cache' })
+    expect(loaded.redis.connections.cache).toMatchObject({ db: 1 })
   }, 30_000)
 
   it('installs cache support with the redis driver using the configured redis default connection', async () => {
@@ -4476,6 +4483,9 @@ export default defineCacheConfig({
   it('installs cache support with the database driver and prints the migration hint', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    await linkWorkspaceCli(projectRoot)
+    const redisSource = "import { defineRedisConfig } from '@holo-js/kernel'\nexport default defineRedisConfig({ default: 'default', connections: { default: { host: '127.0.0.1', db: 0 } } })\n"
+    await writeProjectFile(projectRoot, 'config/redis.ts', redisSource)
 
     const result = runCliProcess(projectRoot, ['install', 'cache', '--driver', 'database'])
     expect(result.status).toBe(0)
@@ -4485,6 +4495,15 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('driver: \'database\'')
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('table: \'cache\'')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-db": "${expectedHoloPackageRange}"`)
+    expect(Object.keys((await loadConfigDirectory(projectRoot, { preferCache: false })).cache.drivers).sort()).toEqual(['database', 'file', 'memory'])
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toBe(redisSource)
+
+    await runProjectPrepare(projectRoot, createIo(projectRoot).io)
+
+    const dependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
+    expect(dependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
+    expect(dependencies['@holo-js/cache-redis']).toBeUndefined()
+    expect(dependencies.ioredis).toBeUndefined()
   }, 30_000)
 
   it('prepares a scaffolded broadcast project that has no .env, as a fresh clone would', async () => {

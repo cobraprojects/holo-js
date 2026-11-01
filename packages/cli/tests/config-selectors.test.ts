@@ -259,7 +259,7 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
 connections: { ...config.connections, alternate: { host: '127.0.0.1', port: 6380 } },
 `)
     await writeConfig(root, 'security', renderSecurityConfig())
-    await writeConfig(root, 'cache', renderCacheConfig())
+    await writeConfig(root, 'cache', renderCacheConfig('redis'))
     await writeConfig(root, 'queue', renderQueueConfig({ driver: 'redis' }))
     const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
     expect(defaults.redis.default).toBe('default')

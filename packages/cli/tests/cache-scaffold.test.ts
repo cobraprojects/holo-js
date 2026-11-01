@@ -30,7 +30,11 @@ describe('cache scaffold', () => {
     expect(loaded.redis.connections.default).toMatchObject({ db: 0 })
   })
 
-  it.each(['file', 'redis', 'database'] as const)('loads the %s default and always includes Redis', async (driver) => {
+  it.each([
+    ['file', ['file', 'memory']],
+    ['database', ['file', 'memory', 'database']],
+    ['redis', ['file', 'memory', 'redis']],
+  ] as const)('configures only the stores the %s driver needs', async (driver, expectedStores) => {
     const root = await mkdtemp(join(tmpdir(), 'holo-cache-scaffold-'))
     tempDirs.push(root)
     await mkdir(join(root, 'config'))
@@ -45,14 +49,12 @@ describe('cache scaffold', () => {
 
     const loaded = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
     expect(loaded.cache.default).toBe(driver)
-    expect(loaded.cache.drivers.redis).toMatchObject({ driver: 'redis', connection: 'cache', prefix: '' })
+    expect(Object.keys(loaded.cache.drivers).sort()).toEqual([...expectedStores].sort())
 
     const overridden = await loadConfigDirectory(root, {
-      processEnv: { CACHE_DRIVER: 'redis', CACHE_PREFIX: 'myapp:cache:' },
+      processEnv: { CACHE_PREFIX: 'myapp:cache:' },
       preferCache: false,
     })
-    expect(overridden.cache.default).toBe('redis')
-    expect(overridden.redis.default).toBe('shared')
     for (const configuredDriver of Object.values(overridden.cache.drivers)) {
       expect(configuredDriver.prefix).toBe('myapp:cache:')
     }

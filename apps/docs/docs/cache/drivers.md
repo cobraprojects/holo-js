@@ -18,14 +18,11 @@ export default defineCacheConfig({
       driver: 'memory',
       maxEntries: 1000,
     },
-    redis: {
-      driver: 'redis',
-    },
   },
 })
 ```
 
-This is the file `npx holo install cache` writes. Change the default store by setting `CACHE_DRIVER` in `.env`.
+This is the file `npx holo install cache` writes. `--driver redis` also adds a `redis` store, and `--driver database` adds a `database` store. Change the default store by setting `CACHE_DRIVER` in `.env` to one of the stores in the file.
 
 ## Choose a driver
 
@@ -80,7 +77,7 @@ Stores entries in Redis, so every server sees the same cache and locks. Install 
 npx holo install cache --driver redis
 ```
 
-This adds `@holo-js/cache-redis` and creates `config/redis.ts` if you don't have one. The cache store points at a named Redis connection; the server address lives in `config/redis.ts`:
+This adds `@holo-js/cache-redis` and a `redis` store to `config/cache.ts`, and creates `config/redis.ts` if you don't have one. The cache store points at a named Redis connection; the server address lives in `config/redis.ts`:
 
 ```ts [config/redis.ts]
 import { env } from '@holo-js/config'

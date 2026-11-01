@@ -183,11 +183,16 @@ export function renderCacheConfig(
     '      driver: \'memory\',',
     '      maxEntries: 1000,',
     '    },',
-    '    redis: {',
-    '      driver: \'redis\',',
-    '      connection: \'cache\',',
-    '    },',
   ]
+
+  if (driver === 'redis') {
+    lines.push(
+      '    redis: {',
+      '      driver: \'redis\',',
+      '      connection: \'cache\',',
+      '    },',
+    )
+  }
 
   if (driver === 'database') {
     lines.push(
