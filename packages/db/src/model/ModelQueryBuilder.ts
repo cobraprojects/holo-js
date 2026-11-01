@@ -1287,12 +1287,20 @@ class ModelQueryBuilderBase<
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
   }
 
-  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]> | '*', aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
-  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey> | '*', aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: '*', aggregate: 'count' | 'exists'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: '*', aggregate: 'count' | 'exists'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, aggregate: 'sum' | 'avg' | 'min' | 'max'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey>, aggregate: 'sum' | 'avg' | 'min' | 'max'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   withAggregate(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.withAggregateLoads(aggregate === 'count' || aggregate === 'exists'
-      ? this.normalizeAggregateLoads(aggregate, first)
-      : this.normalizeColumnAggregateLoads(aggregate, first, column))
+    if (aggregate !== 'count' && aggregate !== 'exists') {
+      return this.withAggregateLoads(this.normalizeColumnAggregateLoads(aggregate, first, column))
+    }
+
+    if (column !== '*') {
+      throw new RelationError(`withAggregate() ${aggregate} loads count related rows; pass '*' as the column instead of "${column}".`)
+    }
+
+    return this.withAggregateLoads(this.normalizeAggregateLoads(aggregate, first))
   }
 
   withSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>

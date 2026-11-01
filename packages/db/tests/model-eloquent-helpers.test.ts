@@ -124,6 +124,7 @@ describe('model eloquent helpers', () => {
 
     expect(authors.map(user => (user.toJSON() as Record<string, unknown>).posts_sum_votes)).toEqual([6, 8, 0])
     expect(counted.map(user => (user.toJSON() as Record<string, unknown>).posts_count)).toEqual([2, 1, 0])
+    expect(() => User.withAggregate('posts', 'votes' as '*', 'count')).toThrow("withAggregate() count loads count related rows; pass '*' as the column instead of \"votes\".")
   })
 
   it('filters by attached related models', async () => {

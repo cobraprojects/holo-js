@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { DB, column, configureDB, createConnectionManager, createDialect, resetDB } from '../src'
 import { defineTable } from './support/internal'
 
@@ -94,6 +95,7 @@ describe('where clauses', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    resetConfigRuntime()
   })
 
   it('filters with like patterns case-insensitively by default', async () => {
@@ -240,5 +242,29 @@ describe('where clauses', () => {
     await seedOrders()
 
     expect(await DB.table('orders').orderByDesc('total').pluck('id')).toEqual([4, 2, 1, 3])
+  })
+
+  it('compares relative times against native SQLite timestamps', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE alarms (id INTEGER PRIMARY KEY, rings_at TEXT)')
+    await adapter.execute(`INSERT INTO alarms VALUES (1, datetime('now', '+1 hour')), (2, datetime('now', '-1 hour'))`)
+
+    expect(await DB.table('alarms').wherePast('rings_at').pluck('id')).toEqual([2])
+    expect(await DB.table('alarms').whereFuture('rings_at').pluck('id')).toEqual([1])
+  })
+
+  it('bounds today by midnight in the application timezone', async () => {
+    await seedEvents()
+    configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2025-02-20T03:00:00Z') })
+    await DB.table(events).insert([
+      { id: 5, startsAt: new Date('2025-02-19T15:30:00Z'), endsAt: new Date('2025-02-19T15:30:00Z') },
+      { id: 6, startsAt: new Date('2025-02-19T14:30:00Z'), endsAt: new Date('2025-02-19T14:30:00Z') },
+    ])
+    const query = () => DB.table(events).where('id', '>', 4).orderBy('id')
+
+    expect(await query().whereToday('startsAt').pluck('id')).toEqual([5])
+    expect(await query().whereBeforeToday('startsAt').pluck('id')).toEqual([6])
+    expect(await query().whereTodayOrAfter('startsAt').pluck('id')).toEqual([5])
   })
 })

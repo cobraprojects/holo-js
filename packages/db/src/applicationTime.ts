@@ -116,6 +116,11 @@ export function parseWallClockTimestamp(value: string, timeZone: string, ambigui
   }, timeZone, ambiguity)
 }
 
+export function startOfDayInTimezone(instant: Date, timeZone: string, dayOffset = 0): Date {
+  const wall = wallClockAt(instant, timeZone)
+  return instantOfWallClock({ ...wall, day: wall.day + dayOffset, hour: 0, minute: 0, second: 0, millisecond: 0 }, timeZone, 'later')
+}
+
 export function formatCalendarDate(instant: Date, timeZone: string): string {
   const wall = wallClockAt(instant, timeZone)
   return `${pad(wall.year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)}`

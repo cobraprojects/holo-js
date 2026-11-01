@@ -612,7 +612,7 @@ const authors = await Author.withMax('books', 'pages').get()
 
 ### withAggregate()
 
-Adds a `{relation}_{function}_{column}` attribute using the aggregate function you name: `count`, `exists`, `sum`, `avg`, `min`, or `max`. `withSum()`, `withAvg()`, `withMin()`, `withMax()`, `withCount()`, and `withExists()` are shortcuts for it. With `count` and `exists`, pass `'*'` as the column; the attribute is named `{relation}_count` or `{relation}_exists`.
+Adds a `{relation}_{function}_{column}` attribute using the aggregate function you name: `count`, `exists`, `sum`, `avg`, `min`, or `max`. `withSum()`, `withAvg()`, `withMin()`, `withMax()`, `withCount()`, and `withExists()` are shortcuts for it. With `count` and `exists`, the column must be `'*'`, and the attribute is named `{relation}_count` or `{relation}_exists`.
 
 ```ts
 const authors = await Author.withAggregate('books', 'pages', 'sum').get()

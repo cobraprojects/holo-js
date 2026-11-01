@@ -688,6 +688,8 @@ export class SQLQueryCompiler {
   ): string {
     const column = this.compileColumnReference(predicate.column)
     switch (predicate.part) {
+      case 'instant':
+        return `${column} ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'date':
         return `DATE(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':

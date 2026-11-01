@@ -157,6 +157,8 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   ): string {
     const column = this.compileColumnReference(predicate.column)
     switch (predicate.part) {
+      case 'instant':
+        return `julianday(${column}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
       case 'date':
         return `date(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':

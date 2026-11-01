@@ -2,7 +2,7 @@ import { CompilerError, ConfigurationError, SecurityError } from '../core/errors
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
-import { formatCalendarDate } from '../applicationTime'
+import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import {
@@ -1170,7 +1170,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const now = new Date()
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereWithBoolean(boolean, column, operator, now), this)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereDatePart(boolean, 'instant', column, operator, now), this)
   }
 
   private whereRelativeToToday(
@@ -1178,9 +1178,32 @@ export class TableQueryBuilder<
     columns: string | readonly string[],
     operator: '=' | '<' | '<=' | '>' | '>=',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    const today = formatCalendarDate(new Date(), getApplicationTimezone())
+    const now = new Date()
+    const timeZone = getApplicationTimezone()
+    const today = formatCalendarDate(now, timeZone)
+    const startOfToday = startOfDayInTimezone(now, timeZone)
+    const startOfTomorrow = startOfDayInTimezone(now, timeZone, 1)
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereDatePart(boolean, 'date', column, operator, today), this)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => {
+        if (query.getColumnDefinition(column)?.kind === 'date') {
+          return query.whereDatePart(boolean, 'date', column, operator, today)
+        }
+
+        switch (operator) {
+          case '=':
+            return query.whereGroupWithBoolean(boolean, group => group
+              .whereDatePart('and', 'instant', column, '>=', startOfToday)
+              .whereDatePart('and', 'instant', column, '<', startOfTomorrow))
+          case '<':
+            return query.whereDatePart(boolean, 'instant', column, '<', startOfToday)
+          case '<=':
+            return query.whereDatePart(boolean, 'instant', column, '<', startOfTomorrow)
+          case '>':
+            return query.whereDatePart(boolean, 'instant', column, '>=', startOfTomorrow)
+          case '>=':
+            return query.whereDatePart(boolean, 'instant', column, '>=', startOfToday)
+        }
+      }, this)
   }
 
   whereJson(

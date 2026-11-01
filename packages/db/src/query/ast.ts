@@ -130,7 +130,7 @@ export interface QueryBetweenColumnsPredicate {
   readonly negated: boolean
 }
 
-export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time'
+export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time' | 'instant'
 
 export interface QueryDatePredicate {
   readonly kind: 'date'

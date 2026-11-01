@@ -31,7 +31,7 @@ const OPERATORS = new Set<QueryOperator>([
   'like',
 ])
 const DIRECTIONS = new Set<QueryDirection>(['asc', 'desc'])
-const DATE_PARTS = new Set<QueryDatePredicate['part']>(['date', 'month', 'day', 'year', 'time'])
+const DATE_PARTS = new Set<QueryDatePredicate['part']>(['date', 'month', 'day', 'year', 'time', 'instant'])
 const JSON_VALUE_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<=', 'like'])
 const JSON_LENGTH_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<='])
 const COLUMN_COMPARISON_OPERATORS = new Set<QueryColumnPredicate['operator']>(['=', '!=', '>', '>=', '<', '<=', 'like'])
