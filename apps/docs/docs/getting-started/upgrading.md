@@ -1,6 +1,10 @@
 # Upgrade Guide
 
-## Upgrading from 0.5.2 to the next release
+## Upgrading from 0.5.2 to 0.5.3
+
+Update every installed `@holo-js/*` package to `0.5.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#053---2026-11-01) lists the release changes.
+
+0.5.3 enforces `enum()` values in the database on PostgreSQL and SQLite, and `holo install cache` writes only the stores the chosen driver needs.
 
 ### Enum columns are enforced on PostgreSQL and SQLite
 

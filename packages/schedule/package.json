@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/schedule",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Holo-JS Framework - task scheduling",
   "type": "module",
   "license": "MIT",
