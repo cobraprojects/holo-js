@@ -576,7 +576,11 @@ export class ModelRepository<
 
     if (subqueries.length === 0) {
       if (filter.negate) {
-        return query
+        return filter.boolean === 'or'
+          ? query.orWhere(builder => builder
+              .whereNull(this.qualifyParentColumn(this.definition.primaryKey) as never)
+              .orWhereNotNull(this.qualifyParentColumn(this.definition.primaryKey) as never))
+          : query
       }
 
       const impossible = (builder: TableQueryBuilder<TTable, Record<string, unknown>>) => (
