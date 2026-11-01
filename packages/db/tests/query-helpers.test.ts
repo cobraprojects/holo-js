@@ -170,8 +170,11 @@ describe('query builder helpers', () => {
       connections: { default: { adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('mysql') } },
     }))
 
-    await expect(DB.transaction(async tx => tx.table('orders').truncate()))
-      .rejects.toThrow('truncate() cannot run inside a transaction on "mysql" because the database commits the transaction; use delete() instead.')
+    const message = 'truncate() cannot run inside a transaction on "mysql" because the database commits the transaction; use delete() instead.'
+    const prebuilt = DB.table('orders')
+
+    await expect(DB.transaction(async tx => tx.table('orders').truncate())).rejects.toThrow(message)
+    await expect(DB.transaction(async () => prebuilt.truncate())).rejects.toThrow(message)
   })
 
   it('rejects inserting from a query on another connection', async () => {

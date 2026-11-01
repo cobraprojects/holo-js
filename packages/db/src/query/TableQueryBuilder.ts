@@ -6,6 +6,7 @@ import { formatCalendarDate, startOfDayInTimezone } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import { getRootDatabaseContext } from '../core/contextOwnership'
+import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import {
   getDatabaseQueryCacheBridge,
   hasActiveDatabaseDependencyCollector,
@@ -2885,7 +2886,7 @@ export class TableQueryBuilder<
   }
 
   async truncate(): Promise<void> {
-    if (this.getCompiler().truncateCommitsOpenTransaction() && this.connection.getScope().kind !== 'root') {
+    if (this.getCompiler().truncateCommitsOpenTransaction() && this.isInsideTransaction()) {
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
@@ -3187,6 +3188,15 @@ export class TableQueryBuilder<
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
+  }
+
+  private isInsideTransaction(): boolean {
+    if (this.connection.getScope().kind !== 'root') return true
+
+    const active = connectionAsyncContext.getActive()?.connection
+    return typeof active !== 'undefined'
+      && active.getScope().kind !== 'root'
+      && getRootDatabaseContext(active) === getRootDatabaseContext(this.connection)
   }
 
   private async resetSequence(): Promise<void> {
