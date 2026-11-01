@@ -175,6 +175,12 @@ describe('query builder helpers', () => {
 
     await expect(DB.transaction(async tx => tx.table('orders').truncate())).rejects.toThrow(message)
     await expect(DB.transaction(async () => prebuilt.truncate())).rejects.toThrow(message)
+
+    let releaseAfterCommit: () => Promise<void> = async () => {}
+    await DB.transaction(async () => {
+      releaseAfterCommit = () => prebuilt.truncate()
+    })
+    await expect(releaseAfterCommit()).resolves.toBeUndefined()
   })
 
   it('rejects inserting from a query on another connection', async () => {

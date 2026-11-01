@@ -290,6 +290,10 @@ export class DatabaseContext {
     return { ...this._scope }
   }
 
+  isInTransaction(): boolean {
+    return (this._scope.kind !== 'root' && this._isActiveTransaction()) || typeof this._findAmbientTransaction() !== 'undefined'
+  }
+
   afterCommit(callback: TransactionCallback): void {
     this._registerTransactionCallback('afterCommit', callback)
   }
