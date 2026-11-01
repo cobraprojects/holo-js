@@ -4,12 +4,19 @@ import type {
   QueryDatePredicate,
   QueryFullTextPredicate,
   QueryJsonPredicate,
+  QueryLikePredicate,
   QueryJsonUpdateOperation,
   QueryLockMode,
   UpsertQueryPlan,
 } from './ast'
 
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    bindings.push(predicate.value)
+    const operator = predicate.caseSensitive ? 'LIKE' : 'ILIKE'
+    return `${this.compileColumnReference(predicate.column)}::text ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+  }
+
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
     return `LATERAL ${subquery} AS ${this.quoteIdentifier(alias)}`
   }

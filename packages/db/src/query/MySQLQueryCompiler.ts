@@ -1,8 +1,14 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    bindings.push(predicate.value)
+    const operator = predicate.caseSensitive ? 'LIKE BINARY' : 'LIKE'
+    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+  }
+
   protected override createSqlStringLiteral(value: string): string {
     return compileMySQLStringLiteral(value)
   }

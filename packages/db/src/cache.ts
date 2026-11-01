@@ -1276,6 +1276,7 @@ function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): 
     case 'integer-in':
     case 'column':
     case 'null':
+    case 'like':
     case 'date':
     case 'json':
     case 'fulltext':

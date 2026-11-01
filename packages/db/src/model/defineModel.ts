@@ -21,8 +21,6 @@ import type { DatabaseContext } from '../core/DatabaseContext'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
 import { assertModelScopeNameAvailable, type ModelQueryBuilder } from './ModelQueryBuilder'
-import type { Entity } from './Entity'
-import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type {
   CursorPaginationOptions,
   PaginationOptions,
@@ -35,49 +33,18 @@ import type {
   EntityWithLoaded,
   EmptyScopeMap,
   GeneratedSchemaTable,
-  ModelCastDefinition,
   ModelAttributeKey,
   ModelColumnName,
-  ModelColumnReference,
   ModelDefinition,
-  ModelJsonColumnPath,
   ModelRecord,
-  ModelSelectableColumn,
   ModelScopesDefinition,
   ModelUpdatePayload,
-  ModelRelationName,
-  ModelRelationPath,
-  RelatedColumnNameForRelationPath,
-  RelationConstraintFor,
-  RelationConstraintMap,
-  RelationNameConstraintMap,
   UniqueIdRuntimeConfig,
 } from './types'
-import type { StaticModelApi } from './staticModelApi'
+import { STATIC_MODEL_QUERY_FORWARD_METHODS, type StaticModelApi } from './staticModelApi'
 
-type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
-type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
 const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 const HOLO_MODEL_OBSERVER_REGISTRAR = Symbol.for('holo-js.db.model-observer-registrar')
-type MorphEntityTarget = {
-  exists(): boolean
-  getRepository(): {
-    definition: {
-      morphClass: string
-      primaryKey: string
-    }
-  }
-  get(key: string): unknown
-}
-type MorphModelTarget = {
-  definition?: {
-    morphClass?: string
-  }
-}
-type MorphTypeSelector = string | MorphModelTarget | MorphEntityTarget | null
-type SubqueryBuilder<TSubTable extends TableDefinition = TableDefinition>
-  = ModelQueryBuilder<TSubTable> | TableQueryBuilder<TSubTable, Record<string, unknown>>
-
 type ColumnShapeInput = Record<string, ColumnInput>
 type EmptyColumnShape = Record<never, never>
 type ModelTableBuilderResult<
@@ -379,15 +346,6 @@ function createStaticModelApi<
     newQueryWithoutRelationships() {
       return this.getRepository().newQueryWithoutRelationships()
     },
-    from(table: string) {
-      return this.query().from(table)
-    },
-    debug() {
-      return this.query().debug()
-    },
-    dump() {
-      return this.query().dump()
-    },
     preventLazyLoading(value: boolean = true) {
       setPreventLazyLoading(definition, value)
       return this
@@ -405,327 +363,6 @@ function createStaticModelApi<
     },
     unguarded<TResult>(callback: () => TResult | Promise<TResult>) {
       return withoutModelGuards(callback)
-    },
-    where(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>, operator?: unknown, value?: unknown) {
-      return typeof columnOrCallback === 'function'
-        ? this.query().where(columnOrCallback)
-        : this.query().where(columnOrCallback, operator, value)
-    },
-    orWhere(columnOrCallback: ModelColumnName<TTable> | BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>, operator?: unknown, value?: unknown) {
-      return typeof columnOrCallback === 'function'
-        ? this.query().orWhere(columnOrCallback)
-        : this.query().orWhere(columnOrCallback, operator, value)
-    },
-    whereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>) {
-      return this.query().whereNot(callback)
-    },
-    orWhereNot(callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>>) {
-      return this.query().orWhereNot(callback)
-    },
-    whereExists<TSubTable extends TableDefinition>(subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().whereExists(subquery)
-    },
-    orWhereExists<TSubTable extends TableDefinition>(subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().orWhereExists(subquery)
-    },
-    whereNotExists<TSubTable extends TableDefinition>(subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().whereNotExists(subquery)
-    },
-    orWhereNotExists<TSubTable extends TableDefinition>(subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().orWhereNotExists(subquery)
-    },
-    whereSub<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'in' | 'not in' | 'like', subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().whereSub(column, operator, subquery)
-    },
-    orWhereSub<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'in' | 'not in' | 'like', subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().orWhereSub(column, operator, subquery)
-    },
-    whereInSub<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().whereInSub(column, subquery)
-    },
-    whereNotInSub<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, subquery: SubqueryBuilder<TSubTable>) {
-      return this.query().whereNotInSub(column, subquery)
-    },
-    select(...columns: readonly ModelSelectableColumn<TTable>[]) {
-      return this.query().select(...columns)
-    },
-    addSelect(...columns: readonly ModelSelectableColumn<TTable>[]) {
-      return this.query().addSelect(...columns)
-    },
-    withCasts(casts: Record<string, ModelCastDefinition>) {
-      return this.query().withCasts(casts)
-    },
-    selectSub<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string) {
-      return this.query().selectSub(query, alias)
-    },
-    addSelectSub<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string) {
-      return this.query().addSelectSub(query, alias)
-    },
-    whereNull(column: ModelColumnName<TTable>) {
-      return this.query().whereNull(column)
-    },
-    orWhereNull(column: ModelColumnName<TTable>) {
-      return this.query().orWhereNull(column)
-    },
-    whereNotNull(column: ModelColumnName<TTable>) {
-      return this.query().whereNotNull(column)
-    },
-    orWhereNotNull(column: ModelColumnName<TTable>) {
-      return this.query().orWhereNotNull(column)
-    },
-    when<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>) {
-      return this.query().when(value, callback, defaultCallback)
-    },
-    unless<TValue>(value: TValue, callback: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>, defaultCallback?: ValueBuilderCallback<ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, TValue>) {
-      return this.query().unless(value, callback, defaultCallback)
-    },
-    distinct() {
-      return this.query().distinct()
-    },
-    whereColumn(column: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', compareTo: ModelColumnReference<TTable>) {
-      return this.query().whereColumn(column, operator, compareTo)
-    },
-    whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]) {
-      return this.query().whereIn(column, values)
-    },
-    whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]) {
-      return this.query().whereNotIn(column, values)
-    },
-    whereBetween(column: ModelColumnName<TTable>, range: readonly [unknown, unknown]) {
-      return this.query().whereBetween(column, range)
-    },
-    whereNotBetween(column: ModelColumnName<TTable>, range: readonly [unknown, unknown]) {
-      return this.query().whereNotBetween(column, range)
-    },
-    whereLike(column: ModelColumnName<TTable>, pattern: string) {
-      return this.query().whereLike(column, pattern)
-    },
-    orWhereLike(column: ModelColumnName<TTable>, pattern: string) {
-      return this.query().orWhereLike(column, pattern)
-    },
-    whereAny(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown) {
-      return this.query().whereAny(columns, operator, value)
-    },
-    whereAll(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown) {
-      return this.query().whereAll(columns, operator, value)
-    },
-    whereNone(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown) {
-      return this.query().whereNone(columns, operator, value)
-    },
-    join(table: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().join(table, leftColumn, operator, rightColumn)
-    },
-    leftJoin(table: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().leftJoin(table, leftColumn, operator, rightColumn)
-    },
-    rightJoin(table: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().rightJoin(table, leftColumn, operator, rightColumn)
-    },
-    crossJoin(table: string) {
-      return this.query().crossJoin(table)
-    },
-    joinSub<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().joinSub(query, alias, leftColumn, operator, rightColumn)
-    },
-    leftJoinSub<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().leftJoinSub(query, alias, leftColumn, operator, rightColumn)
-    },
-    rightJoinSub<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string, leftColumn: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', rightColumn: ModelColumnReference<TTable>) {
-      return this.query().rightJoinSub(query, alias, leftColumn, operator, rightColumn)
-    },
-    joinLateral<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string) {
-      return this.query().joinLateral(query, alias)
-    },
-    leftJoinLateral<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>, alias: string) {
-      return this.query().leftJoinLateral(query, alias)
-    },
-    union<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>) {
-      return this.query().union(query)
-    },
-    unionAll<TSubTable extends TableDefinition>(query: SubqueryBuilder<TSubTable>) {
-      return this.query().unionAll(query)
-    },
-    groupBy(...columns: readonly ModelColumnName<TTable>[]) {
-      return this.query().groupBy(...columns)
-    },
-    having(expression: string, operator: unknown, value?: unknown) {
-      return this.query().having(expression, operator, value)
-    },
-    havingBetween(expression: string, range: readonly [unknown, unknown]) {
-      return this.query().havingBetween(expression, range)
-    },
-    unsafeWhere(sql: string, bindings: readonly unknown[]) {
-      return this.query().unsafeWhere(sql, bindings)
-    },
-    orUnsafeWhere(sql: string, bindings: readonly unknown[]) {
-      return this.query().orUnsafeWhere(sql, bindings)
-    },
-    whereDate(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereDate(column, operator, value)
-    },
-    whereMonth(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereMonth(column, operator, value)
-    },
-    whereDay(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereDay(column, operator, value)
-    },
-    whereYear(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereYear(column, operator, value)
-    },
-    whereTime(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereTime(column, operator, value)
-    },
-    whereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereJson(columnPath, operator, value)
-    },
-    orWhereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown) {
-      return this.query().orWhereJson(columnPath, operator, value)
-    },
-    whereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown) {
-      return this.query().whereJsonContains(columnPath, value)
-    },
-    orWhereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown) {
-      return this.query().orWhereJsonContains(columnPath, value)
-    },
-    whereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown) {
-      return this.query().whereJsonLength(columnPath, operator, value)
-    },
-    orWhereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown) {
-      return this.query().orWhereJsonLength(columnPath, operator, value)
-    },
-    whereFullText(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[], value: string, options: { mode?: 'natural' | 'boolean' } = {}) {
-      return this.query().whereFullText(columns, value, options)
-    },
-    orWhereFullText(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[], value: string, options: { mode?: 'natural' | 'boolean' } = {}) {
-      return this.query().orWhereFullText(columns, value, options)
-    },
-    whereVectorSimilarTo(column: ModelColumnName<TTable>, vector: readonly number[], minSimilarity: number = 0) {
-      return this.query().whereVectorSimilarTo(column, vector, minSimilarity)
-    },
-    orWhereVectorSimilarTo(column: ModelColumnName<TTable>, vector: readonly number[], minSimilarity: number = 0) {
-      return this.query().orWhereVectorSimilarTo(column, vector, minSimilarity)
-    },
-    orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc') {
-      return this.query().orderBy(column, direction)
-    },
-    latest(column?: ModelColumnName<TTable>) {
-      return this.query().latest(column)
-    },
-    oldest(column?: ModelColumnName<TTable>) {
-      return this.query().oldest(column)
-    },
-    inRandomOrder() {
-      return this.query().inRandomOrder()
-    },
-    reorder(column?: ModelColumnName<TTable>, direction?: 'asc' | 'desc') {
-      return this.query().reorder(column, direction)
-    },
-    unsafeOrderBy(sql: string, bindings: readonly unknown[]) {
-      return this.query().unsafeOrderBy(sql, bindings)
-    },
-    lock(mode: 'update' | 'share') {
-      return this.query().lock(mode)
-    },
-    lockForUpdate() {
-      return this.query().lockForUpdate()
-    },
-    sharedLock() {
-      return this.query().sharedLock()
-    },
-    withoutGlobalScope(name: string) {
-      return this.query().withoutGlobalScope(name)
-    },
-    withoutGlobalScopes(names?: readonly string[]) {
-      return this.query().withoutGlobalScopes(names)
-    },
-    with(
-      first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
-      second?: ModelRelationPath<TRelations> | RelationConstraintFor<TRelations, ModelRelationPath<TRelations>>,
-      ...rest: readonly ModelRelationPath<TRelations>[]
-    ) {
-      if (Array.isArray(first)) {
-        return this.query().with(first as readonly ModelRelationPath<TRelations>[])
-      }
-      if (typeof first === 'object') {
-        return this.query().with(first as RelationConstraintMap<TRelations>)
-      }
-      if (typeof second === 'function') {
-        return this.query().with(first, second)
-      }
-      return this.query().with(first, ...(typeof second === 'string' ? [second, ...rest] : rest))
-    },
-    withCount(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return typeof first === 'string'
-        ? this.query().withCount(first, ...rest)
-        : this.query().withCount(first)
-    },
-    withExists(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return typeof first === 'string'
-        ? this.query().withExists(first, ...rest)
-        : this.query().withExists(first)
-    },
-    withSum(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withSum(first as never, column as never, ...rest)
-    },
-    withAvg(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withAvg(first as never, column as never, ...rest)
-    },
-    withMin(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withMin(first as never, column as never, ...rest)
-    },
-    withMax(first: ModelRelationName<TRelations> | RelationNameConstraintMap<TRelations>, column: string, ...rest: readonly ModelRelationName<TRelations>[]) {
-      return this.query().withMax(first as never, column as never, ...rest)
-    },
-    has(relation: ModelRelationPath<TRelations>) {
-      return this.query().has(relation)
-    },
-    orHas(relation: ModelRelationPath<TRelations>) {
-      return this.query().orHas(relation)
-    },
-    whereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
-      return this.query().whereHas(relation, constraint)
-    },
-    orWhereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
-      return this.query().orWhereHas(relation, constraint)
-    },
-    doesntHave(relation: ModelRelationPath<TRelations>) {
-      return this.query().doesntHave(relation)
-    },
-    orDoesntHave(relation: ModelRelationPath<TRelations>) {
-      return this.query().orDoesntHave(relation)
-    },
-    whereDoesntHave<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
-      return this.query().whereDoesntHave(relation, constraint)
-    },
-    orWhereDoesntHave<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
-      return this.query().orWhereDoesntHave(relation, constraint)
-    },
-    whereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown) {
-      return this.query().whereRelation(relation, column, operator, value)
-    },
-    orWhereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown) {
-      return this.query().orWhereRelation(relation, column, operator, value)
-    },
-    whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>) {
-      return this.query().whereBelongsTo(entity, relationName)
-    },
-    orWhereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>) {
-      return this.query().orWhereBelongsTo(entity, relationName)
-    },
-    whereMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {
-      return this.query().whereMorphedTo(relation, target)
-    },
-    orWhereMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {
-      return this.query().orWhereMorphedTo(relation, target)
-    },
-    whereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {
-      return this.query().whereNotMorphedTo(relation, target)
-    },
-    orWhereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {
-      return this.query().orWhereNotMorphedTo(relation, target)
-    },
-    withWhereHas<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, constraint?: RelationConstraintFor<TRelations, TRelationPath>) {
-      return this.query().withWhereHas(relation, constraint)
     },
     find(value: unknown) {
       return this.getRepository().find(value)
@@ -909,6 +546,14 @@ function createStaticModelApi<
       return definition.table.tableName
     },
   } as StaticModelApi<TTable, TScopes, TRelations>
+
+  for (const method of STATIC_MODEL_QUERY_FORWARD_METHODS) {
+    const forward = (...args: readonly unknown[]) => {
+      const query = model.query()
+      return Reflect.apply(query[method], query, args)
+    }
+    ;(model as Record<string, unknown>)[method] = forward
+  }
 
   for (const [name, scope] of Object.entries(definition.scopes)) {
     const scoped = scope as (query: ModelQueryBuilder<TTable, TRelations, unknown, TScopes>, ...args: readonly unknown[]) => ModelQueryBuilder<TTable, TRelations, unknown, TScopes>

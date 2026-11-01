@@ -36,110 +36,128 @@ type ModelPrimaryKeyValue<TTable extends TableDefinition>
   = [PrimaryKeyName<TTable>] extends [never]
     ? unknown
     : ModelRecord<TTable>[PrimaryKeyName<TTable>]
-type StaticModelQueryForwardMethod =
-  | 'from'
-  | 'debug'
-  | 'dump'
-  | 'where'
-  | 'orWhere'
-  | 'whereNot'
-  | 'orWhereNot'
-  | 'whereExists'
-  | 'orWhereExists'
-  | 'whereNotExists'
-  | 'orWhereNotExists'
-  | 'whereSub'
-  | 'orWhereSub'
-  | 'whereInSub'
-  | 'whereNotInSub'
-  | 'select'
-  | 'addSelect'
-  | 'withCasts'
-  | 'selectSub'
-  | 'addSelectSub'
-  | 'whereNull'
-  | 'orWhereNull'
-  | 'whereNotNull'
-  | 'orWhereNotNull'
-  | 'when'
-  | 'unless'
-  | 'distinct'
-  | 'whereColumn'
-  | 'whereIn'
-  | 'whereNotIn'
-  | 'whereBetween'
-  | 'whereNotBetween'
-  | 'whereLike'
-  | 'orWhereLike'
-  | 'whereAny'
-  | 'whereAll'
-  | 'whereNone'
-  | 'join'
-  | 'leftJoin'
-  | 'rightJoin'
-  | 'crossJoin'
-  | 'joinSub'
-  | 'leftJoinSub'
-  | 'rightJoinSub'
-  | 'joinLateral'
-  | 'leftJoinLateral'
-  | 'union'
-  | 'unionAll'
-  | 'groupBy'
-  | 'having'
-  | 'havingBetween'
-  | 'unsafeWhere'
-  | 'orUnsafeWhere'
-  | 'whereDate'
-  | 'whereMonth'
-  | 'whereDay'
-  | 'whereYear'
-  | 'whereTime'
-  | 'whereJson'
-  | 'orWhereJson'
-  | 'whereJsonContains'
-  | 'orWhereJsonContains'
-  | 'whereJsonLength'
-  | 'orWhereJsonLength'
-  | 'whereFullText'
-  | 'orWhereFullText'
-  | 'whereVectorSimilarTo'
-  | 'orWhereVectorSimilarTo'
-  | 'orderBy'
-  | 'latest'
-  | 'oldest'
-  | 'inRandomOrder'
-  | 'reorder'
-  | 'unsafeOrderBy'
-  | 'lock'
-  | 'lockForUpdate'
-  | 'sharedLock'
-  | 'withoutGlobalScope'
-  | 'withoutGlobalScopes'
-  | 'with'
-  | 'withCount'
-  | 'withExists'
-  | 'withSum'
-  | 'withAvg'
-  | 'withMin'
-  | 'withMax'
-  | 'has'
-  | 'orHas'
-  | 'whereHas'
-  | 'orWhereHas'
-  | 'doesntHave'
-  | 'orDoesntHave'
-  | 'whereDoesntHave'
-  | 'orWhereDoesntHave'
-  | 'whereRelation'
-  | 'orWhereRelation'
-  | 'whereBelongsTo'
-  | 'orWhereBelongsTo'
-  | 'whereMorphedTo'
-  | 'orWhereMorphedTo'
-  | 'whereNotMorphedTo'
-  | 'orWhereNotMorphedTo'
-  | 'withWhereHas'
+export const STATIC_MODEL_QUERY_FORWARD_METHODS = [
+  'from',
+  'debug',
+  'dump',
+  'where',
+  'orWhere',
+  'whereNot',
+  'orWhereNot',
+  'whereExists',
+  'orWhereExists',
+  'whereNotExists',
+  'orWhereNotExists',
+  'whereSub',
+  'orWhereSub',
+  'whereInSub',
+  'whereNotInSub',
+  'select',
+  'addSelect',
+  'withCasts',
+  'selectSub',
+  'addSelectSub',
+  'whereNull',
+  'orWhereNull',
+  'whereNotNull',
+  'orWhereNotNull',
+  'when',
+  'unless',
+  'distinct',
+  'whereColumn',
+  'orWhereColumn',
+  'whereIn',
+  'orWhereIn',
+  'whereNotIn',
+  'orWhereNotIn',
+  'whereBetween',
+  'orWhereBetween',
+  'whereNotBetween',
+  'orWhereNotBetween',
+  'whereLike',
+  'orWhereLike',
+  'whereNotLike',
+  'orWhereNotLike',
+  'whereAny',
+  'orWhereAny',
+  'whereAll',
+  'orWhereAll',
+  'whereNone',
+  'orWhereNone',
+  'join',
+  'leftJoin',
+  'rightJoin',
+  'crossJoin',
+  'joinSub',
+  'leftJoinSub',
+  'rightJoinSub',
+  'joinLateral',
+  'leftJoinLateral',
+  'union',
+  'unionAll',
+  'groupBy',
+  'having',
+  'havingBetween',
+  'unsafeWhere',
+  'orUnsafeWhere',
+  'whereDate',
+  'orWhereDate',
+  'whereMonth',
+  'orWhereMonth',
+  'whereDay',
+  'orWhereDay',
+  'whereYear',
+  'orWhereYear',
+  'whereTime',
+  'orWhereTime',
+  'whereJson',
+  'orWhereJson',
+  'whereJsonContains',
+  'orWhereJsonContains',
+  'whereJsonLength',
+  'orWhereJsonLength',
+  'whereFullText',
+  'orWhereFullText',
+  'whereVectorSimilarTo',
+  'orWhereVectorSimilarTo',
+  'orderBy',
+  'latest',
+  'oldest',
+  'inRandomOrder',
+  'reorder',
+  'unsafeOrderBy',
+  'lock',
+  'lockForUpdate',
+  'sharedLock',
+  'withoutGlobalScope',
+  'withoutGlobalScopes',
+  'with',
+  'withCount',
+  'withExists',
+  'withSum',
+  'withAvg',
+  'withMin',
+  'withMax',
+  'has',
+  'orHas',
+  'whereHas',
+  'orWhereHas',
+  'doesntHave',
+  'orDoesntHave',
+  'whereDoesntHave',
+  'orWhereDoesntHave',
+  'whereRelation',
+  'orWhereRelation',
+  'whereBelongsTo',
+  'orWhereBelongsTo',
+  'whereMorphedTo',
+  'orWhereMorphedTo',
+  'whereNotMorphedTo',
+  'orWhereNotMorphedTo',
+  'withWhereHas',
+] as const satisfies readonly (keyof ModelQueryBuilder)[]
+
+type StaticModelQueryForwardMethod = typeof STATIC_MODEL_QUERY_FORWARD_METHODS[number]
 type StaticModelQueryForwarders<
   TTable extends TableDefinition,
   TRelations extends RelationMap,

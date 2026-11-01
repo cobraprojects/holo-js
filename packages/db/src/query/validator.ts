@@ -407,6 +407,13 @@ function assertPredicate(
     return
   }
 
+  if (predicate.kind === 'like') {
+    if (typeof predicate.value !== 'string') {
+      throw new SecurityError(`Like predicate for column "${predicate.column}" requires a string pattern.`)
+    }
+    return
+  }
+
   if (predicate.kind === 'column') {
     assertColumnReference(predicate.compareTo, tableName, allowedColumns)
 

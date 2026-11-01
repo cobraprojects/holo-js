@@ -8,6 +8,7 @@ import type { CompiledStatement, CompiledStatementMetadata } from '../core/types
 import type {
   DeleteQueryPlan,
   QueryDatePredicate,
+  QueryLikePredicate,
   QueryFullTextPredicate,
   QueryHavingClause,
   QueryJsonUpdateOperation,
@@ -531,6 +532,10 @@ export class SQLQueryCompiler {
       return `${this.compileColumnReference(predicate.column)} IS ${predicate.negated ? 'NOT ' : ''}NULL`
     }
 
+    if (predicate.kind === 'like') {
+      return this.compileLikePredicate(predicate, bindings)
+    }
+
     if (predicate.kind === 'column') {
       return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
     }
@@ -556,6 +561,18 @@ export class SQLQueryCompiler {
 
   protected compileComparisonPlaceholder(_predicate: QueryPredicate, index: number): string {
     return this.createPlaceholder(index)
+  }
+
+  protected compileLikePredicate(
+    predicate: QueryLikePredicate,
+    bindings: unknown[],
+  ): string {
+    if (predicate.caseSensitive) {
+      throw new CompilerError('This database engine does not support case-sensitive like operations.')
+    }
+
+    bindings.push(predicate.value)
+    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}LIKE ${this.createPlaceholder(bindings.length)}`
   }
 
   protected compileDatePredicate(

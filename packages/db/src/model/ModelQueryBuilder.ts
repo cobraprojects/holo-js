@@ -507,16 +507,28 @@ class ModelQueryBuilderBase<
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
   }
 
-  whereColumn(
-    column: ModelColumnReference<TTable>,
-    operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
-    compareTo: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.clone(this.tableQuery.whereColumn(column as never, operator, compareTo as never))
+  whereColumn(column: ModelColumnReference<TTable>, compareTo: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  whereColumn(column: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', compareTo: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  whereColumn(column: ModelColumnReference<TTable>, operatorOrCompareTo: string, compareTo?: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return typeof compareTo === 'undefined'
+      ? this.clone(this.tableQuery.whereColumn(column as never, operatorOrCompareTo as never))
+      : this.clone(this.tableQuery.whereColumn(column as never, operatorOrCompareTo as never, compareTo as never))
   }
 
-  whereIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.clone(this.tableQuery.whereIn(column as never, values))
+  orWhereColumn(column: ModelColumnReference<TTable>, compareTo: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  orWhereColumn(column: ModelColumnReference<TTable>, operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like', compareTo: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  orWhereColumn(column: ModelColumnReference<TTable>, operatorOrCompareTo: string, compareTo?: ModelColumnReference<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return typeof compareTo === 'undefined'
+      ? this.clone(this.tableQuery.orWhereColumn(column as never, operatorOrCompareTo as never))
+      : this.clone(this.tableQuery.orWhereColumn(column as never, operatorOrCompareTo as never, compareTo as never))
+  }
+
+  whereIn<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, values: readonly unknown[] | SubqueryBuilder<TSubTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereIn(column as never, this.normalizeWhereInValues(values)))
+  }
+
+  orWhereIn<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, values: readonly unknown[] | SubqueryBuilder<TSubTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereIn(column as never, this.normalizeWhereInValues(values)))
   }
 
   [withoutRelationLoads](): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
@@ -548,8 +560,12 @@ class ModelQueryBuilderBase<
     ]))
   }
 
-  whereNotIn(column: ModelColumnName<TTable>, values: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.clone(this.tableQuery.whereNotIn(column as never, values))
+  whereNotIn<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, values: readonly unknown[] | SubqueryBuilder<TSubTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereNotIn(column as never, this.normalizeWhereInValues(values)))
+  }
+
+  orWhereNotIn<TSubTable extends TableDefinition>(column: ModelColumnName<TTable>, values: readonly unknown[] | SubqueryBuilder<TSubTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNotIn(column as never, this.normalizeWhereInValues(values)))
   }
 
   whereBetween(
@@ -559,6 +575,13 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.whereBetween(column as never, range))
   }
 
+  orWhereBetween(
+    column: ModelColumnName<TTable>,
+    range: readonly [unknown, unknown],
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereBetween(column as never, range))
+  }
+
   whereNotBetween(
     column: ModelColumnName<TTable>,
     range: readonly [unknown, unknown],
@@ -566,24 +589,51 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.whereNotBetween(column as never, range))
   }
 
-  whereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.clone(this.tableQuery.whereLike(column as never, pattern))
+  orWhereNotBetween(
+    column: ModelColumnName<TTable>,
+    range: readonly [unknown, unknown],
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNotBetween(column as never, range))
   }
 
-  orWhereLike(column: ModelColumnName<TTable>, pattern: string): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
-    return this.clone(this.tableQuery.orWhereLike(column as never, pattern))
+  whereLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereLike(column as never, value, caseSensitive))
+  }
+
+  orWhereLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereLike(column as never, value, caseSensitive))
+  }
+
+  whereNotLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereNotLike(column as never, value, caseSensitive))
+  }
+
+  orWhereNotLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNotLike(column as never, value, caseSensitive))
   }
 
   whereAny(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereAny(columns as never, operator, value))
   }
 
+  orWhereAny(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereAny(columns as never, operator, value))
+  }
+
   whereAll(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereAll(columns as never, operator, value))
   }
 
+  orWhereAll(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereAll(columns as never, operator, value))
+  }
+
   whereNone(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNone(columns as never, operator, value))
+  }
+
+  orWhereNone(columns: readonly ModelColumnName<TTable>[], operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNone(columns as never, operator, value))
   }
 
   join(
@@ -702,20 +752,40 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.whereDate(column as never, operator, value))
   }
 
+  orWhereDate(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereDate(column as never, operator, value))
+  }
+
   whereMonth(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereMonth(column as never, operator, value))
+  }
+
+  orWhereMonth(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereMonth(column as never, operator, value))
   }
 
   whereDay(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereDay(column as never, operator, value))
   }
 
+  orWhereDay(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereDay(column as never, operator, value))
+  }
+
   whereYear(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereYear(column as never, operator, value))
   }
 
+  orWhereYear(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereYear(column as never, operator, value))
+  }
+
   whereTime(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereTime(column as never, operator, value))
+  }
+
+  orWhereTime(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereTime(column as never, operator, value))
   }
 
   whereJson(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
@@ -1568,6 +1638,12 @@ class ModelQueryBuilderBase<
       this.scopePredicates,
       softDeleteMode,
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  }
+
+  private normalizeWhereInValues<TSubTable extends TableDefinition>(
+    values: readonly unknown[] | SubqueryBuilder<TSubTable>,
+  ): readonly unknown[] | TableQueryBuilder<TableDefinition, Record<string, unknown>> {
+    return Array.isArray(values) ? values : this.normalizeExistsSubquery(values as SubqueryBuilder<TSubTable>)
   }
 
   private normalizeExistsSubquery<TSubTable extends TableDefinition>(

@@ -1,5 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
+import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -41,9 +41,30 @@ function compileSqliteJsonEquality(
   return `${extractedType} IS NOT NULL AND (${differingType} OR ${extracted} != ${placeholder})`
 }
 
+const SQLITE_GLOB_PATTERN_REPLACEMENTS: Readonly<Record<string, string>> = {
+  '[': '[[]',
+  '*': '[*]',
+  '?': '[?]',
+  '%': '*',
+  '_': '?',
+}
+
+function convertLikePatternToGlob(pattern: string): string {
+  return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
+}
+
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    if (!predicate.caseSensitive) {
+      return super.compileLikePredicate(predicate, bindings)
+    }
+
+    bindings.push(convertLikePatternToGlob(predicate.value))
+    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}GLOB ${this.createPlaceholder(bindings.length)}`
+  }
+
   protected override compileLockClause(_lockMode: QueryLockMode): string {
     return ''
   }

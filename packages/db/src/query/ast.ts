@@ -102,6 +102,15 @@ export interface QueryNullPredicate {
   readonly negated: boolean
 }
 
+export interface QueryLikePredicate {
+  readonly kind: 'like'
+  readonly boolean?: 'and' | 'or'
+  readonly column: string
+  readonly value: string
+  readonly caseSensitive: boolean
+  readonly negated: boolean
+}
+
 export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time'
 
 export interface QueryDatePredicate {
@@ -186,6 +195,7 @@ export type QueryPredicateNode
   = | QueryPredicate
     | QueryColumnPredicate
     | QueryNullPredicate
+    | QueryLikePredicate
     | QueryDatePredicate
     | QueryJsonPredicate
     | QueryFullTextPredicate
