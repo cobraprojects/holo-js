@@ -1,5 +1,11 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.5 to 0.5.6
+
+Update every installed `@holo-js/*` package to `0.5.6` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#056---2026-11-01) lists the release changes.
+
+0.5.6 regenerates the model and auth types after `holo migrate`, `holo migrate:fresh` and `holo migrate:rollback`, so models and `auth.user()` are typed from the new tables without running `holo prepare` again.
+
 ## Upgrading from 0.5.4 to 0.5.5
 
 Update every installed `@holo-js/*` package to `0.5.5` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#055---2026-11-01) lists the release changes.
