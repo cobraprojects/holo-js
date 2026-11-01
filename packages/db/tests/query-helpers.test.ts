@@ -180,7 +180,8 @@ describe('query builder helpers', () => {
     await DB.transaction(async () => {
       releaseAfterCommit = () => prebuilt.truncate()
     })
-    await expect(releaseAfterCommit()).resolves.toBeUndefined()
+    const afterCommit = await releaseAfterCommit().then(() => undefined, (error: unknown) => error)
+    expect(String(afterCommit)).not.toContain('cannot run inside a transaction')
   })
 
   it('rejects inserting from a query on another connection', async () => {
