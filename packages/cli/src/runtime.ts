@@ -447,6 +447,10 @@ export async function withRuntimeEnvironment<T>(
       throw new Error(getRuntimeFailureMessage(kind, result))
     }
 
+    if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback') {
+      await prepareProjectDiscovery(projectRoot, environment.project.config)
+    }
+
     return await callback((result.stdout ?? '').trim())
   } finally {
     await environment.cleanup()

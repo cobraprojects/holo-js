@@ -6015,6 +6015,64 @@ export default defineMigration({
       .resolves.toContain('export const rooms = defineGeneratedTable("rooms", {')
   }, 120000)
 
+  it('refreshes schema-dependent model and auth types after migrate writes the schema', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/auth.ts', `
+export default {
+  defaults: { guard: 'web' },
+  guards: { web: { driver: 'session', provider: 'users' } },
+  providers: { users: { model: 'User' } },
+}
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', table => {
+      table.id()
+      table.string('email')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { name: 'User', fillable: ['email'] })
+`)
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    expect(await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8'))
+      .not.toContain('GeneratedSchemaTable<"users">')
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .toContain('export const users = defineGeneratedTable("users", {')
+
+    const modelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+    const authTypes = await readFile(join(projectRoot, '.holo-js/generated/auth.d.ts'), 'utf8')
+    expect(modelTypes).toContain('readonly "User": HoloModel0')
+    expect(modelTypes).toContain('ModelReference<GeneratedSchemaTable<"users">, EmptyScopeMap>')
+    expect(authTypes).toContain('InferSelect<GeneratedSchemaTable<"users">>')
+  }, 90000)
+
   it('rebuilds generated schema artifacts when an already-ran migration reads database state', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
