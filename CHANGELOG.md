@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- CLI: `holo migrate`, `holo migrate:fresh` and `holo migrate:rollback` regenerate the model and auth types after they update the generated schema. Before, a model whose table a migration had just created kept its untyped registry entry, and `auth.user()` kept an untyped user, until you ran `holo prepare` again.
+
 ## 0.5.5 - 2026-11-01
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-054-to-055). No required migrations. Check `whereLike()` on PostgreSQL and `where(column, null)` before upgrading.
