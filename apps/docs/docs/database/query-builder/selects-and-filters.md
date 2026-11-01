@@ -487,7 +487,7 @@ const products = await DB.table('products')
 
 ### whereLike()
 
-Keep rows where the column matches a `LIKE` pattern. Matching ignores case by default on every database. Pass `true` as the third argument to match case exactly.
+Keep rows where the column matches a `LIKE` pattern. Matching ignores case by default on PostgreSQL and SQLite. On MySQL it follows the column's collation, except on JSON paths, where it ignores case. Pass `true` as the third argument to match case exactly.
 
 ```ts
 const results = await DB.table('posts')
@@ -499,7 +499,7 @@ const exact = await DB.table('posts')
   .get()
 ```
 
-Case-insensitive matching uses `ILIKE` on PostgreSQL and `LIKE` on MySQL and SQLite. Case-sensitive matching uses `LIKE` on PostgreSQL, `LIKE BINARY` on MySQL, and `GLOB` on SQLite. On MySQL, case-insensitive matching follows the column's collation.
+Case-insensitive matching uses `ILIKE` on PostgreSQL, `LIKE` on SQLite, and `LIKE` on MySQL (`LOWER()` on both sides for JSON paths). Case-sensitive matching uses `LIKE` on PostgreSQL, `LIKE BINARY` on MySQL, and `GLOB` on SQLite. On MySQL, case-insensitive matching follows the column's collation.
 
 ### orWhereLike()
 

@@ -268,6 +268,10 @@ export class SQLQueryCompiler {
     return undefined
   }
 
+  truncateCommitsOpenTransaction(): boolean {
+    return false
+  }
+
   compileSequenceReset(_tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } | undefined {
     return undefined
   }

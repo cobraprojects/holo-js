@@ -164,6 +164,34 @@ describe('query builder helpers', () => {
     expect(await DB.table('tickets').pluck('id')).toEqual([1])
   })
 
+  it('refuses to truncate inside a transaction on MySQL', async () => {
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('mysql') } },
+    }))
+
+    await expect(DB.transaction(async tx => tx.table('orders').truncate()))
+      .rejects.toThrow('truncate() cannot run inside a transaction on "mysql" because the database commits the transaction; use delete() instead.')
+  })
+
+  it('rejects inserting from a query on another connection', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    await adapter.initialize()
+    onTestFinished(() => adapter.disconnect())
+    const other = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => other.disconnect())
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: { adapter, dialect: createDialect('sqlite') },
+        reporting: { adapter: other, dialect: createDialect('sqlite') },
+      },
+    }))
+
+    await expect(DB.table('archive').insertUsing(['id'], DB.connection('reporting').table('orders').select('id')))
+      .rejects.toThrow('insertUsing() needs a source query on connection "default", received one on "reporting".')
+  })
+
   it('refuses to truncate a table that other tables reference', async () => {
     const adapter = await seedOrders()
     await adapter.execute('CREATE TABLE order_lines (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE)')

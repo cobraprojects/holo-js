@@ -73,7 +73,7 @@ const result = await DB.table('subscribers').insertOrIgnore([
 
 ### insertUsing()
 
-`insertUsing(columns, query)` inserts the rows that another query selects, in one statement. The query's selected columns fill `columns` in order.
+`insertUsing(columns, query)` inserts the rows that another query selects, in one statement. The query's selected columns fill `columns` in order, and the query must use the same connection.
 
 ```ts
 await DB.table('archived_orders').insertUsing(
@@ -253,7 +253,7 @@ await DB.table('sessions')
 await DB.table('import_staging').truncate()
 ```
 
-On PostgreSQL it runs `TRUNCATE ... RESTART IDENTITY` and on MySQL `TRUNCATE TABLE`. On SQLite it runs `DELETE FROM` and then resets the table's `AUTOINCREMENT` counter when SQLite keeps one. On every database, `truncate()` rejects a table that another table references with a foreign key, even when the referencing table is empty. Use `delete()` for those tables instead.
+On PostgreSQL it runs `TRUNCATE ... RESTART IDENTITY` and on MySQL `TRUNCATE TABLE`. On SQLite it runs `DELETE FROM` and then resets the table's `AUTOINCREMENT` counter when SQLite keeps one. On every database, `truncate()` rejects a table that another table references with a foreign key, even when the referencing table is empty. On MySQL it also rejects calls inside a transaction, because `TRUNCATE TABLE` would commit the transaction. Use `delete()` in both cases.
 
 ## Locking rows
 

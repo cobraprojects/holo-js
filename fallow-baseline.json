@@ -813,7 +813,11 @@
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:updateOrInsert",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:insertUsing",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:insertOrIgnoreUsing",
-    "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:truncate"
+    "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:truncate",
+    "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:compileSequenceReset",
+    "unused-class-member:packages/db/src/query/SQLiteQueryCompiler.impl.ts:SQLiteQueryCompiler:compileSequenceReset",
+    "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:truncateCommitsOpenTransaction",
+    "unused-class-member:packages/db/src/query/MySQLQueryCompiler.ts:MySQLQueryCompiler:truncateCommitsOpenTransaction"
   ],
   "unused_store_members": [],
   "unprovided_injects": [],

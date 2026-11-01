@@ -208,6 +208,7 @@ describe('where clauses', () => {
     const query = () => DB.table(profiles).orderBy('id')
 
     expect(await query().whereJsonDoesntContain('settings->tags', 'admin').pluck('id')).toEqual([2, 3])
+    expect(await query().whereJsonDoesntContain('settings->theme', { mode: 'dark' }).pluck('id')).toEqual([2, 3])
     expect(await query().where('id', 1).orWhereJsonDoesntContain('settings->tags', 'staff').pluck('id')).toEqual([1, 3])
     expect(await query().whereJsonContainsKey('settings->theme->mode').pluck('id')).toEqual([1, 2])
     expect(await query().where('id', 3).orWhereJsonContainsKey('settings->theme').pluck('id')).toEqual([1, 2, 3])
@@ -294,6 +295,7 @@ describe('where clauses', () => {
     expect(await DB.table(holidays).whereToday('holidays.day').pluck('id')).toEqual([1])
     expect(await DB.table(holidays).whereBeforeToday('holidays.day').pluck('id')).toEqual([2])
     expect(await DB.table(holidays).wherePast('day').pluck('id')).toEqual([2])
+    expect(await DB.table(defineTable('main.holidays', { id: column.id(), day: column.date() })).whereToday('holidays.day').pluck('id')).toEqual([1])
     expect(await DB.table(holidays).whereNowOrFuture('day').pluck('id')).toEqual([1])
   })
 

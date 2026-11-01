@@ -147,7 +147,7 @@ const tag = await Tag.firstOrCreate(
 
 If two requests race and the table has a unique index on the matched columns, `firstOrCreate()` catches the duplicate-key error and returns the row the other request created.
 
-`createOrFirst()` tries the insert first. When a unique index rejects it, it returns the existing row instead. Use it when the row usually doesn't exist yet. It needs a unique index on the matched columns. Inside a transaction, the insert runs in a savepoint, so a rejected insert doesn't abort the transaction:
+`createOrFirst()` tries the insert first. When a unique index rejects it, it returns the existing row instead. Use it when the row usually doesn't exist yet. It needs a unique index on the matched columns, and at least one attribute to match. Inside a transaction, the insert runs in a savepoint, so a rejected insert doesn't abort the transaction:
 
 ```ts
 const tag = await Tag.createOrFirst(

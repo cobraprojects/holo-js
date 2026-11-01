@@ -148,7 +148,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       }
 
       bindings.push(JSON.stringify(predicate.value))
-      return `${extracted} = json(${this.createPlaceholder(bindings.length)})`
+      return `COALESCE(${extracted} = json(${this.createPlaceholder(bindings.length)}), 0)`
     }
 
     bindings.push(predicate.value)

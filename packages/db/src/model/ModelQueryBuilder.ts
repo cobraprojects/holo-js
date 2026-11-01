@@ -2409,17 +2409,29 @@ class ModelQueryBuilderBase<
     }
 
     const resolvedName = relationName ?? this.inferRelationNameFor(first, MANY_TO_MANY_RELATION_KINDS, 'many-to-many')
-    if (!MANY_TO_MANY_RELATION_KINDS.includes(this.repository.getRelationDefinition(resolvedName).kind)) {
+    const relation = this.repository.getRelationDefinition(resolvedName)
+    if (!MANY_TO_MANY_RELATION_KINDS.includes(relation.kind)) {
       throw new RelationError(`Relation "${resolvedName}" on model "${this.repository.definition.name}" is not a many-to-many relation.`)
     }
 
+    const relatedReference = (relation as RelationWithRelatedModel).related()
+    const relatedTable = ('definition' in relatedReference ? relatedReference.definition : relatedReference).table.tableName
+    const mismatched = entities.find(entity => entity.getRepository().definition.table.tableName !== relatedTable)
+    if (mismatched) {
+      throw new RelationError(`whereAttachedTo() received a "${mismatched.getRepository().definition.name}" model, but relation "${resolvedName}" on model "${this.repository.definition.name}" relates to "${relatedTable}".`)
+    }
+
     const relatedKey = first.getRepository().definition.primaryKey
-    const keys = entities.map(entity => entity.get(relatedKey as never))
+    const keys = entities
+      .map(entity => entity.get(relatedKey as never))
+      .filter(key => key !== null && typeof key !== 'undefined')
     return this.withRelationFilter({
       relation: resolvedName,
       negate: false,
       boolean,
-      constraint: query => query.whereIn(relatedKey as never, keys),
+      constraint: keys.length === 0
+        ? query => query.whereNull(relatedKey as never).whereNotNull(relatedKey as never)
+        : query => query.whereIn(relatedKey as never, keys),
     })
   }
 

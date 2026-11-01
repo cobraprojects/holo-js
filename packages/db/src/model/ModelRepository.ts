@@ -375,6 +375,10 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
+    if (Object.keys(match).length === 0) {
+      throw new HydrationError('createOrFirst() requires at least one attribute to match the existing row.')
+    }
+
     const connection = this.getConnection()
     const create = () => this.create({ ...match, ...values })
     try {

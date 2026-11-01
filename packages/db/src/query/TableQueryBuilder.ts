@@ -1,4 +1,4 @@
-import { CompilerError, ConfigurationError, SecurityError } from '../core/errors'
+import { CompilerError, ConfigurationError, SecurityError, TransactionError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
@@ -628,7 +628,8 @@ export class TableQueryBuilder<
     if (separator === -1) return this.getColumnDefinition(column)
 
     const qualifier = column.slice(0, separator)
-    return qualifier === this.source.tableName || qualifier === this.source.alias
+    const unqualifiedTableName = this.source.tableName.slice(this.source.tableName.lastIndexOf('.') + 1)
+    return qualifier === this.source.tableName || qualifier === this.source.alias || (!this.source.alias && qualifier === unqualifiedTableName)
       ? this.getColumnDefinition(column.slice(separator + 1))
       : undefined
   }
@@ -2869,6 +2870,10 @@ export class TableQueryBuilder<
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     ignoreConflicts: boolean,
   ): Promise<DriverExecutionResult> {
+    if (query.getConnectionName() !== this.connection.getConnectionName()) {
+      throw new SecurityError(`insertUsing() needs a source query on connection "${this.connection.getConnectionName()}", received one on "${query.getConnectionName()}".`)
+    }
+
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -2880,6 +2885,10 @@ export class TableQueryBuilder<
   }
 
   async truncate(): Promise<void> {
+    if (this.getCompiler().truncateCommitsOpenTransaction() && this.connection.getScope().kind !== 'root') {
+      throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
+    }
+
     await this.assertNotReferencedByOtherTables()
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan(this.source)))
     await this.resetSequence()

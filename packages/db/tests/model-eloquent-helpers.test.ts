@@ -90,6 +90,7 @@ describe('model eloquent helpers', () => {
     expect(existing.get('name')).toBe('Mohamed')
     expect(inTransaction.user.get('id')).toBe(2)
     expect(inTransaction.total).toBe(4)
+    await expect(User.createOrFirst({}, { name: 'Nobody', email: 'mo@example.com' })).rejects.toThrow('createOrFirst() requires at least one attribute to match the existing row.')
   })
 
   it('keeps relation constraint callbacks unary outside morph filters', async () => {
@@ -150,5 +151,8 @@ describe('model eloquent helpers', () => {
     expect(await Post.whereAttachedTo(news).pluck('id')).toEqual([10])
     expect(await Post.whereAttachedTo([news, tips], 'tags').orderBy('id').pluck('id')).toEqual([10, 12])
     expect(await Post.where('id', 11).orWhereAttachedTo(tips).orderBy('id').pluck('id')).toEqual([11, 12])
+    expect(await Post.whereAttachedTo(Tag.make({ name: 'draft' })).pluck('id')).toEqual([])
+    expect(await Post.whereAttachedTo([news, Tag.make({ name: 'draft' })]).pluck('id')).toEqual([10])
+    expect(() => Post.whereAttachedTo(await Post.findOrFail(10) as never, 'tags')).toThrow('whereAttachedTo() received a "Post" model, but relation "tags" on model "Post" relates to "tags".')
   })
 })

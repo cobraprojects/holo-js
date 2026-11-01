@@ -101,7 +101,7 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
 
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
-      return `${extractedJson} @> ${this.createPlaceholder(bindings.length)}::jsonb`
+      return `COALESCE(${extractedJson} @> ${this.createPlaceholder(bindings.length)}::jsonb, FALSE)`
     }
 
     bindings.push(predicate.value)

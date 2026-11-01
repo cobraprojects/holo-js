@@ -65,6 +65,10 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return this.createSqlStringLiteral(formatWallClock(value, getApplicationTimezone()))
   }
 
+  override truncateCommitsOpenTransaction(): boolean {
+    return true
+  }
+
   protected override compileTruncateSql(table: string): string {
     return `TRUNCATE TABLE ${table}`
   }
@@ -109,7 +113,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
-      return `JSON_CONTAINS(${extracted}, CAST(${this.createPlaceholder(bindings.length)} AS JSON))`
+      return `COALESCE(JSON_CONTAINS(${extracted}, CAST(${this.createPlaceholder(bindings.length)} AS JSON)), 0)`
     }
 
     bindings.push(predicate.value)
