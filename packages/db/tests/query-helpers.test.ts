@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { DB, MySQLQueryCompiler, PostgresQueryCompiler, SQLiteQueryCompiler, configureDB, createConnectionManager, createDialect, createSelectQueryPlan, createTableSource, resetDB } from '../src'
 import { createInsertUsingQueryPlan, createTruncateQueryPlan, withPredicate } from '../src/query/ast'
 
@@ -124,6 +125,14 @@ describe('query builder helpers', () => {
 
     expect(await DB.table('reminders').wherePast('remind_at').pluck('id')).toEqual([1])
     expect(await DB.table('reminders').whereFuture('remind_at').pluck('id')).toEqual([2])
+  })
+
+  it('renders MySQL date bindings in the application timezone', () => {
+    configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+    onTestFinished(() => resetConfigRuntime())
+    const mysql = new MySQLQueryCompiler(identifier => `\`${identifier}\``, () => '?')
+
+    expect(mysql.substituteBindings('SELECT ?', [new Date('2026-01-01T12:00:00Z')])).toBe("SELECT '2026-01-01 21:00:00.000'")
   })
 
   it('rejects inserting rows selected with unsafe raw SQL when the security policy disallows it', async () => {

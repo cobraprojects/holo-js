@@ -1,5 +1,7 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { formatWallClock } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
@@ -46,6 +48,10 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       .map(column => `${this.quoteIdentifier(column)} = VALUES(${this.quoteIdentifier(column)})`)
       .join(', ')
     return ` ON DUPLICATE KEY UPDATE ${updates}`
+  }
+
+  protected override createDateLiteral(value: Date): string {
+    return this.createSqlStringLiteral(formatWallClock(value, getApplicationTimezone()))
   }
 
   protected override compileTruncateSql(table: string): string {

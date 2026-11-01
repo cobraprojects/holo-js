@@ -81,10 +81,14 @@ export class SQLQueryCompiler {
     if (value === null || typeof value === 'undefined') return 'NULL'
     if (typeof value === 'number' || typeof value === 'bigint') return String(value)
     if (typeof value === 'boolean') return this.createBooleanLiteral(value)
-    if (value instanceof Date) return this.createSqlStringLiteral(value.toISOString())
+    if (value instanceof Date) return this.createDateLiteral(value)
     if (value instanceof Uint8Array) return this.createBinaryLiteral(value)
     if (typeof value === 'string') return this.createSqlStringLiteral(value)
     return this.createSqlStringLiteral(JSON.stringify(value))
+  }
+
+  protected createDateLiteral(value: Date): string {
+    return this.createSqlStringLiteral(value.toISOString())
   }
 
   protected createBooleanLiteral(value: boolean): string {
