@@ -906,7 +906,9 @@ export class TableQueryBuilder<
     return this.clone(withPredicate(this.plan, {
       kind: 'between-columns',
       boolean,
-      subject,
+      subject: 'value' in subject
+        ? { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) }
+        : subject,
       bounds,
       negated,
     }))
@@ -2829,6 +2831,7 @@ export class TableQueryBuilder<
   }
 
   async truncate(): Promise<void> {
+    await this.assertNotReferencedByOtherTables()
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan(this.source)))
     await this.invalidateTableQueries('delete')
   }
@@ -3125,6 +3128,16 @@ export class TableQueryBuilder<
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
+  }
+
+  private async assertNotReferencedByOtherTables(): Promise<void> {
+    const statement = this.getCompiler().compileReferencingTables(this.source.tableName)
+    if (!statement) return
+
+    const { rows } = await this.connection.queryCompiled<{ name: string }>(statement)
+    if (rows.length > 0) {
+      throw new CompilerError(`Cannot truncate "${this.source.tableName}" because ${rows.map(row => `"${row.name}"`).join(', ')} reference it with foreign keys.`)
+    }
   }
 
   private async invalidateTableQueries(kind: 'insert' | 'delete'): Promise<void> {

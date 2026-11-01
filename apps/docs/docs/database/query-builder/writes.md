@@ -253,7 +253,7 @@ await DB.table('sessions')
 await DB.table('import_staging').truncate()
 ```
 
-On PostgreSQL it runs `TRUNCATE ... RESTART IDENTITY` and on MySQL `TRUNCATE TABLE`. Both reject a table that other tables reference with foreign keys; empty the referencing tables first. On SQLite it runs `DELETE FROM` and does not reset the auto-increment counter.
+On PostgreSQL it runs `TRUNCATE ... RESTART IDENTITY` and on MySQL `TRUNCATE TABLE`. On SQLite it runs `DELETE FROM` and does not reset the auto-increment counter. On every database, `truncate()` rejects a table that other tables reference with foreign keys; empty the referencing tables first.
 
 ## Locking rows
 

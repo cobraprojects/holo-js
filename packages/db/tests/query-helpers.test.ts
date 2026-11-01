@@ -135,6 +135,24 @@ describe('query builder helpers', () => {
     expect(await DB.table('archived_orders').count()).toBe(0)
   })
 
+  it('refuses to truncate a table that other tables reference', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE order_lines (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE)')
+    await adapter.execute('INSERT INTO order_lines VALUES (1, 1)')
+
+    await expect(DB.table('orders').truncate()).rejects.toThrow('Cannot truncate "orders" because "order_lines" reference it with foreign keys.')
+    expect(await DB.table('orders').count()).toBe(4)
+    expect(await DB.table('order_lines').count()).toBe(1)
+  })
+
+  it('compares a date value against a range bounded by columns', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE promotions (id INTEGER PRIMARY KEY, starts_at TEXT, ends_at TEXT)')
+    await adapter.execute(`INSERT INTO promotions VALUES (1, '2026-01-01T00:00:00.000Z', '2026-12-31T00:00:00.000Z'), (2, '2027-01-01T00:00:00.000Z', '2027-12-31T00:00:00.000Z')`)
+
+    expect(await DB.table('promotions').whereValueBetween(new Date('2026-06-01T00:00:00Z'), ['starts_at', 'ends_at']).pluck('id')).toEqual([1])
+  })
+
   it('truncates a table', async () => {
     await seedOrders()
 

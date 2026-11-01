@@ -260,6 +260,10 @@ export class SQLQueryCompiler {
     }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
   }
 
+  compileReferencingTables(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
   protected compileTruncateSql(table: string): string {
     return `DELETE FROM ${table}`
   }

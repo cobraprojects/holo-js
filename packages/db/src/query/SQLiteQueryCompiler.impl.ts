@@ -1,4 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import type { CompiledStatement } from '../core/types'
 import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
@@ -56,6 +57,14 @@ function convertLikePatternToGlob(pattern: string): string {
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  override compileReferencingTables(tableName: string): CompiledStatement {
+    return {
+      sql: 'SELECT DISTINCT "tables"."name" AS "name" FROM "sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name") AS "keys" WHERE "tables"."type" = \'table\' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)',
+      bindings: [tableName, tableName],
+      source: `query:select:${tableName}`,
+    }
+  }
+
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
     if (!predicate.caseSensitive) {
       return super.compileLikePredicate(predicate, bindings)
