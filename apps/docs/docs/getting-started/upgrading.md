@@ -1,5 +1,21 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.4 to 0.5.5
+
+Update every installed `@holo-js/*` package to `0.5.5` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#055---2026-11-01) lists the release changes.
+
+0.5.5 adds most of Laravel's remaining query builder and Eloquent methods, such as `whereNotLike()`, `whereToday()`, `updateOrInsert()`, `truncate()`, `findOr()` and `createOrFirst()`. Two existing queries now behave as in Laravel, so check them before upgrading:
+
+- On PostgreSQL, `whereLike()` ignores case (`ILIKE`). Before, it was case-sensitive. Pass `true` as the third argument to keep a case-sensitive match:
+
+  ```ts
+  await DB.table('users').whereLike('name', 'Mo%', true).get()
+  ```
+
+- `where(column, null)` compiles to `IS NULL` and `where(column, '!=', null)` to `IS NOT NULL`. Before, they compiled to `= NULL` and `!= NULL` and matched no rows. Remove such calls if you relied on them returning nothing.
+
+On SQLite, `Date` values for columns the schema doesn't define are stored as ISO strings instead of throwing an error.
+
 ## Upgrading from 0.5.3 to 0.5.4
 
 Update every installed `@holo-js/*` package to `0.5.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#054---2026-11-01) lists the release changes.

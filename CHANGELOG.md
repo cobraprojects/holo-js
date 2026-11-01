@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-11-01
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-054-to-055). No required migrations. Check `whereLike()` on PostgreSQL and `where(column, null)` before upgrading.
+
+### Added
+
+- Database: the query builder gets most of Laravel's remaining query builder methods, with Laravel's signatures. Filters: `whereNotLike()`, the `or` forms of the basic `where` clauses, two-argument `whereColumn()`, subqueries in `whereIn()` and `whereNotIn()`, `whereBetweenColumns()`, `whereValueBetween()`, relative date filters such as `wherePast()`, `whereToday()` and `whereTodayOrAfter()`, `whereJsonDoesntContain()`, `whereJsonContainsKey()`, `orHaving()`, `havingNull()`, `havingNotBetween()` and `orderByDesc()`. Reading and writing: `each()`, `eachById()`, `lazyById()`, `lazyByIdDesc()`, `implode()`, `average()`, `existsOr()`, `doesntExistOr()`, `toRawSql()`, `incrementEach()`, `decrementEach()`, `updateOrInsert()`, `insertUsing()`, `insertOrIgnoreUsing()` and `truncate()`. The `…Today` filters use `app.timezone`. See [Selects and filters](apps/docs/docs/database/query-builder/selects-and-filters.md), [Chunking](apps/docs/docs/database/query-builder/chunking.md) and [Inserts, Updates, Deletes](apps/docs/docs/database/query-builder/writes.md).
+- ORM: models get Laravel's `whereKey()`, `whereKeyNot()`, `findOr()`, `firstOr()`, `findOrNew()`, `createOrFirst()`, `whereDoesntHaveRelation()`, the `hasMorph()`, `whereHasMorph()` and `doesntHaveMorph()` families, `whereMorphDoesntHaveRelation()`, `withAggregate()` and `whereAttachedTo()`, plus every new query builder method. See [Querying Models](apps/docs/docs/orm/querying.md) and [Writing Models](apps/docs/docs/orm/writes.md#createorfirst).
+- `truncate()` resets the auto-increment counter on every database, SQLite included. It refuses tables that other tables reference with foreign keys, and on MySQL it refuses to run inside a transaction, because `TRUNCATE TABLE` would commit it. `truncate()` and `insertUsing()` clear cached reads for the whole table.
+
+### Changed
+
+- Database: `whereLike()` ignores case on PostgreSQL (`ILIKE`), as in Laravel. Before, it was case-sensitive there. Pass `true` as the third argument for a case-sensitive match on every database.
+- Database: `where(column, null)` compiles to `IS NULL` and `where(column, '!=', null)` to `IS NOT NULL`, as in Laravel. Before, they compiled to `= NULL` and `!= NULL`, which never match.
+- Database: on SQLite, `Date` values bound to columns that the schema doesn't define are stored as ISO strings. Before, the driver threw an error.
+- Database: `whereJsonDoesntContain()` and other negated JSON contains checks keep rows whose JSON path is missing.
+
+### Compatibility and upgrade requirements
+
+- On PostgreSQL, `whereLike()` calls can now match more rows. Pass `true` as the third argument where you need a case-sensitive match. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-054-to-055).
+- Queries that relied on `where(column, null)` matching no rows now return the rows where the column is `NULL`.
+
 ## 0.5.4 - 2026-11-01
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-053-to-054). No required migrations.

@@ -213,8 +213,8 @@ const staff = await DB.table('users')
   .get()
 ```
 
-::: warning
-`where('deleted_at', null)` compiles to `= NULL`, which never matches in SQL. Use `whereNull()` and `whereNotNull()` to check for `NULL`.
+::: tip
+`where('deleted_at', null)` compiles to `IS NULL`, and `where('deleted_at', '!=', null)` compiles to `IS NOT NULL`. `whereNull()` and `whereNotNull()` do the same.
 :::
 
 ### Grouping conditions
