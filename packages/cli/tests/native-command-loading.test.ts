@@ -38,6 +38,43 @@ it.each(['configured', 'default'] as const)('executes a real CLI command with %s
   }
 }, 15000)
 
+it('runs app commands that deep-import packages without exports maps and keeps the CLI usable when a command cannot load', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('node_modules/request-headers/package.json', JSON.stringify({ name: 'request-headers' }))
+    await write('node_modules/request-headers/headers.js', "exports.headers = () => ({ get: () => 'en' })")
+    await write('server/services/locale.ts', "import { headers } from 'request-headers/headers'\nexport const currentLocale = () => headers().get('accept-language')")
+    await write('server/commands/accounts/finish-deletions.ts', "import { currentLocale } from '../../services/locale'\nexport default { description: 'Finish account deletions', async run() { console.log(JSON.stringify({ locale: currentLocale() })) } }")
+    const { stdout } = await execute(process.execPath, [cli, 'accounts:finish-deletions'], { cwd: root })
+    expect(JSON.parse(stdout.trim())).toEqual({ locale: 'en' })
+
+    const brokenImport = "import { missing } from 'missing-package/headers'\n"
+    await write('server/commands/reports/broken.ts', `${brokenImport}export default { name: 'reports:run', description: 'Run reports', async run() { missing() } }`)
+    await write('server/commands/migrate.ts', `${brokenImport}export default { name: 'db:migrate-legacy', description: 'Legacy migrate', async run() { missing() } }`)
+    await write('server/commands/cleanup.ts', "export default { name: 'cleanup:legacy', description: 'Legacy cleanup', async run() { console.log('legacy cleaned') } ")
+    await write('server/commands/reports/typo.ts', "import { format } from './missing-formatter'\nexport default { description: 'Typo report', async run() { format() } }")
+    await write('server/commands/tools/cleanup.ts', "export default { name: 'cleanup', description: 'Clean up', async run() { console.log('cleaned') } }")
+    const migrated = await execute(process.execPath, [cli, 'migrate'], { cwd: root })
+    expect(migrated.stdout).toContain('No migrations were executed.')
+    const listed = await execute(process.execPath, [cli, 'list'], { cwd: root })
+    expect(listed.stdout).toMatch(/reports:broken\s.*Failed to load: .*missing-package/)
+    expect(listed.stdout).toMatch(/reports:typo\s.*Failed to load: .*missing-formatter/)
+    expect(listed.stdout).toContain('accounts:finish-deletions')
+    expect((await execute(process.execPath, [cli, 'cleanup'], { cwd: root })).stdout.trim()).toBe('cleaned')
+    await expect(execute(process.execPath, [cli, 'reports:broken'], { cwd: root })).rejects.toThrow(/Cannot find package 'missing-package'/)
+
+    await write('server/commands/reports/broken.ts', "export default { name: 'reports:run', description: 'Run reports', async run() { console.log('reported') } }")
+    await write('server/commands/cleanup.ts', "export default { name: 'cleanup:legacy', description: 'Legacy cleanup', async run() { console.log('legacy cleaned') } }")
+    const recovered = await execute(process.execPath, [cli, 'list'], { cwd: root })
+    expect(recovered.stdout).toMatch(/reports:run\s.*Run reports/)
+    expect(recovered.stdout).not.toContain('reports:broken')
+    expect((await execute(process.execPath, [cli, 'reports:run'], { cwd: root })).stdout.trim()).toBe('reported')
+    expect((await execute(process.execPath, [cli, 'cleanup:legacy'], { cwd: root })).stdout.trim()).toBe('legacy cleaned')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('reports a real compiler error and removes runtime bundles when a discovered model cannot load', async () => {
   const { root, write } = await createProject()
   try {

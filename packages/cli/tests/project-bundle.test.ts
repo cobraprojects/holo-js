@@ -1,11 +1,15 @@
+import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { createServer } from 'vite'
 import { expect, it, onTestFinished } from 'vitest'
 import { runtimeModuleInternals } from '../../core/src/runtimeModule'
 import { bundleProjectModule } from '../src/project/runtime'
+
+const execute = promisify(execFile)
 
 const bundlers = [
   { name: 'CLI', bundle: bundleProjectModule, runtimeRoot: '.holo-js/runtime/cli' },
@@ -21,6 +25,10 @@ async function createProject(): Promise<string> {
     name: 'bundle-dependency', type: 'module', exports: './index.mjs',
   }))
   await writeFile(join(root, 'node_modules/bundle-dependency/index.mjs'), "export default 'external'\n")
+  await mkdir(join(root, 'node_modules/legacy-dependency/client'), { recursive: true })
+  await writeFile(join(root, 'node_modules/legacy-dependency/package.json'), JSON.stringify({ name: 'legacy-dependency' }))
+  await writeFile(join(root, 'node_modules/legacy-dependency/headers.js'), "exports.headers = () => 'legacy headers'\n")
+  await writeFile(join(root, 'node_modules/legacy-dependency/client/index.js'), "exports.client = 'legacy client'\n")
   await writeFile(join(root, 'src/value.ts'), "export default 'alias'\n")
   await writeFile(join(root, 'src/asset.txt'), 'source asset')
   return root
@@ -61,6 +69,47 @@ export const result = [value, dependency, await readFile(new URL('./asset.txt', 
     await expect(readdir(dirname(dirname(bundled.path)))).rejects.toMatchObject({ code: 'ENOENT' })
   },
 )
+
+it.each(bundlers)('$name loads deep imports into installed packages with and without exports maps', async ({ bundle }) => {
+  const root = await createProject()
+  await writeFile(join(root, 'node_modules/bundle-dependency/package.json'), JSON.stringify({
+    name: 'bundle-dependency', type: 'module', exports: { '.': './index.mjs', './feature': './feature.mjs' },
+  }))
+  await writeFile(join(root, 'node_modules/bundle-dependency/feature.mjs'), "export const feature = 'exported feature'\n")
+  await writeFile(join(root, 'src/service.ts'), `
+import { headers } from 'legacy-dependency/headers'
+import { client } from 'legacy-dependency/client'
+import { feature } from 'bundle-dependency/feature'
+export const result = [headers(), client, feature]
+`)
+  const entry = join(root, 'src/entry.ts')
+  await writeFile(entry, "export { result } from './service'\n")
+  const bundled = await bundle(root, entry)
+  onTestFinished(() => bundled.cleanup())
+
+  const { stdout } = await execute(process.execPath, [
+    '--input-type=module',
+    '--eval',
+    'const { result } = await import(process.argv[1]); console.log(JSON.stringify(result))',
+    pathToFileURL(bundled.path).href,
+  ])
+  expect(JSON.parse(stdout)).toEqual(['legacy headers', 'legacy client', 'exported feature'])
+})
+
+it.each(bundlers)('$name keeps TypeScript path aliases that look like package subpaths pointed at app files', async ({ bundle }) => {
+  const root = await createProject()
+  await writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { paths: { 'legacy-dependency/headers': ['./src/headers.ts'] } },
+  }))
+  await writeFile(join(root, 'src/headers.ts'), "export const headers = () => 'app headers'\n")
+  const entry = join(root, 'src/entry.ts')
+  await writeFile(entry, "import { headers } from 'legacy-dependency/headers'\nexport const result = headers()\n")
+  const bundled = await bundle(root, entry)
+  onTestFinished(() => bundled.cleanup())
+
+  const loaded = await import(pathToFileURL(bundled.path).href) as { result: string }
+  expect(loaded.result).toBe('app headers')
+})
 
 it.each(bundlers)('$name cleans up the runtime bundle when application config resolution fails', async ({ bundle, runtimeRoot }) => {
   const root = await createProject()
