@@ -7,8 +7,15 @@ import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
     bindings.push(predicate.value)
-    const operator = predicate.caseSensitive ? 'LIKE BINARY' : 'LIKE'
-    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+    const negation = predicate.negated ? 'NOT ' : ''
+    const placeholder = this.createPlaceholder(bindings.length)
+    if (predicate.caseSensitive) {
+      return `${this.compileLikeSubject(predicate)} ${negation}LIKE BINARY ${placeholder}`
+    }
+
+    return predicate.path.length === 0
+      ? `${this.compileLikeSubject(predicate)} ${negation}LIKE ${placeholder}`
+      : `LOWER(${this.compileLikeSubject(predicate)}) ${negation}LIKE LOWER(${placeholder})`
   }
 
   protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {

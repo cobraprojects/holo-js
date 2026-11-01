@@ -717,19 +717,19 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.orWhereTodayOrAfter(columns as never))
   }
 
-  whereLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  whereLike(column: ModelJsonColumnPath<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereLike(column as never, value, caseSensitive))
   }
 
-  orWhereLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  orWhereLike(column: ModelJsonColumnPath<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereLike(column as never, value, caseSensitive))
   }
 
-  whereNotLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  whereNotLike(column: ModelJsonColumnPath<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotLike(column as never, value, caseSensitive))
   }
 
-  orWhereNotLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  orWhereNotLike(column: ModelJsonColumnPath<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereNotLike(column as never, value, caseSensitive))
   }
 

@@ -311,6 +311,8 @@ describe('where clauses', () => {
     useDialect('mysql')
     expect(DB.table(profiles).whereNotLike('settings->theme', 'da%', true).toSQL().sql)
       .toBe('SELECT * FROM `profiles` WHERE JSON_UNQUOTE(JSON_EXTRACT(`settings`, \'$.theme\')) NOT LIKE BINARY ?')
+    expect(DB.table(profiles).whereLike('settings->theme', 'da%').toSQL().sql)
+      .toBe('SELECT * FROM `profiles` WHERE LOWER(JSON_UNQUOTE(JSON_EXTRACT(`settings`, \'$.theme\'))) LIKE LOWER(?)')
   })
 
   it('treats equality with null as an IS NULL check', async () => {
@@ -319,5 +321,12 @@ describe('where clauses', () => {
     expect(await DB.table('orders').where('note', null).pluck('id')).toEqual([2])
     expect(await DB.table('orders').where('note', '!=', null).orderBy('id').pluck('id')).toEqual([1, 3, 4])
     expect(await DB.table('orders').where('id', 1).orWhere('note', null).orderBy('id').pluck('id')).toEqual([1, 2])
+  })
+
+  it('rejects JSON paths rooted at qualified non-JSON columns', () => {
+    useDialect('sqlite')
+    const people = defineTable('people', { id: column.id(), name: column.string() })
+
+    expect(() => DB.table(people).whereLike('people.name->first', 'a%')).toThrow('whereLike() requires "people.name" to be a JSON column.')
   })
 })

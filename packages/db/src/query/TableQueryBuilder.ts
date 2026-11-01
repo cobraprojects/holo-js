@@ -634,7 +634,7 @@ export class TableQueryBuilder<
   }
 
   private assertJsonRootColumn(column: string, methodName: string): void {
-    const columnDefinition = this.getColumnDefinition(column)
+    const columnDefinition = this.getSourceColumnDefinition(column)
     if (columnDefinition && columnDefinition.kind !== 'json') {
       throw new SecurityError(`${methodName}() requires "${column}" to be a JSON column.`)
     }
@@ -934,7 +934,7 @@ export class TableQueryBuilder<
   }
 
   whereLike(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: string,
     caseSensitive = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -942,7 +942,7 @@ export class TableQueryBuilder<
   }
 
   orWhereLike(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: string,
     caseSensitive = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -950,7 +950,7 @@ export class TableQueryBuilder<
   }
 
   whereNotLike(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: string,
     caseSensitive = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -958,7 +958,7 @@ export class TableQueryBuilder<
   }
 
   orWhereNotLike(
-    column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
+    column: JsonColumnPath<TTableOrName, TAvailableColumns>,
     value: string,
     caseSensitive = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
