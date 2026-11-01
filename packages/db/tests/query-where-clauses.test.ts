@@ -28,7 +28,7 @@ async function seedUsers(): Promise<void> {
     (3, 'Amina', 'amina@example.org')`)
 }
 
-async function seedOrders(): Promise<void> {
+async function seedOrders(): Promise<ReturnType<typeof createSQLiteAdapter>> {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
   await adapter.initialize()
   onTestFinished(() => adapter.disconnect())
@@ -42,6 +42,7 @@ async function seedOrders(): Promise<void> {
     (2, 'pending', NULL, 250, 0, '2025-02-20 18:45:00'),
     (3, 'refunded', 'refunded', 75, 75, '2024-12-31 23:59:00'),
     (4, 'paid', 'rush', 500, 400, '2025-03-01 07:00:00')`)
+  return adapter
 }
 
 const events = defineTable('events', {

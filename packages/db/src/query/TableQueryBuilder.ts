@@ -102,6 +102,7 @@ import type {
   QueryJsonUpdateOperation,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
+  QueryDatePart,
   QueryOperator,
   QueryPredicateNode,
   QueryPredicate,
@@ -573,7 +574,7 @@ export class TableQueryBuilder<
 
   private whereDatePart(
     boolean: 'and' | 'or',
-    part: 'date' | 'month' | 'day' | 'year' | 'time',
+    part: QueryDatePart,
     column: string,
     operator: QueryOperator | unknown,
     value?: unknown,
