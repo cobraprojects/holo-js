@@ -210,6 +210,26 @@ export const STATIC_MODEL_QUERY_FORWARD_METHODS = [
   'insertUsing',
   'insertOrIgnoreUsing',
   'truncate',
+  'whereKey',
+  'whereKeyNot',
+  'findOr',
+  'firstOr',
+  'findOrNew',
+  'whereDoesntHaveRelation',
+  'orWhereDoesntHaveRelation',
+  'hasMorph',
+  'orHasMorph',
+  'doesntHaveMorph',
+  'orDoesntHaveMorph',
+  'whereHasMorph',
+  'orWhereHasMorph',
+  'whereDoesntHaveMorph',
+  'orWhereDoesntHaveMorph',
+  'whereMorphDoesntHaveRelation',
+  'orWhereMorphDoesntHaveRelation',
+  'withAggregate',
+  'whereAttachedTo',
+  'orWhereAttachedTo',
 ] as const satisfies readonly (keyof ModelQueryBuilder)[]
 
 type StaticModelQueryForwardMethod = typeof STATIC_MODEL_QUERY_FORWARD_METHODS[number]
@@ -302,6 +322,7 @@ export type StaticModelApi<
   upsert(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
+  createOrFirst(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>

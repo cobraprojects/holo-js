@@ -334,10 +334,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {
@@ -351,10 +348,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {
@@ -375,6 +369,33 @@ export class ModelRepository<
 
       throw error
     }
+  }
+
+  async createOrFirst(
+    match: Partial<ModelRecord<TTable>>,
+    values: Partial<ModelRecord<TTable>> = {},
+  ): Promise<Entity<TTable>> {
+    const connection = this.getConnection()
+    const create = () => this.create({ ...match, ...values })
+    try {
+      return connection.getScope().kind === 'root' ? await create() : await connection.transaction(create)
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error
+      }
+
+      const existing = await this.queryMatching(match).first()
+      if (existing) {
+        return existing
+      }
+
+      throw error
+    }
+  }
+
+  private queryMatching(match: Partial<ModelRecord<TTable>>) {
+    return Object.entries(match)
+      .reduce((query, [column, value]) => query.where(column as never, value), this.query())
   }
 
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
@@ -1737,10 +1758,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {

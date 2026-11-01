@@ -107,6 +107,9 @@ type EagerLoad = {
   relation: string
   constraint?: RelationConstraint
 }
+type RelationWithRelatedModel = Extract<RelationDefinition, { kind: 'belongsTo' | 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
+const BELONGS_TO_RELATION_KINDS: readonly RelationDefinition['kind'][] = ['belongsTo']
+const MANY_TO_MANY_RELATION_KINDS: readonly RelationDefinition['kind'][] = ['belongsToMany', 'morphToMany', 'morphedByMany']
 type AggregateLoad = {
   relation: string
   kind: 'count' | 'exists' | 'sum' | 'avg' | 'min' | 'max'
@@ -354,6 +357,16 @@ class ModelQueryBuilderBase<
     subquery: SubqueryBuilder<TSubTable>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereNotInSub(column as never, this.normalizeExistsSubquery(subquery)))
+  }
+
+  whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    return Array.isArray(value) ? this.whereIn(key, value) : this.where(key, value)
+  }
+
+  whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    const key = this.repository.definition.primaryKey as ModelColumnName<TTable>
+    return Array.isArray(value) ? this.whereNotIn(key, value) : this.where(key, '!=', value)
   }
 
   whereNull(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
@@ -1101,6 +1114,56 @@ class ModelQueryBuilderBase<
     return this.orWhereHas(relation, query => query.where(column, operator, value))
   }
 
+  whereDoesntHaveRelation<TRelationPath extends ModelRelationPath<TRelations>>(
+    relation: TRelationPath,
+    column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+    operator: unknown,
+    value?: unknown,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.whereDoesntHave(relation, query => query.where(column, operator, value))
+  }
+
+  orWhereDoesntHaveRelation<TRelationPath extends ModelRelationPath<TRelations>>(
+    relation: TRelationPath,
+    column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+    operator: unknown,
+    value?: unknown,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.orWhereDoesntHave(relation, query => query.where(column, operator, value))
+  }
+
+  hasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, false, 'and')
+  }
+
+  orHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, false, 'or')
+  }
+
+  doesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'and')
+  }
+
+  orDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'or')
+  }
+
+  whereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, false, 'and', constraint)
+  }
+
+  orWhereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, false, 'or', constraint)
+  }
+
+  whereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'and', constraint)
+  }
+
+  orWhereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'or', constraint)
+  }
+
   whereMorphRelation<TRelationPath extends ModelRelationPath<TRelations>>(
     relation: TRelationPath,
     types: MorphRelationTypeInput,
@@ -1121,6 +1184,26 @@ class ModelQueryBuilderBase<
     return this.applyMorphRelationFilter(relation, types, column, operator, value, 'or')
   }
 
+  whereMorphDoesntHaveRelation<TRelationPath extends ModelRelationPath<TRelations>>(
+    relation: TRelationPath,
+    types: MorphRelationTypeInput,
+    column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+    operator: unknown,
+    value?: unknown,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'and', query => query.where(column, operator, value))
+  }
+
+  orWhereMorphDoesntHaveRelation<TRelationPath extends ModelRelationPath<TRelations>>(
+    relation: TRelationPath,
+    types: MorphRelationTypeInput,
+    column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+    operator: unknown,
+    value?: unknown,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, true, 'or', query => query.where(column, operator, value))
+  }
+
   whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
     relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
@@ -1133,6 +1216,20 @@ class ModelQueryBuilderBase<
     relationName?: ModelRelationPath<TRelations>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyBelongsToFilter(relatedEntity, relationName, 'or')
+  }
+
+  whereAttachedTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    related: Entity<TRelated, TRelatedRelations> | readonly Entity<TRelated, TRelatedRelations>[],
+    relationName?: ModelRelationPath<TRelations>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyAttachedToFilter(related, relationName, 'and')
+  }
+
+  orWhereAttachedTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    related: Entity<TRelated, TRelatedRelations> | readonly Entity<TRelated, TRelatedRelations>[],
+    relationName?: ModelRelationPath<TRelations>,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyAttachedToFilter(related, relationName, 'or')
   }
 
   whereMorphedTo(
@@ -1188,6 +1285,14 @@ class ModelQueryBuilderBase<
     ...rest: readonly ModelRelationName<TRelations>[]
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.withAggregateLoads(this.normalizeAggregateLoads('exists', first, rest))
+  }
+
+  withAggregate<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]> | '*', aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate<TKey extends string>(relations: NoInfer<TKey> | AggregateRelationConstraintMap<TRelations, TKey>, column: AggregateRelatedColumnNameOfKeys<TRelations, TKey> | '*', aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+  withAggregate(first: ModelRelationName<TRelations> | RelationNameConstraintRecord<TRelations>, column: string, aggregate: AggregateLoad['kind']): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.withAggregateLoads(aggregate === 'count' || aggregate === 'exists'
+      ? this.normalizeAggregateLoads(aggregate, first)
+      : this.normalizeColumnAggregateLoads(aggregate, first, column))
   }
 
   withSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>, ...rest: readonly ModelRelationName<TRelations>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
@@ -1732,6 +1837,18 @@ class ModelQueryBuilderBase<
     return entity
   }
 
+  async findOr<TResult>(value: unknown, callback: () => TResult | Promise<TResult>): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | TResult> {
+    return await this.find(value) ?? callback()
+  }
+
+  async firstOr<TResult>(callback: () => TResult | Promise<TResult>): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | TResult> {
+    return await this.first() ?? callback()
+  }
+
+  async findOrNew(value: unknown): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | Entity<TTable, TRelations>> {
+    return await this.find(value) ?? this.repository.make() as Entity<TTable, TRelations>
+  }
+
   async find(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
     const key = (column ?? this.repository.definition.primaryKey) as ModelColumnName<TTable>
     return this.where(key, value).first()
@@ -2069,13 +2186,23 @@ class ModelQueryBuilderBase<
     value: unknown,
     boolean: 'and' | 'or',
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.applyHasMorphFilter(relation, types, false, boolean, query => query.where(column, operator, value))
+  }
+
+  private applyHasMorphFilter(
+    relation: ModelRelationPath<TRelations>,
+    types: MorphRelationTypeInput,
+    negate: boolean,
+    boolean: 'and' | 'or',
+    constraint?: RelationConstraint,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.assertMorphToRelation(relation)
     return this.withRelationFilter({
       relation,
-      negate: false,
+      negate,
       boolean,
       morphTypes: this.normalizeMorphTypes(types),
-      constraint: query => query.where(column, operator, value),
+      constraint,
     })
   }
 
@@ -2220,16 +2347,19 @@ class ModelQueryBuilderBase<
     relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelRelationPath<TRelations> {
-    if (relationName) {
-      return relationName
-    }
+    return relationName ?? this.inferRelationNameFor(relatedEntity, BELONGS_TO_RELATION_KINDS, 'belongs-to')
+  }
 
+  private inferRelationNameFor<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
+    kinds: readonly RelationDefinition['kind'][],
+    label: string,
+  ): ModelRelationPath<TRelations> {
     const relatedDefinition = relatedEntity.getRepository().definition
     const candidates = Object.entries(this.repository.definition.relations)
-      .filter(([, relation]) => relation.kind === 'belongsTo')
-      .map(([name, relation]) => [name, relation as Extract<typeof relation, { kind: 'belongsTo' }>] as const)
+      .filter(([, relation]) => kinds.includes(relation.kind))
       .filter(([, relation]) => {
-        const ref = relation.related()
+        const ref = (relation as RelationWithRelatedModel).related()
         const definition = 'definition' in ref ? ref.definition : ref
         return definition.table.tableName === relatedDefinition.table.tableName
       })
@@ -2241,13 +2371,39 @@ class ModelQueryBuilderBase<
 
     if (candidates.length === 0) {
       throw new RelationError(
-        `No belongs-to relation on model "${this.repository.definition.name}" matches related model "${relatedDefinition.name}".`,
+        `No ${label} relation on model "${this.repository.definition.name}" matches related model "${relatedDefinition.name}".`,
       )
     }
 
     throw new RelationError(
-      `Multiple belongs-to relations on model "${this.repository.definition.name}" match related model "${relatedDefinition.name}". Specify the relation name explicitly.`,
+      `Multiple ${label} relations on model "${this.repository.definition.name}" match related model "${relatedDefinition.name}". Specify the relation name explicitly.`,
     )
+  }
+
+  private applyAttachedToFilter<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    related: Entity<TRelated, TRelatedRelations> | readonly Entity<TRelated, TRelatedRelations>[],
+    relationName: ModelRelationPath<TRelations> | undefined,
+    boolean: 'and' | 'or',
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    const entities = Array.isArray(related) ? related : [related as Entity<TRelated, TRelatedRelations>]
+    const [first] = entities
+    if (!first) {
+      throw new RelationError('whereAttachedTo() requires at least one related model.')
+    }
+
+    const resolvedName = relationName ?? this.inferRelationNameFor(first, MANY_TO_MANY_RELATION_KINDS, 'many-to-many')
+    if (!MANY_TO_MANY_RELATION_KINDS.includes(this.repository.getRelationDefinition(resolvedName).kind)) {
+      throw new RelationError(`Relation "${resolvedName}" on model "${this.repository.definition.name}" is not a many-to-many relation.`)
+    }
+
+    const relatedKey = first.getRepository().definition.primaryKey
+    const keys = entities.map(entity => entity.get(relatedKey as never))
+    return this.withRelationFilter({
+      relation: resolvedName,
+      negate: false,
+      boolean,
+      constraint: query => query.whereIn(relatedKey as never, keys),
+    })
   }
 
   private extractNumericValues(

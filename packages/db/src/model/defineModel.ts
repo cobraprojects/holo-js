@@ -523,6 +523,9 @@ function createStaticModelApi<
     firstOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
       return this.getRepository().firstOrCreate(match, values)
     },
+    createOrFirst(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+      return this.getRepository().createOrFirst(match, values)
+    },
     saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]) {
       return this.getRepository().saveMany(entities)
     },
