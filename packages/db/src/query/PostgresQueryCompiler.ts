@@ -20,7 +20,7 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileTruncateSql(table: string): string {
-    return `TRUNCATE ${table} RESTART IDENTITY CASCADE`
+    return `TRUNCATE ${table} RESTART IDENTITY`
   }
 
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {

@@ -109,6 +109,32 @@ describe('query builder helpers', () => {
     expect(await DB.table('archived_orders').orderBy('id').pluck('id')).toEqual([1, 2, 4])
   })
 
+  it('ignores placeholder characters inside comments and quoted strings when inlining bindings', () => {
+    const sqlite = new SQLiteQueryCompiler(identifier => `"${identifier}"`, () => '?')
+    const postgres = new PostgresQueryCompiler(identifier => `"${identifier}"`, index => `$${index}`)
+
+    expect(sqlite.substituteBindings("SELECT /* ? */ ? AS value, '?' AS mark -- ?\n", [42])).toBe("SELECT /* ? */ 42 AS value, '?' AS mark -- ?\n")
+    expect(postgres.substituteBindings('SELECT $tag$ $1 $tag$, $2, $1', ['a', 'b'])).toBe("SELECT $tag$ $1 $tag$, 'b', 'a'")
+  })
+
+  it('filters relative to now on tables without column definitions', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE reminders (id INTEGER PRIMARY KEY, remind_at TEXT)')
+    await adapter.execute(`INSERT INTO reminders VALUES (1, '2000-01-01T00:00:00.000Z'), (2, '2999-01-01T00:00:00.000Z')`)
+
+    expect(await DB.table('reminders').wherePast('remind_at').pluck('id')).toEqual([1])
+    expect(await DB.table('reminders').whereFuture('remind_at').pluck('id')).toEqual([2])
+  })
+
+  it('rejects inserting rows selected with unsafe raw SQL when the security policy disallows it', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE archived_orders (id INTEGER PRIMARY KEY, total INTEGER)')
+
+    await expect(DB.table('archived_orders').insertUsing(['id', 'total'], DB.table('orders').select('id', 'total').unsafeWhere('1 = 1', [])))
+      .rejects.toThrow('Unsafe raw SQL is disabled by the active security policy')
+    expect(await DB.table('archived_orders').count()).toBe(0)
+  })
+
   it('truncates a table', async () => {
     await seedOrders()
 
@@ -124,7 +150,7 @@ describe('query builder helpers', () => {
     const orders = createTableSource('orders')
     const paidOrders = withPredicate(createSelectQueryPlan(createTableSource('orders')), { kind: 'comparison', column: 'status', operator: '=', value: 'paid' })
 
-    expect(postgres.compile(createTruncateQueryPlan(orders)).sql).toBe('TRUNCATE "orders" RESTART IDENTITY CASCADE')
+    expect(postgres.compile(createTruncateQueryPlan(orders)).sql).toBe('TRUNCATE "orders" RESTART IDENTITY')
     expect(mysql.compile(createTruncateQueryPlan(orders)).sql).toBe('TRUNCATE TABLE `orders`')
     expect(sqlite.compile(createTruncateQueryPlan(orders)).sql).toBe('DELETE FROM "orders"')
     expect(postgres.compile(createInsertUsingQueryPlan(createTableSource('archive'), ['id'], paidOrders))).toMatchObject({

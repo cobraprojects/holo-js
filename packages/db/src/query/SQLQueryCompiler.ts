@@ -65,37 +65,16 @@ export class SQLQueryCompiler {
 
   substituteBindings(sql: string, bindings: readonly unknown[]): string {
     let result = ''
-    let quote: string | undefined
-    let bindingIndex = 0
-    for (let position = 0; position < sql.length; position += 1) {
-      const character = sql[position]!
-      if (quote) {
-        quote = character === quote ? undefined : quote
-        result += character
-        continue
-      }
-
-      if (character === '\'' || character === '"' || character === '`') {
-        quote = character
-        result += character
-        continue
-      }
-
-      const placeholder = this.createPlaceholder(bindingIndex + 1)
-      const isPlaceholder = bindingIndex < bindings.length
-        && sql.startsWith(placeholder, position)
-        && !/\d/.test(sql[position + placeholder.length] ?? '')
-      if (!isPlaceholder) {
-        result += character
-        continue
-      }
-
-      result += this.createDebugLiteral(bindings[bindingIndex])
-      bindingIndex += 1
-      position += placeholder.length - 1
+    let offset = 0
+    let nextBinding = 0
+    for (const placeholder of rawSqlPlaceholders(sql)) {
+      const bindingIndex = typeof placeholder.index === 'undefined' ? nextBinding++ : placeholder.index - 1
+      if (bindingIndex >= bindings.length) continue
+      result += sql.slice(offset, placeholder.start) + this.createDebugLiteral(bindings[bindingIndex])
+      offset = placeholder.end
     }
 
-    return result
+    return result + sql.slice(offset)
   }
 
   protected createDebugLiteral(value: unknown): string {
@@ -259,12 +238,18 @@ export class SQLQueryCompiler {
     const bindings: unknown[] = []
     const columns = plan.columns.map(column => this.quoteIdentifier(column)).join(', ')
     const query = this.compileSelectSql(plan.query, bindings)
+    const unsafe = this.isUnsafeSelectPlan(plan.query, true)
+    const metadata = this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan))
 
     return this.withMetadata({
       sql: `${this.compileInsertPrefix(plan)} ${this.quoteIdentifier(plan.source.tableName)} (${columns}) ${query}${this.compileInsertSuffix(plan)}`,
       bindings,
+      unsafe: unsafe ? true : undefined,
       source: `query:insert:${plan.source.tableName}`,
-    }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
+    }, {
+      ...metadata,
+      safety: { unsafe, containsRawSql: this.planContainsRawSql(plan.query) },
+    })
   }
 
   protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {
