@@ -436,6 +436,10 @@ function assertPredicate(
   }
 
   if (predicate.kind === 'like') {
+    if (predicate.path.some(segment => !segment || typeof segment !== 'string')) {
+      throw new SecurityError(`JSON path for column "${predicate.column}" contains an invalid segment.`)
+    }
+
     if (typeof predicate.value !== 'string') {
       throw new SecurityError(`Like predicate for column "${predicate.column}" requires a string pattern.`)
     }

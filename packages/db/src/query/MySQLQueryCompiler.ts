@@ -8,7 +8,11 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
     bindings.push(predicate.value)
     const operator = predicate.caseSensitive ? 'LIKE BINARY' : 'LIKE'
-    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return `JSON_UNQUOTE(JSON_EXTRACT(${column}, ${this.createJsonPathLiteral(path)}))`
   }
 
   protected override createSqlStringLiteral(value: string): string {

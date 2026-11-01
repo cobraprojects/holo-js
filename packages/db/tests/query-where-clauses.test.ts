@@ -296,4 +296,28 @@ describe('where clauses', () => {
     expect(await DB.table(holidays).wherePast('day').pluck('id')).toEqual([2])
     expect(await DB.table(holidays).whereNowOrFuture('day').pluck('id')).toEqual([1])
   })
+
+  it('matches like patterns inside JSON paths', async () => {
+    await seedProfiles()
+    await DB.table(profiles).insert({ id: 4, settings: { theme: { mode: 'Dark' } } })
+
+    expect(await DB.table(profiles).whereLike('settings->theme->mode', 'da%').orderBy('id').pluck('id')).toEqual([1, 4])
+    expect(await DB.table(profiles).whereLike('settings->theme->mode', 'Da%', true).pluck('id')).toEqual([4])
+    expect(await DB.table(profiles).whereNotLike('settings->theme->mode', 'da%').orderBy('id').pluck('id')).toEqual([])
+
+    useDialect('postgres')
+    expect(DB.table(profiles).whereLike('settings->theme->mode', 'da%').toSQL().sql)
+      .toBe('SELECT * FROM "profiles" WHERE (("settings")::jsonb #>> \'{"theme","mode"}\')::text ILIKE $1')
+    useDialect('mysql')
+    expect(DB.table(profiles).whereNotLike('settings->theme', 'da%', true).toSQL().sql)
+      .toBe('SELECT * FROM `profiles` WHERE JSON_UNQUOTE(JSON_EXTRACT(`settings`, \'$.theme\')) NOT LIKE BINARY ?')
+  })
+
+  it('treats equality with null as an IS NULL check', async () => {
+    await seedOrders()
+
+    expect(await DB.table('orders').where('note', null).pluck('id')).toEqual([2])
+    expect(await DB.table('orders').where('note', '!=', null).orderBy('id').pluck('id')).toEqual([1, 3, 4])
+    expect(await DB.table('orders').where('id', 1).orWhere('note', null).orderBy('id').pluck('id')).toEqual([1, 2])
+  })
 })

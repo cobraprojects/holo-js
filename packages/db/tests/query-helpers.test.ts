@@ -95,6 +95,15 @@ describe('query builder helpers', () => {
     ])
   })
 
+  it('updates rows matched by null attributes instead of inserting duplicates', async () => {
+    await seedOrders()
+    await DB.table('orders').insert({ id: 5, status: null, total: 0 })
+
+    expect(await DB.table('orders').updateOrInsert({ status: null }, { total: 9 })).toBe(true)
+
+    expect(await DB.table('orders').whereNull('status').get()).toEqual([{ id: 5, status: null, total: 9 }])
+  })
+
   it('inserts rows selected by another query', async () => {
     const adapter = await seedOrders()
     await adapter.execute('CREATE TABLE archived_orders (id INTEGER PRIMARY KEY, total INTEGER)')

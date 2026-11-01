@@ -674,6 +674,15 @@ export class SQLQueryCompiler {
     return `${this.createPlaceholder(bindings.length)} ${operator} ${range}`
   }
 
+  protected compileLikeSubject(predicate: QueryLikePredicate): string {
+    const column = this.compileColumnReference(predicate.column)
+    return predicate.path.length === 0 ? column : this.compileJsonTextExtraction(column, predicate.path)
+  }
+
+  protected compileJsonTextExtraction(column: string, _path: readonly string[]): string {
+    throw new CompilerError(`Dialect does not implement JSON text extraction for "${column}".`)
+  }
+
   protected compileLikePredicate(
     predicate: QueryLikePredicate,
     bindings: unknown[],
@@ -683,7 +692,7 @@ export class SQLQueryCompiler {
     }
 
     bindings.push(predicate.value)
-    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}LIKE ${this.createPlaceholder(bindings.length)}`
+    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}LIKE ${this.createPlaceholder(bindings.length)}`
   }
 
   protected compileDatePredicate(

@@ -534,6 +534,14 @@ export class TableQueryBuilder<
     }
 
     const normalized = this.normalizeOperatorValue(operator, value)
+    if (normalized.value === null && (normalized.operator === '=' || normalized.operator === '!=')) {
+      return this.clone(withPredicate(this.plan, {
+        kind: 'null',
+        boolean,
+        column,
+        negated: normalized.operator === '!=',
+      }))
+    }
 
     return this.clone(withPredicate(this.plan, {
       kind: 'comparison',
@@ -964,10 +972,14 @@ export class TableQueryBuilder<
     caseSensitive: boolean,
     negated: boolean,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const target = column.includes('->')
+      ? this.parseJsonPath(column, false, 'whereLike')
+      : { column, path: [] }
     return this.clone(withPredicate(this.plan, {
       kind: 'like',
       boolean,
-      column,
+      column: target.column,
+      path: target.path,
       value,
       caseSensitive,
       negated,

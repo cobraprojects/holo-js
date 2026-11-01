@@ -71,7 +71,11 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
 
     bindings.push(convertLikePatternToGlob(predicate.value))
-    return `${this.compileColumnReference(predicate.column)} ${predicate.negated ? 'NOT ' : ''}GLOB ${this.createPlaceholder(bindings.length)}`
+    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}GLOB ${this.createPlaceholder(bindings.length)}`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return createSqliteJsonExtractExpression(column, this.createJsonPathLiteral(path))
   }
 
   protected override compileLockClause(_lockMode: QueryLockMode): string {

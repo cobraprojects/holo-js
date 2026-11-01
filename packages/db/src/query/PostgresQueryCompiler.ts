@@ -26,7 +26,12 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
     bindings.push(predicate.value)
     const operator = predicate.caseSensitive ? 'LIKE' : 'ILIKE'
-    return `${this.compileColumnReference(predicate.column)}::text ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+    const subject = predicate.path.length === 0 ? this.compileLikeSubject(predicate) : `(${this.compileLikeSubject(predicate)})`
+    return `${subject}::text ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return `(${column})::jsonb #>> ${this.createPostgresPathLiteral(path)}`
   }
 
   protected override compileLateralJoinSource(subquery: string, alias: string): string {

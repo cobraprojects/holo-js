@@ -117,6 +117,7 @@ export interface QueryLikePredicate {
   readonly kind: 'like'
   readonly boolean?: 'and' | 'or'
   readonly column: string
+  readonly path: readonly string[]
   readonly value: string
   readonly caseSensitive: boolean
   readonly negated: boolean
