@@ -52,9 +52,10 @@ describe('cache scaffold', () => {
     expect(Object.keys(loaded.cache.drivers).sort()).toEqual([...expectedStores].sort())
 
     const overridden = await loadConfigDirectory(root, {
-      processEnv: { CACHE_PREFIX: 'myapp:cache:' },
+      processEnv: { CACHE_DRIVER: 'memory', CACHE_PREFIX: 'myapp:cache:' },
       preferCache: false,
     })
+    expect(overridden.cache.default).toBe('memory')
     for (const configuredDriver of Object.values(overridden.cache.drivers)) {
       expect(configuredDriver.prefix).toBe('myapp:cache:')
     }
