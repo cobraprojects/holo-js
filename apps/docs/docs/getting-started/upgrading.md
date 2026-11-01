@@ -6,7 +6,7 @@
 
 [`enum()`](/database/migrations#enum) columns created from now on get a `CHECK` constraint named `<table>_<column>_check` on PostgreSQL and SQLite, so the database rejects values outside the list. MySQL already used a native `ENUM` and doesn't change.
 
-Enum columns created before this release keep accepting any string: Holo doesn't alter existing tables on upgrade. To add the constraint, redeclare each enum column with [`change()`](/database/migrations#change) in a new migration:
+Enum columns created before this release keep accepting any string: Holo doesn't alter existing tables on upgrade. Changing another column of the same table with `change()` leaves them as they are, on SQLite too, where `change()` rebuilds the whole table. To add the constraint, redeclare each enum column with [`change()`](/database/migrations#change) in a new migration:
 
 ```ts
 import { defineMigration } from '@holo-js/db'

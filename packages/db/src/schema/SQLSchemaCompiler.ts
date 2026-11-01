@@ -234,6 +234,12 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileColumn(tableName: string, column: AnyColumnDefinition): string {
+    const definition = this.compileColumnDefinition(column)
+    const enumCheck = this.compileEnumCheckConstraint(tableName, column)
+    return enumCheck ? `${definition} ${enumCheck}` : definition
+  }
+
+  protected compileColumnDefinition(column: AnyColumnDefinition): string {
     assertValidIdentifierSegment(column.name, 'Column name')
     const parts = [
       this.quoteIdentifier(column.name),
@@ -273,11 +279,6 @@ export abstract class SQLSchemaCompiler {
       if (column.references.onUpdate) {
         parts.push(compileReferentialAction('UPDATE', column.references.onUpdate))
       }
-    }
-
-    const enumCheck = this.compileEnumCheckConstraint(tableName, column)
-    if (enumCheck) {
-      parts.push(enumCheck)
     }
 
     return parts.join(' ')

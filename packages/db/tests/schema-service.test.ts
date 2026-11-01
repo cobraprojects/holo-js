@@ -206,10 +206,44 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.id()
         table.enum('state', ['open', 'closed'] as const).default('open')
       })
+      const orders = `o_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      await schema.createTable(orders, table => {
+        table.id()
+        table.enum('status', ['open', 'closed'] as const).default('open')
+        table.enum('archive_status', ['kept', 'purged'] as const).default('kept')
+      })
+      await adapter.execute(`ALTER TABLE "${orders}" ADD CONSTRAINT "__holo_check_rename_0" CHECK (id > 0)`)
+      await adapter.execute(`ALTER TABLE "${orders}" ADD CONSTRAINT "__holo_check_rename_1" UNIQUE (id)`)
+      await schema.renameTable(orders, `${orders}_archive`)
+      expect(await checkNames(`${orders}_archive`)).toEqual(['__holo_check_rename_0', `${orders}_archive_archive_status_check`, `${orders}_archive_status_check`])
+      await schema.dropTable(`${orders}_archive`)
+
       await schema.renameTable(`${customSchema}.orders`, 'purchases')
       expect(await checkNames(`${customSchema}.purchases`)).toEqual(['purchases_state_check'])
       await schema.table(`${customSchema}.purchases`, table => { table.string('state').default('open').change() })
       expect(await checkNames(`${customSchema}.purchases`)).toEqual([])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps unconstrained enum columns from older databases unchanged when another column changes', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_legacy_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY, "status" TEXT NOT NULL DEFAULT 'active', "tier" TEXT NOT NULL DEFAULT 'free' check (tier in ('free', 'pro')), "bio" TEXT NOT NULL DEFAULT 'CHECK (status IN (')`)
+      schema.register(defineTable(name, {
+        id: column.integer().primaryKey(),
+        status: column.enum(['active', 'disabled'] as const).default('active'),
+        tier: column.enum(['free', 'pro'] as const).default('free'),
+        bio: column.text().default('CHECK (status IN ('),
+      }))
+      await db.table(name).insert({ status: 'legacy' })
+
+      await schema.table(name, table => { table.text('bio').nullable().change() })
+      await db.table(name).insert({ status: 'other' })
+      expect(await db.table(name).orderBy('id').pluck('status')).toEqual(['legacy', 'other'])
+      await expect(db.table(name).insert({ tier: 'enterprise' })).rejects.toThrow()
+
+      await schema.table(name, table => { table.enum('status', ['active', 'disabled', 'legacy', 'other'] as const).default('active').change() })
+      await expect(db.table(name).insert({ status: 'unknown' })).rejects.toThrow()
     })
 
     it.runIf(driver === 'mysql')('registers a table renamed out of another database under its new location', async () => {

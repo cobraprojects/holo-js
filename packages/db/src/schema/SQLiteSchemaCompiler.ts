@@ -24,10 +24,17 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return compileDialectDefaultLiteral('sqlite', value)
   }
 
-  compileRebuildTable(table: TableDefinition, temporaryTableName: string): DDLStatement {
+  compileRebuildTable(
+    table: TableDefinition,
+    temporaryTableName: string,
+    uncheckedEnumColumns: ReadonlySet<string>,
+  ): DDLStatement {
     assertValidIdentifierPath(temporaryTableName, 'Table name')
+    const definitions = Object.values(table.columns).map(column => uncheckedEnumColumns.has(column.name)
+      ? this.compileColumnDefinition(column)
+      : this.compileColumn(table.tableName, column))
     return {
-      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${this.compileTableDefinitions(table).join(', ')})`,
+      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${definitions.join(', ')})`,
       source: `schema:sqliteRebuild:create:${table.tableName}`,
     }
   }

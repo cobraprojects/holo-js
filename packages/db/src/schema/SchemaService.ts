@@ -76,6 +76,10 @@ type SQLiteForeignKeyRow = {
   on_delete: string
 }
 
+type SQLiteTableSqlRow = {
+  sql: string
+}
+
 type SQLiteSchemaObjectRow = {
   type: 'index' | 'trigger'
   name: string
@@ -95,8 +99,9 @@ type PostgresIndexRow = {
   definition: string
 }
 
-type PostgresCheckConstraintRow = {
+type PostgresConstraintRow = {
   name: string
+  is_check: boolean
 }
 
 type CheckConstraintRename = {
@@ -769,22 +774,37 @@ export class SchemaService {
   ): Promise<void> {
     const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
     const tableIdentifier = tableName.split('.').map(quote).join('.')
-    const result = await this.connection.introspectCompiled<PostgresCheckConstraintRow>({
-      sql: 'SELECT conname AS name FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = \'c\'',
+    const result = await this.connection.introspectCompiled<PostgresConstraintRow>({
+      sql: 'SELECT conname AS name, contype = \'c\' AS is_check FROM pg_constraint WHERE conrelid = to_regclass($1)',
       bindings: [tableIdentifier],
       source: `schema:introspect:checks:${tableName}`,
     })
-    const existingNames = new Set(result.rows.map(row => row.name))
-
-    for (const { from, to } of checkRenames) {
-      if (from === to || !existingNames.has(from)) {
-        continue
+    const existingCheckNames = new Set(result.rows.filter(row => row.is_check).map(row => row.name))
+    const reservedNames = new Set([...result.rows.map(row => row.name), ...checkRenames.map(({ to }) => to)])
+    const reserveTemporaryName = (): string => {
+      let suffix = 0
+      while (reservedNames.has(`__holo_check_rename_${suffix}`)) {
+        suffix += 1
       }
 
-      await this.connection.executeCompiled({
-        sql: `ALTER TABLE ${tableIdentifier} RENAME CONSTRAINT ${quote(from)} TO ${quote(to)}`,
-        source: `schema:renameCheck:${tableName}:${from}:${to}`,
-      })
+      const name = `__holo_check_rename_${suffix}`
+      reservedNames.add(name)
+      return name
+    }
+    const pendingRenames = checkRenames
+      .filter(({ from, to }) => from !== to && existingCheckNames.has(from))
+      .map(rename => ({ ...rename, temporary: reserveTemporaryName() }))
+    const renameConstraint = (from: string, to: string) => this.connection.executeCompiled({
+      sql: `ALTER TABLE ${tableIdentifier} RENAME CONSTRAINT ${quote(from)} TO ${quote(to)}`,
+      source: `schema:renameCheck:${tableName}:${from}:${to}`,
+    })
+
+    for (const { from, temporary } of pendingRenames) {
+      await renameConstraint(from, temporary)
+    }
+
+    for (const { to, temporary } of pendingRenames) {
+      await renameConstraint(temporary, to)
     }
   }
 
@@ -832,7 +852,18 @@ export class SchemaService {
     const compiler = new SQLiteSchemaCompiler(quote)
     const columns = Object.keys(rebuilt.columns).map(quote).join(', ')
 
-    await this.connection.executeCompiled(compiler.compileRebuildTable(rebuilt, temporaryTableName))
+    const currentTable = await this.connection.introspectCompiled<SQLiteTableSqlRow>({
+      sql: 'SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?',
+      bindings: [tableName],
+      source: `schema:sqliteRebuild:table:${tableName}`,
+    })
+    const currentSql = (currentTable.rows[0]?.sql ?? '').replace(/'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g, ' ')
+    const uncheckedEnumColumns = new Set(Object.values(registered.columns)
+      .filter(definition => definition.kind === 'enum' && definition.name !== column.name)
+      .filter(definition => !new RegExp(`CHECK\\s*\\(\\s*["\`[]?${definition.name}["\`\\]]?\\s+IN\\s*\\(`, 'i').test(currentSql))
+      .map(definition => definition.name))
+
+    await this.connection.executeCompiled(compiler.compileRebuildTable(rebuilt, temporaryTableName, uncheckedEnumColumns))
     await this.connection.executeCompiled({
       sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
       source: `schema:sqliteRebuild:copy:${tableName}`,
