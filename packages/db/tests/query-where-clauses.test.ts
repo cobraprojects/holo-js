@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { DB, configureDB, createConnectionManager, createDialect, resetDB } from '../src'
+import { DB, column, configureDB, createConnectionManager, createDialect, resetDB } from '../src'
+import { defineTable } from './support/internal'
 
 function useDialect(name: 'mysql' | 'postgres' | 'sqlite'): void {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -42,9 +43,57 @@ async function seedOrders(): Promise<void> {
     (4, 'paid', 'rush', 500, 400, '2025-03-01 07:00:00')`)
 }
 
+const events = defineTable('events', {
+  id: column.id(),
+  startsAt: column.timestamp(),
+  endsAt: column.timestamp(),
+})
+
+async function seedEvents(): Promise<void> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  await adapter.initialize()
+  onTestFinished(() => adapter.disconnect())
+  configureDB(createConnectionManager({
+    defaultConnection: 'default',
+    connections: { default: { adapter, dialect: createDialect('sqlite') } },
+  }))
+  await adapter.execute('CREATE TABLE events (id INTEGER PRIMARY KEY, startsAt TEXT, endsAt TEXT)')
+  await DB.table(events).insert([
+    { id: 1, startsAt: new Date('2025-02-19T08:00:00Z'), endsAt: new Date('2025-02-19T09:00:00Z') },
+    { id: 2, startsAt: new Date('2025-02-20T09:00:00Z'), endsAt: new Date('2025-02-20T12:00:00Z') },
+    { id: 3, startsAt: new Date('2025-02-20T15:00:00Z'), endsAt: new Date('2025-02-21T10:00:00Z') },
+    { id: 4, startsAt: new Date('2025-02-22T08:00:00Z'), endsAt: new Date('2025-02-22T09:00:00Z') },
+  ])
+}
+
+const profiles = defineTable('profiles', {
+  id: column.id(),
+  settings: column.json<{ tags?: string[], theme?: { mode: string | null } }>(),
+})
+
+async function seedProfiles(): Promise<void> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  await adapter.initialize()
+  onTestFinished(() => adapter.disconnect())
+  configureDB(createConnectionManager({
+    defaultConnection: 'default',
+    connections: { default: { adapter, dialect: createDialect('sqlite') } },
+  }))
+  await adapter.execute('CREATE TABLE profiles (id INTEGER PRIMARY KEY, settings TEXT)')
+  await DB.table(profiles).insert([
+    { id: 1, settings: { tags: ['admin', 'staff'], theme: { mode: 'dark' } } },
+    { id: 2, settings: { tags: ['staff'], theme: { mode: null } } },
+    { id: 3, settings: { tags: [] } },
+  ])
+}
+
 describe('where clauses', () => {
   beforeEach(() => {
     resetDB()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('filters with like patterns case-insensitively by default', async () => {
@@ -108,5 +157,88 @@ describe('where clauses', () => {
     expect(await DB.table('orders').whereNotIn('id', paidIds).orderBy('id').pluck('id')).toEqual([2, 3])
     expect(await DB.table('orders').where('id', 2).orWhereIn('id', paidIds).orderBy('id').pluck('id')).toEqual([1, 2, 4])
     expect(await DB.table('orders').where('id', 1).orWhereNotIn('id', paidIds).orderBy('id').pluck('id')).toEqual([1, 2, 3])
+  })
+
+  it('compares columns and values against ranges bounded by other columns', async () => {
+    await seedOrders()
+    const orders = () => DB.table('orders')
+
+    expect(await orders().whereBetweenColumns('paid', ['id', 'total']).orderBy('id').pluck('id')).toEqual([1, 3, 4])
+    expect(await orders().whereNotBetweenColumns('paid', ['id', 'total']).pluck('id')).toEqual([2])
+    expect(await orders().where('id', 1).orWhereBetweenColumns('id', ['paid', 'total']).orderBy('id').pluck('id')).toEqual([1, 2])
+    expect(await orders().where('id', 2).orWhereNotBetweenColumns('total', ['paid', 'total']).orderBy('id').pluck('id')).toEqual([2])
+    expect(await orders().whereValueBetween(90, ['paid', 'total']).orderBy('id').pluck('id')).toEqual([2])
+    expect(await orders().whereValueNotBetween(90, ['paid', 'total']).orderBy('id').pluck('id')).toEqual([1, 3, 4])
+    expect(await orders().where('id', 1).orWhereValueBetween(450, ['paid', 'total']).orderBy('id').pluck('id')).toEqual([1, 4])
+    expect(await orders().where('id', 1).orWhereValueNotBetween(0, ['paid', 'total']).orderBy('id').pluck('id')).toEqual([1, 3, 4])
+  })
+
+  it('filters columns relative to the current time and date', async () => {
+    await seedEvents()
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2025-02-20T12:00:00Z') })
+    const query = () => DB.table(events).orderBy('id')
+
+    expect(await query().wherePast('endsAt').pluck('id')).toEqual([1])
+    expect(await query().whereNowOrPast('endsAt').pluck('id')).toEqual([1, 2])
+    expect(await query().whereFuture('startsAt').pluck('id')).toEqual([3, 4])
+    expect(await query().whereNowOrFuture(['startsAt', 'endsAt']).pluck('id')).toEqual([3, 4])
+    expect(await query().where('id', 1).orWherePast('startsAt').pluck('id')).toEqual([1, 2])
+    expect(await query().where('id', 1).orWhereNowOrPast('endsAt').pluck('id')).toEqual([1, 2])
+    expect(await query().where('id', 1).orWhereFuture('startsAt').pluck('id')).toEqual([1, 3, 4])
+    expect(await query().where('id', 1).orWhereNowOrFuture('endsAt').pluck('id')).toEqual([1, 2, 3, 4])
+
+    expect(await query().whereToday('startsAt').pluck('id')).toEqual([2, 3])
+    expect(await query().whereToday(['startsAt', 'endsAt']).pluck('id')).toEqual([2])
+    expect(await query().whereBeforeToday('startsAt').pluck('id')).toEqual([1])
+    expect(await query().whereAfterToday('endsAt').pluck('id')).toEqual([3, 4])
+    expect(await query().whereTodayOrBefore('startsAt').pluck('id')).toEqual([1, 2, 3])
+    expect(await query().whereTodayOrAfter('startsAt').pluck('id')).toEqual([2, 3, 4])
+    expect(await query().where('id', 4).orWhereToday('endsAt').pluck('id')).toEqual([2, 4])
+    expect(await query().where('id', 4).orWhereBeforeToday('endsAt').pluck('id')).toEqual([1, 4])
+    expect(await query().where('id', 1).orWhereAfterToday('startsAt').pluck('id')).toEqual([1, 4])
+    expect(await query().where('id', 4).orWhereTodayOrBefore('endsAt').pluck('id')).toEqual([1, 2, 4])
+    expect(await query().where('id', 1).orWhereTodayOrAfter('endsAt').pluck('id')).toEqual([1, 2, 3, 4])
+  })
+
+  it('filters json columns by missing values and key presence', async () => {
+    await seedProfiles()
+    const query = () => DB.table(profiles).orderBy('id')
+
+    expect(await query().whereJsonDoesntContain('settings->tags', 'admin').pluck('id')).toEqual([2, 3])
+    expect(await query().where('id', 1).orWhereJsonDoesntContain('settings->tags', 'staff').pluck('id')).toEqual([1, 3])
+    expect(await query().whereJsonContainsKey('settings->theme->mode').pluck('id')).toEqual([1, 2])
+    expect(await query().where('id', 3).orWhereJsonContainsKey('settings->theme').pluck('id')).toEqual([1, 2, 3])
+    expect(await query().whereJsonDoesntContainKey('settings->theme').pluck('id')).toEqual([3])
+    expect(await query().where('id', 1).orWhereJsonDoesntContainKey('settings->theme->mode').pluck('id')).toEqual([1, 3])
+  })
+
+  it('compiles json key presence for each dialect', () => {
+    useDialect('mysql')
+    expect(DB.table(profiles).whereJsonContainsKey('settings->theme').toSQL().sql)
+      .toBe('SELECT * FROM `profiles` WHERE IFNULL(JSON_CONTAINS_PATH(`settings`, \'one\', \'$.theme\'), 0)')
+
+    useDialect('postgres')
+    expect(DB.table(profiles).whereJsonDoesntContainKey('settings->theme').toSQL().sql)
+      .toBe('SELECT * FROM "profiles" WHERE NOT (jsonb_extract_path(("settings")::jsonb, \'theme\') IS NOT NULL)')
+  })
+
+  it('combines having clauses with or, null checks, and ranges', async () => {
+    await seedOrders()
+    const byStatus = () => DB.table('orders').select('status').groupBy('status').orderBy('status')
+
+    expect(await byStatus().having('count(*)', 2).orHaving('sum(total)', '<', 100).pluck('status')).toEqual(['paid', 'refunded'])
+    expect(await byStatus().havingNull('max(note)').pluck('status')).toEqual(['pending'])
+    expect(await byStatus().havingNotNull('max(note)').pluck('status')).toEqual(['paid', 'refunded'])
+    expect(await byStatus().having('count(*)', 2).orHavingNull('max(note)').pluck('status')).toEqual(['paid', 'pending'])
+    expect(await byStatus().having('count(*)', 2).orHavingNotNull('min(note)').pluck('status')).toEqual(['paid', 'refunded'])
+    expect(await byStatus().havingNotBetween('sum(total)', [100, 300]).pluck('status')).toEqual(['paid', 'refunded'])
+    expect(await byStatus().having('count(*)', 2).orHavingBetween('sum(total)', [200, 300]).pluck('status')).toEqual(['paid', 'pending'])
+    expect(await byStatus().having('count(*)', 2).orHavingNotBetween('sum(total)', [50, 300]).pluck('status')).toEqual(['paid'])
+  })
+
+  it('orders descending with orderByDesc', async () => {
+    await seedOrders()
+
+    expect(await DB.table('orders').orderByDesc('total').pluck('id')).toEqual([4, 2, 1, 3])
   })
 })

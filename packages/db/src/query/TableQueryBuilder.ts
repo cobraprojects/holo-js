@@ -2,6 +2,7 @@ import { CompilerError, ConfigurationError, SecurityError } from '../core/errors
 import { NumericAdjustment } from './NumericAdjustment'
 import { redactBindings } from '../security/policy'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { formatCalendarDate } from '../applicationTime'
 import { createTrustedRawPredicate } from './trustedRawPredicate'
 import { isGenuineDatabaseContext } from '../core/genuineContexts'
 import {
@@ -95,6 +96,7 @@ import type {
   QueryAggregateSelection,
   QueryDirection,
   QueryJsonUpdateOperation,
+  QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
   QueryOperator,
   QueryPredicateNode,
@@ -859,6 +861,53 @@ export class TableQueryBuilder<
     }))
   }
 
+  whereBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('and', { column }, columns, false)
+  }
+
+  orWhereBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('or', { column }, columns, false)
+  }
+
+  whereNotBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('and', { column }, columns, true)
+  }
+
+  orWhereNotBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('or', { column }, columns, true)
+  }
+
+  whereValueBetween(value: unknown, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('and', { value }, columns, false)
+  }
+
+  orWhereValueBetween(value: unknown, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('or', { value }, columns, false)
+  }
+
+  whereValueNotBetween(value: unknown, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('and', { value }, columns, true)
+  }
+
+  orWhereValueNotBetween(value: unknown, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereBetweenColumnsWithBoolean('or', { value }, columns, true)
+  }
+
+  private whereBetweenColumnsWithBoolean(
+    boolean: 'and' | 'or',
+    subject: QueryBetweenColumnsPredicate['subject'],
+    bounds: readonly [string, string],
+    negated: boolean,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withPredicate(this.plan, {
+      kind: 'between-columns',
+      boolean,
+      subject,
+      bounds,
+      negated,
+    }))
+  }
+
   whereLike(
     column: DeclaredColumnName<TTableOrName, TAvailableColumns>,
     value: string,
@@ -1036,6 +1085,98 @@ export class TableQueryBuilder<
     return this.whereDatePart('or', 'time', column, operator, value)
   }
 
+  wherePast(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('and', columns, '<')
+  }
+
+  orWherePast(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('or', columns, '<')
+  }
+
+  whereNowOrPast(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('and', columns, '<=')
+  }
+
+  orWhereNowOrPast(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('or', columns, '<=')
+  }
+
+  whereFuture(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('and', columns, '>')
+  }
+
+  orWhereFuture(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('or', columns, '>')
+  }
+
+  whereNowOrFuture(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('and', columns, '>=')
+  }
+
+  orWhereNowOrFuture(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToNow('or', columns, '>=')
+  }
+
+  whereToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('and', columns, '=')
+  }
+
+  orWhereToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('or', columns, '=')
+  }
+
+  whereBeforeToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('and', columns, '<')
+  }
+
+  orWhereBeforeToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('or', columns, '<')
+  }
+
+  whereTodayOrBefore(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('and', columns, '<=')
+  }
+
+  orWhereTodayOrBefore(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('or', columns, '<=')
+  }
+
+  whereAfterToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('and', columns, '>')
+  }
+
+  orWhereAfterToday(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('or', columns, '>')
+  }
+
+  whereTodayOrAfter(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('and', columns, '>=')
+  }
+
+  orWhereTodayOrAfter(columns: DeclaredColumnName<TTableOrName, TAvailableColumns> | readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereRelativeToToday('or', columns, '>=')
+  }
+
+  private whereRelativeToNow(
+    boolean: 'and' | 'or',
+    columns: string | readonly string[],
+    operator: '<' | '<=' | '>' | '>=',
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const now = new Date()
+    return (typeof columns === 'string' ? [columns] : columns)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereWithBoolean(boolean, column, operator, now), this)
+  }
+
+  private whereRelativeToToday(
+    boolean: 'and' | 'or',
+    columns: string | readonly string[],
+    operator: '=' | '<' | '<=' | '>' | '>=',
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const today = formatCalendarDate(new Date(), getApplicationTimezone())
+    return (typeof columns === 'string' ? [columns] : columns)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.whereDatePart(boolean, 'date', column, operator, today), this)
+  }
+
   whereJson(
     columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>,
     operator: QueryOperator | unknown,
@@ -1064,6 +1205,46 @@ export class TableQueryBuilder<
     value: unknown,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     return this.whereJsonContainsWithBoolean('or', columnPath, value)
+  }
+
+  whereJsonDoesntContain(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>, value: unknown): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereGroupWithBoolean('and', query => query.whereJsonContainsWithBoolean('and', columnPath, value), true)
+  }
+
+  orWhereJsonDoesntContain(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>, value: unknown): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereGroupWithBoolean('or', query => query.whereJsonContainsWithBoolean('and', columnPath, value), true)
+  }
+
+  whereJsonContainsKey(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereJsonContainsKeyWithBoolean('and', columnPath)
+  }
+
+  orWhereJsonContainsKey(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereJsonContainsKeyWithBoolean('or', columnPath)
+  }
+
+  whereJsonDoesntContainKey(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereGroupWithBoolean('and', query => query.whereJsonContainsKeyWithBoolean('and', columnPath), true)
+  }
+
+  orWhereJsonDoesntContainKey(columnPath: JsonColumnPath<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereGroupWithBoolean('or', query => query.whereJsonContainsKeyWithBoolean('and', columnPath), true)
+  }
+
+  private whereJsonContainsKeyWithBoolean(
+    boolean: 'and' | 'or',
+    columnPath: string,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const { column, path } = this.parseJsonPath(columnPath, false, 'whereJsonContainsKey')
+
+    return this.clone(withPredicate(this.plan, {
+      kind: 'json',
+      boolean,
+      column,
+      path,
+      jsonMode: 'key',
+      value: undefined,
+    }))
   }
 
   whereJsonLength(
@@ -1275,21 +1456,108 @@ export class TableQueryBuilder<
     const normalizedOperator = typeof value === 'undefined' ? '=' : operator as QueryOperator
     const normalizedValue = typeof value === 'undefined' ? operator : value
     return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'and',
       expression,
       operator: normalizedOperator as Exclude<QueryOperator, 'in' | 'not in'>,
       value: normalizedValue,
     }))
   }
 
-  havingBetween(
+  orHaving(
     expression: string,
-    range: readonly [unknown, unknown],
+    operator: QueryOperator | unknown,
+    value?: unknown,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const normalizedOperator = typeof value === 'undefined' ? '=' : operator as QueryOperator
+    const normalizedValue = typeof value === 'undefined' ? operator : value
     return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'or',
+      expression,
+      operator: normalizedOperator as Exclude<QueryOperator, 'in' | 'not in'>,
+      value: normalizedValue,
+    }))
+  }
+
+  havingBetween(expression: string, range: readonly [unknown, unknown]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'and',
       expression,
       operator: 'between',
       value: range,
     }))
+  }
+
+  orHavingBetween(expression: string, range: readonly [unknown, unknown]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'or',
+      expression,
+      operator: 'between',
+      value: range,
+    }))
+  }
+
+  havingNotBetween(expression: string, range: readonly [unknown, unknown]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'and',
+      expression,
+      operator: 'not between',
+      value: range,
+    }))
+  }
+
+  orHavingNotBetween(expression: string, range: readonly [unknown, unknown]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.clone(withHaving(this.plan, {
+      kind: 'comparison',
+      boolean: 'or',
+      expression,
+      operator: 'not between',
+      value: range,
+    }))
+  }
+
+  havingNull(expressions: string | readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return (typeof expressions === 'string' ? [expressions] : expressions)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, expression) => query.clone(withHaving(query.plan, {
+        kind: 'null',
+        boolean: 'and',
+        expression,
+        negated: false,
+      })), this)
+  }
+
+  orHavingNull(expressions: string | readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return (typeof expressions === 'string' ? [expressions] : expressions)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, expression) => query.clone(withHaving(query.plan, {
+        kind: 'null',
+        boolean: 'or',
+        expression,
+        negated: false,
+      })), this)
+  }
+
+  havingNotNull(expressions: string | readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return (typeof expressions === 'string' ? [expressions] : expressions)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, expression) => query.clone(withHaving(query.plan, {
+        kind: 'null',
+        boolean: 'and',
+        expression,
+        negated: true,
+      })), this)
+  }
+
+  orHavingNotNull(expressions: string | readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return (typeof expressions === 'string' ? [expressions] : expressions)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, expression) => query.clone(withHaving(query.plan, {
+        kind: 'null',
+        boolean: 'or',
+        expression,
+        negated: true,
+      })), this)
   }
 
   orWhereJsonLength(
@@ -1394,6 +1662,10 @@ export class TableQueryBuilder<
     return this.clone(withoutPredicates(this.plan, predicate => (
       predicate.kind === 'null' && predicate.column === column && predicate.negated === true
     )))
+  }
+
+  orderByDesc(column: DeclaredColumnName<TTableOrName, TAvailableColumns>): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.orderBy(column, 'desc')
   }
 
   orderBy(

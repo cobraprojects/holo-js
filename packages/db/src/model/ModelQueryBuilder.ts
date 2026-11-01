@@ -396,6 +396,10 @@ class ModelQueryBuilderBase<
     return this.resolveBuilder(defaultCallback?.(this.asScopedBuilder(), value))
   }
 
+  orderByDesc(column: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orderByDesc(column as never))
+  }
+
   orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc'): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orderBy(column as never, direction))
   }
@@ -596,6 +600,110 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.orWhereNotBetween(column as never, range))
   }
 
+  whereBetweenColumns(column: ModelColumnName<TTable>, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereBetweenColumns(column as never, columns as never))
+  }
+
+  orWhereBetweenColumns(column: ModelColumnName<TTable>, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereBetweenColumns(column as never, columns as never))
+  }
+
+  whereNotBetweenColumns(column: ModelColumnName<TTable>, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereNotBetweenColumns(column as never, columns as never))
+  }
+
+  orWhereNotBetweenColumns(column: ModelColumnName<TTable>, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNotBetweenColumns(column as never, columns as never))
+  }
+
+  whereValueBetween(value: unknown, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereValueBetween(value, columns as never))
+  }
+
+  orWhereValueBetween(value: unknown, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereValueBetween(value, columns as never))
+  }
+
+  whereValueNotBetween(value: unknown, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereValueNotBetween(value, columns as never))
+  }
+
+  orWhereValueNotBetween(value: unknown, columns: readonly [ModelColumnName<TTable>, ModelColumnName<TTable>]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereValueNotBetween(value, columns as never))
+  }
+
+  wherePast(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.wherePast(columns as never))
+  }
+
+  orWherePast(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWherePast(columns as never))
+  }
+
+  whereNowOrPast(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereNowOrPast(columns as never))
+  }
+
+  orWhereNowOrPast(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNowOrPast(columns as never))
+  }
+
+  whereFuture(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereFuture(columns as never))
+  }
+
+  orWhereFuture(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereFuture(columns as never))
+  }
+
+  whereNowOrFuture(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereNowOrFuture(columns as never))
+  }
+
+  orWhereNowOrFuture(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereNowOrFuture(columns as never))
+  }
+
+  whereToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereToday(columns as never))
+  }
+
+  orWhereToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereToday(columns as never))
+  }
+
+  whereBeforeToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereBeforeToday(columns as never))
+  }
+
+  orWhereBeforeToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereBeforeToday(columns as never))
+  }
+
+  whereTodayOrBefore(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereTodayOrBefore(columns as never))
+  }
+
+  orWhereTodayOrBefore(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereTodayOrBefore(columns as never))
+  }
+
+  whereAfterToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereAfterToday(columns as never))
+  }
+
+  orWhereAfterToday(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereAfterToday(columns as never))
+  }
+
+  whereTodayOrAfter(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereTodayOrAfter(columns as never))
+  }
+
+  orWhereTodayOrAfter(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereTodayOrAfter(columns as never))
+  }
+
   whereLike(column: ModelColumnName<TTable>, value: string, caseSensitive = false): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.whereLike(column as never, value, caseSensitive))
   }
@@ -740,6 +848,38 @@ class ModelQueryBuilderBase<
     return this.clone(this.tableQuery.havingBetween(expression, range))
   }
 
+  orHaving(expression: string, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orHaving(expression, operator, value))
+  }
+
+  orHavingBetween(expression: string, range: readonly [unknown, unknown]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orHavingBetween(expression, range))
+  }
+
+  havingNotBetween(expression: string, range: readonly [unknown, unknown]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.havingNotBetween(expression, range))
+  }
+
+  orHavingNotBetween(expression: string, range: readonly [unknown, unknown]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orHavingNotBetween(expression, range))
+  }
+
+  havingNull(expressions: string | readonly string[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.havingNull(expressions))
+  }
+
+  orHavingNull(expressions: string | readonly string[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orHavingNull(expressions))
+  }
+
+  havingNotNull(expressions: string | readonly string[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.havingNotNull(expressions))
+  }
+
+  orHavingNotNull(expressions: string | readonly string[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orHavingNotNull(expressions))
+  }
+
   unsafeWhere(sql: string, bindings: readonly unknown[]): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.unsafeWhere(sql, bindings))
   }
@@ -802,6 +942,30 @@ class ModelQueryBuilderBase<
 
   orWhereJsonContains(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.clone(this.tableQuery.orWhereJsonContains(columnPath as never, value))
+  }
+
+  whereJsonDoesntContain(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereJsonDoesntContain(columnPath as never, value))
+  }
+
+  orWhereJsonDoesntContain(columnPath: ModelJsonColumnPath<TTable>, value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereJsonDoesntContain(columnPath as never, value))
+  }
+
+  whereJsonContainsKey(columnPath: ModelJsonColumnPath<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereJsonContainsKey(columnPath as never))
+  }
+
+  orWhereJsonContainsKey(columnPath: ModelJsonColumnPath<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereJsonContainsKey(columnPath as never))
+  }
+
+  whereJsonDoesntContainKey(columnPath: ModelJsonColumnPath<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.whereJsonDoesntContainKey(columnPath as never))
+  }
+
+  orWhereJsonDoesntContainKey(columnPath: ModelJsonColumnPath<TTable>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+    return this.clone(this.tableQuery.orWhereJsonDoesntContainKey(columnPath as never))
   }
 
   whereJsonLength(columnPath: ModelJsonColumnPath<TTable>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {

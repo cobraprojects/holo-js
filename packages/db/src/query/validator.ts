@@ -119,6 +119,10 @@ function assertHavingClause(clause: QueryHavingClause): void {
     throw new SecurityError(`Having expression "${clause.expression}" is not allowed in safe query mode.`)
   }
 
+  if (clause.kind === 'null') {
+    return
+  }
+
   if (!OPERATORS.has(clause.operator)) {
     throw new SecurityError(`Operator "${clause.operator}" is not allowed in having clauses.`)
   }
@@ -298,6 +302,14 @@ function assertPredicate(
       throw new SecurityError(`JSON path for column "${predicate.column}" contains an invalid segment.`)
     }
 
+    if (predicate.jsonMode === 'key') {
+      if (predicate.path.length === 0) {
+        throw new SecurityError(`JSON key predicate for column "${predicate.column}" requires a key path.`)
+      }
+
+      return
+    }
+
     if (predicate.jsonMode === 'length') {
       if (typeof predicate.operator === 'undefined') {
         throw new SecurityError(`JSON length predicate for column "${predicate.column}" requires an operator.`)
@@ -398,6 +410,22 @@ function assertPredicate(
       throw new SecurityError(`Vector similarity query for "${predicate.column}" must provide ${columnDefinition.vectorDimensions} dimensions.`)
     }
 
+    return
+  }
+
+  if (predicate.kind === 'between-columns') {
+    for (const bound of predicate.bounds) {
+      assertColumnReference(bound, tableName, allowedColumns)
+    }
+
+    if ('column' in predicate.subject) {
+      assertColumnReference(predicate.subject.column, tableName, allowedColumns)
+      return
+    }
+
+    if (typeof predicate.subject.value === 'undefined') {
+      throw new SecurityError('Value range predicates cannot compare an undefined value.')
+    }
     return
   }
 

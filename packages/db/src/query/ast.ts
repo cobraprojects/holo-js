@@ -72,11 +72,22 @@ export interface QueryUnionClause {
   readonly query: SelectQueryPlan
 }
 
-export interface QueryHavingClause {
+export interface QueryHavingComparisonClause {
+  readonly kind: 'comparison'
+  readonly boolean?: 'and' | 'or'
   readonly expression: string
   readonly operator: Exclude<QueryOperator, 'in' | 'not in'>
   readonly value: unknown
 }
+
+export interface QueryHavingNullClause {
+  readonly kind: 'null'
+  readonly boolean?: 'and' | 'or'
+  readonly expression: string
+  readonly negated: boolean
+}
+
+export type QueryHavingClause = QueryHavingComparisonClause | QueryHavingNullClause
 
 export interface QueryPredicate {
   readonly kind: 'comparison'
@@ -111,6 +122,14 @@ export interface QueryLikePredicate {
   readonly negated: boolean
 }
 
+export interface QueryBetweenColumnsPredicate {
+  readonly kind: 'between-columns'
+  readonly boolean?: 'and' | 'or'
+  readonly subject: { readonly column: string } | { readonly value: unknown }
+  readonly bounds: readonly [string, string]
+  readonly negated: boolean
+}
+
 export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time'
 
 export interface QueryDatePredicate {
@@ -122,7 +141,7 @@ export interface QueryDatePredicate {
   readonly value: unknown
 }
 
-export type QueryJsonMode = 'value' | 'contains' | 'length'
+export type QueryJsonMode = 'value' | 'contains' | 'length' | 'key'
 export type QueryFullTextMode = 'natural' | 'boolean'
 
 export interface QueryJsonPredicate {
@@ -196,6 +215,7 @@ export type QueryPredicateNode
     | QueryColumnPredicate
     | QueryNullPredicate
     | QueryLikePredicate
+    | QueryBetweenColumnsPredicate
     | QueryDatePredicate
     | QueryJsonPredicate
     | QueryFullTextPredicate

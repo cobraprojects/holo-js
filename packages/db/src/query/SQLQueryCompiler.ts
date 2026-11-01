@@ -9,6 +9,7 @@ import type {
   DeleteQueryPlan,
   QueryDatePredicate,
   QueryLikePredicate,
+  QueryBetweenColumnsPredicate,
   QueryFullTextPredicate,
   QueryHavingClause,
   QueryJsonUpdateOperation,
@@ -459,18 +460,28 @@ export class SQLQueryCompiler {
   ): string {
     if (clauses.length === 0) return ''
 
-    const compiled = clauses.map((clause) => {
-      if (clause.operator === 'between' || clause.operator === 'not between') {
-        const values = clause.value as readonly [unknown, unknown]
-        bindings.push(values[0], values[1])
-        return `${this.compileHavingExpression(clause.expression)} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length - 1)} AND ${this.createPlaceholder(bindings.length)}`
-      }
-
-      bindings.push(clause.value)
-      return `${this.compileHavingExpression(clause.expression)} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
-    }).join(' AND ')
+    const compiled = clauses.map((clause, index) => {
+      const condition = this.compileHavingCondition(clause, bindings)
+      return index === 0 ? condition : `${(clause.boolean ?? 'and').toUpperCase()} ${condition}`
+    }).join(' ')
 
     return ` HAVING ${compiled}`
+  }
+
+  private compileHavingCondition(clause: QueryHavingClause, bindings: unknown[]): string {
+    const expression = this.compileHavingExpression(clause.expression)
+    if (clause.kind === 'null') {
+      return `${expression} IS ${clause.negated ? 'NOT ' : ''}NULL`
+    }
+
+    if (clause.operator === 'between' || clause.operator === 'not between') {
+      const values = clause.value as readonly [unknown, unknown]
+      bindings.push(values[0], values[1])
+      return `${expression} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length - 1)} AND ${this.createPlaceholder(bindings.length)}`
+    }
+
+    bindings.push(clause.value)
+    return `${expression} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
   }
 
   protected compilePredicate(
@@ -536,6 +547,10 @@ export class SQLQueryCompiler {
       return this.compileLikePredicate(predicate, bindings)
     }
 
+    if (predicate.kind === 'between-columns') {
+      return this.compileBetweenColumnsPredicate(predicate, bindings)
+    }
+
     if (predicate.kind === 'column') {
       return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
     }
@@ -561,6 +576,21 @@ export class SQLQueryCompiler {
 
   protected compileComparisonPlaceholder(_predicate: QueryPredicate, index: number): string {
     return this.createPlaceholder(index)
+  }
+
+  protected compileBetweenColumnsPredicate(
+    predicate: QueryBetweenColumnsPredicate,
+    bindings: unknown[],
+  ): string {
+    const [lower, upper] = predicate.bounds
+    const range = `${this.compileColumnReference(lower)} AND ${this.compileColumnReference(upper)}`
+    const operator = predicate.negated ? 'NOT BETWEEN' : 'BETWEEN'
+    if ('column' in predicate.subject) {
+      return `${this.compileColumnReference(predicate.subject.column)} ${operator} ${range}`
+    }
+
+    bindings.push(predicate.subject.value)
+    return `${this.createPlaceholder(bindings.length)} ${operator} ${range}`
   }
 
   protected compileLikePredicate(

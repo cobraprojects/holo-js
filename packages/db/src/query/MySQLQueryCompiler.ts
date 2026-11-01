@@ -82,6 +82,10 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       return `JSON_UNQUOTE(${extracted}) ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `IFNULL(JSON_CONTAINS_PATH(${column}, 'one', ${pathLiteral}), 0)`
+    }
+
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
       return `JSON_CONTAINS(${extracted}, CAST(${this.createPlaceholder(bindings.length)} AS JSON))`

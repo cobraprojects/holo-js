@@ -78,6 +78,10 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
       return `${extractedText} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `${extractedJson} IS NOT NULL`
+    }
+
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
       return `${extractedJson} @> ${this.createPlaceholder(bindings.length)}::jsonb`

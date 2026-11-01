@@ -109,6 +109,10 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       return `${extracted} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `json_type(${column}, ${pathLiteral}) IS NOT NULL`
+    }
+
     if (predicate.jsonMode === 'contains') {
       if (predicate.value === null || ['string', 'number', 'boolean'].includes(typeof predicate.value)) {
         bindings.push(predicate.value)
