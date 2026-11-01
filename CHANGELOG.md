@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-11-01
+
+See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-053-to-054). No required migrations.
+
 ### Fixed
 
 - CLI: commands, jobs, listeners and other app files that the `holo` CLI loads can import package subpaths from packages without an `exports` map, such as `next/headers`. Before, Node could not find these imports, so `holo` failed with `Cannot find module '…/node_modules/next/headers'` whenever such an import was anywhere in the imported files. The same fix applies to app modules that Holo loads at runtime.

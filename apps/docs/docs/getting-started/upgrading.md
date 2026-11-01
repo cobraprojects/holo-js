@@ -1,5 +1,11 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.3 to 0.5.4
+
+Update every installed `@holo-js/*` package to `0.5.4` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#054---2026-11-01) lists the release changes.
+
+0.5.4 fixes `holo` commands failing when app files import package subpaths such as `next/headers`, and a command file that fails to load no longer breaks the other `holo` commands.
+
 ## Upgrading from 0.5.2 to 0.5.3
 
 Update every installed `@holo-js/*` package to `0.5.3` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#053---2026-11-01) lists the release changes.
