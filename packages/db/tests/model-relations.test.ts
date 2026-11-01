@@ -193,7 +193,7 @@ describe('model relation slice', () => {
     expect(await Mechanic.doesntHave('repairs').pluck('id')).toEqual([41])
   })
 
-  it('fails closed to an impossible predicate when morphTo existence has no registered targets and no-ops for negated checks', async () => {
+  it('fails closed to an impossible predicate when morphTo existence has no registered targets and matches every row for negated checks', async () => {
     const adapter = createSQLiteAdapter({ filename: ':memory:' })
     onTestFinished(() => adapter.disconnect())
     const db = createDatabase({ adapter, dialect: createDatabaseDialect('sqlite') })
@@ -214,7 +214,7 @@ describe('model relation slice', () => {
 
     expect(Image.has('imageable').toSQL().sql).toContain('"images"."id" IS NULL AND "images"."id" IS NOT NULL')
     expect(Image.where('id', 999).orHas('imageable').toSQL().sql).toContain(' OR ("images"."id" IS NULL AND "images"."id" IS NOT NULL)')
-    expect(Image.orDoesntHave('imageable').toSQL().sql).toBe('SELECT * FROM "images"')
+    expect(await Image.where('id', 999).orDoesntHave('imageable').pluck('id')).toEqual([1])
   })
 
   it('loads belongsTo, hasOne, and hasMany relations from a real database without N+1 reads', async () => {
