@@ -119,17 +119,23 @@ function errorMessage(error: unknown): string {
 async function bundleCommandModules(
   modules: ProjectModuleBatch,
   commandFiles: readonly string[],
+  bundleErrors = new Map<string, string>(),
 ): Promise<ReadonlyMap<string, string>> {
-  const bundleErrors = new Map<string, string>()
   try {
     await modules.bundle(commandFiles)
-    return bundleErrors
-  } catch {
-    for (const filePath of commandFiles) {
-      await modules.bundle([filePath]).catch((error: unknown) => bundleErrors.set(filePath, errorMessage(error)))
+  } catch (error) {
+    const [onlyFile] = commandFiles
+    if (commandFiles.length === 1 && onlyFile) {
+      bundleErrors.set(onlyFile, errorMessage(error))
+      return bundleErrors
     }
-    return bundleErrors
+
+    const middle = Math.ceil(commandFiles.length / 2)
+    await bundleCommandModules(modules, commandFiles.slice(0, middle), bundleErrors)
+    await bundleCommandModules(modules, commandFiles.slice(middle), bundleErrors)
   }
+
+  return bundleErrors
 }
 
 async function importCommandModule(
