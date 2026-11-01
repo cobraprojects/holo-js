@@ -1,5 +1,27 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.2 to the next release
+
+### Enum columns are enforced on PostgreSQL and SQLite
+
+[`enum()`](/database/migrations#enum) columns created from now on get a `CHECK` constraint named `<table>_<column>_check` on PostgreSQL and SQLite, so the database rejects values outside the list. MySQL already used a native `ENUM` and doesn't change.
+
+Enum columns created before this release keep accepting any string: Holo doesn't alter existing tables on upgrade. Changing another column of the same table with `change()` leaves them as they are, on SQLite too, where `change()` rebuilds the whole table. To add the constraint, redeclare each enum column with [`change()`](/database/migrations#change) in a new migration:
+
+```ts
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('users', (table) => {
+      table.enum('status', ['active', 'disabled']).default('active').change()
+    })
+  },
+})
+```
+
+The migration fails, and changes nothing, if existing rows hold a value outside the list. Find them first, for example with `SELECT DISTINCT status FROM users`, and update them or add the value to the list. On PostgreSQL, `change()` replaces a constraint that already has the `<table>_<column>_check` name, such as one you added by hand.
+
 ## Upgrading from 0.5.1 to 0.5.2
 
 Update every installed `@holo-js/*` package to `0.5.2` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#052---2026-10-31) lists the release changes.

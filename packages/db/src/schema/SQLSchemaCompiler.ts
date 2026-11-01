@@ -1,6 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
-import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import type { AnyColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement } from './ddl'
 
@@ -38,7 +38,7 @@ export abstract class SQLSchemaCompiler {
     }
 
     if (operation.kind === 'alterColumn') {
-      return this.compileAlterColumn(operation.tableName, operation.column)
+      return this.compileAlterColumn(operation.tableName, operation.column, operation.previousColumn)
     }
 
     if (operation.kind === 'createForeignKey') {
@@ -97,7 +97,7 @@ export abstract class SQLSchemaCompiler {
   compileAddColumn(tableName: string, column: AnyColumnDefinition): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
     return {
-      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD COLUMN ${this.compileColumn(column)}`,
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD COLUMN ${this.compileColumn(tableName, column)}`,
       source: `schema:addColumn:${tableName}:${column.name}`,
     }
   }
@@ -121,11 +121,11 @@ export abstract class SQLSchemaCompiler {
     }
   }
 
-  compileAlterColumn(tableName: string, column: AnyColumnDefinition): DDLStatement[] {
+  compileAlterColumn(tableName: string, column: AnyColumnDefinition, _previousColumn?: AnyColumnDefinition): DDLStatement[] {
     assertValidIdentifierPath(tableName, 'Table name')
     this.assertSupportedAlterColumnDefinition(column)
     return [{
-      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} MODIFY COLUMN ${this.compileColumn(column)}`,
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} MODIFY COLUMN ${this.compileColumn(tableName, column)}`,
       source: `schema:alterColumn:${tableName}:${column.name}`,
     }]
   }
@@ -230,10 +230,16 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileTableDefinitions(table: TableDefinition): string[] {
-    return Object.values(table.columns).map(column => this.compileColumn(column))
+    return Object.values(table.columns).map(column => this.compileColumn(table.tableName, column))
   }
 
-  protected compileColumn(column: AnyColumnDefinition): string {
+  protected compileColumn(tableName: string, column: AnyColumnDefinition): string {
+    const definition = this.compileColumnDefinition(column)
+    const enumCheck = this.compileEnumCheckConstraint(tableName, column)
+    return enumCheck ? `${definition} ${enumCheck}` : definition
+  }
+
+  protected compileColumnDefinition(column: AnyColumnDefinition): string {
     assertValidIdentifierSegment(column.name, 'Column name')
     const parts = [
       this.quoteIdentifier(column.name),
@@ -276,6 +282,22 @@ export abstract class SQLSchemaCompiler {
     }
 
     return parts.join(' ')
+  }
+
+  protected compileEnumCheckConstraint(tableName: string, column: AnyColumnDefinition): string | undefined {
+    if (column.kind !== 'enum') {
+      return undefined
+    }
+
+    if (!column.enumValues || column.enumValues.length === 0) {
+      throw new SchemaError(`Enum column "${column.name}" requires at least one allowed value.`)
+    }
+
+    const allowedValues = column.enumValues
+      .map(value => this.compileDefaultValue(value, column))
+      .join(', ')
+    const constraintName = this.quoteIdentifier(resolveGeneratedCheckName(tableName, column.name))
+    return `CONSTRAINT ${constraintName} CHECK (${this.quoteIdentifier(column.name)} IN (${allowedValues}))`
   }
 
   protected appendPrimaryKeyExtras(_parts: string[], _column: AnyColumnDefinition): void {}

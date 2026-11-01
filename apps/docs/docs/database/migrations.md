@@ -456,11 +456,29 @@ table.text('body')
 
 ### enum()
 
-Adds a string column that accepts one of a fixed list of values. The TypeScript type is the union of those values.
+Adds a string column that accepts one of a fixed list of values. The TypeScript type is the union of those values. The database rejects any other value, including values written with raw SQL or by other apps. A nullable enum also accepts `NULL`.
 
 ```ts
 table.enum('status', ['draft', 'published']).default('draft')
 ```
+
+| Database | Column type | How the list is enforced |
+| --- | --- | --- |
+| MySQL | `ENUM('draft', 'published')` | Native enum type |
+| PostgreSQL | `TEXT` | `CHECK` constraint named `<table>_<column>_check`, such as `posts_status_check` |
+| SQLite | `TEXT` | `CHECK` constraint named `<table>_<column>_check` |
+
+The table part of the name leaves out the schema, so `public.posts` also gives `posts_status_check`. A name longer than 63 characters is cut short and ends with a hash, such as `<start of name>_1a2b3c4d_check`.
+
+To add or remove a value, redeclare the column with the full new list and call [`change()`](#change) in a new migration:
+
+```ts
+await schema.table('posts', (table) => {
+  table.enum('status', ['draft', 'published', 'archived']).default('draft').change()
+})
+```
+
+On PostgreSQL, `change()` drops `<table>_<column>_check` and adds it again with the new list. Changing an enum column to another type, such as `string()`, drops the constraint, and renaming the table or the column renames it. Both rely on the schema registry, which `holo migrate` fills from your migrations. `change()` on a column that isn't an enum leaves check constraints alone. On SQLite, `change()` rebuilds the table with the new constraint. The migration fails, and changes nothing, if existing rows hold a value that isn't in the new list; update those rows first.
 
 ### boolean()
 
@@ -763,7 +781,7 @@ table.foreignId('user_id').constrained().noActionOnUpdate()
 
 ### change()
 
-Changes an existing column instead of adding one. Call it inside `table()` after redeclaring the column. On SQLite, Holo rebuilds the table, and the table must already be in the schema registry; otherwise it throws a `SchemaError`.
+Changes an existing column instead of adding one. Call it inside `table()` after redeclaring the column. On SQLite, Holo rebuilds the table, and the table must already be in the schema registry; otherwise it throws a `SchemaError`. Redeclaring an [`enum()`](#enum) column replaces its list of allowed values.
 
 ```ts
 await schema.table('users', (table) => {

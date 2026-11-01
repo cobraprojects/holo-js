@@ -5,6 +5,11 @@
 ### Fixed
 
 - `holo install cache` writes only the stores the chosen driver needs. Before, `config/cache.ts` always had a `redis` store pointing at a `cache` Redis connection, even with the default `file` driver or `--driver database`. That connection was often missing from `config/redis.ts`, and because the store existed, `holo prepare` added `@holo-js/cache-redis` and `ioredis` to `package.json` again on every install. Now `file` writes the `file` and `memory` stores, `--driver database` adds a `database` store, and only `--driver redis` adds the `redis` store, the `cache` Redis connection and `@holo-js/cache-redis`. Existing apps that don't use Redis for cache can delete the `redis` store from `config/cache.ts`; the next `holo prepare` then removes `@holo-js/cache-redis`, and also removes `ioredis` if nothing else uses Redis.
+- Database: `enum()` columns on PostgreSQL and SQLite get a `CHECK` constraint named `<table>_<column>_check`, so the database rejects values outside the list. Before, they were plain `TEXT` columns that accepted any string, and only the TypeScript type limited the values. A nullable enum still accepts `NULL`. Redeclaring an enum column with `change()` replaces the allowed values, so adding a value needs no raw SQL. On PostgreSQL, renaming the table or the column renames the constraint. See [Migrations](apps/docs/docs/database/migrations.md#enum).
+
+### Compatibility and upgrade requirements
+
+- Enum columns created before this release on PostgreSQL and SQLite have no constraint and keep accepting any string. To enforce the list, redeclare each one with `change()` in a new migration, after fixing rows that hold other values. See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#enum-columns-are-enforced-on-postgresql-and-sqlite).
 
 ## 0.5.2 - 2026-10-31
 
