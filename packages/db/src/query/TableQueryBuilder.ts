@@ -2882,6 +2882,7 @@ export class TableQueryBuilder<
   async truncate(): Promise<void> {
     await this.assertNotReferencedByOtherTables()
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan(this.source)))
+    await this.resetSequence()
     await this.invalidateTableQueries('delete')
   }
 
@@ -3177,6 +3178,16 @@ export class TableQueryBuilder<
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
+  }
+
+  private async resetSequence(): Promise<void> {
+    const sequence = this.getCompiler().compileSequenceReset(this.source.tableName)
+    if (!sequence) return
+
+    const { rows } = await this.connection.queryCompiled(sequence.probe)
+    if (rows.length > 0) {
+      await this.connection.executeCompiled(sequence.reset)
+    }
   }
 
   private async assertNotReferencedByOtherTables(): Promise<void> {

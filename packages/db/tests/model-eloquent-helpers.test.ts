@@ -105,6 +105,9 @@ describe('model eloquent helpers', () => {
     expect(await Image.hasMorph('imageable', 'Post').orderBy('id').pluck('id')).toEqual([31, 32])
     expect(await Image.whereHasMorph('imageable', ['Post'], query => query.where('votes', '>', 4)).pluck('id')).toEqual([31])
     expect(await Image.whereHasMorph('imageable', [User]).pluck('id')).toEqual([30])
+    expect(await Image.whereHasMorph('imageable', ['Post', 'User'], (query, type) => type === 'Post'
+      ? query.where('votes', '>', 4)
+      : query.where('name', 'Mohamed')).orderBy('id').pluck('id')).toEqual([30, 31])
     expect(await Image.where('id', 30).orWhereHasMorph('imageable', 'Post', query => query.where('title', 'Draft')).orderBy('id').pluck('id')).toEqual([30, 32])
     expect(await Image.where('id', 30).orHasMorph('imageable', 'Post').orderBy('id').pluck('id')).toEqual([30, 31, 32])
     expect(await Image.doesntHaveMorph('imageable', 'Post').pluck('id')).toEqual([30])

@@ -57,6 +57,21 @@ function convertLikePatternToGlob(pattern: string): string {
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
+    return {
+      probe: {
+        sql: 'SELECT 1 AS "present" FROM "sqlite_master" WHERE "type" = \'table\' AND "name" = \'sqlite_sequence\'',
+        bindings: [],
+        source: `query:select:${tableName}`,
+      },
+      reset: {
+        sql: 'DELETE FROM "sqlite_sequence" WHERE "name" = ?',
+        bindings: [tableName],
+        source: `query:delete:${tableName}`,
+      },
+    }
+  }
+
   override compileReferencingTables(tableName: string): CompiledStatement {
     return {
       sql: 'SELECT DISTINCT "tables"."name" AS "name" FROM "sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name") AS "keys" WHERE "tables"."type" = \'table\' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)',

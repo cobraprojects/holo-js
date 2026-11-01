@@ -775,11 +775,13 @@ const comments = await Comment.where('pinned', true).orDoesntHaveMorph('commenta
 
 ### whereHasMorph()
 
-Like `hasMorph()`, with a constraint on the related model.
+Like `hasMorph()`, with a constraint on the related model. The callback also receives the morph type, so you can constrain each type differently.
 
 ```ts
 const comments = await Comment
-  .whereHasMorph('commentable', [Post, Video], query => query.where('status', 'published'))
+  .whereHasMorph('commentable', [Post, Video], (query, type) => type === 'Post'
+    ? query.where('status', 'published')
+    : query.where('visibility', 'public'))
   .get()
 ```
 

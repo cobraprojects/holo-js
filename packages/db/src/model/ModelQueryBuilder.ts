@@ -73,7 +73,7 @@ import type { ModelRepository } from './ModelRepository'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
-type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
+type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
 type QueryableModelReference = ModelDefinitionLike<TableDefinition> & {
   query(): ModelQueryBuilder<TableDefinition>
 }
@@ -2616,13 +2616,13 @@ class ModelQueryBuilderBase<
     const relationResult = relation.constraint?.(query)
     query = relationResult instanceof ModelQueryBuilderBase ? relationResult as typeof query : query
 
+    const relatedDefinition = 'definition' in related ? related.definition : related
     if (constraint) {
-      const result = constraint(query)
+      const result = constraint(query, relatedDefinition.morphClass)
       query = result instanceof ModelQueryBuilderBase ? result as typeof query : query
     }
 
     const plan = query.getTableQueryBuilder().getPlan()
-    const relatedDefinition = 'definition' in related ? related.definition : related
     const observation = createDatabaseQueryObservation(
       plan,
       relatedDefinition.connectionName ?? this.getConnectionName(),

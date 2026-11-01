@@ -153,6 +153,17 @@ describe('query builder helpers', () => {
     expect(await DB.table('archived_orders').count()).toBe(0)
   })
 
+  it('restarts auto-increment ids after truncating a SQLite table', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)')
+    await DB.table('tickets').insert([{ title: 'first' }, { title: 'second' }])
+
+    await DB.table('tickets').truncate()
+    await DB.table('tickets').insert({ title: 'fresh' })
+
+    expect(await DB.table('tickets').pluck('id')).toEqual([1])
+  })
+
   it('refuses to truncate a table that other tables reference', async () => {
     const adapter = await seedOrders()
     await adapter.execute('CREATE TABLE order_lines (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE)')

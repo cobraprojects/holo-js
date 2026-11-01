@@ -268,6 +268,10 @@ export class SQLQueryCompiler {
     return undefined
   }
 
+  compileSequenceReset(_tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } | undefined {
+    return undefined
+  }
+
   protected compileTruncateSql(table: string): string {
     return `DELETE FROM ${table}`
   }

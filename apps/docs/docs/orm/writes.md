@@ -626,7 +626,7 @@ await Post.prune()
 
 ### truncate()
 
-Deletes every row in the model's table with one statement and resets the auto-increment counter where the database supports it. Model events don't fire.
+Deletes every row in the model's table with one statement and resets the auto-increment counter. Model events don't fire.
 
 ```ts
 await ImportRow.truncate()
