@@ -73,7 +73,8 @@ import type { ModelRepository } from './ModelRepository'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
-type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
+type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
+type MorphRelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
 type QueryableModelReference = ModelDefinitionLike<TableDefinition> & {
   query(): ModelQueryBuilder<TableDefinition>
 }
@@ -1148,19 +1149,19 @@ class ModelQueryBuilderBase<
     return this.applyHasMorphFilter(relation, types, true, 'or')
   }
 
-  whereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  whereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: MorphRelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyHasMorphFilter(relation, types, false, 'and', constraint)
   }
 
-  orWhereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  orWhereHasMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: MorphRelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyHasMorphFilter(relation, types, false, 'or', constraint)
   }
 
-  whereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  whereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: MorphRelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyHasMorphFilter(relation, types, true, 'and', constraint)
   }
 
-  orWhereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
+  orWhereDoesntHaveMorph(relation: ModelRelationPath<TRelations>, types: MorphRelationTypeInput, constraint?: MorphRelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     return this.applyHasMorphFilter(relation, types, true, 'or', constraint)
   }
 
@@ -2202,7 +2203,7 @@ class ModelQueryBuilderBase<
     types: MorphRelationTypeInput,
     negate: boolean,
     boolean: 'and' | 'or',
-    constraint?: RelationConstraint,
+    constraint?: MorphRelationConstraint,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> {
     this.assertMorphToRelation(relation)
     return this.withRelationFilter({
@@ -2210,7 +2211,7 @@ class ModelQueryBuilderBase<
       negate,
       boolean,
       morphTypes: this.normalizeMorphTypes(types),
-      constraint,
+      constraint: constraint && (query => constraint(query, query.getRepository().definition.morphClass)),
     })
   }
 
@@ -2616,13 +2617,13 @@ class ModelQueryBuilderBase<
     const relationResult = relation.constraint?.(query)
     query = relationResult instanceof ModelQueryBuilderBase ? relationResult as typeof query : query
 
-    const relatedDefinition = 'definition' in related ? related.definition : related
     if (constraint) {
-      const result = constraint(query, relatedDefinition.morphClass)
+      const result = constraint(query)
       query = result instanceof ModelQueryBuilderBase ? result as typeof query : query
     }
 
     const plan = query.getTableQueryBuilder().getPlan()
+    const relatedDefinition = 'definition' in related ? related.definition : related
     const observation = createDatabaseQueryObservation(
       plan,
       relatedDefinition.connectionName ?? this.getConnectionName(),

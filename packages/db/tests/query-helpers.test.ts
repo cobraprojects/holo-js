@@ -158,7 +158,7 @@ describe('query builder helpers', () => {
     await adapter.execute('CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)')
     await DB.table('tickets').insert([{ title: 'first' }, { title: 'second' }])
 
-    await DB.table('tickets').truncate()
+    await DB.table('TICKETS').truncate()
     await DB.table('tickets').insert({ title: 'fresh' })
 
     expect(await DB.table('tickets').pluck('id')).toEqual([1])

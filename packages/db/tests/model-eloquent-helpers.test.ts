@@ -92,6 +92,13 @@ describe('model eloquent helpers', () => {
     expect(inTransaction.total).toBe(4)
   })
 
+  it('keeps relation constraint callbacks unary outside morph filters', async () => {
+    const { User } = await seedBlog()
+    const popular = (query: { where(column: 'votes', operator: string, value: number): unknown }, minimum = 4) => query.where('votes', '>', minimum)
+
+    expect(await User.whereHas('posts', popular).orderBy('id').pluck('name')).toEqual(['Mohamed', 'Amina'])
+  })
+
   it('filters by missing related column values', async () => {
     const { User } = await seedBlog()
 

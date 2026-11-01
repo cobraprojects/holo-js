@@ -67,7 +67,7 @@ type WriteMarks = {
 type PivotAttributes = Record<string, unknown>
 type PivotSyncResult = { attached: unknown[], detached: unknown[], updated: unknown[] }
 type PivotToggleResult = { attached: unknown[], detached: unknown[] }
-type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>, morphType: string) => unknown
+type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
 type RelationFilter = {
   relation: string
   negate: boolean
@@ -2523,7 +2523,7 @@ export class ModelRepository<
       return constrained
     }
 
-    const result = constraint(constrained, repository.definition.morphClass)
+    const result = constraint(constrained)
     return result instanceof ModelQueryBuilder ? result as ModelQueryBuilder : constrained
   }
 

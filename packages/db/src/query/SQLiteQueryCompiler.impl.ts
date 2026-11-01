@@ -65,7 +65,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
         source: `query:select:${tableName}`,
       },
       reset: {
-        sql: 'DELETE FROM "sqlite_sequence" WHERE "name" = ?',
+        sql: 'DELETE FROM "sqlite_sequence" WHERE "name" = ? COLLATE NOCASE',
         bindings: [tableName],
         source: `query:delete:${tableName}`,
       },
