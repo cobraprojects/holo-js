@@ -268,4 +268,18 @@ describe('where clauses', () => {
     expect(await query().whereBeforeToday('startsAt').pluck('id')).toEqual([6])
     expect(await query().whereTodayOrAfter('startsAt').pluck('id')).toEqual([5])
   })
+
+  it('starts today at the first midnight when the clock repeats midnight', async () => {
+    await seedEvents()
+    configureConfigRuntime({ app: { timezone: 'America/Havana' } } as never)
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2025-11-02T12:00:00Z') })
+    await DB.table(events).insert([
+      { id: 5, startsAt: new Date('2025-11-02T04:30:00Z'), endsAt: new Date('2025-11-02T04:30:00Z') },
+      { id: 6, startsAt: new Date('2025-11-02T03:30:00Z'), endsAt: new Date('2025-11-02T03:30:00Z') },
+    ])
+    const query = () => DB.table(events).where('id', '>', 4).orderBy('id')
+
+    expect(await query().whereToday('startsAt').pluck('id')).toEqual([5])
+    expect(await query().whereBeforeToday('startsAt').pluck('id')).toEqual([6])
+  })
 })
