@@ -218,6 +218,21 @@ describe('query builder helpers', () => {
     expect(await DB.table('main.tickets').pluck('id')).toEqual([1])
   })
 
+  it('truncates the attached SQLite table an unqualified name resolves to', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute("ATTACH DATABASE ':memory:' AS archive")
+    await adapter.execute('CREATE TABLE archive.receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, total INTEGER)')
+    await adapter.execute('CREATE TABLE archive.receipt_lines (id INTEGER PRIMARY KEY, receipt_id INTEGER REFERENCES receipts(id) ON DELETE CASCADE)')
+    await adapter.execute('INSERT INTO archive.receipts (total) VALUES (1), (2)')
+
+    await expect(DB.table('receipts').truncate()).rejects.toThrow('Cannot truncate "receipts" because "receipt_lines" reference it with foreign keys.')
+
+    await adapter.execute('DROP TABLE archive.receipt_lines')
+    await DB.table('receipts').truncate()
+    await adapter.execute('INSERT INTO archive.receipts (total) VALUES (3)')
+    expect(await DB.table('archive.receipts').pluck('id')).toEqual([1])
+  })
+
   it('refuses to truncate a table that other tables reference', async () => {
     const adapter = await seedOrders()
     await adapter.execute('CREATE TABLE order_lines (id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE)')

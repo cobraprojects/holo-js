@@ -67,6 +67,16 @@ function splitSchemaTable(tableName: string): { readonly schemaName: string, rea
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  override compileTableSchemaLookup(tableName: string): CompiledStatement | undefined {
+    if (tableName.includes('.')) return undefined
+
+    return {
+      sql: 'SELECT "tables"."schema" AS "schema" FROM pragma_table_list(?) AS "tables" JOIN pragma_database_list AS "databases" ON "databases"."name" = "tables"."schema" WHERE "tables"."type" = \'table\' ORDER BY CASE "tables"."schema" WHEN \'temp\' THEN 0 ELSE 1 END, "databases"."seq" LIMIT 1',
+      bindings: [tableName],
+      source: `query:select:${tableName}`,
+    }
+  }
+
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
     const { schema, table } = splitSchemaTable(tableName)
     return {

@@ -817,7 +817,9 @@
     "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:compileSequenceReset",
     "unused-class-member:packages/db/src/query/SQLiteQueryCompiler.impl.ts:SQLiteQueryCompiler:compileSequenceReset",
     "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:truncateCommitsOpenTransaction",
-    "unused-class-member:packages/db/src/query/MySQLQueryCompiler.ts:MySQLQueryCompiler:truncateCommitsOpenTransaction"
+    "unused-class-member:packages/db/src/query/MySQLQueryCompiler.ts:MySQLQueryCompiler:truncateCommitsOpenTransaction",
+    "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:compileTableSchemaLookup",
+    "unused-class-member:packages/db/src/query/SQLiteQueryCompiler.impl.ts:SQLiteQueryCompiler:compileTableSchemaLookup"
   ],
   "unused_store_members": [],
   "unprovided_injects": [],

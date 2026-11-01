@@ -2889,9 +2889,10 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
-    await this.assertNotReferencedByOtherTables()
-    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan(this.source)))
-    await this.resetSequence()
+    const tableName = await this.resolveTruncateTarget()
+    await this.assertNotReferencedByOtherTables(tableName)
+    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
+    await this.resetSequence(tableName)
     await this.invalidateTableQueries('delete')
   }
 
@@ -3189,8 +3190,17 @@ export class TableQueryBuilder<
       : undefined
   }
 
-  private async resetSequence(): Promise<void> {
-    const sequence = this.getCompiler().compileSequenceReset(this.source.tableName)
+  private async resolveTruncateTarget(): Promise<string> {
+    const lookup = this.getCompiler().compileTableSchemaLookup(this.source.tableName)
+    if (!lookup) return this.source.tableName
+
+    const { rows } = await this.connection.queryCompiled<{ schema: string }>(lookup)
+    const schema = rows[0]?.schema
+    return schema ? `${schema}.${this.source.tableName}` : this.source.tableName
+  }
+
+  private async resetSequence(tableName: string): Promise<void> {
+    const sequence = this.getCompiler().compileSequenceReset(tableName)
     if (!sequence) return
 
     const { rows } = await this.connection.queryCompiled(sequence.probe)
@@ -3199,8 +3209,8 @@ export class TableQueryBuilder<
     }
   }
 
-  private async assertNotReferencedByOtherTables(): Promise<void> {
-    const statement = this.getCompiler().compileReferencingTables(this.source.tableName)
+  private async assertNotReferencedByOtherTables(tableName: string): Promise<void> {
+    const statement = this.getCompiler().compileReferencingTables(tableName)
     if (!statement) return
 
     const { rows } = await this.connection.queryCompiled<{ name: string }>(statement)

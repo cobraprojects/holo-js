@@ -268,6 +268,10 @@ export class SQLQueryCompiler {
     return undefined
   }
 
+  compileTableSchemaLookup(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
   truncateCommitsOpenTransaction(): boolean {
     return false
   }
