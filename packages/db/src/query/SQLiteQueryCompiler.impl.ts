@@ -1,5 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
+import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -163,7 +163,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
   }
 
-  protected override compileInsertPrefix(plan: InsertQueryPlan): string {
+  protected override compileInsertPrefix(plan: InsertStatementOptions): string {
     return plan.ignoreConflicts ? 'INSERT OR IGNORE INTO' : 'INSERT INTO'
   }
 }

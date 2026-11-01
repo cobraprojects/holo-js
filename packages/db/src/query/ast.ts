@@ -271,6 +271,25 @@ export interface InsertQueryPlan {
   readonly values: readonly Record<string, unknown>[]
 }
 
+export interface InsertStatementOptions {
+  readonly ignoreConflicts: boolean
+  readonly returning?: boolean
+  readonly returningColumn?: string
+}
+
+export interface InsertUsingQueryPlan {
+  readonly kind: 'insert-using'
+  readonly source: QuerySource
+  readonly ignoreConflicts: boolean
+  readonly columns: readonly string[]
+  readonly query: SelectQueryPlan
+}
+
+export interface TruncateQueryPlan {
+  readonly kind: 'truncate'
+  readonly source: QuerySource
+}
+
 export interface UpsertQueryPlan {
   readonly kind: 'upsert'
   readonly source: QuerySource
@@ -298,6 +317,8 @@ export interface DeleteQueryPlan {
 export type QueryPlan
   = | SelectQueryPlan
     | InsertQueryPlan
+    | InsertUsingQueryPlan
+    | TruncateQueryPlan
     | UpsertQueryPlan
     | UpdateQueryPlan
     | DeleteQueryPlan
@@ -646,6 +667,25 @@ export function createUpdateQueryPlan(
     returning: options.returning === true,
     values: Object.freeze({ ...values }),
   })
+}
+
+export function createInsertUsingQueryPlan(
+  source: QuerySource,
+  columns: readonly string[],
+  query: SelectQueryPlan,
+  options: { readonly ignoreConflicts?: boolean } = {},
+): InsertUsingQueryPlan {
+  return Object.freeze({
+    kind: 'insert-using',
+    source,
+    ignoreConflicts: options.ignoreConflicts === true,
+    columns: Object.freeze([...columns]),
+    query,
+  })
+}
+
+export function createTruncateQueryPlan(source: QuerySource): TruncateQueryPlan {
+  return Object.freeze({ kind: 'truncate', source })
 }
 
 export function createDeleteQueryPlan(

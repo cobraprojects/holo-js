@@ -677,6 +677,22 @@ export function validateQueryPlan(plan: QueryPlan): void {
       return
     }
 
+    case 'insert-using': {
+      if (plan.columns.length === 0) {
+        throw new SecurityError('Insert using queries must include at least one column.')
+      }
+
+      for (const column of plan.columns) {
+        assertKnownColumn(column, plan.source.tableName, allowedColumns)
+      }
+
+      validateQueryPlan(plan.query)
+      return
+    }
+
+    case 'truncate':
+      return
+
     case 'upsert': {
       if (plan.values.length === 0) {
         throw new SecurityError('Upsert queries must include at least one row.')

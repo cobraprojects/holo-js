@@ -196,6 +196,20 @@ export const STATIC_MODEL_QUERY_FORWARD_METHODS = [
   'whereNotMorphedTo',
   'orWhereNotMorphedTo',
   'withWhereHas',
+  'each',
+  'eachById',
+  'lazyById',
+  'lazyByIdDesc',
+  'existsOr',
+  'doesntExistOr',
+  'implode',
+  'average',
+  'toRawSql',
+  'incrementEach',
+  'decrementEach',
+  'insertUsing',
+  'insertOrIgnoreUsing',
+  'truncate',
 ] as const satisfies readonly (keyof ModelQueryBuilder)[]
 
 type StaticModelQueryForwardMethod = typeof STATIC_MODEL_QUERY_FORWARD_METHODS[number]

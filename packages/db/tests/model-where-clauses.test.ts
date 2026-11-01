@@ -62,4 +62,46 @@ describe('model where clauses', () => {
     expect(await User.orderByDesc('id').pluck('name')).toEqual(['Amina', 'mona', 'Mohamed'])
     expect(await User.select('createdAt').groupBy('createdAt').having('count(*)', 2).orHavingNull('max(id)').count()).toBe(1)
   })
+
+  it('iterates models one at a time', async () => {
+    const User = await seedUserModel()
+    const names: string[] = []
+
+    await User.orderBy('id').each((user, index) => {
+      names.push(`${index}:${user.get('name')}`)
+    }, 2)
+    await User.eachById((user) => {
+      names.push(user.get('name'))
+      return false
+    })
+    for await (const user of User.lazyByIdDesc(2)) names.push(user.get('name'))
+    for await (const user of User.where('id', '>', 1).lazyById()) names.push(user.get('name'))
+
+    expect(names).toEqual(['0:Mohamed', '1:mona', '0:Amina', 'Mohamed', 'Amina', 'mona', 'Mohamed', 'mona', 'Amina'])
+  })
+
+  it('reads joined values, averages, and existence fallbacks from models', async () => {
+    const User = await seedUserModel()
+
+    expect(await User.orderBy('id').implode('name', '|')).toBe('Mohamed|mona|Amina')
+    expect(await User.average('id')).toBe(2)
+    expect(await User.where('id', 9).existsOr(() => 'missing')).toBe('missing')
+    expect(await User.doesntExistOr(() => 'present')).toBe('present')
+  })
+
+  it('writes through model query helpers', async () => {
+    const User = await seedUserModel()
+    const archive = User.where('id', '>', 1).toRawSql()
+
+    await User.where('id', 1).incrementEach({ id: 10 })
+    await User.where('id', 11).decrementEach({ id: 7 })
+    await User.insertUsing(['name', 'email', 'createdAt'], User.select('name', 'email', 'createdAt').where('name', 'Amina'))
+
+    expect(archive).toBe('SELECT * FROM "users" WHERE "id" > 1')
+    expect(await User.orderBy('id').pluck('id')).toEqual([2, 3, 4, 5])
+
+    await User.truncate()
+
+    expect(await User.count()).toBe(0)
+  })
 })

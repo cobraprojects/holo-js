@@ -1,0 +1,155 @@
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { DB, MySQLQueryCompiler, PostgresQueryCompiler, SQLiteQueryCompiler, configureDB, createConnectionManager, createDialect, createSelectQueryPlan, createTableSource, resetDB } from '../src'
+import { createInsertUsingQueryPlan, createTruncateQueryPlan, withPredicate } from '../src/query/ast'
+
+async function seedOrders(): Promise<ReturnType<typeof createSQLiteAdapter>> {
+  const adapter = createSQLiteAdapter({ filename: ':memory:' })
+  await adapter.initialize()
+  onTestFinished(() => adapter.disconnect())
+  configureDB(createConnectionManager({
+    defaultConnection: 'default',
+    connections: { default: { adapter, dialect: createDialect('sqlite') } },
+  }))
+  await adapter.execute('CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT, total INTEGER)')
+  await adapter.execute(`INSERT INTO orders VALUES
+    (1, 'paid', 100),
+    (2, 'pending', 250),
+    (3, 'refunded', 75),
+    (4, 'paid', 500)`)
+  return adapter
+}
+
+async function collect<TRow>(rows: AsyncIterable<TRow>): Promise<TRow[]> {
+  const collected: TRow[] = []
+  for await (const row of rows) collected.push(row)
+  return collected
+}
+
+describe('query builder helpers', () => {
+  beforeEach(() => {
+    resetDB()
+  })
+
+  it('visits rows one at a time across chunks', async () => {
+    await seedOrders()
+    const visited: Array<[unknown, number]> = []
+
+    await DB.table('orders').orderBy('id').each((row, index) => {
+      visited.push([row.id, index])
+    }, 3)
+    expect(visited).toEqual([[1, 0], [2, 1], [3, 2], [4, 0]])
+
+    const stoppedAt: unknown[] = []
+    await DB.table('orders').eachById((row) => {
+      stoppedAt.push(row.id)
+      return row.id !== 2
+    }, 2)
+    expect(stoppedAt).toEqual([1, 2])
+  })
+
+  it('streams rows ordered by id', async () => {
+    await seedOrders()
+
+    expect((await collect(DB.table('orders').lazyById(3))).map(row => row.id)).toEqual([1, 2, 3, 4])
+    expect((await collect(DB.table('orders').lazyByIdDesc(3))).map(row => row.id)).toEqual([4, 3, 2, 1])
+    expect((await collect(DB.table('orders').where('status', 'paid').lazyByIdDesc(1, 'total'))).map(row => row.id)).toEqual([4, 1])
+  })
+
+  it('reads joined values, averages, and existence fallbacks', async () => {
+    await seedOrders()
+
+    expect(await DB.table('orders').orderBy('id').implode('status', ', ')).toBe('paid, pending, refunded, paid')
+    expect(await DB.table('orders').where('status', 'paid').implode('total')).toBe('100500')
+    expect(await DB.table('orders').where('status', 'paid').average('total')).toBe(300)
+    expect(await DB.table('orders').where('status', 'paid').existsOr(() => 'none')).toBe(true)
+    expect(await DB.table('orders').where('status', 'void').existsOr(() => 'none')).toBe('none')
+    expect(await DB.table('orders').where('status', 'void').doesntExistOr(async () => 'some')).toBe(true)
+    expect(await DB.table('orders').where('status', 'paid').doesntExistOr(async () => 'some')).toBe('some')
+  })
+
+  it('adjusts several numeric columns at once', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('ALTER TABLE orders ADD COLUMN refunds INTEGER NOT NULL DEFAULT 0')
+
+    await DB.table('orders').where('id', 1).incrementEach({ total: 10, refunds: 2 }, { status: 'adjusted' })
+    await DB.table('orders').where('id', 4).decrementEach({ total: 100, refunds: 1 })
+
+    expect(await DB.table('orders').whereIn('id', [1, 4]).orderBy('id').select('id', 'status', 'total', 'refunds').get()).toEqual([
+      { id: 1, status: 'adjusted', total: 110, refunds: 2 },
+      { id: 4, status: 'paid', total: 400, refunds: -1 },
+    ])
+  })
+
+  it('updates a matching row or inserts a new one', async () => {
+    await seedOrders()
+
+    expect(await DB.table('orders').updateOrInsert({ id: 2 }, { status: 'paid' })).toBe(true)
+    expect(await DB.table('orders').updateOrInsert({ id: 9 }, { status: 'new', total: 1 })).toBe(true)
+    expect(await DB.table('orders').updateOrInsert({ id: 9, status: 'new' })).toBe(true)
+
+    expect(await DB.table('orders').whereIn('id', [2, 9]).orderBy('id').get()).toEqual([
+      { id: 2, status: 'paid', total: 250 },
+      { id: 9, status: 'new', total: 1 },
+    ])
+  })
+
+  it('inserts rows selected by another query', async () => {
+    const adapter = await seedOrders()
+    await adapter.execute('CREATE TABLE archived_orders (id INTEGER PRIMARY KEY, total INTEGER)')
+
+    const result = await DB.table('archived_orders').insertUsing(['id', 'total'], DB.table('orders').select('id', 'total').where('status', 'paid'))
+
+    expect(result.affectedRows).toBe(2)
+    expect(await DB.table('archived_orders').orderBy('id').get()).toEqual([{ id: 1, total: 100 }, { id: 4, total: 500 }])
+
+    const ignored = await DB.table('archived_orders').insertOrIgnoreUsing(['id', 'total'], DB.table('orders').select('id', 'total').whereIn('id', [1, 2]))
+
+    expect(ignored.affectedRows).toBe(1)
+    expect(await DB.table('archived_orders').orderBy('id').pluck('id')).toEqual([1, 2, 4])
+  })
+
+  it('truncates a table', async () => {
+    await seedOrders()
+
+    await DB.table('orders').truncate()
+
+    expect(await DB.table('orders').count()).toBe(0)
+  })
+
+  it('compiles truncate and insert using statements for each dialect', () => {
+    const postgres = new PostgresQueryCompiler(identifier => `"${identifier}"`, index => `$${index}`)
+    const mysql = new MySQLQueryCompiler(identifier => `\`${identifier}\``, () => '?')
+    const sqlite = new SQLiteQueryCompiler(identifier => `"${identifier}"`, () => '?')
+    const orders = createTableSource('orders')
+    const paidOrders = withPredicate(createSelectQueryPlan(createTableSource('orders')), { kind: 'comparison', column: 'status', operator: '=', value: 'paid' })
+
+    expect(postgres.compile(createTruncateQueryPlan(orders)).sql).toBe('TRUNCATE "orders" RESTART IDENTITY CASCADE')
+    expect(mysql.compile(createTruncateQueryPlan(orders)).sql).toBe('TRUNCATE TABLE `orders`')
+    expect(sqlite.compile(createTruncateQueryPlan(orders)).sql).toBe('DELETE FROM "orders"')
+    expect(postgres.compile(createInsertUsingQueryPlan(createTableSource('archive'), ['id'], paidOrders))).toMatchObject({
+      sql: 'INSERT INTO "archive" ("id") SELECT * FROM "orders" WHERE "status" = $1',
+      bindings: ['paid'],
+    })
+    expect(postgres.compile(createInsertUsingQueryPlan(createTableSource('archive'), ['id'], paidOrders, { ignoreConflicts: true })).sql)
+      .toBe('INSERT INTO "archive" ("id") SELECT * FROM "orders" WHERE "status" = $1 ON CONFLICT DO NOTHING')
+    expect(mysql.compile(createInsertUsingQueryPlan(createTableSource('archive'), ['id'], paidOrders, { ignoreConflicts: true })).sql)
+      .toBe('INSERT IGNORE INTO `archive` (`id`) SELECT * FROM `orders` WHERE `status` = ?')
+  })
+
+  it('renders queries with their bindings inlined for debugging', async () => {
+    await seedOrders()
+
+    expect(DB.table('orders').where('status', "it's ?").whereIn('id', [1, 2]).whereNull('total').toRawSql())
+      .toBe(`SELECT * FROM "orders" WHERE "status" = 'it''s ?' AND "id" IN (1, 2) AND "total" IS NULL`)
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: { default: { adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('postgres') } },
+    }))
+    const ids = Array.from({ length: 10 }, (_, index) => index + 1)
+
+    expect(DB.table('orders').whereIn('id', ids).where('paid', true).where('settings->theme', 'dark').toRawSql())
+      .toBe('SELECT * FROM "orders" WHERE "id" IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) AND "paid" = true AND jsonb_extract_path(("settings")::jsonb, \'theme\') = \'"dark"\'::jsonb')
+  })
+})

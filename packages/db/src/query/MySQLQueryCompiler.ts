@@ -1,6 +1,6 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
@@ -33,7 +33,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return lockMode === 'update' ? 'FOR UPDATE' : 'LOCK IN SHARE MODE'
   }
 
-  protected override compileInsertPrefix(plan: InsertQueryPlan): string {
+  protected override compileInsertPrefix(plan: InsertStatementOptions): string {
     return plan.ignoreConflicts ? 'INSERT IGNORE INTO' : 'INSERT INTO'
   }
 
@@ -46,6 +46,10 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       .map(column => `${this.quoteIdentifier(column)} = VALUES(${this.quoteIdentifier(column)})`)
       .join(', ')
     return ` ON DUPLICATE KEY UPDATE ${updates}`
+  }
+
+  protected override compileTruncateSql(table: string): string {
+    return `TRUNCATE TABLE ${table}`
   }
 
   protected override compileRandomOrder(): string {

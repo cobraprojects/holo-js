@@ -17,6 +17,9 @@ import type {
   QueryJsonPredicate,
   QueryLockMode,
   InsertQueryPlan,
+  InsertStatementOptions,
+  InsertUsingQueryPlan,
+  TruncateQueryPlan,
   UpsertQueryPlan,
   QueryPlan,
   QueryPredicateNode,
@@ -45,6 +48,10 @@ export class SQLQueryCompiler {
         return this.compileSelect(plan)
       case 'insert':
         return this.compileInsert(plan)
+      case 'insert-using':
+        return this.compileInsertUsing(plan)
+      case 'truncate':
+        return this.compileTruncate(plan)
       case 'update':
         return this.compileUpdate(plan)
       case 'upsert':
@@ -54,6 +61,59 @@ export class SQLQueryCompiler {
       default:
         throw new CompilerError(`Unsupported query plan kind "${(plan as { kind: string }).kind}".`)
     }
+  }
+
+  substituteBindings(sql: string, bindings: readonly unknown[]): string {
+    let result = ''
+    let quote: string | undefined
+    let bindingIndex = 0
+    for (let position = 0; position < sql.length; position += 1) {
+      const character = sql[position]!
+      if (quote) {
+        quote = character === quote ? undefined : quote
+        result += character
+        continue
+      }
+
+      if (character === '\'' || character === '"' || character === '`') {
+        quote = character
+        result += character
+        continue
+      }
+
+      const placeholder = this.createPlaceholder(bindingIndex + 1)
+      const isPlaceholder = bindingIndex < bindings.length
+        && sql.startsWith(placeholder, position)
+        && !/\d/.test(sql[position + placeholder.length] ?? '')
+      if (!isPlaceholder) {
+        result += character
+        continue
+      }
+
+      result += this.createDebugLiteral(bindings[bindingIndex])
+      bindingIndex += 1
+      position += placeholder.length - 1
+    }
+
+    return result
+  }
+
+  protected createDebugLiteral(value: unknown): string {
+    if (value === null || typeof value === 'undefined') return 'NULL'
+    if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+    if (typeof value === 'boolean') return this.createBooleanLiteral(value)
+    if (value instanceof Date) return this.createSqlStringLiteral(value.toISOString())
+    if (value instanceof Uint8Array) return this.createBinaryLiteral(value)
+    if (typeof value === 'string') return this.createSqlStringLiteral(value)
+    return this.createSqlStringLiteral(JSON.stringify(value))
+  }
+
+  protected createBooleanLiteral(value: boolean): string {
+    return value ? '1' : '0'
+  }
+
+  protected createBinaryLiteral(value: Uint8Array): string {
+    return `X'${Buffer.from(value).toString('hex').toUpperCase()}'`
   }
 
   private compileRawSql(sql: string, values: readonly unknown[], bindings: unknown[]): string {
@@ -193,6 +253,30 @@ export class SQLQueryCompiler {
       bindings,
       source: `query:insert:${plan.source.tableName}`,
     }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
+  }
+
+  protected compileInsertUsing(plan: InsertUsingQueryPlan): CompiledStatement {
+    const bindings: unknown[] = []
+    const columns = plan.columns.map(column => this.quoteIdentifier(column)).join(', ')
+    const query = this.compileSelectSql(plan.query, bindings)
+
+    return this.withMetadata({
+      sql: `${this.compileInsertPrefix(plan)} ${this.quoteIdentifier(plan.source.tableName)} (${columns}) ${query}${this.compileInsertSuffix(plan)}`,
+      bindings,
+      source: `query:insert:${plan.source.tableName}`,
+    }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
+  }
+
+  protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {
+    return this.withMetadata({
+      sql: this.compileTruncateSql(this.quoteIdentifier(plan.source.tableName)),
+      bindings: [],
+      source: `query:delete:${plan.source.tableName}`,
+    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
+  }
+
+  protected compileTruncateSql(table: string): string {
+    return `DELETE FROM ${table}`
   }
 
   protected compileUpsert(plan: UpsertQueryPlan): CompiledStatement {
@@ -341,6 +425,10 @@ export class SQLQueryCompiler {
         const columnCount = Object.keys(plan.values[0]!).length
         return 1 + Math.max(1, columnCount) * Math.max(1, plan.values.length)
       }
+      case 'insert-using':
+        return 1 + plan.columns.length + this.calculatePlanComplexity(plan.query)
+      case 'truncate':
+        return 1
       case 'upsert': {
         const columnCount = Object.keys(plan.values[0]!).length
         return 2
@@ -669,11 +757,11 @@ export class SQLQueryCompiler {
     return 'RANDOM()'
   }
 
-  protected compileInsertPrefix(_plan: InsertQueryPlan): string {
+  protected compileInsertPrefix(_plan: InsertStatementOptions): string {
     return 'INSERT INTO'
   }
 
-  protected compileInsertSuffix(_plan: InsertQueryPlan): string {
+  protected compileInsertSuffix(_plan: InsertStatementOptions): string {
     if (_plan.returningColumn) return ` RETURNING ${this.quoteIdentifier(_plan.returningColumn)}`
     return _plan.returning === true ? ' RETURNING *' : ''
   }

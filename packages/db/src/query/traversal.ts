@@ -112,3 +112,14 @@ export async function* queryBatches<
     cursor = batch.nextCursor
   } while (cursor !== null)
 }
+
+export async function visitRows<TRow>(
+  rows: readonly TRow[],
+  callback: (row: TRow, index: number) => unknown | Promise<unknown>,
+): Promise<boolean> {
+  for (const [index, row] of rows.entries()) {
+    if (await callback(row, index) === false) return false
+  }
+
+  return true
+}

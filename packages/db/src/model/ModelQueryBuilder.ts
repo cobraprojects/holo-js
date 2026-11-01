@@ -23,7 +23,7 @@ import {
   decodeValueCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
-import { queryBatches } from '../query/traversal'
+import { queryBatches, visitRows } from '../query/traversal'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
@@ -1222,6 +1222,10 @@ class ModelQueryBuilderBase<
     return this.getTableQueryBuilder().toSQL()
   }
 
+  toRawSql(): string {
+    return this.getTableQueryBuilder().toRawSql()
+  }
+
   debug() {
     return this.getTableQueryBuilder().debug()
   }
@@ -1497,14 +1501,53 @@ class ModelQueryBuilderBase<
     direction: 'asc' | 'desc',
   ): Promise<void> {
     let page = 1
-    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
+    for await (const rows of this.idBatches(size, column, direction)) {
+      if (await callback(rows, page) === false) return
+      page += 1
+    }
+  }
+
+  private idBatches(size: number, column: ModelAttributeKey<TTable>, direction: 'asc' | 'desc') {
+    return queryBatches(this.getTableQueryBuilder(), size, {
       column,
       direction,
       fallbackOrder: direction === 'asc' ? 'database' : 'rows',
       primaryKey: this.repository.definition.primaryKey,
-    }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
-      if (await callback(rows, page) === false) return
-      page += 1
+    }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))
+  }
+
+  async each(
+    callback: (entity: EntityWithLoaded<TTable, TRelations, TLoaded>, index: number) => unknown | Promise<unknown>,
+    count = 1000,
+  ): Promise<void> {
+    await this.chunk(count, rows => visitRows(rows, callback))
+  }
+
+  async eachById(
+    callback: (entity: EntityWithLoaded<TTable, TRelations, TLoaded>, index: number) => unknown | Promise<unknown>,
+    count = 1000,
+    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+  ): Promise<void> {
+    await this.chunkById(count, rows => visitRows(rows, callback), column)
+  }
+
+  async* lazyById(
+    size = 1000,
+    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+  ): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
+    for await (const rows of this.idBatches(size, column, 'asc')) {
+      yield* rows
+    }
+  }
+
+  async* lazyByIdDesc(
+    size = 1000,
+    column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
+  ): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
+    for await (const rows of this.idBatches(size, column, 'desc')) {
+      yield* rows
     }
   }
 
@@ -1540,6 +1583,18 @@ class ModelQueryBuilderBase<
 
   async doesntExist(): Promise<boolean> {
     return this.getTableQueryBuilder().doesntExist()
+  }
+
+  async existsOr<TResult>(callback: () => TResult | Promise<TResult>): Promise<true | TResult> {
+    return this.getTableQueryBuilder().existsOr(callback)
+  }
+
+  async doesntExistOr<TResult>(callback: () => TResult | Promise<TResult>): Promise<true | TResult> {
+    return this.getTableQueryBuilder().doesntExistOr(callback)
+  }
+
+  async implode<TColumn extends ModelAttributeKey<TTable>>(column: TColumn, glue = ''): Promise<string> {
+    return (await this.pluck(column)).join(glue)
   }
 
   async pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>> {
@@ -1600,6 +1655,10 @@ class ModelQueryBuilderBase<
       rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
     }
     return result
+  }
+
+  average(column: ModelColumnName<TTable>): Promise<number | null> {
+    return this.avg(column)
   }
 
   async avg(column: ModelColumnName<TTable>): Promise<number | null> {
@@ -1725,6 +1784,44 @@ class ModelQueryBuilderBase<
       amount,
       this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
     )
+  }
+
+  async incrementEach(
+    columns: Partial<Record<ModelColumnName<TTable>, number>>,
+    extraValues: Partial<ModelRecord<TTable>> = {},
+  ): Promise<DriverExecutionResult> {
+    return this.getTableQueryBuilder().incrementEach(
+      columns as Readonly<Record<string, number>>,
+      this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
+    )
+  }
+
+  async decrementEach(
+    columns: Partial<Record<ModelColumnName<TTable>, number>>,
+    extraValues: Partial<ModelRecord<TTable>> = {},
+  ): Promise<DriverExecutionResult> {
+    return this.getTableQueryBuilder().decrementEach(
+      columns as Readonly<Record<string, number>>,
+      this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
+    )
+  }
+
+  async insertUsing<TSubTable extends TableDefinition>(
+    columns: readonly ModelColumnName<TTable>[],
+    query: SubqueryBuilder<TSubTable>,
+  ): Promise<DriverExecutionResult> {
+    return this.getTableQueryBuilder().insertUsing(columns as never, this.normalizeExistsSubquery(query))
+  }
+
+  async insertOrIgnoreUsing<TSubTable extends TableDefinition>(
+    columns: readonly ModelColumnName<TTable>[],
+    query: SubqueryBuilder<TSubTable>,
+  ): Promise<DriverExecutionResult> {
+    return this.getTableQueryBuilder().insertOrIgnoreUsing(columns as never, this.normalizeExistsSubquery(query))
+  }
+
+  async truncate(): Promise<void> {
+    await this.getTableQueryBuilder().truncate()
   }
 
   async upsert(

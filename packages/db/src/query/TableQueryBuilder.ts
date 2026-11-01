@@ -13,6 +13,8 @@ import {
   invalidateQueryCacheDependencies,
   runQueryCacheOperation,
   createDatabaseMutationEvent,
+  createTableCacheDependency,
+  createTableRowWildcardCacheDependency,
   createDatabaseQueryFallbackObservation,
   createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
@@ -42,7 +44,7 @@ import {
   type QueryCacheFlexibleTtlInput,
   type QueryCacheTtlInput,
 } from '../cache'
-import { queryBatches } from './traversal'
+import { queryBatches, visitRows } from './traversal'
 import { readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
 import {
   createCursorPaginator,
@@ -58,6 +60,8 @@ import {
 import { cursorPredicate } from './cursorPredicate'
 import {
   createDeleteQueryPlan,
+  createInsertUsingQueryPlan,
+  createTruncateQueryPlan,
   createInsertQueryPlan,
   createSelectQueryPlan,
   createTableSource,
@@ -1770,6 +1774,11 @@ export class TableQueryBuilder<
     return this.getCompiler().compile(this.plan)
   }
 
+  toRawSql(): string {
+    const statement = this.toSQL()
+    return this.getCompiler().substituteBindings(statement.sql, statement.bindings ?? [])
+  }
+
   debug() {
     const statement = this.toSQL()
     const bindings = redactBindings(statement.bindings ?? [], this.connection.getSecurityPolicy())
@@ -2397,12 +2406,53 @@ export class TableQueryBuilder<
     }
   }
 
+  async each<TRow extends Record<string, unknown> = TSelectedRow>(
+    callback: (row: TRow, index: number) => unknown | Promise<unknown>,
+    count = 1000,
+  ): Promise<void> {
+    await this.chunk<TRow>(count, rows => visitRows(rows, callback))
+  }
+
+  async eachById<TRow extends Record<string, unknown> = TSelectedRow>(
+    callback: (row: TRow, index: number) => unknown | Promise<unknown>,
+    count = 1000,
+    column = 'id',
+  ): Promise<void> {
+    await this.chunkById<TRow>(count, rows => visitRows(rows, callback), column)
+  }
+
   async* lazy<TRow extends Record<string, unknown> = TSelectedRow>(
     size = 1000,
   ): AsyncGenerator<TRow, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     for await (const rows of queryBatches(this, size, {}, (rows: readonly TRow[]) => rows)) {
+      yield* rows
+    }
+  }
+
+  async* lazyById<TRow extends Record<string, unknown> = TSelectedRow>(
+    size = 1000,
+    column = 'id',
+  ): AsyncGenerator<TRow, void, unknown> {
+    yield* this.lazyByColumn<TRow>(size, column, 'asc')
+  }
+
+  async* lazyByIdDesc<TRow extends Record<string, unknown> = TSelectedRow>(
+    size = 1000,
+    column = 'id',
+  ): AsyncGenerator<TRow, void, unknown> {
+    yield* this.lazyByColumn<TRow>(size, column, 'desc')
+  }
+
+  private async* lazyByColumn<TRow extends Record<string, unknown>>(
+    size: number,
+    column: string,
+    direction: QueryDirection,
+  ): AsyncGenerator<TRow, void, unknown> {
+    assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
+
+    for await (const rows of queryBatches(this, size, { column, direction }, (rows: readonly TRow[]) => rows)) {
       yield* rows
     }
   }
@@ -2450,6 +2500,18 @@ export class TableQueryBuilder<
       }))
     }
     return result
+  }
+
+  async existsOr<TResult>(callback: () => TResult | Promise<TResult>): Promise<true | TResult> {
+    return await this.exists() ? true : callback()
+  }
+
+  async doesntExistOr<TResult>(callback: () => TResult | Promise<TResult>): Promise<true | TResult> {
+    return await this.doesntExist() ? true : callback()
+  }
+
+  async implode<TKey extends SelectedColumnNames<TSelectedRow>>(column: TKey, glue = ''): Promise<string> {
+    return (await this.pluck(column)).join(glue)
   }
 
   async pluck<TKey extends SelectedColumnNames<TSelectedRow>>(
@@ -2510,6 +2572,10 @@ export class TableQueryBuilder<
 
   async sum(column: string): Promise<number> {
     return this.aggregateNumeric(column, 'sum')
+  }
+
+  average(column: string): Promise<number | null> {
+    return this.avg(column)
   }
 
   async avg(column: string): Promise<number | null> {
@@ -2685,7 +2751,7 @@ export class TableQueryBuilder<
     amount = 1,
     extraValues: Readonly<Record<string, unknown>> = {},
   ): Promise<DriverExecutionResult> {
-    return this.adjustNumericColumn(column, amount, extraValues)
+    return this.adjustNumericColumns({ [column]: amount }, extraValues)
   }
 
   async decrement(
@@ -2693,7 +2759,78 @@ export class TableQueryBuilder<
     amount = 1,
     extraValues: Readonly<Record<string, unknown>> = {},
   ): Promise<DriverExecutionResult> {
-    return this.adjustNumericColumn(column, -amount, extraValues)
+    return this.adjustNumericColumns({ [column]: -amount }, extraValues)
+  }
+
+  async incrementEach(
+    columns: Readonly<Record<string, number>>,
+    extraValues: Readonly<Record<string, unknown>> = {},
+  ): Promise<DriverExecutionResult> {
+    return this.adjustNumericColumns(columns, extraValues)
+  }
+
+  async decrementEach(
+    columns: Readonly<Record<string, number>>,
+    extraValues: Readonly<Record<string, unknown>> = {},
+  ): Promise<DriverExecutionResult> {
+    return this.adjustNumericColumns(
+      Object.fromEntries(Object.entries(columns).map(([column, amount]) => [column, -amount])),
+      extraValues,
+    )
+  }
+
+  async updateOrInsert(
+    attributes: Readonly<Record<string, unknown>>,
+    values: Readonly<Record<string, unknown>> | ((exists: boolean) => Readonly<Record<string, unknown>>) = {},
+  ): Promise<boolean> {
+    const matching = Object.entries(attributes)
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, [column, value]) => query.where(column as never, value), this)
+    const exists = await matching.exists()
+    const resolvedValues = typeof values === 'function' ? values(exists) : values
+    if (!exists) {
+      await this.insert({ ...attributes, ...resolvedValues })
+      return true
+    }
+
+    if (Object.keys(resolvedValues).length === 0) {
+      return true
+    }
+
+    return (await matching.update(resolvedValues)).affectedRows !== 0
+  }
+
+  async insertUsing(
+    columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
+    query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+  ): Promise<DriverExecutionResult> {
+    return this.executeInsertUsing(columns, query, false)
+  }
+
+  async insertOrIgnoreUsing(
+    columns: readonly DeclaredColumnName<TTableOrName, TAvailableColumns>[],
+    query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+  ): Promise<DriverExecutionResult> {
+    return this.executeInsertUsing(columns, query, true)
+  }
+
+  private async executeInsertUsing(
+    columns: readonly string[],
+    query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
+    ignoreConflicts: boolean,
+  ): Promise<DriverExecutionResult> {
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
+      createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
+    ))
+    await this.invalidateTableQueries('insert')
+    return {
+      affectedRows: result.affectedRows,
+      lastInsertId: result.lastInsertId,
+    }
+  }
+
+  async truncate(): Promise<void> {
+    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan(this.source)))
+    await this.invalidateTableQueries('delete')
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
@@ -2990,6 +3127,23 @@ export class TableQueryBuilder<
       : undefined
   }
 
+  private async invalidateTableQueries(kind: 'insert' | 'delete'): Promise<void> {
+    const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
+    if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
+      return
+    }
+
+    const connectionName = this.connection.getConnectionName()
+    await invalidateQueryCacheDependencies(
+      this.connection,
+      [
+        createTableCacheDependency(connectionName, this.source.tableName),
+        createTableRowWildcardCacheDependency(connectionName, this.source.tableName),
+      ],
+      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source.tableName)] : [],
+    )
+  }
+
   private async invalidateInsertQueries(
     kind: 'insert' | 'upsert',
     rows: readonly Readonly<Record<string, unknown>>[],
@@ -3114,30 +3268,32 @@ export class TableQueryBuilder<
     return { operator, value }
   }
 
-  private async adjustNumericColumn(
-    column: string,
-    amount: number,
+  private async adjustNumericColumns(
+    amounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    const adjustment = new NumericAdjustment(amount)
+    const columns = Object.keys(amounts)
     const primaryKey = this.resolvePrimaryKeyColumn()
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [primaryKey as never, column as never]),
+      withSelections(this.plan, [primaryKey, ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
     const rows = await uncachedSelection.get() as Record<string, unknown>[]
     for (const row of rows) {
-      const currentValue = row[column]
-      if (currentValue == null || typeof this.normalizeNumericResult(currentValue) === 'undefined') {
-        throw new CompilerError(`Cannot increment/decrement non-numeric column "${column}".`)
+      for (const column of columns) {
+        const currentValue = row[column]
+        if (currentValue == null || typeof this.normalizeNumericResult(currentValue) === 'undefined') {
+          throw new CompilerError(`Cannot increment/decrement non-numeric column "${column}".`)
+        }
       }
     }
     if (rows.length === 0) return { affectedRows: 0, lastInsertId: undefined }
 
-    const values = { ...extraValues, [column]: adjustment }
+    const adjustments = Object.fromEntries(Object.entries(amounts).map(([column, amount]) => [column, new NumericAdjustment(amount)]))
+    const values = { ...extraValues, ...adjustments }
     if (typeof this.plan.limit === 'undefined' && typeof this.plan.offset === 'undefined') {
       return this.update(values)
     }
