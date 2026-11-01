@@ -1276,6 +1276,8 @@ function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): 
     case 'integer-in':
     case 'column':
     case 'null':
+    case 'like':
+    case 'between-columns':
     case 'date':
     case 'json':
     case 'fulltext':
@@ -1665,6 +1667,7 @@ function readGroupedCountHavingClause(
   const clause = plan.having[0]
   if (
     !clause
+    || clause.kind !== 'comparison'
     || clause.expression.replace(/\s+/g, '').toLowerCase() !== 'count(*)'
     || typeof clause.value !== 'number'
     || !Number.isFinite(clause.value)
@@ -1710,6 +1713,7 @@ function hasOnlyRedundantGroupedCountHaving(plan: SelectQueryPlan): boolean {
 
   const clause = plan.having[0]
   return typeof clause !== 'undefined'
+    && clause.kind === 'comparison'
     && clause.expression.replace(/\s+/g, '').toLowerCase() === 'count(*)'
     && clause.operator === '>='
     && clause.value === 1

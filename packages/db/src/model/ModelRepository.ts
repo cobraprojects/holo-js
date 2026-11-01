@@ -334,10 +334,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {
@@ -351,10 +348,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {
@@ -375,6 +369,37 @@ export class ModelRepository<
 
       throw error
     }
+  }
+
+  async createOrFirst(
+    match: Partial<ModelRecord<TTable>>,
+    values: Partial<ModelRecord<TTable>> = {},
+  ): Promise<Entity<TTable>> {
+    if (Object.keys(match).length === 0) {
+      throw new HydrationError('createOrFirst() requires at least one attribute to match the existing row.')
+    }
+
+    const connection = this.getConnection()
+    const create = () => this.create({ ...match, ...values })
+    try {
+      return connection.getScope().kind === 'root' ? await create() : await connection.transaction(create)
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error
+      }
+
+      const existing = await this.queryMatching(match).first()
+      if (existing) {
+        return existing
+      }
+
+      throw error
+    }
+  }
+
+  private queryMatching(match: Partial<ModelRecord<TTable>>) {
+    return Object.entries(match)
+      .reduce((query, [column, value]) => query.where(column as never, value), this.query())
   }
 
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
@@ -555,7 +580,11 @@ export class ModelRepository<
 
     if (subqueries.length === 0) {
       if (filter.negate) {
-        return query
+        return filter.boolean === 'or'
+          ? query.orWhere(builder => builder
+              .whereNull(this.qualifyParentColumn(this.definition.primaryKey) as never)
+              .orWhereNotNull(this.qualifyParentColumn(this.definition.primaryKey) as never))
+          : query
       }
 
       const impossible = (builder: TableQueryBuilder<TTable, Record<string, unknown>>) => (
@@ -1737,10 +1766,7 @@ export class ModelRepository<
     match: Partial<ModelRecord<TTable>>,
     values: Partial<ModelRecord<TTable>> = {},
   ): Promise<Entity<TTable>> {
-    let query = this.query()
-    for (const [column, value] of Object.entries(match)) {
-      query = query.where(column as never, value)
-    }
+    const query = this.queryMatching(match)
 
     const existing = await query.first()
     if (existing) {
@@ -2599,7 +2625,7 @@ export class ModelRepository<
     selectors?: readonly string[],
   ): readonly ModelDefinitionLike[] {
     const references = listMorphModels()
-    if (!selectors || selectors.length === 0) {
+    if (!selectors) {
       return references
     }
 
@@ -3138,7 +3164,7 @@ export class ModelRepository<
     actualType: string,
     selectors?: readonly string[],
   ): boolean {
-    if (!selectors || selectors.length === 0) {
+    if (!selectors) {
       return true
     }
 

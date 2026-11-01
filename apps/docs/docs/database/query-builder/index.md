@@ -35,11 +35,13 @@ Every query builder method, grouped by what it does. Each name links to its entr
 
 - [where()](/database/query-builder/selects-and-filters#where), [orWhere()](/database/query-builder/selects-and-filters#orwhere), [whereNot()](/database/query-builder/selects-and-filters#wherenot), [orWhereNot()](/database/query-builder/selects-and-filters#orwherenot)
 - [whereNull()](/database/query-builder/selects-and-filters#wherenull), [orWhereNull()](/database/query-builder/selects-and-filters#orwherenull), [whereNotNull()](/database/query-builder/selects-and-filters#wherenotnull), [orWhereNotNull()](/database/query-builder/selects-and-filters#orwherenotnull), [withoutWhereNull()](/database/query-builder/selects-and-filters#withoutwherenull), [withoutWhereNotNull()](/database/query-builder/selects-and-filters#withoutwherenotnull)
-- [whereIn()](/database/query-builder/selects-and-filters#wherein), [whereNotIn()](/database/query-builder/selects-and-filters#wherenotin), [whereBetween()](/database/query-builder/selects-and-filters#wherebetween), [whereNotBetween()](/database/query-builder/selects-and-filters#wherenotbetween)
-- [whereLike()](/database/query-builder/selects-and-filters#wherelike), [orWhereLike()](/database/query-builder/selects-and-filters#orwherelike), [whereColumn()](/database/query-builder/selects-and-filters#wherecolumn)
-- [whereAny()](/database/query-builder/selects-and-filters#whereany), [whereAll()](/database/query-builder/selects-and-filters#whereall), [whereNone()](/database/query-builder/selects-and-filters#wherenone)
-- [whereDate()](/database/query-builder/selects-and-filters#wheredate), [whereMonth()](/database/query-builder/selects-and-filters#wheremonth), [whereDay()](/database/query-builder/selects-and-filters#whereday), [whereYear()](/database/query-builder/selects-and-filters#whereyear), [whereTime()](/database/query-builder/selects-and-filters#wheretime)
-- [whereJson()](/database/query-builder/selects-and-filters#wherejson), [orWhereJson()](/database/query-builder/selects-and-filters#orwherejson), [whereJsonContains()](/database/query-builder/selects-and-filters#wherejsoncontains), [orWhereJsonContains()](/database/query-builder/selects-and-filters#orwherejsoncontains), [whereJsonLength()](/database/query-builder/selects-and-filters#wherejsonlength), [orWhereJsonLength()](/database/query-builder/selects-and-filters#orwherejsonlength)
+- [whereIn()](/database/query-builder/selects-and-filters#wherein), [orWhereIn()](/database/query-builder/selects-and-filters#orwherein), [whereNotIn()](/database/query-builder/selects-and-filters#wherenotin), [orWhereNotIn()](/database/query-builder/selects-and-filters#orwherenotin), [whereBetween()](/database/query-builder/selects-and-filters#wherebetween), [orWhereBetween()](/database/query-builder/selects-and-filters#orwherebetween), [whereNotBetween()](/database/query-builder/selects-and-filters#wherenotbetween), [orWhereNotBetween()](/database/query-builder/selects-and-filters#orwherenotbetween)
+- [whereBetweenColumns()](/database/query-builder/selects-and-filters#wherebetweencolumns), [orWhereBetweenColumns()](/database/query-builder/selects-and-filters#orwherebetweencolumns), [whereNotBetweenColumns()](/database/query-builder/selects-and-filters#wherenotbetweencolumns), [orWhereNotBetweenColumns()](/database/query-builder/selects-and-filters#orwherenotbetweencolumns), [whereValueBetween()](/database/query-builder/selects-and-filters#wherevaluebetween), [orWhereValueBetween()](/database/query-builder/selects-and-filters#orwherevaluebetween), [whereValueNotBetween()](/database/query-builder/selects-and-filters#wherevaluenotbetween), [orWhereValueNotBetween()](/database/query-builder/selects-and-filters#orwherevaluenotbetween)
+- [whereLike()](/database/query-builder/selects-and-filters#wherelike), [orWhereLike()](/database/query-builder/selects-and-filters#orwherelike), [whereNotLike()](/database/query-builder/selects-and-filters#wherenotlike), [orWhereNotLike()](/database/query-builder/selects-and-filters#orwherenotlike), [whereColumn()](/database/query-builder/selects-and-filters#wherecolumn), [orWhereColumn()](/database/query-builder/selects-and-filters#orwherecolumn)
+- [whereAny()](/database/query-builder/selects-and-filters#whereany), [orWhereAny()](/database/query-builder/selects-and-filters#orwhereany), [whereAll()](/database/query-builder/selects-and-filters#whereall), [orWhereAll()](/database/query-builder/selects-and-filters#orwhereall), [whereNone()](/database/query-builder/selects-and-filters#wherenone), [orWhereNone()](/database/query-builder/selects-and-filters#orwherenone)
+- [whereDate()](/database/query-builder/selects-and-filters#wheredate), [orWhereDate()](/database/query-builder/selects-and-filters#orwheredate), [whereMonth()](/database/query-builder/selects-and-filters#wheremonth), [orWhereMonth()](/database/query-builder/selects-and-filters#orwheremonth), [whereDay()](/database/query-builder/selects-and-filters#whereday), [orWhereDay()](/database/query-builder/selects-and-filters#orwhereday), [whereYear()](/database/query-builder/selects-and-filters#whereyear), [orWhereYear()](/database/query-builder/selects-and-filters#orwhereyear), [whereTime()](/database/query-builder/selects-and-filters#wheretime), [orWhereTime()](/database/query-builder/selects-and-filters#orwheretime)
+- [wherePast()](/database/query-builder/selects-and-filters#wherepast), [orWherePast()](/database/query-builder/selects-and-filters#orwherepast), [whereNowOrPast()](/database/query-builder/selects-and-filters#wherenoworpast), [orWhereNowOrPast()](/database/query-builder/selects-and-filters#orwherenoworpast), [whereFuture()](/database/query-builder/selects-and-filters#wherefuture), [orWhereFuture()](/database/query-builder/selects-and-filters#orwherefuture), [whereNowOrFuture()](/database/query-builder/selects-and-filters#wherenoworfuture), [orWhereNowOrFuture()](/database/query-builder/selects-and-filters#orwherenoworfuture), [whereToday()](/database/query-builder/selects-and-filters#wheretoday), [orWhereToday()](/database/query-builder/selects-and-filters#orwheretoday), [whereBeforeToday()](/database/query-builder/selects-and-filters#wherebeforetoday), [orWhereBeforeToday()](/database/query-builder/selects-and-filters#orwherebeforetoday), [whereTodayOrBefore()](/database/query-builder/selects-and-filters#wheretodayorbefore), [orWhereTodayOrBefore()](/database/query-builder/selects-and-filters#orwheretodayorbefore), [whereAfterToday()](/database/query-builder/selects-and-filters#whereaftertoday), [orWhereAfterToday()](/database/query-builder/selects-and-filters#orwhereaftertoday), [whereTodayOrAfter()](/database/query-builder/selects-and-filters#wheretodayorafter), [orWhereTodayOrAfter()](/database/query-builder/selects-and-filters#orwheretodayorafter)
+- [whereJson()](/database/query-builder/selects-and-filters#wherejson), [orWhereJson()](/database/query-builder/selects-and-filters#orwherejson), [whereJsonContains()](/database/query-builder/selects-and-filters#wherejsoncontains), [orWhereJsonContains()](/database/query-builder/selects-and-filters#orwherejsoncontains), [whereJsonLength()](/database/query-builder/selects-and-filters#wherejsonlength), [orWhereJsonLength()](/database/query-builder/selects-and-filters#orwherejsonlength), [whereJsonDoesntContain()](/database/query-builder/selects-and-filters#wherejsondoesntcontain), [orWhereJsonDoesntContain()](/database/query-builder/selects-and-filters#orwherejsondoesntcontain), [whereJsonContainsKey()](/database/query-builder/selects-and-filters#wherejsoncontainskey), [orWhereJsonContainsKey()](/database/query-builder/selects-and-filters#orwherejsoncontainskey), [whereJsonDoesntContainKey()](/database/query-builder/selects-and-filters#wherejsondoesntcontainkey), [orWhereJsonDoesntContainKey()](/database/query-builder/selects-and-filters#orwherejsondoesntcontainkey)
 - [whereFullText()](/database/query-builder/selects-and-filters#wherefulltext), [orWhereFullText()](/database/query-builder/selects-and-filters#orwherefulltext), [whereVectorSimilarTo()](/database/query-builder/selects-and-filters#wherevectorsimilarto), [orWhereVectorSimilarTo()](/database/query-builder/selects-and-filters#orwherevectorsimilarto)
 - [whereExists()](/database/query-builder/joins-and-subqueries#whereexists), [orWhereExists()](/database/query-builder/joins-and-subqueries#orwhereexists), [whereNotExists()](/database/query-builder/joins-and-subqueries#wherenotexists), [orWhereNotExists()](/database/query-builder/joins-and-subqueries#orwherenotexists)
 - [whereSub()](/database/query-builder/joins-and-subqueries#wheresub), [orWhereSub()](/database/query-builder/joins-and-subqueries#orwheresub), [whereInSub()](/database/query-builder/joins-and-subqueries#whereinsub), [whereNotInSub()](/database/query-builder/joins-and-subqueries#wherenotinsub)
@@ -55,28 +57,28 @@ Every query builder method, grouped by what it does. Each name links to its entr
 
 **Group, order, and limit**
 
-- [groupBy()](/database/query-builder/selects-and-filters#groupby), [having()](/database/query-builder/selects-and-filters#having), [havingBetween()](/database/query-builder/selects-and-filters#havingbetween)
-- [orderBy()](/database/query-builder/selects-and-filters#orderby), [latest()](/database/query-builder/selects-and-filters#latest), [oldest()](/database/query-builder/selects-and-filters#oldest), [inRandomOrder()](/database/query-builder/selects-and-filters#inrandomorder), [reorder()](/database/query-builder/selects-and-filters#reorder), [orderByVectorSimilarity()](/database/query-builder/selects-and-filters#orderbyvectorsimilarity), [unsafeOrderBy()](/database/query-builder/joins-and-subqueries#unsafeorderby)
+- [groupBy()](/database/query-builder/selects-and-filters#groupby), [having()](/database/query-builder/selects-and-filters#having), [orHaving()](/database/query-builder/selects-and-filters#orhaving), [havingBetween()](/database/query-builder/selects-and-filters#havingbetween), [orHavingBetween()](/database/query-builder/selects-and-filters#orhavingbetween), [havingNotBetween()](/database/query-builder/selects-and-filters#havingnotbetween), [orHavingNotBetween()](/database/query-builder/selects-and-filters#orhavingnotbetween), [havingNull()](/database/query-builder/selects-and-filters#havingnull), [orHavingNull()](/database/query-builder/selects-and-filters#orhavingnull), [havingNotNull()](/database/query-builder/selects-and-filters#havingnotnull), [orHavingNotNull()](/database/query-builder/selects-and-filters#orhavingnotnull)
+- [orderBy()](/database/query-builder/selects-and-filters#orderby), [orderByDesc()](/database/query-builder/selects-and-filters#orderbydesc), [latest()](/database/query-builder/selects-and-filters#latest), [oldest()](/database/query-builder/selects-and-filters#oldest), [inRandomOrder()](/database/query-builder/selects-and-filters#inrandomorder), [reorder()](/database/query-builder/selects-and-filters#reorder), [orderByVectorSimilarity()](/database/query-builder/selects-and-filters#orderbyvectorsimilarity), [unsafeOrderBy()](/database/query-builder/joins-and-subqueries#unsafeorderby)
 - [limit()](/database/query-builder/selects-and-filters#limit), [offset()](/database/query-builder/selects-and-filters#offset), [skip()](/database/query-builder/selects-and-filters#skip), [take()](/database/query-builder/selects-and-filters#take), [forPage()](/database/query-builder/selects-and-filters#forpage)
 - [lock()](/database/query-builder/selects-and-filters#lock), [lockForUpdate()](/database/query-builder/selects-and-filters#lockforupdate), [sharedLock()](/database/query-builder/selects-and-filters#sharedlock)
 
 **Read rows**
 
 - [get()](#get), [first()](#first), [find()](#find), [sole()](#sole)
-- [value()](#value), [valueOrFail()](#valueorfail), [soleValue()](#solevalue), [pluck()](#pluck)
-- [exists()](#exists), [doesntExist()](#doesntexist)
-- [count()](#count), [sum()](#sum), [avg()](#avg), [min()](#min), [max()](#max)
+- [value()](#value), [valueOrFail()](#valueorfail), [soleValue()](#solevalue), [pluck()](#pluck), [implode()](#implode)
+- [exists()](#exists), [doesntExist()](#doesntexist), [existsOr()](#existsor), [doesntExistOr()](#doesntexistor)
+- [count()](#count), [sum()](#sum), [avg()](#avg), [average()](#average), [min()](#min), [max()](#max)
 - [paginate()](/database/pagination#paginate), [simplePaginate()](/database/pagination#simplepaginate), [cursorPaginate()](/database/pagination#cursorpaginate)
-- [chunk()](/database/query-builder/chunking#chunk), [chunkById()](/database/query-builder/chunking#chunkbyid), [chunkByIdDesc()](/database/query-builder/chunking#chunkbyiddesc), [lazy()](/database/query-builder/chunking#lazy), [cursor()](/database/query-builder/chunking#cursor)
+- [chunk()](/database/query-builder/chunking#chunk), [chunkById()](/database/query-builder/chunking#chunkbyid), [chunkByIdDesc()](/database/query-builder/chunking#chunkbyiddesc), [each()](/database/query-builder/chunking#each), [eachById()](/database/query-builder/chunking#eachbyid), [lazy()](/database/query-builder/chunking#lazy), [lazyById()](/database/query-builder/chunking#lazybyid), [lazyByIdDesc()](/database/query-builder/chunking#lazybyiddesc), [cursor()](/database/query-builder/chunking#cursor)
 
 **Write rows**
 
-- [insert()](/database/query-builder/writes#insert), [insertOrIgnore()](/database/query-builder/writes#insertorignore), [insertGetId()](/database/query-builder/writes#insertgetid), [upsert()](/database/query-builder/writes#upsert)
-- [update()](/database/query-builder/writes#update), [updateJson()](/database/query-builder/writes#updatejson), [increment()](/database/query-builder/writes#increment), [decrement()](/database/query-builder/writes#decrement), [delete()](/database/query-builder/writes#delete)
+- [insert()](/database/query-builder/writes#insert), [insertOrIgnore()](/database/query-builder/writes#insertorignore), [insertGetId()](/database/query-builder/writes#insertgetid), [insertUsing()](/database/query-builder/writes#insertusing), [insertOrIgnoreUsing()](/database/query-builder/writes#insertorignoreusing), [upsert()](/database/query-builder/writes#upsert), [updateOrInsert()](/database/query-builder/writes#updateorinsert)
+- [update()](/database/query-builder/writes#update), [updateJson()](/database/query-builder/writes#updatejson), [increment()](/database/query-builder/writes#increment), [decrement()](/database/query-builder/writes#decrement), [incrementEach()](/database/query-builder/writes#incrementeach), [decrementEach()](/database/query-builder/writes#decrementeach), [delete()](/database/query-builder/writes#delete), [truncate()](/database/query-builder/writes#truncate)
 
 **Debug, cache, and raw SQL**
 
-- [toSQL()](#tosql), [debug()](#debug), [dump()](#dump), [cache()](#cache)
+- [toSQL()](#tosql), [toRawSql()](#torawsql), [debug()](#debug), [dump()](#dump), [cache()](#cache)
 - [unsafeQuery()](/database/query-builder/joins-and-subqueries#unsafequery), [unsafeExecute()](/database/query-builder/joins-and-subqueries#unsafeexecute)
 
 ## Start a query
@@ -229,6 +231,15 @@ const titles = await DB.table('posts')
 // ['Hello World', 'Second Post', ...]
 ```
 
+### implode()
+
+`implode(column, glue = '')` joins one column from every matching row into a string.
+
+```ts
+const tags = await DB.table('tags').orderBy('name').implode('name', ', ')
+// 'news, release, tips'
+```
+
 ## Check if rows exist
 
 ### exists()
@@ -249,6 +260,28 @@ const taken = await DB.table('users')
 const isFree = await DB.table('users')
   .where('email', 'ava@example.com')
   .doesntExist()
+```
+
+### existsOr()
+
+`existsOr(callback)` returns `true` when at least one row matches. Otherwise it returns the result of the callback.
+
+```ts
+const found = await DB.table('invoices')
+  .where('number', number)
+  .existsOr(() => {
+    throw new Error(`Invoice ${number} not found`)
+  })
+```
+
+### doesntExistOr()
+
+`doesntExistOr(callback)` returns `true` when no row matches. Otherwise it returns the result of the callback.
+
+```ts
+const free = await DB.table('users')
+  .where('email', email)
+  .doesntExistOr(() => 'taken')
 ```
 
 ## Aggregates
@@ -279,6 +312,14 @@ const revenue = await DB.table('orders').where('status', 'paid').sum('total')
 const averageOrder = await DB.table('orders').avg('total')
 ```
 
+### average()
+
+`average()` is another name for `avg()`.
+
+```ts
+const averageOrder = await DB.table('orders').average('total')
+```
+
 ### min()
 
 `min()` returns the lowest value of one column. It returns `null` when no rows match.
@@ -295,7 +336,7 @@ const cheapest = await DB.table('products').min('price')
 const priciest = await DB.table('products').max('price')
 ```
 
-`count()` and `sum()` return a `number`. `avg()`, `min()`, and `max()` return `number | null`.
+`count()` and `sum()` return a `number`. `avg()`, `average()`, `min()`, and `max()` return `number | null`.
 
 To compute aggregates per group, select them as columns instead. See [Grouping](/database/query-builder/selects-and-filters#grouping-and-having).
 
@@ -354,6 +395,15 @@ console.log(query.toSQL())
 // { sql: 'SELECT * FROM "users" WHERE "active" = ? ORDER BY "name" ASC', bindings: [true], ... }
 ```
 
+### toRawSql()
+
+`toRawSql()` returns the SQL with the bindings written into it as literals. Use it to read or copy a query while debugging. Don't run the output; run the query itself, which sends the bindings separately.
+
+```ts
+console.log(DB.table('users').where('name', 'Ava').toRawSql())
+// SELECT * FROM "users" WHERE "name" = 'Ava'
+```
+
 ### debug()
 
 `debug()` returns the same output as `toSQL()`, plus the connection name and scheduling details. Sensitive bindings are redacted.
@@ -394,11 +444,13 @@ const categories = await DB.table('categories')
 | `sole()` | the only row; throws otherwise |
 | `value(column)` / `valueOrFail(column)` / `soleValue(column)` | one column value |
 | `pluck(column)` | array of one column's values |
+| `implode(column, glue = '')` | one column's values joined into a string |
 | `exists()` / `doesntExist()` | `boolean` |
+| `existsOr(callback)` / `doesntExistOr(callback)` | `true`, or the callback's result |
 | `count()` / `sum(column)` | `number` |
-| `avg(column)` / `min(column)` / `max(column)` | `number \| null` |
+| `avg(column)` / `average(column)` / `min(column)` / `max(column)` | `number \| null` |
 | `paginate()` / `simplePaginate()` / `cursorPaginate()` | a page of rows — see [Pagination](/database/pagination) |
-| `chunk()` / `chunkById()` / `lazy()` / `cursor()` | batches or a stream — see [Chunking](/database/query-builder/chunking) |
+| `chunk()` / `chunkById()` / `each()` / `eachById()` / `lazy()` / `lazyById()` / `lazyByIdDesc()` / `cursor()` | batches or a stream — see [Chunking](/database/query-builder/chunking) |
 
 ## Next steps
 

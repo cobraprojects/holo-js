@@ -319,10 +319,25 @@ const anyPost = await DB.table('posts')
 
 ### whereIn()
 
-Keep rows where the column matches any value in the list.
+Keep rows where the column matches any value in the list. Pass a query instead of a list to match the values it selects.
 
 ```ts
 const picked = await DB.table('posts').whereIn('id', [1, 2, 3]).get()
+
+const byActiveAuthors = await DB.table('posts')
+  .whereIn('user_id', DB.table('users').select('id').where('active', true))
+  .get()
+```
+
+### orWhereIn()
+
+Add an `OR` condition that the column matches any value in the list or query.
+
+```ts
+const posts = await DB.table('posts')
+  .where('featured', true)
+  .orWhereIn('id', [1, 2, 3])
+  .get()
 ```
 
 ### whereNotIn()
@@ -333,12 +348,34 @@ Keep rows where the column matches none of the values in the list.
 const others = await DB.table('posts').whereNotIn('status', ['draft', 'archived']).get()
 ```
 
+### orWhereNotIn()
+
+Add an `OR` condition that the column matches none of the values in the list or query.
+
+```ts
+const posts = await DB.table('posts')
+  .where('featured', true)
+  .orWhereNotIn('status', ['draft', 'archived'])
+  .get()
+```
+
 ### whereBetween()
 
 Keep rows where the column falls between two values, inclusive.
 
 ```ts
 const midRange = await DB.table('products').whereBetween('price', [10, 50]).get()
+```
+
+### orWhereBetween()
+
+Add an `OR` condition that the column falls between two values.
+
+```ts
+const products = await DB.table('products')
+  .where('on_sale', true)
+  .orWhereBetween('price', [10, 50])
+  .get()
 ```
 
 ### whereNotBetween()
@@ -349,17 +386,120 @@ Keep rows where the column falls outside the two values.
 const outliers = await DB.table('products').whereNotBetween('price', [10, 50]).get()
 ```
 
+### orWhereNotBetween()
+
+Add an `OR` condition that the column falls outside the two values.
+
+```ts
+const products = await DB.table('products')
+  .where('featured', true)
+  .orWhereNotBetween('price', [10, 50])
+  .get()
+```
+
+## Ranges bounded by columns
+
+### whereBetweenColumns()
+
+Keep rows where a column falls between the values of two other columns in the same row.
+
+```ts
+const inRange = await DB.table('patients')
+  .whereBetweenColumns('weight', ['min_allowed_weight', 'max_allowed_weight'])
+  .get()
+```
+
+### orWhereBetweenColumns()
+
+Add an `OR` condition that a column falls between two other columns.
+
+```ts
+const patients = await DB.table('patients')
+  .where('reviewed', true)
+  .orWhereBetweenColumns('weight', ['min_allowed_weight', 'max_allowed_weight'])
+  .get()
+```
+
+### whereNotBetweenColumns()
+
+Keep rows where a column falls outside the values of two other columns.
+
+```ts
+const outOfRange = await DB.table('patients')
+  .whereNotBetweenColumns('weight', ['min_allowed_weight', 'max_allowed_weight'])
+  .get()
+```
+
+### orWhereNotBetweenColumns()
+
+Add an `OR` condition that a column falls outside two other columns.
+
+```ts
+const patients = await DB.table('patients')
+  .where('flagged', true)
+  .orWhereNotBetweenColumns('weight', ['min_allowed_weight', 'max_allowed_weight'])
+  .get()
+```
+
+### whereValueBetween()
+
+Keep rows where a value falls between two columns.
+
+```ts
+const available = await DB.table('products')
+  .whereValueBetween(100, ['min_price', 'max_price'])
+  .get()
+```
+
+### orWhereValueBetween()
+
+Add an `OR` condition that a value falls between two columns.
+
+```ts
+const products = await DB.table('products')
+  .where('featured', true)
+  .orWhereValueBetween(100, ['min_price', 'max_price'])
+  .get()
+```
+
+### whereValueNotBetween()
+
+Keep rows where a value falls outside two columns.
+
+```ts
+const unavailable = await DB.table('products')
+  .whereValueNotBetween(100, ['min_price', 'max_price'])
+  .get()
+```
+
+### orWhereValueNotBetween()
+
+Add an `OR` condition that a value falls outside two columns.
+
+```ts
+const products = await DB.table('products')
+  .where('archived', true)
+  .orWhereValueNotBetween(100, ['min_price', 'max_price'])
+  .get()
+```
+
 ## Pattern matching
 
 ### whereLike()
 
-Keep rows where the column matches a `LIKE` pattern. It is a shortcut for `where(column, 'like', pattern)`.
+Keep rows where the column matches a `LIKE` pattern. Matching ignores case by default on PostgreSQL and SQLite. On MySQL it follows the column's collation, except on JSON paths, where it ignores case. Pass `true` as the third argument to match case exactly.
 
 ```ts
 const results = await DB.table('posts')
   .whereLike('title', '%holo%')
   .get()
+
+const exact = await DB.table('posts')
+  .whereLike('title', 'Holo%', true)
+  .get()
 ```
+
+Case-insensitive matching uses `ILIKE` on PostgreSQL, `LIKE` on SQLite, and `LIKE` on MySQL (`LOWER()` on both sides for JSON paths). Case-sensitive matching uses `LIKE` on PostgreSQL, `LIKE BINARY` on MySQL, and `GLOB` on SQLite. On MySQL, case-insensitive matching follows the column's collation.
 
 ### orWhereLike()
 
@@ -372,15 +512,51 @@ const results = await DB.table('posts')
   .get()
 ```
 
+### whereNotLike()
+
+Keep rows where the column does not match a `LIKE` pattern. It accepts the same case-sensitivity flag as `whereLike()`.
+
+```ts
+const results = await DB.table('posts')
+  .whereNotLike('title', '%draft%')
+  .get()
+```
+
+### orWhereNotLike()
+
+Add an `OR` condition that the column does not match a `LIKE` pattern.
+
+```ts
+const results = await DB.table('posts')
+  .where('featured', true)
+  .orWhereNotLike('title', '%draft%')
+  .get()
+```
+
 ## Comparing two columns
 
 ### whereColumn()
 
-Compare one column to another column instead of to a value. The operator must be `=`, `!=`, `>`, `>=`, `<`, `<=`, or `like`. Any other operator throws a `SecurityError` when the query runs.
+Compare one column to another column instead of to a value. Pass two columns to compare them with `=`. The operator must be `=`, `!=`, `>`, `>=`, `<`, `<=`, or `like`. Any other operator throws a `SecurityError` when the query runs.
 
 ```ts
 const overBudget = await DB.table('projects')
   .whereColumn('spent', '>', 'budget')
+  .get()
+
+const unchanged = await DB.table('users')
+  .whereColumn('updated_at', 'created_at')
+  .get()
+```
+
+### orWhereColumn()
+
+Add an `OR` condition that compares two columns.
+
+```ts
+const projects = await DB.table('projects')
+  .where('flagged', true)
+  .orWhereColumn('spent', '>', 'budget')
   .get()
 ```
 
@@ -425,6 +601,39 @@ const clean = await DB.table('posts')
   .get()
 ```
 
+### orWhereAny()
+
+Add an `OR` condition that is true for at least one of the columns.
+
+```ts
+const matches = await DB.table('posts')
+  .where('featured', true)
+  .orWhereAny(['title', 'excerpt'], 'like', '%holo%')
+  .get()
+```
+
+### orWhereAll()
+
+Add an `OR` condition that is true for every column.
+
+```ts
+const matching = await DB.table('products')
+  .where('featured', true)
+  .orWhereAll(['name', 'sku'], 'like', 'A%')
+  .get()
+```
+
+### orWhereNone()
+
+Add an `OR` condition that is true for none of the columns.
+
+```ts
+const clean = await DB.table('posts')
+  .where('reviewed', true)
+  .orWhereNone(['title', 'body'], 'like', '%spam%')
+  .get()
+```
+
 ## Dates and times
 
 Compare only part of a date or timestamp column:
@@ -437,7 +646,7 @@ const firstOfMonth = await DB.table('orders').whereDay('created_at', 1).get()
 const afterHours = await DB.table('orders').whereTime('created_at', '>', '18:00:00').get()
 ```
 
-Each method accepts an optional operator, like `where()`.
+Each method accepts an optional operator, like `where()`. Each also has an `OR` form: `orWhereDate()`, `orWhereMonth()`, `orWhereDay()`, `orWhereYear()`, and `orWhereTime()`.
 
 ### whereDate()
 
@@ -479,6 +688,181 @@ Compare the time part of a column.
 const eveningOrders = await DB.table('orders').whereTime('created_at', '>', '18:00:00').get()
 ```
 
+### orWhereDate()
+
+Add an `OR` condition on the date part of a column.
+
+```ts
+const orders = await DB.table('orders')
+  .where('priority', true)
+  .orWhereDate('created_at', '2026-10-17')
+  .get()
+```
+
+### orWhereMonth()
+
+Add an `OR` condition on the month of a column.
+
+```ts
+const orders = await DB.table('orders').where('priority', true).orWhereMonth('created_at', 12).get()
+```
+
+### orWhereDay()
+
+Add an `OR` condition on the day of the month of a column.
+
+```ts
+const orders = await DB.table('orders').where('priority', true).orWhereDay('created_at', 1).get()
+```
+
+### orWhereYear()
+
+Add an `OR` condition on the year of a column.
+
+```ts
+const orders = await DB.table('orders').where('priority', true).orWhereYear('created_at', 2026).get()
+```
+
+### orWhereTime()
+
+Add an `OR` condition on the time part of a column.
+
+```ts
+const orders = await DB.table('orders').where('priority', true).orWhereTime('created_at', '>', '18:00:00').get()
+```
+
+## Relative dates
+
+Compare columns to the current time or today's date. "Today" runs from midnight to midnight in the application timezone (`app.timezone`), so timestamps are compared as moments in time. Columns declared with `column.date()` are compared by calendar date against today, so `wherePast()` keeps dates before today and `whereNowOrFuture()` keeps today and later. Pass one column or a list. With a list, the `where…` methods need every column to match, and the `orWhere…` methods add one `OR` condition per column.
+
+```ts
+const upcoming = await DB.table('events').whereFuture('starts_at').get()
+const dueToday = await DB.table('tasks').whereToday('due_at').get()
+const overdue = await DB.table('invoices').whereBeforeToday(['due_at']).get()
+```
+
+Every method has an `OR` form that starts with `orWhere`, for example `orWherePast()` and `orWhereToday()`.
+
+| Method | Keeps rows where the column is |
+| --- | --- |
+| `wherePast(columns)` | before now |
+| `whereNowOrPast(columns)` | now or before |
+| `whereFuture(columns)` | after now |
+| `whereNowOrFuture(columns)` | now or after |
+| `whereToday(columns)` | on today's date |
+| `whereBeforeToday(columns)` | before today's date |
+| `whereTodayOrBefore(columns)` | on or before today's date |
+| `whereAfterToday(columns)` | after today's date |
+| `whereTodayOrAfter(columns)` | on or after today's date |
+
+### wherePast()
+
+```ts
+const finished = await DB.table('events').wherePast('ends_at').get()
+```
+
+### orWherePast()
+
+```ts
+const events = await DB.table('events').where('cancelled', true).orWherePast('ends_at').get()
+```
+
+### whereNowOrPast()
+
+```ts
+const started = await DB.table('events').whereNowOrPast('starts_at').get()
+```
+
+### orWhereNowOrPast()
+
+```ts
+const events = await DB.table('events').where('pinned', true).orWhereNowOrPast('starts_at').get()
+```
+
+### whereFuture()
+
+```ts
+const upcoming = await DB.table('events').whereFuture('starts_at').get()
+```
+
+### orWhereFuture()
+
+```ts
+const events = await DB.table('events').where('pinned', true).orWhereFuture('starts_at').get()
+```
+
+### whereNowOrFuture()
+
+```ts
+const open = await DB.table('events').whereNowOrFuture('ends_at').get()
+```
+
+### orWhereNowOrFuture()
+
+```ts
+const events = await DB.table('events').where('pinned', true).orWhereNowOrFuture('ends_at').get()
+```
+
+### whereToday()
+
+```ts
+const dueToday = await DB.table('tasks').whereToday('due_at').get()
+```
+
+### orWhereToday()
+
+```ts
+const tasks = await DB.table('tasks').where('urgent', true).orWhereToday('due_at').get()
+```
+
+### whereBeforeToday()
+
+```ts
+const overdue = await DB.table('tasks').whereBeforeToday('due_at').get()
+```
+
+### orWhereBeforeToday()
+
+```ts
+const tasks = await DB.table('tasks').where('urgent', true).orWhereBeforeToday('due_at').get()
+```
+
+### whereTodayOrBefore()
+
+```ts
+const due = await DB.table('tasks').whereTodayOrBefore('due_at').get()
+```
+
+### orWhereTodayOrBefore()
+
+```ts
+const tasks = await DB.table('tasks').where('urgent', true).orWhereTodayOrBefore('due_at').get()
+```
+
+### whereAfterToday()
+
+```ts
+const later = await DB.table('tasks').whereAfterToday('due_at').get()
+```
+
+### orWhereAfterToday()
+
+```ts
+const tasks = await DB.table('tasks').where('urgent', true).orWhereAfterToday('due_at').get()
+```
+
+### whereTodayOrAfter()
+
+```ts
+const pending = await DB.table('tasks').whereTodayOrAfter('due_at').get()
+```
+
+### orWhereTodayOrAfter()
+
+```ts
+const tasks = await DB.table('tasks').where('urgent', true).orWhereTodayOrAfter('due_at').get()
+```
+
 ## JSON columns
 
 Reach into a JSON column with `->` between keys. This works in `where()` and the dedicated JSON methods.
@@ -495,6 +879,9 @@ Each segment between `->` is one key, so a key that contains a comma is matched 
 | --- | --- |
 | `whereJson(path, operator?, value)` / `orWhereJson(...)` | compare a scalar value (string, number, boolean, `null`) at a path |
 | `whereJsonContains(path, value)` / `orWhereJsonContains(...)` | check that a JSON array or object contains a value |
+| `whereJsonDoesntContain(path, value)` / `orWhereJsonDoesntContain(...)` | check that a JSON array or object does not contain a value |
+| `whereJsonContainsKey(path)` / `orWhereJsonContainsKey(...)` | check that a key exists at a path, even when its value is `null` |
+| `whereJsonDoesntContainKey(path)` / `orWhereJsonDoesntContainKey(...)` | check that a key is missing at a path |
 | `whereJsonLength(path, operator?, value)` / `orWhereJsonLength(...)` | compare the length of a JSON array |
 
 ### whereJson()
@@ -536,6 +923,69 @@ Add an `OR` condition that the JSON array or object contains the value.
 const reviewers = await DB.table('users')
   .whereJsonContains('settings->tags', 'beta')
   .orWhereJsonContains('settings->tags', 'reviewer')
+  .get()
+```
+
+### whereJsonDoesntContain()
+
+Keep rows where the JSON array or object at a path does not contain the value.
+
+```ts
+const nonBeta = await DB.table('users')
+  .whereJsonDoesntContain('settings->tags', 'beta')
+  .get()
+```
+
+### orWhereJsonDoesntContain()
+
+Add an `OR` condition that the JSON value at a path does not contain the value.
+
+```ts
+const users = await DB.table('users')
+  .where('admin', true)
+  .orWhereJsonDoesntContain('settings->tags', 'beta')
+  .get()
+```
+
+### whereJsonContainsKey()
+
+Keep rows where a key exists at a JSON path. A key that holds `null` still counts as present.
+
+```ts
+const themed = await DB.table('users')
+  .whereJsonContainsKey('settings->theme')
+  .get()
+```
+
+### orWhereJsonContainsKey()
+
+Add an `OR` condition that a key exists at a JSON path.
+
+```ts
+const users = await DB.table('users')
+  .where('admin', true)
+  .orWhereJsonContainsKey('settings->theme')
+  .get()
+```
+
+### whereJsonDoesntContainKey()
+
+Keep rows where a key is missing at a JSON path.
+
+```ts
+const unthemed = await DB.table('users')
+  .whereJsonDoesntContainKey('settings->theme')
+  .get()
+```
+
+### orWhereJsonDoesntContainKey()
+
+Add an `OR` condition that a key is missing at a JSON path.
+
+```ts
+const users = await DB.table('users')
+  .where('admin', true)
+  .orWhereJsonDoesntContainKey('settings->theme')
   .get()
 ```
 
@@ -683,6 +1133,14 @@ const users = await DB.table('users')
   .get()
 ```
 
+### orderByDesc()
+
+Sort by a column in descending order. It is a shortcut for `orderBy(column, 'desc')`.
+
+```ts
+const popular = await DB.table('posts').orderByDesc('views').get()
+```
+
 ### latest()
 
 Sort newest first by a column. The column defaults to `created_at`.
@@ -765,6 +1223,107 @@ const steadyAuthors = await DB.table('posts')
   .select('user_id')
   .groupBy('user_id')
   .havingBetween('count(*)', [5, 20])
+  .get()
+```
+
+### orHaving()
+
+Add an `OR` condition on an aggregate.
+
+```ts
+const notable = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .having('count(*)', '>', 10)
+  .orHaving('sum(views)', '>', 1000)
+  .get()
+```
+
+### orHavingBetween()
+
+Add an `OR` condition that an aggregate falls between two values.
+
+```ts
+const authors = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .having('count(*)', '>', 50)
+  .orHavingBetween('sum(views)', [100, 500])
+  .get()
+```
+
+### havingNotBetween()
+
+Filter groups where an aggregate falls outside two values.
+
+```ts
+const outliers = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .havingNotBetween('count(*)', [5, 20])
+  .get()
+```
+
+### orHavingNotBetween()
+
+Add an `OR` condition that an aggregate falls outside two values.
+
+```ts
+const authors = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .having('count(*)', 0)
+  .orHavingNotBetween('sum(views)', [100, 500])
+  .get()
+```
+
+### havingNull()
+
+Filter groups where an aggregate is `NULL`. Pass one expression or a list.
+
+```ts
+const unscheduled = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .havingNull('max(published_at)')
+  .get()
+```
+
+### orHavingNull()
+
+Add an `OR` condition that an aggregate is `NULL`.
+
+```ts
+const authors = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .having('count(*)', '>', 10)
+  .orHavingNull('max(published_at)')
+  .get()
+```
+
+### havingNotNull()
+
+Filter groups where an aggregate is not `NULL`.
+
+```ts
+const publishing = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .havingNotNull('max(published_at)')
+  .get()
+```
+
+### orHavingNotNull()
+
+Add an `OR` condition that an aggregate is not `NULL`.
+
+```ts
+const authors = await DB.table('posts')
+  .select('user_id')
+  .groupBy('user_id')
+  .having('count(*)', '>', 10)
+  .orHavingNotNull('max(published_at)')
   .get()
 ```
 

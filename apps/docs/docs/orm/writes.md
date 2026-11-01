@@ -21,11 +21,11 @@ The payload is typed from your table. `create()` requires every column that has 
 
 Each method is described in the [method reference](#method-reference) at the bottom of this page. Relation writes such as `attach()` and `createRelated()` are on the [relationship pages](/orm/relationships/).
 
-**Create:** [create()](#create), [createMany()](#createmany), [createQuietly()](#createquietly), [createManyQuietly()](#createmanyquietly), [make()](#make), [firstOrCreate()](#firstorcreate), [firstOrNew()](#firstornew), [updateOrCreate()](#updateorcreate), [upsert()](#upsert)
+**Create:** [create()](#create), [createMany()](#createmany), [createQuietly()](#createquietly), [createManyQuietly()](#createmanyquietly), [make()](#make), [firstOrCreate()](#firstorcreate), [createOrFirst()](#createorfirst), [firstOrNew()](#firstornew), [updateOrCreate()](#updateorcreate), [upsert()](#upsert)
 
-**Update:** [update()](#update), [updateJson()](#updatejson), [increment()](#increment), [decrement()](#decrement), [fill()](#fill), [forceFill()](#forcefill), [set()](#set), [save()](#save), [push()](#push), [saveQuietly()](#savequietly), [saveMany()](#savemany)
+**Update:** [update()](#update), [updateJson()](#updatejson), [increment()](#increment), [decrement()](#decrement), [incrementEach()](#incrementeach), [decrementEach()](#decrementeach), [fill()](#fill), [forceFill()](#forcefill), [set()](#set), [save()](#save), [push()](#push), [saveQuietly()](#savequietly), [saveMany()](#savemany)
 
-**Delete and restore:** [delete()](#delete), [deleteQuietly()](#deletequietly), [destroy()](#destroy), [prune()](#prune), [forceDelete()](#forcedelete), [forceDeleteQuietly()](#forcedeletequietly), [restore()](#restore), [restoreQuietly()](#restorequietly)
+**Delete and restore:** [delete()](#delete), [deleteQuietly()](#deletequietly), [destroy()](#destroy), [prune()](#prune), [truncate()](#truncate), [forceDelete()](#forcedelete), [forceDeleteQuietly()](#forcedeletequietly), [restore()](#restore), [restoreQuietly()](#restorequietly)
 
 **Copy and slugs:** [replicate()](#replicate), [uniqueSlug()](#uniqueslug)
 
@@ -120,6 +120,12 @@ await Product.where('id', productId).decrement('stock', 1, { restocked: false })
 
 The optional third argument updates other columns in the same statement. Calling `Post.increment('views')` directly on the model updates every row.
 
+Change several columns at once with `incrementEach()` and `decrementEach()`:
+
+```ts
+await User.where('id', user.id).incrementEach({ votes: 5, balance: 100 })
+```
+
 ### Update JSON columns
 
 Use `updateJson()` with a `->` path to change one key inside a JSON column:
@@ -141,7 +147,16 @@ const tag = await Tag.firstOrCreate(
 
 If two requests race and the table has a unique index on the matched columns, `firstOrCreate()` catches the duplicate-key error and returns the row the other request created.
 
-`firstOrNew()` does the same but returns an unsaved instance when nothing matches:
+`createOrFirst()` tries the insert first. When a unique index rejects it, it returns the existing row instead. Use it when the row usually doesn't exist yet. It needs a unique index on the matched columns, and at least one attribute to match. Inside a transaction, the insert runs in a savepoint, so a rejected insert doesn't abort the transaction:
+
+```ts
+const tag = await Tag.createOrFirst(
+  { slug: 'typescript' },
+  { name: 'TypeScript' },
+)
+```
+
+`firstOrNew()` does the same as `firstOrCreate()` but returns an unsaved instance when nothing matches:
 
 ```ts
 const tag = await Tag.firstOrNew({ slug: 'typescript' }, { name: 'TypeScript' })
@@ -231,6 +246,12 @@ Delete every matching row with one statement:
 
 ```ts
 await Session.where('expires_at', '<', new Date()).delete()
+```
+
+Remove every row in the table with `truncate()`. It runs one statement, skips model events, and ignores `where` clauses. See [truncate()](/database/query-builder/writes#truncate) for how each database handles it.
+
+```ts
+await ImportRow.truncate()
 ```
 
 ## Soft delete and restore
@@ -424,6 +445,14 @@ Returns the first row that matches the first argument. If none matches, creates 
 const tag = await Tag.firstOrCreate({ slug: 'typescript' }, { name: 'TypeScript' })
 ```
 
+### createOrFirst()
+
+Creates a row from both arguments. If a unique index rejects the insert, returns the existing row that matches the first argument instead.
+
+```ts
+const tag = await Tag.createOrFirst({ slug: 'typescript' }, { name: 'TypeScript' })
+```
+
 ### firstOrNew()
 
 Returns the first matching row, or an unsaved model built from both arguments. Nothing is written until you call `save()`.
@@ -482,6 +511,22 @@ Subtracts from a numeric column. It takes the same arguments as `increment()`.
 
 ```ts
 await Product.where('id', productId).decrement('stock', 1)
+```
+
+### incrementEach()
+
+Adds to several numeric columns in one statement. The optional second argument updates other columns, and the model's `updated_at` is set like `increment()`.
+
+```ts
+await User.where('id', user.id).incrementEach({ votes: 5, balance: 100 })
+```
+
+### decrementEach()
+
+Subtracts from several numeric columns in one statement. It takes the same arguments as `incrementEach()`.
+
+```ts
+await Product.where('id', productId).decrementEach({ stock: 2, reserved: 2 })
 ```
 
 ### fill()
@@ -577,6 +622,14 @@ Deletes the rows that the model's `prunable` option selects, and returns how man
 
 ```ts
 await Post.prune()
+```
+
+### truncate()
+
+Deletes every row in the model's table with one statement and resets the auto-increment counter. Model events don't fire.
+
+```ts
+await ImportRow.truncate()
 ```
 
 ### forceDelete()

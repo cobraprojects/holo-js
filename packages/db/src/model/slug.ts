@@ -33,6 +33,7 @@ type UniqueSlugModel<
     readonly connectionName?: string
     readonly name: string
     readonly primaryKey: string
+    readonly table: TTable
   }
   whereLike(column: ModelColumnName<TTable>, value: string): {
     when(

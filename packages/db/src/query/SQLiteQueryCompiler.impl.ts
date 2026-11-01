@@ -1,5 +1,6 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
+import type { CompiledStatement } from '../core/types'
+import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -41,9 +42,79 @@ function compileSqliteJsonEquality(
   return `${extractedType} IS NOT NULL AND (${differingType} OR ${extracted} != ${placeholder})`
 }
 
+const SQLITE_GLOB_PATTERN_REPLACEMENTS: Readonly<Record<string, string>> = {
+  '[': '[[]',
+  '*': '[*]',
+  '?': '[?]',
+  '%': '*',
+  '_': '?',
+}
+
+function convertLikePatternToGlob(pattern: string): string {
+  return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
+}
+
+function splitSchemaTable(tableName: string): { readonly schemaName: string, readonly schema: string, readonly table: string } {
+  const separator = tableName.indexOf('.')
+  if (separator === -1) {
+    return { schemaName: 'main', schema: '', table: tableName }
+  }
+
+  const schemaName = tableName.slice(0, separator)
+  return { schemaName, schema: `"${schemaName.replaceAll('"', '""')}".`, table: tableName.slice(separator + 1) }
+}
+
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  override compileTableSchemaLookup(tableName: string): CompiledStatement | undefined {
+    if (tableName.includes('.')) return undefined
+
+    return {
+      sql: 'SELECT "tables"."schema" AS "schema" FROM pragma_table_list(?) AS "tables" JOIN pragma_database_list AS "databases" ON "databases"."name" = "tables"."schema" ORDER BY CASE "tables"."schema" WHEN \'temp\' THEN 0 ELSE 1 END, "databases"."seq" LIMIT 1',
+      bindings: [tableName],
+      source: `query:select:${tableName}`,
+    }
+  }
+
+  override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
+    const { schema, table } = splitSchemaTable(tableName)
+    return {
+      probe: {
+        sql: `SELECT 1 AS "present" FROM ${schema}"sqlite_master" WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
+        bindings: [],
+        source: `query:select:${tableName}`,
+      },
+      reset: {
+        sql: `DELETE FROM ${schema}"sqlite_sequence" WHERE "name" = ? COLLATE NOCASE`,
+        bindings: [table],
+        source: `query:delete:${tableName}`,
+      },
+    }
+  }
+
+  override compileReferencingTables(tableName: string): CompiledStatement {
+    const { schemaName, schema, table } = splitSchemaTable(tableName)
+    return {
+      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${schema}"sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
+      bindings: [schemaName, table, table],
+      source: `query:select:${tableName}`,
+    }
+  }
+
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    if (!predicate.caseSensitive) {
+      return super.compileLikePredicate(predicate, bindings)
+    }
+
+    bindings.push(convertLikePatternToGlob(predicate.value))
+    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}GLOB ${this.createPlaceholder(bindings.length)}`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return createSqliteJsonExtractExpression(column, this.createJsonPathLiteral(path))
+  }
+
   protected override compileLockClause(_lockMode: QueryLockMode): string {
     return ''
   }
@@ -88,6 +159,10 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       return `${extracted} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `json_type(${column}, ${pathLiteral}) IS NOT NULL`
+    }
+
     if (predicate.jsonMode === 'contains') {
       if (predicate.value === null || ['string', 'number', 'boolean'].includes(typeof predicate.value)) {
         bindings.push(predicate.value)
@@ -95,7 +170,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       }
 
       bindings.push(JSON.stringify(predicate.value))
-      return `${extracted} = json(${this.createPlaceholder(bindings.length)})`
+      return `COALESCE(${extracted} = json(${this.createPlaceholder(bindings.length)}), 0)`
     }
 
     bindings.push(predicate.value)
@@ -123,6 +198,8 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   ): string {
     const column = this.compileColumnReference(predicate.column)
     switch (predicate.part) {
+      case 'instant':
+        return `julianday(${column}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
       case 'date':
         return `date(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':
@@ -138,7 +215,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
   }
 
-  protected override compileInsertPrefix(plan: InsertQueryPlan): string {
+  protected override compileInsertPrefix(plan: InsertStatementOptions): string {
     return plan.ignoreConflicts ? 'INSERT OR IGNORE INTO' : 'INSERT INTO'
   }
 }

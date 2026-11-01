@@ -1,15 +1,39 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import type {
-  InsertQueryPlan,
+  InsertStatementOptions,
   QueryDatePredicate,
   QueryFullTextPredicate,
   QueryJsonPredicate,
+  QueryLikePredicate,
   QueryJsonUpdateOperation,
   QueryLockMode,
   UpsertQueryPlan,
 } from './ast'
 
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override createBooleanLiteral(value: boolean): string {
+    return value ? 'true' : 'false'
+  }
+
+  protected override createBinaryLiteral(value: Uint8Array): string {
+    return `'\\x${Buffer.from(value).toString('hex')}'::bytea`
+  }
+
+  protected override compileTruncateSql(table: string): string {
+    return `TRUNCATE ${table} RESTART IDENTITY`
+  }
+
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    bindings.push(predicate.value)
+    const operator = predicate.caseSensitive ? 'LIKE' : 'ILIKE'
+    const subject = predicate.path.length === 0 ? this.compileLikeSubject(predicate) : `(${this.compileLikeSubject(predicate)})`
+    return `${subject}::text ${predicate.negated ? 'NOT ' : ''}${operator} ${this.createPlaceholder(bindings.length)}`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return `(${column})::jsonb #>> ${this.createPostgresPathLiteral(path)}`
+  }
+
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
     return `LATERAL ${subquery} AS ${this.quoteIdentifier(alias)}`
   }
@@ -19,7 +43,7 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
     return lockOf === undefined ? clause : `${clause} OF ${lockOf}`
   }
 
-  protected override compileInsertSuffix(plan: InsertQueryPlan): string {
+  protected override compileInsertSuffix(plan: InsertStatementOptions): string {
     if (plan.returning === true) {
       return `${plan.ignoreConflicts ? ' ON CONFLICT DO NOTHING' : ''} RETURNING *`
     }
@@ -71,9 +95,13 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
       return `${extractedText} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `${extractedJson} IS NOT NULL`
+    }
+
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
-      return `${extractedJson} @> ${this.createPlaceholder(bindings.length)}::jsonb`
+      return `COALESCE(${extractedJson} @> ${this.createPlaceholder(bindings.length)}::jsonb, FALSE)`
     }
 
     bindings.push(predicate.value)

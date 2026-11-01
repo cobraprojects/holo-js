@@ -65,6 +65,27 @@ describe('native database and cache integration', () => {
 
   const names = () => DB.table(users).orderBy('id').cache(60).pluck('name')
 
+  it('evicts cached reads after truncating or inserting from a query', async () => {
+    await createSchemaService(db).createTable('imports', table => {
+      table.id(); table.string('name')
+    })
+    await DB.table('imports').insert({ name: 'Cara' })
+    const cachedCount = () => DB.table(users).cache(60).count()
+    const cachedThird = () => DB.table(users).where('id', 3).cache(60).first()
+    expect(await cachedCount()).toBe(2)
+    expect(await cachedThird()).toBeUndefined()
+
+    await DB.table(users).insertUsing(['name'], DB.table('imports').select('name'))
+
+    expect(await cachedCount()).toBe(3)
+    expect((await cachedThird())?.name).toBe('Cara')
+
+    await DB.table(users).truncate()
+
+    expect(await cachedCount()).toBe(0)
+    expect(await cachedThird()).toBeUndefined()
+  })
+
   it('isolates cached rows, counts and existence with an explicit key and invalidates them after writes', async () => {
     const query = DB.table(users).cache({ key: 'users.shared', ttl: 60 })
     expect(await query.count()).toBe(2)

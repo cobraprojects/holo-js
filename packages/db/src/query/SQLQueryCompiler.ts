@@ -8,6 +8,8 @@ import type { CompiledStatement, CompiledStatementMetadata } from '../core/types
 import type {
   DeleteQueryPlan,
   QueryDatePredicate,
+  QueryLikePredicate,
+  QueryBetweenColumnsPredicate,
   QueryFullTextPredicate,
   QueryHavingClause,
   QueryJsonUpdateOperation,
@@ -15,6 +17,9 @@ import type {
   QueryJsonPredicate,
   QueryLockMode,
   InsertQueryPlan,
+  InsertStatementOptions,
+  InsertUsingQueryPlan,
+  TruncateQueryPlan,
   UpsertQueryPlan,
   QueryPlan,
   QueryPredicateNode,
@@ -43,6 +48,10 @@ export class SQLQueryCompiler {
         return this.compileSelect(plan)
       case 'insert':
         return this.compileInsert(plan)
+      case 'insert-using':
+        return this.compileInsertUsing(plan)
+      case 'truncate':
+        return this.compileTruncate(plan)
       case 'update':
         return this.compileUpdate(plan)
       case 'upsert':
@@ -52,6 +61,42 @@ export class SQLQueryCompiler {
       default:
         throw new CompilerError(`Unsupported query plan kind "${(plan as { kind: string }).kind}".`)
     }
+  }
+
+  substituteBindings(sql: string, bindings: readonly unknown[]): string {
+    let result = ''
+    let offset = 0
+    let nextBinding = 0
+    for (const placeholder of rawSqlPlaceholders(sql)) {
+      const bindingIndex = typeof placeholder.index === 'undefined' ? nextBinding++ : placeholder.index - 1
+      if (bindingIndex >= bindings.length) continue
+      result += sql.slice(offset, placeholder.start) + this.createDebugLiteral(bindings[bindingIndex])
+      offset = placeholder.end
+    }
+
+    return result + sql.slice(offset)
+  }
+
+  protected createDebugLiteral(value: unknown): string {
+    if (value === null || typeof value === 'undefined') return 'NULL'
+    if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+    if (typeof value === 'boolean') return this.createBooleanLiteral(value)
+    if (value instanceof Date) return this.createDateLiteral(value)
+    if (value instanceof Uint8Array) return this.createBinaryLiteral(value)
+    if (typeof value === 'string') return this.createSqlStringLiteral(value)
+    return this.createSqlStringLiteral(JSON.stringify(value))
+  }
+
+  protected createDateLiteral(value: Date): string {
+    return this.createSqlStringLiteral(value.toISOString())
+  }
+
+  protected createBooleanLiteral(value: boolean): string {
+    return value ? '1' : '0'
+  }
+
+  protected createBinaryLiteral(value: Uint8Array): string {
+    return `X'${Buffer.from(value).toString('hex').toUpperCase()}'`
   }
 
   private compileRawSql(sql: string, values: readonly unknown[], bindings: unknown[]): string {
@@ -191,6 +236,52 @@ export class SQLQueryCompiler {
       bindings,
       source: `query:insert:${plan.source.tableName}`,
     }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
+  }
+
+  protected compileInsertUsing(plan: InsertUsingQueryPlan): CompiledStatement {
+    const bindings: unknown[] = []
+    const columns = plan.columns.map(column => this.quoteIdentifier(column)).join(', ')
+    const query = this.compileSelectSql(plan.query, bindings)
+    const unsafe = this.isUnsafeSelectPlan(plan.query, true)
+    const metadata = this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan))
+
+    return this.withMetadata({
+      sql: `${this.compileInsertPrefix(plan)} ${this.compileTableReference(plan.source.tableName)} (${columns}) ${query}${this.compileInsertSuffix(plan)}`,
+      bindings,
+      unsafe: unsafe ? true : undefined,
+      source: `query:insert:${plan.source.tableName}`,
+    }, {
+      ...metadata,
+      safety: { unsafe, containsRawSql: this.planContainsRawSql(plan.query) },
+    })
+  }
+
+  protected compileTruncate(plan: TruncateQueryPlan): CompiledStatement {
+    return this.withMetadata({
+      sql: this.compileTruncateSql(this.compileTableReference(plan.source.tableName)),
+      bindings: [],
+      source: `query:delete:${plan.source.tableName}`,
+    }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
+  }
+
+  compileReferencingTables(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
+  compileTableSchemaLookup(_tableName: string): CompiledStatement | undefined {
+    return undefined
+  }
+
+  truncateCommitsOpenTransaction(): boolean {
+    return false
+  }
+
+  compileSequenceReset(_tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } | undefined {
+    return undefined
+  }
+
+  protected compileTruncateSql(table: string): string {
+    return `DELETE FROM ${table}`
   }
 
   protected compileUpsert(plan: UpsertQueryPlan): CompiledStatement {
@@ -339,6 +430,10 @@ export class SQLQueryCompiler {
         const columnCount = Object.keys(plan.values[0]!).length
         return 1 + Math.max(1, columnCount) * Math.max(1, plan.values.length)
       }
+      case 'insert-using':
+        return 1 + plan.columns.length + this.calculatePlanComplexity(plan.query)
+      case 'truncate':
+        return 1
       case 'upsert': {
         const columnCount = Object.keys(plan.values[0]!).length
         return 2
@@ -458,18 +553,28 @@ export class SQLQueryCompiler {
   ): string {
     if (clauses.length === 0) return ''
 
-    const compiled = clauses.map((clause) => {
-      if (clause.operator === 'between' || clause.operator === 'not between') {
-        const values = clause.value as readonly [unknown, unknown]
-        bindings.push(values[0], values[1])
-        return `${this.compileHavingExpression(clause.expression)} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length - 1)} AND ${this.createPlaceholder(bindings.length)}`
-      }
-
-      bindings.push(clause.value)
-      return `${this.compileHavingExpression(clause.expression)} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
-    }).join(' AND ')
+    const compiled = clauses.map((clause, index) => {
+      const condition = this.compileHavingCondition(clause, bindings)
+      return index === 0 ? condition : `${(clause.boolean ?? 'and').toUpperCase()} ${condition}`
+    }).join(' ')
 
     return ` HAVING ${compiled}`
+  }
+
+  private compileHavingCondition(clause: QueryHavingClause, bindings: unknown[]): string {
+    const expression = this.compileHavingExpression(clause.expression)
+    if (clause.kind === 'null') {
+      return `${expression} IS ${clause.negated ? 'NOT ' : ''}NULL`
+    }
+
+    if (clause.operator === 'between' || clause.operator === 'not between') {
+      const values = clause.value as readonly [unknown, unknown]
+      bindings.push(values[0], values[1])
+      return `${expression} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length - 1)} AND ${this.createPlaceholder(bindings.length)}`
+    }
+
+    bindings.push(clause.value)
+    return `${expression} ${clause.operator.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
   }
 
   protected compilePredicate(
@@ -531,6 +636,14 @@ export class SQLQueryCompiler {
       return `${this.compileColumnReference(predicate.column)} IS ${predicate.negated ? 'NOT ' : ''}NULL`
     }
 
+    if (predicate.kind === 'like') {
+      return this.compileLikePredicate(predicate, bindings)
+    }
+
+    if (predicate.kind === 'between-columns') {
+      return this.compileBetweenColumnsPredicate(predicate, bindings)
+    }
+
     if (predicate.kind === 'column') {
       return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
     }
@@ -558,12 +671,50 @@ export class SQLQueryCompiler {
     return this.createPlaceholder(index)
   }
 
+  protected compileBetweenColumnsPredicate(
+    predicate: QueryBetweenColumnsPredicate,
+    bindings: unknown[],
+  ): string {
+    const [lower, upper] = predicate.bounds
+    const range = `${this.compileColumnReference(lower)} AND ${this.compileColumnReference(upper)}`
+    const operator = predicate.negated ? 'NOT BETWEEN' : 'BETWEEN'
+    if ('column' in predicate.subject) {
+      return `${this.compileColumnReference(predicate.subject.column)} ${operator} ${range}`
+    }
+
+    bindings.push(predicate.subject.value)
+    return `${this.createPlaceholder(bindings.length)} ${operator} ${range}`
+  }
+
+  protected compileLikeSubject(predicate: QueryLikePredicate): string {
+    const column = this.compileColumnReference(predicate.column)
+    return predicate.path.length === 0 ? column : this.compileJsonTextExtraction(column, predicate.path)
+  }
+
+  protected compileJsonTextExtraction(column: string, _path: readonly string[]): string {
+    throw new CompilerError(`Dialect does not implement JSON text extraction for "${column}".`)
+  }
+
+  protected compileLikePredicate(
+    predicate: QueryLikePredicate,
+    bindings: unknown[],
+  ): string {
+    if (predicate.caseSensitive) {
+      throw new CompilerError('This database engine does not support case-sensitive like operations.')
+    }
+
+    bindings.push(predicate.value)
+    return `${this.compileLikeSubject(predicate)} ${predicate.negated ? 'NOT ' : ''}LIKE ${this.createPlaceholder(bindings.length)}`
+  }
+
   protected compileDatePredicate(
     predicate: QueryDatePredicate,
     placeholder: string,
   ): string {
     const column = this.compileColumnReference(predicate.column)
     switch (predicate.part) {
+      case 'instant':
+        return `${column} ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'date':
         return `DATE(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':
@@ -622,11 +773,11 @@ export class SQLQueryCompiler {
     return 'RANDOM()'
   }
 
-  protected compileInsertPrefix(_plan: InsertQueryPlan): string {
+  protected compileInsertPrefix(_plan: InsertStatementOptions): string {
     return 'INSERT INTO'
   }
 
-  protected compileInsertSuffix(_plan: InsertQueryPlan): string {
+  protected compileInsertSuffix(_plan: InsertStatementOptions): string {
     if (_plan.returningColumn) return ` RETURNING ${this.quoteIdentifier(_plan.returningColumn)}`
     return _plan.returning === true ? ' RETURNING *' : ''
   }

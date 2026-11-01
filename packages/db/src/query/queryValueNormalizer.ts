@@ -15,7 +15,7 @@ export function normalizeQueryWriteValue(
 ): unknown {
   if (value instanceof NumericAdjustment) return value
   const column = table?.columns[columnName]
-  if (!column) return value
+  if (!column) return driver === 'sqlite' && value instanceof Date ? value.toISOString() : value
   return normalizeDialectWriteValue(driver as SchemaDialectName, column as AnyColumnDefinition, value)
 }
 

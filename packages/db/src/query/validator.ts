@@ -31,7 +31,7 @@ const OPERATORS = new Set<QueryOperator>([
   'like',
 ])
 const DIRECTIONS = new Set<QueryDirection>(['asc', 'desc'])
-const DATE_PARTS = new Set<QueryDatePredicate['part']>(['date', 'month', 'day', 'year', 'time'])
+const DATE_PARTS = new Set<QueryDatePredicate['part']>(['date', 'month', 'day', 'year', 'time', 'instant'])
 const JSON_VALUE_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<=', 'like'])
 const JSON_LENGTH_OPERATORS = new Set<QueryOperator>(['=', '!=', '>', '>=', '<', '<='])
 const COLUMN_COMPARISON_OPERATORS = new Set<QueryColumnPredicate['operator']>(['=', '!=', '>', '>=', '<', '<=', 'like'])
@@ -117,6 +117,10 @@ function assertQualifiedIdentifier(value: string, kind: string): void {
 function assertHavingClause(clause: QueryHavingClause): void {
   if (!HAVING_EXPRESSION_PATTERN.test(clause.expression)) {
     throw new SecurityError(`Having expression "${clause.expression}" is not allowed in safe query mode.`)
+  }
+
+  if (clause.kind === 'null') {
+    return
   }
 
   if (!OPERATORS.has(clause.operator)) {
@@ -298,6 +302,14 @@ function assertPredicate(
       throw new SecurityError(`JSON path for column "${predicate.column}" contains an invalid segment.`)
     }
 
+    if (predicate.jsonMode === 'key') {
+      if (predicate.path.length === 0) {
+        throw new SecurityError(`JSON key predicate for column "${predicate.column}" requires a key path.`)
+      }
+
+      return
+    }
+
     if (predicate.jsonMode === 'length') {
       if (typeof predicate.operator === 'undefined') {
         throw new SecurityError(`JSON length predicate for column "${predicate.column}" requires an operator.`)
@@ -401,9 +413,36 @@ function assertPredicate(
     return
   }
 
+  if (predicate.kind === 'between-columns') {
+    for (const bound of predicate.bounds) {
+      assertColumnReference(bound, tableName, allowedColumns)
+    }
+
+    if ('column' in predicate.subject) {
+      assertColumnReference(predicate.subject.column, tableName, allowedColumns)
+      return
+    }
+
+    if (typeof predicate.subject.value === 'undefined') {
+      throw new SecurityError('Value range predicates cannot compare an undefined value.')
+    }
+    return
+  }
+
   assertColumnReference(predicate.column, tableName, allowedColumns)
 
   if (predicate.kind === 'null') {
+    return
+  }
+
+  if (predicate.kind === 'like') {
+    if (predicate.path.some(segment => !segment || typeof segment !== 'string')) {
+      throw new SecurityError(`JSON path for column "${predicate.column}" contains an invalid segment.`)
+    }
+
+    if (typeof predicate.value !== 'string') {
+      throw new SecurityError(`Like predicate for column "${predicate.column}" requires a string pattern.`)
+    }
     return
   }
 
@@ -641,6 +680,22 @@ export function validateQueryPlan(plan: QueryPlan): void {
       }
       return
     }
+
+    case 'insert-using': {
+      if (plan.columns.length === 0) {
+        throw new SecurityError('Insert using queries must include at least one column.')
+      }
+
+      for (const column of plan.columns) {
+        assertKnownColumn(column, plan.source.tableName, allowedColumns)
+      }
+
+      validateQueryPlan(plan.query)
+      return
+    }
+
+    case 'truncate':
+      return
 
     case 'upsert': {
       if (plan.values.length === 0) {

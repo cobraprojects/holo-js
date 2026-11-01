@@ -75,6 +75,28 @@ await DB.table('events').chunkById(1000, handleEvents, 'event_id')
 await DB.table('events').chunkByIdDesc(1000, handleEvents)
 ```
 
+## Visit rows one at a time
+
+### each()
+
+`each(callback, count = 1000)` fetches rows in batches of `count` and calls your callback once per row. The callback receives the row and its index within the current batch. Return `false` to stop.
+
+```ts
+await DB.table('users').orderBy('id').each(async (user) => {
+  await sendDigest(user)
+})
+```
+
+### eachById()
+
+`eachById(callback, count = 1000, column = 'id')` works like `each()`, but batches by ID like `chunkById()`. Use it when your callback updates the rows it visits.
+
+```ts
+await DB.table('subscriptions').where('active', false).eachById(async (subscription) => {
+  await DB.table('subscriptions').where('id', subscription.id).delete()
+})
+```
+
 ## Stream rows one at a time
 
 ### lazy()
@@ -92,6 +114,26 @@ Pass a batch size to change how many rows are fetched per query:
 ```ts
 for await (const log of DB.table('audit_logs').lazy(5000)) {
   archive.push(log)
+}
+```
+
+### lazyById()
+
+`lazyById(size = 1000, column = 'id')` streams rows like `lazy()`, but fetches each batch after the last ID it saw, like `chunkById()`. Use it when you update rows while you stream them.
+
+```ts
+for await (const user of DB.table('users').where('verified', false).lazyById()) {
+  await DB.table('users').where('id', user.id).update({ reminded_at: new Date() })
+}
+```
+
+### lazyByIdDesc()
+
+`lazyByIdDesc(size = 1000, column = 'id')` works like `lazyById()`, but walks from the highest value down.
+
+```ts
+for await (const event of DB.table('events').lazyByIdDesc(500)) {
+  timeline.push(event)
 }
 ```
 
@@ -139,10 +181,14 @@ for await (const post of Post.lazy()) {
 | `chunk(size, callback)` | batches in your `orderBy()` order, with the primary key as a tie-breaker |
 | `chunkById(size, callback, column = 'id')` | batches ordered by `column`, ascending |
 | `chunkByIdDesc(size, callback, column = 'id')` | batches ordered by `column`, descending |
+| `each(callback, count = 1000)` | one callback per row, in batches |
+| `eachById(callback, count = 1000, column = 'id')` | one callback per row, batched by `column` |
 | `lazy(size = 1000)` | async iterator over single rows |
+| `lazyById(size = 1000, column = 'id')` | async iterator, batched by `column`, ascending |
+| `lazyByIdDesc(size = 1000, column = 'id')` | async iterator, batched by `column`, descending |
 | `cursor()` | same as `lazy()` |
 
-The callback receives `(rows, batchNumber)`. Return `false` to stop.
+The `chunk` callbacks receive `(rows, batchNumber)`, and the `each` callbacks receive `(row, index)`. Return `false` from either to stop.
 
 ## Next steps
 

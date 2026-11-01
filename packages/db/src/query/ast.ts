@@ -72,11 +72,22 @@ export interface QueryUnionClause {
   readonly query: SelectQueryPlan
 }
 
-export interface QueryHavingClause {
+export interface QueryHavingComparisonClause {
+  readonly kind: 'comparison'
+  readonly boolean?: 'and' | 'or'
   readonly expression: string
   readonly operator: Exclude<QueryOperator, 'in' | 'not in'>
   readonly value: unknown
 }
+
+export interface QueryHavingNullClause {
+  readonly kind: 'null'
+  readonly boolean?: 'and' | 'or'
+  readonly expression: string
+  readonly negated: boolean
+}
+
+export type QueryHavingClause = QueryHavingComparisonClause | QueryHavingNullClause
 
 export interface QueryPredicate {
   readonly kind: 'comparison'
@@ -102,7 +113,25 @@ export interface QueryNullPredicate {
   readonly negated: boolean
 }
 
-export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time'
+export interface QueryLikePredicate {
+  readonly kind: 'like'
+  readonly boolean?: 'and' | 'or'
+  readonly column: string
+  readonly path: readonly string[]
+  readonly value: string
+  readonly caseSensitive: boolean
+  readonly negated: boolean
+}
+
+export interface QueryBetweenColumnsPredicate {
+  readonly kind: 'between-columns'
+  readonly boolean?: 'and' | 'or'
+  readonly subject: { readonly column: string } | { readonly value: unknown }
+  readonly bounds: readonly [string, string]
+  readonly negated: boolean
+}
+
+export type QueryDatePart = 'date' | 'month' | 'day' | 'year' | 'time' | 'instant'
 
 export interface QueryDatePredicate {
   readonly kind: 'date'
@@ -113,7 +142,7 @@ export interface QueryDatePredicate {
   readonly value: unknown
 }
 
-export type QueryJsonMode = 'value' | 'contains' | 'length'
+export type QueryJsonMode = 'value' | 'contains' | 'length' | 'key'
 export type QueryFullTextMode = 'natural' | 'boolean'
 
 export interface QueryJsonPredicate {
@@ -186,6 +215,8 @@ export type QueryPredicateNode
   = | QueryPredicate
     | QueryColumnPredicate
     | QueryNullPredicate
+    | QueryLikePredicate
+    | QueryBetweenColumnsPredicate
     | QueryDatePredicate
     | QueryJsonPredicate
     | QueryFullTextPredicate
@@ -241,6 +272,25 @@ export interface InsertQueryPlan {
   readonly values: readonly Record<string, unknown>[]
 }
 
+export interface InsertStatementOptions {
+  readonly ignoreConflicts: boolean
+  readonly returning?: boolean
+  readonly returningColumn?: string
+}
+
+export interface InsertUsingQueryPlan {
+  readonly kind: 'insert-using'
+  readonly source: QuerySource
+  readonly ignoreConflicts: boolean
+  readonly columns: readonly string[]
+  readonly query: SelectQueryPlan
+}
+
+export interface TruncateQueryPlan {
+  readonly kind: 'truncate'
+  readonly source: QuerySource
+}
+
 export interface UpsertQueryPlan {
   readonly kind: 'upsert'
   readonly source: QuerySource
@@ -268,6 +318,8 @@ export interface DeleteQueryPlan {
 export type QueryPlan
   = | SelectQueryPlan
     | InsertQueryPlan
+    | InsertUsingQueryPlan
+    | TruncateQueryPlan
     | UpsertQueryPlan
     | UpdateQueryPlan
     | DeleteQueryPlan
@@ -616,6 +668,25 @@ export function createUpdateQueryPlan(
     returning: options.returning === true,
     values: Object.freeze({ ...values }),
   })
+}
+
+export function createInsertUsingQueryPlan(
+  source: QuerySource,
+  columns: readonly string[],
+  query: SelectQueryPlan,
+  options: { readonly ignoreConflicts?: boolean } = {},
+): InsertUsingQueryPlan {
+  return Object.freeze({
+    kind: 'insert-using',
+    source,
+    ignoreConflicts: options.ignoreConflicts === true,
+    columns: Object.freeze([...columns]),
+    query,
+  })
+}
+
+export function createTruncateQueryPlan(source: QuerySource): TruncateQueryPlan {
+  return Object.freeze({ kind: 'truncate', source })
 }
 
 export function createDeleteQueryPlan(

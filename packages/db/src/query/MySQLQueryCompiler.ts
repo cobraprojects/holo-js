@@ -1,8 +1,27 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import { formatWallClock } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
+import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
+    bindings.push(predicate.value)
+    const negation = predicate.negated ? 'NOT ' : ''
+    const placeholder = this.createPlaceholder(bindings.length)
+    if (predicate.caseSensitive) {
+      return `${this.compileLikeSubject(predicate)} ${negation}LIKE BINARY ${placeholder}`
+    }
+
+    return predicate.path.length === 0
+      ? `${this.compileLikeSubject(predicate)} ${negation}LIKE ${placeholder}`
+      : `LOWER(${this.compileLikeSubject(predicate)}) ${negation}LIKE LOWER(${placeholder})`
+  }
+
+  protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
+    return `JSON_UNQUOTE(JSON_EXTRACT(${column}, ${this.createJsonPathLiteral(path)}))`
+  }
+
   protected override createSqlStringLiteral(value: string): string {
     return compileMySQLStringLiteral(value)
   }
@@ -27,7 +46,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return lockMode === 'update' ? 'FOR UPDATE' : 'LOCK IN SHARE MODE'
   }
 
-  protected override compileInsertPrefix(plan: InsertQueryPlan): string {
+  protected override compileInsertPrefix(plan: InsertStatementOptions): string {
     return plan.ignoreConflicts ? 'INSERT IGNORE INTO' : 'INSERT INTO'
   }
 
@@ -40,6 +59,18 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       .map(column => `${this.quoteIdentifier(column)} = VALUES(${this.quoteIdentifier(column)})`)
       .join(', ')
     return ` ON DUPLICATE KEY UPDATE ${updates}`
+  }
+
+  protected override createDateLiteral(value: Date): string {
+    return this.createSqlStringLiteral(formatWallClock(value, getApplicationTimezone()))
+  }
+
+  override truncateCommitsOpenTransaction(): boolean {
+    return true
+  }
+
+  protected override compileTruncateSql(table: string): string {
+    return `TRUNCATE TABLE ${table}`
   }
 
   protected override compileRandomOrder(): string {
@@ -76,9 +107,13 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       return `JSON_UNQUOTE(${extracted}) ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
+    if (predicate.jsonMode === 'key') {
+      return `IFNULL(JSON_CONTAINS_PATH(${column}, 'one', ${pathLiteral}), 0)`
+    }
+
     if (predicate.jsonMode === 'contains') {
       bindings.push(JSON.stringify(predicate.value))
-      return `JSON_CONTAINS(${extracted}, CAST(${this.createPlaceholder(bindings.length)} AS JSON))`
+      return `COALESCE(JSON_CONTAINS(${extracted}, CAST(${this.createPlaceholder(bindings.length)} AS JSON)), 0)`
     }
 
     bindings.push(predicate.value)
