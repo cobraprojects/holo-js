@@ -153,6 +153,7 @@ describe('model eloquent helpers', () => {
     expect(await Post.where('id', 11).orWhereAttachedTo(tips).orderBy('id').pluck('id')).toEqual([11, 12])
     expect(await Post.whereAttachedTo(Tag.make({ name: 'draft' })).pluck('id')).toEqual([])
     expect(await Post.whereAttachedTo([news, Tag.make({ name: 'draft' })]).pluck('id')).toEqual([10])
-    expect(() => Post.whereAttachedTo(await Post.findOrFail(10) as never, 'tags')).toThrow('whereAttachedTo() received a "Post" model, but relation "tags" on model "Post" relates to "tags".')
+    const post = await Post.findOrFail(10)
+    expect(() => Post.whereAttachedTo(post as never, 'tags')).toThrow('whereAttachedTo() received a "Post" model, but relation "tags" on model "Post" relates to "tags".')
   })
 })

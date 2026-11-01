@@ -628,8 +628,7 @@ export class TableQueryBuilder<
     if (separator === -1) return this.getColumnDefinition(column)
 
     const qualifier = column.slice(0, separator)
-    const unqualifiedTableName = this.source.tableName.slice(this.source.tableName.lastIndexOf('.') + 1)
-    return qualifier === this.source.tableName || qualifier === this.source.alias || (!this.source.alias && qualifier === unqualifiedTableName)
+    return qualifier === this.source.tableName || qualifier === this.source.alias
       ? this.getColumnDefinition(column.slice(separator + 1))
       : undefined
   }
