@@ -2198,6 +2198,14 @@ class ModelQueryBuilderBase<
     return this.applyHasMorphFilter(relation, types, false, boolean, query => query.where(column, operator, value))
   }
 
+  private morphClassOf(query: ModelQueryBuilder<TableDefinition>): string {
+    if (!(query instanceof ModelQueryBuilderBase)) {
+      throw new RelationError('Morph relation constraints require a model query builder.')
+    }
+
+    return query.repository.definition.morphClass
+  }
+
   private applyHasMorphFilter(
     relation: ModelRelationPath<TRelations>,
     types: MorphRelationTypeInput,
@@ -2211,7 +2219,7 @@ class ModelQueryBuilderBase<
       negate,
       boolean,
       morphTypes: this.normalizeMorphTypes(types),
-      constraint: constraint && (query => constraint(query, query.getRepository().definition.morphClass)),
+      constraint: constraint && (query => constraint(query, this.morphClassOf(query))),
     })
   }
 
