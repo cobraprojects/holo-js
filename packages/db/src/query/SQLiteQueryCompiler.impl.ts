@@ -71,7 +71,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     if (tableName.includes('.')) return undefined
 
     return {
-      sql: 'SELECT "tables"."schema" AS "schema" FROM pragma_table_list(?) AS "tables" JOIN pragma_database_list AS "databases" ON "databases"."name" = "tables"."schema" WHERE "tables"."type" = \'table\' ORDER BY CASE "tables"."schema" WHEN \'temp\' THEN 0 ELSE 1 END, "databases"."seq" LIMIT 1',
+      sql: 'SELECT "tables"."schema" AS "schema" FROM pragma_table_list(?) AS "tables" JOIN pragma_database_list AS "databases" ON "databases"."name" = "tables"."schema" ORDER BY CASE "tables"."schema" WHEN \'temp\' THEN 0 ELSE 1 END, "databases"."seq" LIMIT 1',
       bindings: [tableName],
       source: `query:select:${tableName}`,
     }
