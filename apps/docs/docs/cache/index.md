@@ -41,6 +41,14 @@ npx holo install cache --driver database
 | `redis` | `@holo-js/cache-redis` | writes `config/redis.ts` if it is missing |
 | `database` | `@holo-js/cache-db` | run `npx holo cache:table` and `npx holo migrate` |
 
+### Switch drivers
+
+If `config/cache.ts` already exists, the installer doesn't edit it. To switch an installed cache to another driver:
+
+1. Add that driver's store to `config/cache.ts`. See [Cache drivers](/cache/drivers) for each store's config.
+2. Run `npx holo install cache --driver <driver>` to add its package and setup. Without the store, the command stops with an error and writes nothing.
+3. Set `CACHE_DRIVER` in `.env` to the new store's name. The installer keeps the value you already have, so the cache keeps using the old store until you change it.
+
 See [Cache drivers](/cache/drivers) for what each store is good at.
 
 ## Use the cache anywhere on the server
