@@ -1179,6 +1179,10 @@ export class SchemaService {
       return 'integer'
     }
 
+    if (dialect === 'sqlite' && normalized === 'tinyint(1)') {
+      return 'boolean'
+    }
+
     if (dialect === 'mysql' && normalized === 'tinyint') {
       return 'boolean'
     }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Database: new SQLite columns use Laravel's SQLite type names: `tinyint(1)` for booleans, `date` for dates, `datetime` for datetimes and timestamps, `varchar(255)` for strings, and `text` for JSON. `schema.getColumns()` reports these types, and booleans read back with the `boolean` logical type. Values read and write as before, and tables created earlier keep their types. See [Available column types](apps/docs/docs/database/migrations.md#available-column-types).
+
 ### Fixed
 
 - Database: foreign keys declared inside `createTable()` or added with a new column on PostgreSQL and SQLite are now named `{table}_{column}_foreign`, or the name given to `constraintName()`, like foreign keys added with `table.foreign()` and every MySQL foreign key. Before, Holo created them without a name, so PostgreSQL named them `{table}_{column}_fkey` and `dropForeign('{table}_{column}_foreign')` failed. Existing PostgreSQL constraints keep their `_fkey` names; drop them by that name. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign).

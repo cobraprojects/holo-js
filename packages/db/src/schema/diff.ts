@@ -131,7 +131,7 @@ async function diffTable(
       }
 
       if (
-        actual.type === expected.type
+        actual.type.toLowerCase() === expected.type.toLowerCase()
         && actual.notNull === expected.notNull
         && actual.primaryKey === expected.primaryKey
       ) {
