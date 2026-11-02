@@ -31,7 +31,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   ): DDLStatement {
     assertValidIdentifierPath(temporaryTableName, 'Table name')
     const definitions = Object.values(table.columns).map(column => uncheckedEnumColumns.has(column.name)
-      ? this.compileColumnDefinition(column)
+      ? this.compileColumnDefinition(table.tableName, column)
       : this.compileColumn(table.tableName, column))
     return {
       sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${definitions.join(', ')})`,

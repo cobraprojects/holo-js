@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Database: foreign keys declared inside `createTable()` or added with a new column on PostgreSQL and SQLite are now named `{table}_{column}_foreign`, or the name given to `constraintName()`, like foreign keys added with `table.foreign()` and every MySQL foreign key. Before, Holo created them without a name, so PostgreSQL named them `{table}_{column}_fkey` and `dropForeign('{table}_{column}_foreign')` failed. Existing PostgreSQL constraints keep their `_fkey` names; drop them by that name. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign).
+
 ## 0.5.6 - 2026-11-01
 
 See the [upgrade guide](apps/docs/docs/getting-started/upgrading.md#upgrading-from-055-to-056). No required migrations.
