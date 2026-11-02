@@ -13,6 +13,7 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
+import { runWithMigrationLock } from './migration-lock'
 import { createSchemaHydrationConnection, replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
@@ -410,17 +411,20 @@ try {
   }
 
   if (payload.kind === 'migrate') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
-    const migrator = createMigrationService(manager.connection(), migrations)
-    const result = payload.options?.isolated === true
-      ? await migrator.migrateIsolated(payload.options)
-      : { kind: 'ran' as const, executed: await migrator.migrate(payload.options ?? {}) }
-    if (result.kind === 'skipped') {
+    const migrate = async () => {
+      await preloadGeneratedSchema(manager, payload.generatedSchema)
+      await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
+      const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
+      await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+      return executed
+    }
+    const run = payload.options?.isolated === true
+      ? await runWithMigrationLock(projectRoot, migrate)
+      : { kind: 'ran' as const, result: await migrate() }
+    if (run.kind === 'skipped') {
       writeOutput('Another migration run holds the migration lock; no migrations were executed.')
     } else {
-      await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
-      printExecutedItems(result.executed, 'No migrations were executed.', 'Migrations executed:')
+      printExecutedItems(run.result, 'No migrations were executed.', 'Migrations executed:')
     }
   } else if (payload.kind === 'hydrate-schema') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)

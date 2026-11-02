@@ -36,6 +36,9 @@ const env = {
   HOLO_AUTH_REDEMPTION_MYSQL_DATABASE: name,
   HOLO_AUTH_REDEMPTION_MYSQL_PORT: '3306',
 }
+const packageEnv = {
+  cli: { HOLO_REDIS_INTEGRATION: '1' },
+}
 const results = []
 let mysqlAdmin
 
@@ -87,7 +90,7 @@ function collectTasks() {
       reportPaths.push(join(resultsRoot, filename))
       return `npx vitest --pool forks --fileParallelism --maxWorkers 4 --reporter=json --outputFile=../../coverage/native-libraries/${filename}`
     })
-    tasks.push({ label: `packages/${directory}`, command: '/bin/sh', args: ['-c', command], cwd, reportPaths })
+    tasks.push({ label: `packages/${directory}`, command: '/bin/sh', args: ['-c', command], cwd, extraEnv: packageEnv[directory], reportPaths })
   }
   tasks.push({
     label: 'cache-redis-live',
