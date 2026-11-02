@@ -31,7 +31,7 @@ The tables and attributes an application describes for use, including tables tha
 The tables and attributes that currently exist in a connected database.
 
 **Generated schema**:
-The TypeScript table definitions Holo generates from the Database schema and model casts, which give models and queries their types.
+The TypeScript table definitions Holo generates from the Database schema, which give queries their types and models their column types before each model's casts apply.
 _Avoid_: Schema registry
 
 **Auth token redemption**:
