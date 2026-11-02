@@ -234,14 +234,21 @@ try {
   const status = Number.isInteger(failure.status) && failure.status >= 400 && failure.status <= 599
     ? failure.status
     : 422
+  const retryAfterSeconds = typeof failure.retryAfterSeconds === 'number'
+    && Number.isInteger(failure.retryAfterSeconds) && failure.retryAfterSeconds >= 0
+    ? failure.retryAfterSeconds
+    : undefined
+  const retryAt = typeof failure.retryAt === 'string' && !Number.isNaN(Date.parse(failure.retryAt))
+    ? failure.retryAt
+    : undefined
 
   return Response.json({
     ok: false,
     message: failure.message,
     errors: failure.errors,
     bag: failure.bag,
-    retryAfterSeconds: failure.retryAfterSeconds,
-    retryAt: failure.retryAt,
+    retryAfterSeconds,
+    retryAt,
   }, { status })
 }
 ```
