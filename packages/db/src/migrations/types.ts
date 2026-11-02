@@ -32,10 +32,6 @@ export interface MigrateOptions {
   step?: number
 }
 
-export type IsolatedMigrationResult =
-  | { kind: 'skipped' }
-  | { kind: 'ran', executed: Array<MigrationDefinition & { readonly name: string }> }
-
 export interface RollbackOptions {
   step?: number
   batch?: number

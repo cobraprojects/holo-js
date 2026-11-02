@@ -471,7 +471,7 @@ npx holo migrate [--step <n>] [--isolated]
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Run at most this many pending migrations. |
-| `--isolated` | Take a database lock first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
+| `--isolated` | Take the `migrations` lock from the default cache store first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time; every server must share the store, such as `redis` or `database`. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
 
 ```bash
 npx holo migrate

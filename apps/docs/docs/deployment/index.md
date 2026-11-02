@@ -97,7 +97,7 @@ Holo never migrates on startup. A typical deploy:
 5. Cache config with `npx holo config:cache` (optional).
 6. Start or restart the web server and workers.
 
-If several replicas run step 3 at once, use `npx holo migrate --isolated`. One replica applies the migrations and the others skip them without failing the deploy. See [Isolating migration runs](/database/migrations#isolating-migration-runs).
+If several replicas run step 3 at once, use `npx holo migrate --isolated`. One replica applies the migrations and the others skip them without failing the deploy. The lock comes from the default cache store, so every replica must share a `redis` or `database` store. A `database` store needs its tables first: run `npx holo cache:table` and `npx holo migrate` once. See [Isolating migration runs](/database/migrations#isolating-migration-runs).
 
 To undo the last deploy's migrations, run `npx holo migrate:rollback`. In production it asks you to confirm, so pass `--force` in a script. See [Migrations](/database/migrations).
 

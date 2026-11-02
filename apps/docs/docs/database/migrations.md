@@ -162,7 +162,18 @@ When several replicas run `migrate` at the same time, add `--isolated`:
 npx holo migrate --isolated
 ```
 
-The first run takes a database lock and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is held in a `_holo_migration_locks` table and expires an hour after it was last renewed, so a runner that stops without releasing it doesn't block later deploys for longer than that. The run renews the lock before each migration. A single migration that runs longer than an hour can let another runner in, which can apply that migration again. Split very long data backfills into shorter runs, and don't start a second `migrate --isolated` while one is still working on a long migration.
+The first run takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers) and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is released when the run ends. If a runner stops without releasing it, the lock expires after an hour.
+
+`--isolated` needs `@holo-js/cache` installed, and every server must use the same default cache store. Use a `redis` or `database` store when you run more than one server. A `file` store only coordinates processes that share the same cache folder, and a `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). If `@holo-js/cache` isn't installed or the default store can't give a lock, `migrate --isolated` fails with an error that says what to set up.
+
+A `database` cache store keeps its locks in a table, so create the cache tables before the first isolated run:
+
+```bash
+npx holo cache:table
+npx holo migrate
+```
+
+A plain `migrate` doesn't use the cache.
 
 ### Rolling back
 

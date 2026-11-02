@@ -5,11 +5,9 @@ import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
 import { assertMigrationName, defineMigration } from './defineMigration'
 import { ensureMigrationTable } from './ensureMigrationTable'
-import { MigrationLease } from './MigrationLease'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
-  IsolatedMigrationResult,
   MigrateOptions,
   MigrationContext,
   MigrationDefinition,
@@ -126,27 +124,7 @@ export class MigrationService {
     })
   }
 
-  async migrateIsolated(options: MigrateOptions = {}): Promise<IsolatedMigrationResult> {
-    return this.runExclusively(async () => {
-      await this.ensureTrackingTableForMigration()
-      const lease = new MigrationLease(this.connection)
-      if (!await lease.acquire()) {
-        return { kind: 'skipped' }
-      }
-
-      try {
-        const executed = await this.applyPendingMigrations(options, () => lease.renew())
-        return { kind: 'ran', executed }
-      } finally {
-        await lease.release()
-      }
-    })
-  }
-
-  private async applyPendingMigrations(
-    options: MigrateOptions,
-    beforeMigration?: () => Promise<void>,
-  ): Promise<RegisteredMigrationDefinition[]> {
+  private async applyPendingMigrations(options: MigrateOptions): Promise<RegisteredMigrationDefinition[]> {
     const step = options.step ?? Number.POSITIVE_INFINITY
     const ran = await this.getRanRecords()
     const ranNames = new Set(ran.map(record => record.name))
@@ -160,7 +138,6 @@ export class MigrationService {
 
     const executed: RegisteredMigrationDefinition[] = []
     for (const migration of pending) {
-      await beforeMigration?.()
       const log = this.createMigrationLog(migration.name, 'up', nextBatch)
       await this.runMigrationLifecycle(log, async () => {
         await this.runMigrationTransaction(async (tx) => {

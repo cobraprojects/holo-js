@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- CLI: `holo migrate --isolated` takes an atomic `migrations` lock from the application's default cache store, as Laravel's does, instead of a database lease. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends and expires after an hour if a runner stops. `--isolated` needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`; a `database` store needs its tables from `holo cache:table` first. Without `@holo-js/cache`, or with a default store that can't give a lock, `--isolated` fails with an error that says what to set up. Plain `holo migrate` doesn't use the cache. Holo no longer creates the `_holo_migration_locks` table. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
+
+### Compatibility and upgrade requirements
+
+- Database: `MigrationService.migrateIsolated()` and the `IsolatedMigrationResult` type are removed from `@holo-js/db`. Use `holo migrate --isolated`.
+- Deploys that run `holo migrate --isolated` on several servers must set the default cache store to a shared `redis` or `database` store. You can drop a leftover `_holo_migration_locks` table.
+
 ### Fixed
 
 - Database: foreign keys declared inside `createTable()` or added with a new column on PostgreSQL and SQLite are now named `{table}_{column}_foreign`, or the name given to `constraintName()`, like foreign keys added with `table.foreign()` and every MySQL foreign key. Before, Holo created them without a name, so PostgreSQL named them `{table}_{column}_fkey` and `dropForeign('{table}_{column}_foreign')` failed. Existing PostgreSQL constraints keep their `_fkey` names; drop them by that name. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign).

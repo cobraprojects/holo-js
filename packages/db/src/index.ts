@@ -330,7 +330,6 @@ export type {
   MigrationStatus,
   MigrationTemplateKind,
   MigrationTemplateOptions,
-  IsolatedMigrationResult,
   MigrateOptions,
   RollbackOptions,
 } from './migrations'
