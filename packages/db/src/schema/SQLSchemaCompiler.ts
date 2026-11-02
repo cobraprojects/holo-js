@@ -1,7 +1,7 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
-import type { AnyColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, ForeignKeyReference, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement } from './ddl'
 
 type IdentifierQuoter = (identifier: string) => string
@@ -133,7 +133,7 @@ export abstract class SQLSchemaCompiler {
   compileCreateForeignKey(
     tableName: string,
     columnName: string,
-    reference: NonNullable<AnyColumnDefinition['references']>,
+    reference: ForeignKeyReference,
     constraintName?: string,
   ): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
@@ -146,12 +146,29 @@ export abstract class SQLSchemaCompiler {
 
   protected compileForeignKeyConstraint(
     columnName: string,
-    reference: NonNullable<AnyColumnDefinition['references']>,
+    reference: ForeignKeyReference,
     constraintName: string,
   ): string {
     assertValidIdentifierSegment(columnName, 'Column name')
-    assertValidIdentifierSegment(reference.column, 'Referenced column name')
+    return `${this.compileNamedConstraint(constraintName)} FOREIGN KEY (${this.quoteIdentifier(columnName)}) ${this.compileReferencesClause(columnName, reference)}`
+  }
+
+  private compileColumnForeignKeyConstraint(tableName: string, column: AnyColumnDefinition): string | undefined {
+    if (!column.references) {
+      return undefined
+    }
+
+    const constraintName = this.resolveForeignKeyName(tableName, column.name, column.references.constraintName)
+    return `${this.compileNamedConstraint(constraintName)} ${this.compileReferencesClause(column.name, column.references)}`
+  }
+
+  private compileNamedConstraint(constraintName: string): string {
     assertValidIdentifierSegment(constraintName, 'Foreign key name')
+    return `CONSTRAINT ${this.quoteIdentifier(constraintName)}`
+  }
+
+  private compileReferencesClause(columnName: string, reference: ForeignKeyReference): string {
+    assertValidIdentifierSegment(reference.column, 'Referenced column name')
     if (!reference.table) {
       throw new SchemaError(
         `Foreign key column "${columnName}" must include a referenced table for ${this.getDialectLabel()} compilation.`,
@@ -159,8 +176,6 @@ export abstract class SQLSchemaCompiler {
     }
 
     const parts = [
-      `CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
-      `FOREIGN KEY (${this.quoteIdentifier(columnName)})`,
       `REFERENCES ${this.compileIdentifierPath(reference.table)} (${this.quoteIdentifier(reference.column)})`,
     ]
 
@@ -234,12 +249,12 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileColumn(tableName: string, column: AnyColumnDefinition): string {
-    const definition = this.compileColumnDefinition(column)
+    const definition = this.compileColumnDefinition(tableName, column)
     const enumCheck = this.compileEnumCheckConstraint(tableName, column)
     return enumCheck ? `${definition} ${enumCheck}` : definition
   }
 
-  protected compileColumnDefinition(column: AnyColumnDefinition): string {
+  protected compileColumnDefinition(tableName: string, column: AnyColumnDefinition): string {
     assertValidIdentifierSegment(column.name, 'Column name')
     const parts = [
       this.quoteIdentifier(column.name),
@@ -266,19 +281,9 @@ export abstract class SQLSchemaCompiler {
       parts.push(`DEFAULT ${this.compileCurrentTimestamp()}`)
     }
 
-    if (column.references) {
-      const referenceTable = column.references.table as string
-      parts.push(
-        `REFERENCES ${this.compileIdentifierPath(referenceTable)} (${this.quoteIdentifier(column.references.column)})`,
-      )
-
-      if (column.references.onDelete) {
-        parts.push(compileReferentialAction('DELETE', column.references.onDelete))
-      }
-
-      if (column.references.onUpdate) {
-        parts.push(compileReferentialAction('UPDATE', column.references.onUpdate))
-      }
+    const foreignKeyConstraint = this.compileColumnForeignKeyConstraint(tableName, column)
+    if (foreignKeyConstraint) {
+      parts.push(foreignKeyConstraint)
     }
 
     return parts.join(' ')

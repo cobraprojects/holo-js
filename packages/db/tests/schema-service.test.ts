@@ -329,6 +329,39 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getForeignKeys(child)).toEqual([])
     })
 
+    it('drops foreign keys declared inline by createTable and added columns using their conventional names', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parent = `holo_fk_parent_${suffix}`
+      const child = `holo_fk_child_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(child)
+        await schema.dropTable(parent)
+      })
+      await schema.createTable(parent, table => { table.id() })
+      await schema.createTable(child, table => {
+        table.id()
+        table.foreignId('created_by_id').nullable().constrained(parent).restrictOnDelete()
+      })
+      if (driver === 'sqlite') {
+        await expect(schema.table(child, table => { table.dropForeign(`${child}_created_by_id_foreign`) })).rejects.toThrow(CapabilityError)
+        return
+      }
+      await schema.table(child, table => {
+        table.foreignId('updated_by_id').nullable().constrained(parent)
+      })
+      await expect(db.table(child).insert({ created_by_id: 99 })).rejects.toThrow()
+      await expect(db.table(child).insert({ updated_by_id: 99 })).rejects.toThrow()
+
+      await schema.table(child, table => {
+        table.dropForeign(`${child}_created_by_id_foreign`)
+        table.dropForeign(`${child}_updated_by_id_foreign`)
+      })
+
+      await db.table(child).insert({ created_by_id: 99, updated_by_id: 99 })
+      expect(await schema.getForeignKeys(child)).toEqual([])
+    })
+
     it('enforces foreign keys and cascades deletes on the native engine', async () => {
       const { db, schema, table } = await openDatabase(driver)
       const parent = table.tableName.split('.').at(-1)!

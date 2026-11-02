@@ -979,6 +979,14 @@ await schema.table('posts', (table) => {
 })
 ```
 
+On PostgreSQL, Holo versions before 0.5.7 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropForeign('posts_user_id_fkey')
+})
+```
+
 ## Column changes and renames
 
 ### dropColumn()
