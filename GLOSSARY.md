@@ -30,6 +30,10 @@ The tables and attributes an application describes for use, including tables tha
 **Database schema**:
 The tables and attributes that currently exist in a connected database.
 
+**Generated schema**:
+The TypeScript table definitions Holo generates from the Database schema, which give queries their types and models their column types before each model's casts apply.
+_Avoid_: Schema registry
+
 **Auth token redemption**:
 The single-use authorization of an email verification or password reset by a valid token.
 
