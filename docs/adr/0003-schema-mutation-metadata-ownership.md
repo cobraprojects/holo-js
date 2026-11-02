@@ -1,6 +1,6 @@
 # Pair schema mutation and metadata outcomes
 
-Superseded by [0017](0017-database-schema-is-the-only-schema-source.md): Holo will no longer keep schema metadata beside the Database schema. This decision applies until the implementation tracked in #470 lands.
+Superseded by [0017](0017-database-schema-is-the-only-schema-source.md): Holo will no longer keep schema metadata beside the Database schema. The metadata consistency requirements below remain applicable until the implementation tracked in #470 lands.
 
 The schema mutation module will own execution and metadata consistency, including nested transaction rollback and dialect-specific DDL outcomes. A failed operation restores the preceding metadata state rather than deleting a definition explicitly registered before the operation; subsequent operations inside a transaction see its changes. This preserves declared schemas while preventing failed mutations from leaving metadata changes that the database did not retain.
 
