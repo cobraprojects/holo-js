@@ -215,6 +215,65 @@ export default defineAuditConfig({
 
 List the file in `contributes.config.files` so `plugin:info` shows it.
 
+## Handle validation failures in a plugin transport
+
+Holo's framework adapters already return validation failures, and `useForm()` and `useValidationErrors()` display them in apps. Leave that handling to the adapter unless your plugin owns a transport, such as a typed operation envelope, that must include validation errors in its own response.
+
+At that integration boundary, use `validationInternals.serializeValidationException()` from the root `@holo-js/validation` export. Holo's adapters use the same hook. Recognize the failure once, then use the returned payload when mapping the response status and field errors:
+
+```ts
+import { validationInternals } from '@holo-js/validation'
+
+try {
+  const data = await executeOperation()
+  return Response.json({ ok: true, data })
+} catch (error) {
+  const failure = validationInternals.serializeValidationException(error)
+  if (!failure) throw error
+
+  const status = Number.isInteger(failure.status) && failure.status >= 400 && failure.status <= 599
+    ? failure.status
+    : 422
+  const retryAfterSeconds = typeof failure.retryAfterSeconds === 'number'
+    && Number.isInteger(failure.retryAfterSeconds) && failure.retryAfterSeconds >= 0
+    ? failure.retryAfterSeconds
+    : undefined
+  const retryAt = typeof failure.retryAt === 'string' && !Number.isNaN(Date.parse(failure.retryAt))
+    ? failure.retryAt
+    : undefined
+
+  return Response.json({
+    ok: false,
+    message: failure.message,
+    errors: failure.errors,
+    bag: failure.bag,
+    retryAfterSeconds,
+    retryAt,
+  }, { status })
+}
+```
+
+The return type is `SerializedValidationException | undefined`, exported from `@holo-js/validation`. If no recognized payload or digest is found, the hook returns `undefined`; keep your transport's normal error handling for that case. Recognition alone does not guarantee that a status is suitable for an HTTP response, so the example falls back to 422 unless it is an integer from 400 to 599.
+
+### Supported failure shapes
+
+- Live `ValidationException` objects, including equivalent objects from another bundle whose `name` is `ValidationException` and whose `toJSON()` returns a valid payload.
+- Serialized payloads with `ok: false`, `valid: false`, numeric `status`, string `message` and `bag`, an object of `values`, and an `errors` object mapping paths to arrays of strings. Optional retry metadata is preserved.
+- Those failures nested through `body`, `data`, `error`, or `cause`, including nested `Error.cause` wrappers. Cyclic references are handled.
+- Holo validation digests carried in an object's `digest` property. A recognized full payload takes precedence over a digest; a digest without values produces `values: {}`.
+
+The hook does not decode JSON strings. Decode the framework's wire format at the transport boundary first, then pass the decoded payload to the hook. For example, Holo's SvelteKit action failure response carries a JSON string in `data`. An arbitrary `{ status: 422, errors }` object or a form failure without the required validation payload fields is not recognized.
+
+For application code that needs a live exception and its error bag methods, use `isValidationException(error)` and `error.toJSON()` instead. See [Error Messages](/basics/validation/errors).
+
+### Stability and security
+
+This hook is a shared package and adapter integration contract. Its root export is available to plugin authors, but that does not make every member of `validationInternals` an application-facing API or promise that the whole object stays unchanged across releases. Declare the Holo versions your plugin supports in `peerDependencies`, test against those versions, and review upgrade notes when expanding that range. Import the exported hook rather than copying its parser or importing package source files.
+
+Recognition checks the payload shape; it does not authenticate the source, sanitize arbitrary serialized values, validate error paths for your protocol, or validate plugin presentation metadata. Only map failures from the operation or framework boundary you control. Validate outgoing statuses and retry metadata against your transport's requirements, allow-list response fields, and validate field paths after applying any prefix. Keep plugin presentation patches in your own validated metadata and preserve the original exception as `cause` when wrapping it.
+
+Avoid forwarding `values` unless your protocol needs them. When returning form values, use `sanitizeFlashedInput(values, schema)` from `@holo-js/forms` with the original schema, and apply any additional visibility rules your plugin requires. Holo filters sensitive input when creating validation exceptions, but a recognized plain payload is not sanitized again by this hook. Preserve the recognized failure's status and applicable retry metadata so validation or throttling failures do not become generic 500 responses.
+
 ## Test your plugin
 
 1. Make the package available to a test app (for example with a workspace link or `npm install ../holo-audit`), then run `npx holo plugin:add @acme/holo-audit`.
