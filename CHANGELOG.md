@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Database: new SQLite columns use Laravel's SQLite type names: `tinyint(1)` for booleans, `date` for dates, `datetime` for datetimes and timestamps, `varchar(255)` for strings, and `text` for JSON. `schema.getColumns()` reports these types, and booleans read back with the `boolean` logical type. Values read and write as before, and tables created earlier keep their types. See [Available column types](apps/docs/docs/database/migrations.md#available-column-types).
 - CLI: `holo migrate --isolated` takes an atomic `migrations` lock from the application's default cache store, as Laravel's does, instead of a database lease. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends and expires after an hour if a runner stops. `--isolated` needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`; a `database` store needs its tables from `holo cache:table` first. Without `@holo-js/cache`, or with a default store that can't give a lock, `--isolated` fails with an error that says what to set up. Plain `holo migrate` doesn't use the cache. Holo no longer creates the `_holo_migration_locks` table. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
 
 ### Compatibility and upgrade requirements

@@ -64,7 +64,7 @@ describe('native schema diff', () => {
     expect(changed.missingColumns).toEqual(['active'])
     expect(changed.extraColumns).toEqual(['legacy_flag'])
     expect(changed.mismatchedColumns).toEqual([
-      { column: 'email', expected: { type: 'TEXT', notNull: true, primaryKey: false }, actual: { type: 'INTEGER', notNull: false, primaryKey: false } },
+      { column: 'email', expected: { type: 'VARCHAR(255)', notNull: true, primaryKey: false }, actual: { type: 'INTEGER', notNull: false, primaryKey: false } },
       { column: 'team_id', expected: { type: 'INTEGER', notNull: true, primaryKey: false }, actual: { type: 'INTEGER', notNull: false, primaryKey: false } },
     ])
     expect(changed.missingIndexes).toEqual(['users_email_unique'])

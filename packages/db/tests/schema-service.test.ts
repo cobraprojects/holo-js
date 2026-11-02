@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { CapabilityError, column, createSchemaService, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
+import { CapabilityError, column, createSchemaService, defineModel, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -244,6 +244,144 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       await schema.table(name, table => { table.enum('status', ['active', 'disabled', 'legacy', 'other'] as const).default('active').change() })
       await expect(db.table(name).insert({ status: 'unknown' })).rejects.toThrow()
+    })
+
+    it.runIf(driver === 'sqlite')('declares Laravel type names on created and added columns, and reports them when reading columns', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_types_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.boolean('active')
+        table.date('born_on')
+        table.datetime('seen_at')
+        table.timestamp('created_at')
+        table.string('title')
+        table.json('settings')
+      })
+      await schema.table(name, table => {
+        table.boolean('archived').default(false)
+        table.date('expires_on').nullable()
+        table.datetime('synced_at').nullable()
+        table.timestamp('deleted_at').nullable()
+        table.string('slug').nullable()
+        table.json('meta').nullable()
+      })
+
+      const columns = Object.fromEntries((await schema.getColumns(name)).map(column => [column.name, { type: column.type, logicalType: column.logicalType }]))
+      expect(columns).toMatchObject({
+        active: { type: 'tinyint(1)', logicalType: 'boolean' },
+        born_on: { type: 'date', logicalType: 'date' },
+        seen_at: { type: 'datetime', logicalType: 'datetime' },
+        created_at: { type: 'datetime', logicalType: 'datetime' },
+        title: { type: 'varchar(255)', logicalType: 'string' },
+        settings: { type: 'TEXT', logicalType: 'text' },
+        archived: { type: 'tinyint(1)', logicalType: 'boolean' },
+        expires_on: { type: 'date', logicalType: 'date' },
+        synced_at: { type: 'datetime', logicalType: 'datetime' },
+        deleted_at: { type: 'datetime', logicalType: 'datetime' },
+        slug: { type: 'varchar(255)', logicalType: 'string' },
+        meta: { type: 'TEXT', logicalType: 'text' },
+      })
+    })
+
+    it.runIf(driver === 'sqlite')('round-trips booleans, dates, strings, and JSON unchanged through models and the query builder', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_values_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.integer('id').primaryKey()
+        table.boolean('active')
+        table.date('born_on')
+        table.datetime('seen_at')
+        table.timestamp('created_at')
+        table.string('code')
+        table.json('settings')
+      })
+      const definition = defineTable(name, {
+        id: column.integer().primaryKey(),
+        active: column.boolean(),
+        born_on: column.date(),
+        seen_at: column.datetime(),
+        created_at: column.timestamp(),
+        code: column.string(),
+        settings: column.json(),
+      })
+      const Record = defineModel(definition, { timestamps: false, fillable: ['id', 'active', 'born_on', 'seen_at', 'created_at', 'code', 'settings'] })
+      const bornOn = new Date('1990-05-17T00:00:00.000Z')
+      const seenAt = new Date('2026-03-04T05:06:07.890Z')
+      const createdAt = new Date('2026-01-01T00:00:00.000Z')
+      const samples = [
+        { id: 1, active: true, code: '00123', settings: '42', storedSettings: '"42"' },
+        { id: 2, active: false, code: '1e3', settings: 42, storedSettings: '42' },
+        { id: 3, active: true, code: '0.50', settings: { zip: '02134', count: 7 }, storedSettings: '{"zip":"02134","count":7}' },
+        { id: 4, active: false, code: ' 42 ', settings: [1, '1', true], storedSettings: '[1,"1",true]' },
+      ]
+
+      for (const { storedSettings: _stored, ...sample } of samples.slice(0, 2)) {
+        await Record.create({ ...sample, born_on: bornOn, seen_at: seenAt, created_at: createdAt })
+      }
+      for (const { storedSettings: _stored, ...sample } of samples.slice(2)) {
+        await db.table(definition).insert({ ...sample, born_on: bornOn, seen_at: seenAt, created_at: createdAt })
+      }
+
+      for (const sample of samples) {
+        const record = await Record.findOrFail(sample.id)
+        expect(Object.fromEntries((['id', 'active', 'code', 'settings', 'born_on', 'seen_at', 'created_at'] as const).map(key => [key, record.get(key)]))).toEqual({
+          id: sample.id,
+          active: sample.active,
+          code: sample.code,
+          settings: sample.settings,
+          born_on: bornOn,
+          seen_at: seenAt,
+          created_at: createdAt,
+        })
+        expect(await db.table(definition).where('id', sample.id).first()).toEqual({
+          id: sample.id,
+          active: sample.active ? 1 : 0,
+          code: sample.code,
+          settings: sample.storedSettings,
+          born_on: bornOn.toISOString(),
+          seen_at: seenAt.toISOString(),
+          created_at: createdAt.toISOString(),
+        })
+      }
+      expect(await db.table(definition).where('code', '00123').pluck('id')).toEqual([1])
+      expect(await db.table(definition).where('active', true).orderBy('id').pluck('id')).toEqual([1, 3])
+      expect(await db.table(definition).where('seen_at', seenAt).count()).toBe(4)
+    })
+
+    it.runIf(driver === 'sqlite')('keeps tables created with the earlier SQLite type names readable, writable, and extendable unchanged', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_earlier_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY NOT NULL, "active" INTEGER NOT NULL, "born_on" TEXT NOT NULL, "code" TEXT NOT NULL, "settings" TEXT NOT NULL)`)
+      await adapter.execute(`INSERT INTO "${name}" ("id", "active", "born_on", "code", "settings") VALUES (1, 1, '1990-05-17T00:00:00.000Z', '00123', '{"zip":"02134"}')`)
+      const earlierColumns = await schema.getColumns(name)
+
+      await schema.table(name, table => { table.string('nickname').nullable() })
+
+      const definition = defineTable(name, {
+        id: column.integer().primaryKey(),
+        active: column.boolean(),
+        born_on: column.date(),
+        code: column.string(),
+        settings: column.json(),
+        nickname: column.string().nullable(),
+      })
+      const Record = defineModel(definition, { timestamps: false, fillable: ['id', 'active', 'born_on', 'code', 'settings', 'nickname'] })
+      await Record.create({ id: 2, active: false, born_on: new Date('2001-02-03T00:00:00.000Z'), code: '1e3', settings: '7', nickname: '007' })
+
+      expect((await schema.getColumns(name)).filter(column => column.name !== 'nickname')).toEqual(earlierColumns)
+      expect(Object.fromEntries((['active', 'born_on', 'code', 'settings'] as const).map(key => [key, (earlierColumns.find(column => column.name === key))?.logicalType]))).toEqual({
+        active: 'integer',
+        born_on: 'text',
+        code: 'text',
+        settings: 'text',
+      })
+      const first = await Record.findOrFail(1)
+      expect([first.get('active'), first.get('born_on'), first.get('code'), first.get('settings')]).toEqual([true, new Date('1990-05-17T00:00:00.000Z'), '00123', { zip: '02134' }])
+      expect(await db.table(definition).where('id', 2).first()).toEqual({ id: 2, active: 0, born_on: '2001-02-03T00:00:00.000Z', code: '1e3', settings: '"7"', nickname: '007' })
     })
 
     it.runIf(driver === 'mysql')('registers a table renamed out of another database under its new location', async () => {
