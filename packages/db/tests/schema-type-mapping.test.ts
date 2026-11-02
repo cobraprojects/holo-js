@@ -10,7 +10,7 @@ import {
 describe('schema type mapping', () => {
   it('defines explicit logical type mappings for every supported schema dialect', () => {
     expect(Object.keys(DIALECT_LOGICAL_TYPE_MAP).sort()).toEqual(['mysql', 'postgres', 'sqlite'])
-    expect(resolveDialectColumnType('sqlite', column.boolean().toDefinition({ name: 'active' }))).toBe('INTEGER')
+    expect(resolveDialectColumnType('sqlite', column.boolean().toDefinition({ name: 'active' }))).toBe('tinyint(1)')
     expect(resolveDialectColumnType('postgres', column.uuid().toDefinition({ name: 'publicId' }))).toBe('UUID')
     expect(resolveDialectColumnType('mysql', column.timestamp().toDefinition({ name: 'createdAt' }))).toBe('TIMESTAMP')
   })
