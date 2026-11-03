@@ -32,6 +32,30 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return [...indexes]
   }
 
+  compileForeignKeyEnforcementQuery(): DDLStatement {
+    return { sql: 'PRAGMA foreign_keys', source: 'schema:sqliteRebuild:foreignKeys' }
+  }
+
+  compileForeignKeyViolationsQuery(tableName: string): DDLStatement {
+    return { sql: 'PRAGMA foreign_key_check', source: `schema:sqliteRebuild:foreignKeyCheck:${tableName}` }
+  }
+
+  compileCopyTableRows(tableName: string, temporaryTableName: string, columnNames: readonly string[]): DDLStatement {
+    const columns = columnNames.map(columnName => this.quoteIdentifier(columnName)).join(', ')
+    return {
+      sql: `INSERT INTO ${this.quoteIdentifier(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${this.quoteIdentifier(tableName)}`,
+      source: `schema:sqliteRebuild:copy:${tableName}`,
+    }
+  }
+
+  compileMoveAutoIncrementSequence(tableName: string, temporaryTableName: string): DDLStatement[] {
+    const source = `schema:sqliteRebuild:sequence:${tableName}`
+    return [
+      { sql: 'DELETE FROM sqlite_sequence WHERE name = ?', bindings: [temporaryTableName], source },
+      { sql: 'UPDATE sqlite_sequence SET name = ? WHERE name = ?', bindings: [temporaryTableName, tableName], source },
+    ]
+  }
+
   compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
     return [this.compileDropIndex(tableName, fromIndexName), this.compileCreateIndex(tableName, index)]
   }
