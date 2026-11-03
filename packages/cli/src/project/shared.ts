@@ -16,6 +16,7 @@ export type CliModelReference = {
       readonly tableName: string
     }
     readonly prunable?: unknown
+    readonly casts?: Readonly<Record<string, unknown>>
   }
   prune(): Promise<number>
 }
@@ -40,6 +41,7 @@ export type GeneratedModelRegistryEntry = {
   readonly tableName: string
   readonly prunable: boolean
   readonly exportName?: string
+  readonly casts?: Readonly<Record<string, string>>
 }
 
 export type GeneratedMigrationRegistryEntry = {

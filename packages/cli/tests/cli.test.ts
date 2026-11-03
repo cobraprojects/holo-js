@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { spawnSyncBounded } from './sync-child'
+import ts from 'typescript'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -6603,6 +6604,7 @@ export default defineMigration({
     await schema.createTable('users', table => {
       table.id()
       table.string('email')
+      table.integer('is_admin').default(0)
     })
   },
   async down({ schema }) {
@@ -6613,7 +6615,7 @@ export default defineMigration({
     await writeProjectFile(projectRoot, 'server/models/User.ts', `
 import { defineModel } from '@holo-js/db'
 
-export default defineModel('users', { name: 'User', fillable: ['email'] })
+export default defineModel('users', { name: 'User', fillable: ['email'], casts: { is_admin: 'boolean' } })
 `)
 
     const prepared = runCliProcess(projectRoot, ['prepare'])
@@ -6629,8 +6631,26 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     const modelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
     const authTypes = await readFile(join(projectRoot, '.holo-js/generated/auth.d.ts'), 'utf8')
     expect(modelTypes).toContain('readonly "User": HoloModel0')
-    expect(modelTypes).toContain('ModelReference<GeneratedSchemaTable<"users">, EmptyScopeMap>')
-    expect(authTypes).toContain('InferSelect<GeneratedSchemaTable<"users">>')
+    expect(authTypes).toContain('InferSelect<ModelCastedTable<GeneratedSchemaTable<"users">, { readonly "is_admin": "boolean" }>>')
+    await writeProjectFile(projectRoot, 'check-model-types.ts', `
+import './.holo-js/generated/model-registry'
+import type { InferSelect, ModelReference, RegisteredModelReference } from '@holo-js/db'
+
+type Equal<TLeft, TRight> = (<T>() => T extends TLeft ? 1 : 2) extends (<T>() => T extends TRight ? 1 : 2) ? true : false
+type UserRecord = RegisteredModelReference<'User'> extends ModelReference<infer TTable> ? InferSelect<TTable> : never
+
+export const castColumnIsBoolean: Equal<UserRecord['is_admin'], boolean> = true
+export const plainColumnIsString: Equal<UserRecord['email'], string> = true
+`)
+    const program = ts.createProgram([join(projectRoot, 'check-model-types.ts')], {
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   }, 90000)
 
   it('recovers migration metadata when a discovered model uses a generated table without a primary key', async () => {

@@ -226,6 +226,11 @@ export function isCliModelReference(value: unknown): value is CliModelReference 
     && typeof value.prune === 'function'
 }
 
+export function collectBuiltInCasts(casts: Readonly<Record<string, unknown>> | undefined): Readonly<Record<string, string>> | undefined {
+  const entries = Object.entries(casts ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
 export function isUnresolvedModelSchemaError(error: unknown): boolean {
   return error instanceof Error
     && (error.message.includes('is not present in the generated schema registry')
