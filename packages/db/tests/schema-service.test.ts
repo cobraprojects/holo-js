@@ -231,6 +231,28 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       }, 5_000)
     }
 
+    it.runIf(driver === 'sqlite')('changes a column referencing the primary key of its parent implicitly and keeps the key enforcing', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("code" TEXT PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_code" TEXT REFERENCES "${parents}")`)
+      await db.table(parents).insert({ code: 'a' })
+      await db.table(children).insert({ id: 1, parent_code: 'a' })
+
+      await schema.table(children, (table) => { table.string('parent_code').nullable().change() })
+
+      expect(await schema.getForeignKeys(children)).toEqual([expect.objectContaining({ table: parents, from: 'parent_code', to: 'code' })])
+      await db.table(children).insert({ id: 2, parent_code: 'a' })
+      await expect(db.table(children).insert({ id: 3, parent_code: 'missing' })).rejects.toThrow()
+      expect(await db.table(children).orderBy('id').pluck('parent_code')).toEqual(['a', 'a'])
+    })
+
     it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
       const { db, schema } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
