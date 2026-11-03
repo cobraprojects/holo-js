@@ -46,7 +46,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
+import { readInsertedKey, readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -2763,7 +2763,7 @@ export class TableQueryBuilder<
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
     assertSinglePrimaryKey(this.source.table)
     const result = await this.executeInsert(values, true)
-    return result.lastInsertId
+    return readInsertedKey(this.plan.source.table, this.resolvePrimaryKeyColumn(), result.lastInsertId)
   }
 
   async upsert(

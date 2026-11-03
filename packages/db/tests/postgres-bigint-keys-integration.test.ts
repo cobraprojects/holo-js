@@ -101,4 +101,18 @@ describe('postgres bigint keys', () => {
       for (const name of Object.values(names).reverse()) await schema.dropTable(name)
     }
   })
+
+  it('returns the id() a declared table inserts as the number its reads return', async () => {
+    const { schema, names } = await openBigintScenario()
+    try {
+      const groups = defineGeneratedTable(names.groups, { id: column.id(), name: column.string() })
+
+      const id = await DB.table(groups).insertGetId({ name: 'g' })
+
+      expect(id).toBe(1)
+      expect(await DB.table(groups).where('name', 'g').value('id')).toBe(id)
+    } finally {
+      for (const name of Object.values(names).reverse()) await schema.dropTable(name)
+    }
+  })
 })

@@ -51,11 +51,24 @@ export function resolveIntegerResultColumns(plan: SelectQueryPlan): readonly str
   return [...keys]
 }
 
+function readsIntegerText(value: unknown): value is bigint | string {
+  return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
+}
+
 export function readIntegerResultColumns(row: Record<string, unknown>, columns: readonly string[]): Record<string, unknown> {
   const values: Record<string, unknown> = { ...row }
   for (const column of columns) {
     const value = row[column]
-    if (typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))) values[column] = parseInteger(value)
+    if (readsIntegerText(value)) values[column] = parseInteger(value)
   }
   return values
+}
+
+export function readInsertedKey(
+  table: TableDefinition | undefined,
+  column: string,
+  value: number | string | undefined,
+): number | string | undefined {
+  const definition = table && Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
+  return definition && readsAsInteger(definition) && readsIntegerText(value) ? Number(parseInteger(value)) : value
 }
