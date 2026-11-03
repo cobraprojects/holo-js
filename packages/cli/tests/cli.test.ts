@@ -1145,6 +1145,40 @@ async function readGeneratedSchemaFiles(projectRoot: string): Promise<readonly s
   return Promise.all(['schema.generated.ts', 'schema.mjs'].map(file => readFile(join(projectRoot, '.holo-js/generated', file), 'utf8')))
 }
 
+async function writeLegacyGeneratedSchema(projectRoot: string): Promise<void> {
+  const legacyTable = [
+    'export const legacy_widgets = defineGeneratedTable("legacy_widgets", {',
+    '  "id": column.id(),',
+    '  "code": column.string().generated(),',
+    '})',
+    '',
+  ]
+  await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', [
+    'import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'',
+    '',
+    ...legacyTable,
+    'declare module \'@holo-js/db\' {',
+    '  interface GeneratedSchemaTables {',
+    '    "legacy_widgets": typeof legacy_widgets',
+    '  }',
+    '}',
+    '',
+    'export const tables = { "legacy_widgets": legacy_widgets } as const',
+    '',
+    'registerGeneratedTables(tables)',
+    '',
+  ].join('\n'))
+  await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', [
+    'import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'',
+    '',
+    ...legacyTable,
+    'export const tables = Object.freeze({ "legacy_widgets": legacy_widgets })',
+    '',
+    'registerGeneratedTables(tables)',
+    '',
+  ].join('\n'))
+}
+
 function generatedTableNames(generated: string): string[] {
   return [...generated.matchAll(/defineGeneratedTable\("([^"]+)"/g)].map(match => match[1]!).sort()
 }
@@ -6262,6 +6296,19 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }
 
+  it('tells the user to run migrate or build when holo prepare cannot load a 0.5 Generated schema', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeLegacyGeneratedSchema(projectRoot)
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+
+    expect(prepared.status).toBe(1)
+    expect(prepared.stderr).toContain('Unable to load the Generated schema ".holo-js/generated/schema.generated.ts"')
+    expect(prepared.stderr).toContain('Run "holo migrate" or "holo build" to write it again from the database.')
+  }, 30000)
+
   for (const database of schemaSourceDatabases) {
     it.skipIf(!database.enabled)(`writes the Generated schema from the ${database.driver} database after migrate, rollback and fresh`, async () => {
       const projectRoot = await createTempProject()
@@ -6382,6 +6429,46 @@ process.stdout.write('framework build ran\\n')
         await database.drop(databaseName)
       }
     }, 90000)
+
+    it.skipIf(!database.enabled)(`rewrites a 0.5 Generated schema that calls generated() from the ${database.driver} database on migrate, build, fresh and rollback`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const databaseName = `holo_legacy_${randomUUID().replaceAll('-', '')}`
+      await writeSchemaSourceProject(projectRoot, database.connection(databaseName))
+      await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { name: 'User', fillable: ['name'] })
+`)
+      await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', `
+process.stdout.write('framework build ran\\n')
+`)
+      await database.create(databaseName)
+      try {
+        const migrated = runCliProcess(projectRoot, ['migrate'])
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+
+        const upgrades = [
+          { command: ['migrate'], tables: ['profiles', 'users'] },
+          { command: ['build'], tables: ['profiles', 'users'] },
+          { command: ['migrate:fresh'], tables: ['profiles', 'users'] },
+          { command: ['migrate:rollback'], tables: [] },
+        ]
+        for (const upgrade of upgrades) {
+          await writeLegacyGeneratedSchema(projectRoot)
+
+          const upgraded = runCliProcess(projectRoot, upgrade.command, { env: { APP_ENV: 'development' } })
+          expect(upgraded.status, upgraded.stderr || upgraded.stdout).toBe(0)
+          for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+            expect(generatedTableNames(generated)).toEqual(upgrade.tables)
+          }
+          const modelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+          expect(modelTypes.includes('GeneratedSchemaTable<"users">'), upgrade.command.join(' ')).toBe(upgrade.tables.includes('users'))
+        }
+      } finally {
+        await database.drop(databaseName)
+      }
+    }, 120000)
 
     it.skipIf(!database.enabled)(`fails holo build with an error naming the connection when the ${database.driver} database is unreachable`, async () => {
       const projectRoot = await createTempProject()

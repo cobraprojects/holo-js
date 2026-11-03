@@ -159,7 +159,7 @@ async function bundleRuntimeEntries(projectRoot: string, entries: readonly strin
 
 export async function getRuntimeEnvironment(projectRoot: string, kind: RuntimeCommandKind): Promise<RuntimeEnvironment> {
   let project = await loadProjectConfig(projectRoot, { required: true })
-  if (!await loadGeneratedProjectRegistry(projectRoot)) {
+  if (kind !== 'generate-schema' && !await loadGeneratedProjectRegistry(projectRoot)) {
     await prepareProjectDiscovery(projectRoot, project.config)
     project = await loadProjectConfig(projectRoot, { required: true })
   }
@@ -332,7 +332,7 @@ export async function withRuntimeEnvironment<T>(
 ): Promise<T> {
   if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
-    await prepareProjectDiscovery(projectRoot, project.config)
+    await prepareProjectDiscovery(projectRoot, project.config, true, isSchemaChangingKind(kind) ? 'regenerating' : 'current')
   }
 
   const environment = await getRuntimeEnvironment(projectRoot, kind)
