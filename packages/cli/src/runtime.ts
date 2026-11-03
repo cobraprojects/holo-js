@@ -333,7 +333,9 @@ export async function withRuntimeEnvironment<T>(
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
   if (kind === 'seed' || kind === 'media:regenerate') {
-    await withRuntimeEnvironment(projectRoot, 'generate-schema', {}, async () => undefined)
+    await withRuntimeEnvironment(projectRoot, 'generate-schema', {}, async () => undefined).catch((error: unknown) => {
+      process.stderr.write(`[Holo CLI] Continuing with the existing Generated schema. ${errorMessage(error)}\n`)
+    })
   }
   if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })

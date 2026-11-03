@@ -197,16 +197,20 @@ async function dropAllTablesForFresh(
   })
 }
 
-async function createMissingDatabase(connection: DatabaseContext): Promise<void> {
+async function isDatabaseMissing(connection: DatabaseContext): Promise<boolean> {
   const adapter = connection.getAdapter()
-  if (await adapter.databaseExists?.() === false) {
-    await adapter.ensureDatabaseExists?.()
+  return typeof adapter.databaseExists === 'function' && !await adapter.databaseExists()
+}
+
+async function createMissingDatabase(connection: DatabaseContext): Promise<void> {
+  if (await isDatabaseMissing(connection)) {
+    await connection.getAdapter().ensureDatabaseExists?.()
   }
 }
 
 async function readDatabaseSchema(connection: DatabaseContext): Promise<TableDefinition[]> {
   try {
-    if (await connection.getAdapter().databaseExists?.() === false) {
+    if (await isDatabaseMissing(connection)) {
       throw new Error('the database does not exist. Run "holo migrate" to create it.')
     }
     await connection.initialize()
