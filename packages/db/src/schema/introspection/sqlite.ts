@@ -3,7 +3,7 @@ import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
 import { readEnumChecks, readForeignKeys, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
 import { parseCreateTableSql, type ForeignKeyConstraint } from './sqliteDefinitionGrammar'
-import { sameIdentifier, sameIdentifiers } from './sqliteTokens'
+import { readNamesInSql, sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
@@ -21,7 +21,12 @@ export const SQLITE_AUTOINDEX_PREFIX = 'sqlite_autoindex_'
 
 export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
 
+export type SQLiteDependentObject = { schema: string, type: 'view' | 'trigger', name: string, sql: string }
+
+type SchemaObjectRow = SQLiteDependentObject & { tbl_name: string }
+
 const MAIN_SCHEMA = 'main'
+const TEMP_SCHEMA = 'temp'
 
 function splitTableName(tableName: string): { schema: string, table: string } {
   const { schema = MAIN_SCHEMA, table } = splitTablePath(tableName)
@@ -56,6 +61,39 @@ export async function readSQLiteTableObjects(connection: DatabaseContext, tableN
     source: `schema:introspect:objects:${tableName}`,
   })
   return result.rows
+}
+
+function referencesAny(object: SchemaObjectRow, names: readonly string[]): boolean {
+  return readNamesInSql(object.sql).some(referenced => names.some(name => sameIdentifier(name, referenced)))
+}
+
+function collectDependentViews(views: readonly SchemaObjectRow[], dependencies: readonly string[]): SchemaObjectRow[] {
+  const dependents = views.filter(view => referencesAny(view, dependencies))
+  if (dependents.length === 0) return []
+  const remaining = views.filter(view => !dependents.includes(view))
+  return [...dependents, ...collectDependentViews(remaining, dependents.map(view => view.name))]
+}
+
+async function readViewsAndTriggers(connection: DatabaseContext, schema: string): Promise<SchemaObjectRow[]> {
+  const result = await connection.introspectCompiled<Omit<SchemaObjectRow, 'schema'>>({
+    sql: `SELECT type, name, tbl_name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid`,
+    source: `schema:introspect:viewsAndTriggers:${schema}`,
+  })
+  return result.rows.map(row => ({ ...row, schema }))
+}
+
+export async function readSQLiteDependentObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteDependentObject[]> {
+  const { schema, table } = splitTableName(tableName)
+  const schemas = sameIdentifier(schema, TEMP_SCHEMA) ? [schema] : [schema, TEMP_SCHEMA]
+  const rows: SchemaObjectRow[] = []
+  for (const candidateSchema of schemas) rows.push(...await readViewsAndTriggers(connection, candidateSchema))
+  const views = collectDependentViews(rows.filter(row => row.type === 'view'), [table])
+  const dependencies = [table, ...views.map(view => view.name)]
+  const isOwnTrigger = (row: SchemaObjectRow): boolean => sameIdentifier(row.schema, schema) && sameIdentifier(row.tbl_name, table)
+  const triggers = rows.filter(row => row.type === 'trigger'
+    && !isOwnTrigger(row)
+    && (dependencies.some(name => sameIdentifier(name, row.tbl_name)) || referencesAny(row, dependencies)))
+  return [...views, ...triggers].map(({ schema: objectSchema, type, name, sql }) => ({ schema: objectSchema, type, name, sql }))
 }
 
 export async function readSQLiteIndexKey(connection: DatabaseContext, tableName: string, indexName: string): Promise<IndexKeyColumn[]> {

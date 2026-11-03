@@ -549,6 +549,45 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(parents).orderBy('id').pluck('name')).toEqual(['first', null])
     })
 
+    it.runIf(driver === 'sqlite')('keeps views and other tables\' triggers that depend on a table working after change() rebuilds it', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const records = `holo_records_${suffix}`
+      const inbox = `holo_inbox_${suffix}`
+      const recordsView = `holo_records_view_${suffix}`
+      const namesView = `holo_names_view_${suffix}`
+      const sessionView = `holo_session_view_${suffix}`
+      onTestFinished(async () => {
+        await adapter.execute(`DROP VIEW IF EXISTS temp."${sessionView}"`)
+        await adapter.execute(`DROP VIEW IF EXISTS "${namesView}"`)
+        await adapter.execute(`DROP VIEW IF EXISTS "${recordsView}"`)
+        await schema.dropTable(inbox)
+        await schema.dropTable(records)
+      })
+      await schema.createTable(records, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(inbox, (table) => {
+        table.string('message')
+      })
+      await adapter.execute(`CREATE VIEW "${recordsView}" AS SELECT "id", "name" FROM "${records}"`)
+      await adapter.execute(`CREATE VIEW "${namesView}" AS SELECT "name" FROM "${recordsView}"`)
+      await adapter.execute(`CREATE TEMP VIEW "${sessionView}" AS SELECT "name" FROM main."${records}"`)
+      await adapter.execute(`CREATE TRIGGER "inbox_files_${suffix}" AFTER INSERT ON "${inbox}" BEGIN INSERT INTO "${records}" ("name") VALUES (NEW."message"); END`)
+      await adapter.execute(`CREATE TRIGGER "names_insert_${suffix}" INSTEAD OF INSERT ON "${namesView}" BEGIN INSERT INTO "${records}" ("name") VALUES (NEW."name"); END`)
+      await db.table(records).insert({ name: 'first' })
+
+      await schema.table(records, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(inbox).insert({ message: 'filed' })
+      await db.table(namesView).insert({ name: 'through view' })
+      await db.table(records).insert({ id: 4 })
+      expect(await db.table(recordsView).orderBy('id').pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+      expect(await db.table(namesView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+      expect(await db.table(sessionView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+    })
+
     it.runIf(driver === 'sqlite')('rebuilds a mixed-case parent named in another letter case and keeps its rows, children, and triggers', async () => {
       const { db, schema, adapter } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)

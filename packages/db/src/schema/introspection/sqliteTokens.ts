@@ -105,6 +105,14 @@ export function readNameToken(token: SqlToken | undefined): string | undefined {
   return token?.kind === 'word' || token?.kind === 'quotedIdentifier' || token?.kind === 'string' ? token.value : undefined
 }
 
+export function readNamesInSql(sql: string): string[] {
+  const namesIn = (tokens: readonly SqlToken[]): string[] => tokens.flatMap((token) => {
+    const name = readNameToken(token)
+    return name === undefined ? namesIn(token.children ?? []) : [name]
+  })
+  return namesIn(tokenizeSql(sql))
+}
+
 export function splitTokensOnCommas(tokens: readonly SqlToken[]): SqlToken[][] {
   const items: SqlToken[][] = [[]]
   for (const token of tokens) {

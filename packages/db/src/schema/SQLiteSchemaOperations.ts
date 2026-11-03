@@ -2,7 +2,7 @@ import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { findStoredColumn, hasAutoIncrement, isGeneratedColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
@@ -212,6 +212,7 @@ export class SQLiteSchemaOperations {
     }
 
     const schemaObjects = await readSQLiteTableObjects(connection, tableName)
+    const dependentObjects = await readSQLiteDependentObjects(connection, tableName)
     const rebuildStatement = this.compiler.compileRebuildTable(tableName, temporaryTableName, rewrite(structure, storedTable), storedTable.options)
     const rebuiltTable = parseCreateTableSql(rebuildStatement.sql)
     const copiedColumns = structure.columns.filter(existing => !existing.computed).map(existing => existing.name)
@@ -220,9 +221,10 @@ export class SQLiteSchemaOperations {
       rebuildStatement,
       this.compiler.compileCopyTableRows(tableName, temporaryTableName, copiedColumns),
       ...(rebuiltTable && hasAutoIncrement(rebuiltTable) ? this.compiler.compileMoveAutoIncrementSequence(tableName, temporaryTableName) : []),
+      ...this.compiler.compileDropDependentObjects(dependentObjects),
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
-      ...schemaObjects.map(object => ({ sql: object.sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` })),
+      ...[...schemaObjects, ...dependentObjects].map(object => ({ sql: object.sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` })),
     ])
   }
 
