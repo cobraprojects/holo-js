@@ -10,20 +10,34 @@ type IndexRow = { name: string, non_unique: number | string, column_name: string
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 
 const SCHEMA_BINDING = 'COALESCE(?, DATABASE())'
-const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|now|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?$/i
+const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?$|^now\(\)$/i
+const TEMPORAL_TYPE_PATTERN = /^(?:timestamp|datetime)\b/i
+const DEFAULT_GENERATED_PATTERN = /\bDEFAULT_GENERATED\b/i
+const INFORMATION_SCHEMA_ESCAPE_PATTERN = /\\(.)/gs
+const SINGLE_STRING_LITERAL_PATTERN = /^(?:_\w+\s*)?'((?:[^'\\]|\\.|'')*)'$/s
 const MYSQL_STRING_LITERAL_PATTERN = /'((?:[^'\\]|\\.|'')*)'/gs
 const MYSQL_ESCAPE_SEQUENCE_PATTERN = /\\(.)|''/gs
 const MYSQL_ESCAPED_CHARACTERS: Readonly<Record<string, string>> = { '0': '\0', 'b': '\b', 'n': '\n', 'r': '\r', 't': '\t', 'Z': '\x1a', '%': '\\%', '_': '\\_' }
-const NUMERIC_TYPE_PATTERN = /^(?:tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real|bit)\b/i
+
+function isCurrentTimeDefault(row: ColumnRow, columnDefault: string): boolean {
+  return CURRENT_TIME_PATTERN.test(columnDefault)
+    && (DEFAULT_GENERATED_PATTERN.test(row.extra) || TEMPORAL_TYPE_PATTERN.test(row.column_type))
+}
+
+function readExpressionDefault(storedExpression: string): DatabaseColumnDefault {
+  const expression = storedExpression.replace(INFORMATION_SCHEMA_ESCAPE_PATTERN, '$1')
+  const literal = SINGLE_STRING_LITERAL_PATTERN.exec(expression)?.[1]
+  return literal === undefined
+    ? { kind: 'expression', sql: expression }
+    : { kind: 'literal', value: decodeMySQLStringLiteral(literal) }
+}
 
 function readColumnDefault(row: ColumnRow): DatabaseColumnDefault {
-  if (row.column_default === null) return { kind: 'none' }
-  if (CURRENT_TIME_PATTERN.test(row.column_default)) return { kind: 'now' }
-  if (/\bDEFAULT_GENERATED\b/i.test(row.extra)) return { kind: 'expression', sql: row.column_default }
-  if (NUMERIC_TYPE_PATTERN.test(row.column_type) && row.column_default.trim() !== '' && Number.isFinite(Number(row.column_default))) {
-    return { kind: 'literal', value: Number(row.column_default) }
-  }
-  return { kind: 'literal', value: row.column_default }
+  const columnDefault = row.column_default
+  if (columnDefault === null) return { kind: 'none' }
+  if (isCurrentTimeDefault(row, columnDefault)) return { kind: 'now' }
+  if (DEFAULT_GENERATED_PATTERN.test(row.extra)) return readExpressionDefault(columnDefault)
+  return { kind: 'literal', value: columnDefault }
 }
 
 function decodeMySQLStringLiteral(body: string): string {
