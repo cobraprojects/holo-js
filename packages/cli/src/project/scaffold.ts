@@ -1,10 +1,7 @@
 import { resolveFrameworkPreparation } from './framework-preparation'
 import { mkdir, readdir } from 'node:fs/promises'
 import { dirname, extname, resolve } from 'node:path'
-import {
-  loadProjectConfig,
-  resolveGeneratedSchemaPath,
-} from './config'
+import { loadProjectConfig } from './config'
 import {
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
@@ -140,7 +137,6 @@ import {
   renderScaffoldDatabaseConfig,
   renderScaffoldEnvFiles,
   resolveDefaultDatabaseUrl,
-  resolveAuthUserModelSchemaImportPath,
   upsertEnvContents,
 } from './scaffold/project-renderers'
 import {
@@ -440,7 +436,6 @@ export async function installAuthIntoProject(
   const authConfigTargetPath = resolve(projectRoot, 'config/auth.ts')
   const sessionConfigTargetPath = resolve(projectRoot, 'config/session.ts')
   const userModelTargetPath = resolve(modelsRoot, 'User.ts')
-  const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, project.config)
   const migrationFiles = createAuthMigrationFiles()
   const authEnvFiles = renderAuthEnvFiles(features, defaultDatabaseConnection, trustedProxies)
 
@@ -458,13 +453,7 @@ export async function installAuthIntoProject(
     createdSecurityConfig = true
   }
   const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
-  await writeTextFile(
-    userModelTargetPath,
-    renderAuthUserModel(resolveAuthUserModelSchemaImportPath(
-      userModelTargetPath,
-      generatedSchemaPath,
-    )),
-  )
+  await writeTextFile(userModelTargetPath, renderAuthUserModel())
 
   const createdMigrationFiles: string[] = []
   for (const migrationFile of migrationFiles) {

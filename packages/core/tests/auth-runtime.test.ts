@@ -1333,31 +1333,6 @@ export default defineSessionConfig({
     })).rejects.toThrow('Redis store "redis" references shared connection "cache" without top-level Redis config')
   })
 
-  it('loads pending-schema auth model modules without treating them as missing', async () => {
-    const root = await createProject({
-      auth: true,
-    })
-    await writeFile(join(root, 'server/models/User.ts'), `
-export const holoModelPendingSchema = true
-export default undefined
-`, 'utf8')
-
-    const runtime = await createHolo(root, {
-      processEnv: process.env,
-      preferCache: false,
-    })
-
-    await runtime.initialize()
-    expect(runtime.auth).toBeDefined()
-    await expect(runtime.auth?.check()).resolves.toBe(false)
-    await expect(runtime.auth?.register({
-      email: 'ava@example.com',
-      password: 'secret-secret',
-      passwordConfirmation: 'secret-secret',
-    } as never)).rejects.toThrow('pending generated schema output')
-  })
-
-
   it('loads configured social providers lazily and persists social state plus identity links', async () => {
     const root = await createProject({
       auth: true,
@@ -3005,7 +2980,7 @@ export default {
     },
   )
 
-  it('covers core auth store helpers, provider markers, and pending auth providers directly', async () => {
+  it('covers core auth store helpers and provider markers directly', async () => {
     const root = await createProject({
       auth: true,
       session: 'database',
@@ -3305,33 +3280,6 @@ export default {
     expect(holoRuntimeInternals.markProviderUser('user-1', 'users')).toBe('user-1')
     expect(holoRuntimeInternals.markProviderUser(frozenUser, 'users')).toBe(frozenUser)
     expect(holoRuntimeInternals.fromHostedIdentityProviderValue('workos', 'google')).toBe('google')
-
-    await writeFile(join(root, 'server/models/User.ts'), `
-export default undefined
-export const holoModelPendingSchema = true
-`, 'utf8')
-    const pendingProviders = (await holoRuntimeInternals.createCoreAuthPersistence(root, runtime.loadedConfig)).providers
-    const pendingAdapter = pendingProviders.users as {
-      findById(id: string | number): Promise<unknown>
-      findByCredentials(credentials: Record<string, unknown>): Promise<unknown>
-      create(input: Record<string, unknown>): Promise<unknown>
-      update(id: unknown, input: Record<string, unknown>): Promise<unknown>
-      matchesUser(user: unknown): boolean
-      getId(user: unknown): string | number
-      getPasswordHash(user: unknown): string | null | undefined
-      getEmailVerifiedAt(user: unknown): Date | string | null | undefined
-      serialize(user: unknown): unknown
-    }
-
-    await expect(pendingAdapter.findById(1)).rejects.toThrow('pending generated schema output')
-    await expect(pendingAdapter.findByCredentials({ email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
-    await expect(pendingAdapter.create({ email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
-    await expect(pendingAdapter.update(1, { email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
-    expect(pendingAdapter.matchesUser({})).toBe(false)
-    expect(() => pendingAdapter.getId({})).toThrow('pending generated schema output')
-    expect(() => pendingAdapter.getPasswordHash({})).toThrow('pending generated schema output')
-    expect(() => pendingAdapter.getEmailVerifiedAt({})).toThrow('pending generated schema output')
-    expect(() => pendingAdapter.serialize({})).toThrow('pending generated schema output')
   })
 
   it('covers hosted identity fallback values and default auth-store branches', async () => {

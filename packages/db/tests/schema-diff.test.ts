@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { column, createDatabase, createDialect, createSchemaDiff, createSchemaService, SchemaError } from '../src'
+import { column, createDatabase, createDialect, diffSchema, createSchemaService, SchemaError } from '../src'
 import { defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
 import { openDatabase } from './support/database'
@@ -16,7 +16,7 @@ describe('native schema diff', () => {
   it.each(['sqlite', 'postgres', 'mysql'] as const)('reports matching columns and indexes on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const expected = defineTable(table.tableName.split('.').at(-1)!, table.columns)
-    const diff = await createSchemaDiff(schema, [expected])
+    const diff = await diffSchema(schema, [expected])
     expect(diff.missingTables).toEqual([])
     expect(diff.tables).toHaveLength(1)
     expect(diff.tables[0]).toMatchObject({
@@ -37,7 +37,7 @@ describe('native schema diff', () => {
       id: column.id(), team_id: column.foreignId().constrained('teams'), message: column.string(),
     }, { indexes: [{ columns: ['message'], unique: false }] })
     for (const table of [teams, users, audits]) await createTestTable(db, table)
-    const diff = await createSchemaDiff(schema, [teams, users, audits])
+    const diff = await diffSchema(schema, [teams, users, audits])
     expect(diff.hasChanges).toBe(false)
     expect(diff.extraTables).toEqual([])
     expect(diff.missingTables).toEqual([])
@@ -56,7 +56,7 @@ describe('native schema diff', () => {
       team_id: column.foreignId().constrained('teams').cascadeOnDelete().restrictOnUpdate(),
     }, { indexes: [{ columns: ['email'], unique: true }] })
     const posts = defineTable('posts', { id: column.id() })
-    const diff = await createSchemaDiff(schema, [teams, users, posts])
+    const diff = await diffSchema(schema, [teams, users, posts])
     expect(diff.missingTables).toEqual(['posts'])
     expect(diff.extraTables).toEqual(['legacy'])
     expect(diff.hasChanges).toBe(true)
@@ -84,7 +84,7 @@ describe('native schema diff', () => {
     const metrics = defineTable('metrics', {
       price: column.decimal(), ratio: column.real(), payload: column.blob(), team_id: column.integer().nullable(),
     }, { indexes: [{ name: 'metrics_price_idx', columns: ['price'], unique: true }] })
-    const diff = await createSchemaDiff(schema, [metrics])
+    const diff = await diffSchema(schema, [metrics])
     expect(diff.tables[0]!.mismatchedColumns).toEqual([])
     expect(diff.tables[0]!.mismatchedIndexes).toEqual([{
       index: 'metrics_price_idx', expected: { unique: true, columns: ['price'] }, actual: { unique: false, columns: ['ratio'] },
@@ -96,7 +96,7 @@ describe('native schema diff', () => {
     const { db, table, schema } = await openDatabase(driver)
     await schema.table(table.tableName, table => { table.blob('embedding').nullable() })
     const vectors = defineTable(table.tableName.split('.').at(-1)!, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
-    await expect(createSchemaDiff(schema, [vectors])).rejects.toThrow(SchemaError)
+    await expect(diffSchema(schema, [vectors])).rejects.toThrow(SchemaError)
     expect(await db.table(table).count()).toBe(0)
   })
 })

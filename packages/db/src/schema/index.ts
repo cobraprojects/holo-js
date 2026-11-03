@@ -13,7 +13,7 @@ export {
 export { TableDefinitionBuilder } from './TableDefinitionBuilder'
 export { TableMutationBuilder } from './TableMutationBuilder'
 export { SchemaService, createSchemaService } from './SchemaService'
-export { diffSchema, diffSchema as createSchemaDiff } from './diff'
+export { diffSchema } from './diff'
 export { SQLSchemaCompiler } from './SQLSchemaCompiler'
 export { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 export { PostgresSchemaCompiler } from './PostgresSchemaCompiler'

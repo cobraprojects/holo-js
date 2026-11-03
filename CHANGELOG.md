@@ -23,6 +23,7 @@
 - Database: `MigrationService.migrateIsolated()` and the `IsolatedMigrationResult` type are removed from `@holo-js/db`. Use `holo migrate --isolated`.
 - Database: `SchemaService.register()`, `sync()` and `previewSync()`, the `SchemaSyncPlan` type, the `generated()` column modifier, `SchemaRegistry`, `createSchemaRegistry()`, `DatabaseContext.getSchemaRegistry()` and the `schemaRegistry` option of `createDatabase()` are removed. Create tables with migrations instead of `sync()`. For a column the database fills in, use a database `default()` instead of `generated()`. Regenerate an older `schema.generated.ts` that still calls `.generated()` with `holo migrate` or `holo build`.
 - Database: `alterColumnOperation()` and `compileAlterColumn()` no longer take the previous column definition.
+- Database: `MigrationService.planSquash()`, `MigrationService.hasRan()`, `MigrationService.getExecutionPolicy()`, the `MigrationSquashPlan` and `MigrationExecutionPolicy` types, and the `createSchemaDiff` alias are removed from `@holo-js/db`. Use `MigrationService.status()` to see which migrations ran, and `diffSchema()` in place of `createSchemaDiff()`.
 - Deploys that run `holo migrate --isolated` on several servers must set the default cache store to a shared `redis` or `database` store. You can drop a leftover `_holo_migration_locks` table.
 
 ### Fixed
