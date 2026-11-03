@@ -18,6 +18,10 @@ export function getRegistryMigrationSlug(name: string): string {
   return normalizeMigrationSlug(stripMigrationNamePrefix(name))
 }
 
+export function normalizeCacheMigrationName(tableName: string): string {
+  return normalizeMigrationSlug(`create_${tableName.replaceAll('.', '_')}_cache_table`)
+}
+
 export function hasRegisteredMigrationSlug(
   registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
   migrationSlug: string,

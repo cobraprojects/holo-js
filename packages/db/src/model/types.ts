@@ -5,6 +5,7 @@ import type { AnyColumnDefinition, ColumnDefinition, InferInsert, InferSelect, I
 import type { Entity, ModelBase, ModelRelationMethods } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 import type { ModelCollection } from './collection'
+import type { TableWildcardSelection } from '../query/selectionTypes'
 
 export type ModelInsertPayload<TTable extends TableDefinition> = Partial<InferInsert<TTable>>
 export type ModelUpdatePayload<TTable extends TableDefinition> = Partial<InferUpdate<TTable>>
@@ -14,7 +15,9 @@ export type ModelAttributeKey<TTable extends TableDefinition> = Extract<keyof In
 export type ModelColumnName<TTable extends TableDefinition> = ModelAttributeKey<TTable> | `${string}.${ModelAttributeKey<TTable>}`
 export type ModelColumnReference<TTable extends TableDefinition> = ModelColumnName<TTable> | `${string}.${string}`
 export type ModelJsonColumnPath<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>}->${string}`
-export type ModelSelectableColumn<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>} as ${string}`
+export type ModelSelectableColumn<TTable extends TableDefinition, TJoinedTables extends string = never> = ModelColumnName<TTable>
+  | `${ModelColumnName<TTable>} as ${string}`
+  | TableWildcardSelection<TTable['tableName'] | TJoinedTables>
 export interface AnyModelDefinition {
   readonly kind: 'model'
   readonly table: TableDefinition
@@ -999,11 +1002,12 @@ export type ModelScopeMethods<
   TScopes extends ModelScopesDefinition,
   TRelations extends RelationMap = RelationMap,
   TLoaded = unknown,
+  TJoinedTables extends string = never,
 > = {
   [K in keyof TScopes]:
   TScopes[K] extends (query: infer TQuery, ...args: infer TArgs) => ModelQueryBuilder<TTable>
     ? ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> extends TQuery
-      ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+      ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
       : never
     : never
 }
