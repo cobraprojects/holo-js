@@ -51,7 +51,7 @@ export function booleanStorageValue(value: unknown): number | null | undefined {
   return coerceBoolean(value) ? 1 : 0
 }
 
-export function parseInteger(value: unknown): unknown {
+function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
