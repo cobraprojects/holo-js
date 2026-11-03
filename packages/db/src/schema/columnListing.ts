@@ -1,5 +1,6 @@
 import { createSchemaReader } from './introspection'
 import { getRootDatabaseContext } from '../core/contextOwnership'
+import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import type { DatabaseContext } from '../core/DatabaseContext'
 
@@ -9,17 +10,21 @@ type ColumnListingEntry = {
   columns?: ReadonlySet<string>
 }
 
-const listings = new WeakMap<DatabaseContext, Map<string, ColumnListingEntry>>()
+const listings = new WeakMap<object, Map<string, ColumnListingEntry>>()
+
+function listingOwner(connection: DatabaseContext): object {
+  return currentRootTransaction(connection) ?? getRootDatabaseContext(connection)
+}
 
 function connectionListings(connection: DatabaseContext): Map<string, ColumnListingEntry> {
-  const root = getRootDatabaseContext(connection)
-  const existing = listings.get(root)
+  const owner = listingOwner(connection)
+  const existing = listings.get(owner)
   if (existing) {
     return existing
   }
 
   const created = new Map<string, ColumnListingEntry>()
-  listings.set(root, created)
+  listings.set(owner, created)
   return created
 }
 
@@ -64,5 +69,5 @@ export function loadColumnListing(connection: DatabaseContext, tableName: string
 }
 
 export function getLoadedColumnListing(connection: DatabaseContext, tableName: string): ReadonlySet<string> | undefined {
-  return currentEntry(listings.get(getRootDatabaseContext(connection)), tableName)?.columns
+  return currentEntry(listings.get(listingOwner(connection)), tableName)?.columns
 }
