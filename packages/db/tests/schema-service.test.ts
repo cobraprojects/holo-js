@@ -408,6 +408,32 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await db.table(moved).insert({ id: 1, state: 'lost' })
     })
 
+    it.runIf(driver === 'postgres')('renames only the conventional enum check when a column has several, and keeps custom-named checks', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_many_checks_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const moved = `${name}_moved`
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await schema.dropTable(moved)
+      })
+      const checkNames = async (tableName: string): Promise<string[]> => (await adapter.query<{ conname: string }>(
+        'SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = \'c\' ORDER BY conname',
+        [tableName],
+      )).rows.map(row => row.conname)
+      await adapter.execute(`CREATE TABLE "${name}" (
+        id integer PRIMARY KEY,
+        status varchar(20) NOT NULL CHECK (status IN ('open', 'closed', 'archived')) CHECK (status IN ('open', 'closed')) CONSTRAINT status_allowed CHECK (status IN ('open', 'closed'))
+      )`)
+
+      await schema.table(name, table => { table.renameColumn('status', 'state') })
+      expect(await checkNames(name)).toEqual([`${name}_state_check`, `${name}_status_check1`, 'status_allowed'])
+
+      await schema.renameTable(name, moved)
+      expect(await checkNames(moved)).toEqual([`${moved}_state_check`, `${name}_status_check1`, 'status_allowed'])
+      await db.table(moved).insert({ id: 1, state: 'open' })
+      await expect(db.table(moved).insert({ id: 2, state: 'archived' })).rejects.toThrow()
+    })
+
     it.runIf(driver === 'sqlite')('keeps enum check names when renaming a table and when a later change() rebuilds it', async () => {
       const { db } = await openDatabase(driver)
       const schema = createSchemaService(db)
