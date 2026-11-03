@@ -666,8 +666,8 @@ describe('native schema core', () => {
     builder.dropConstrainedForeignId('author_id')
 
     expect(builder.getOperations()).toEqual([
-      { kind: 'dropForeignKey', constraintName: 'tenant_posts_user_id_foreign' },
-      { kind: 'dropForeignKey', constraintName: 'tenant_posts_author_id_foreign' },
+      { kind: 'dropForeignKey', constraintName: 'tenant_posts_user_id_foreign', columns: ['user_id'] },
+      { kind: 'dropForeignKey', constraintName: 'tenant_posts_author_id_foreign', columns: ['author_id'] },
       { kind: 'dropColumn', columnName: 'author_id' },
     ])
   })
@@ -679,7 +679,7 @@ describe('native schema core', () => {
     builder.dropUnique('posts_email_key')
 
     expect(builder.getOperations()).toEqual([
-      { kind: 'dropUnique', indexName: 'tenant_posts_email_unique' },
+      { kind: 'dropUnique', indexName: 'tenant_posts_email_unique', columns: ['email'] },
       { kind: 'dropUnique', indexName: 'posts_email_key' },
     ])
   })

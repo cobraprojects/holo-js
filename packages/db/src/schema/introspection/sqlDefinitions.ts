@@ -106,14 +106,90 @@ const TABLE_FOREIGN_KEY_PATTERN = new RegExp(
   'i',
 )
 
-export function readForeignKeyName(definition: string, columnName: string | undefined): { column: string, name: string } | undefined {
+export interface ForeignKeyDefinition {
+  readonly column: string
+  readonly name?: string
+}
+
+export function readForeignKey(definition: string, columnName: string | undefined): ForeignKeyDefinition | undefined {
   if (columnName) {
+    if (!readInlineColumnConstraints(definition).references) return undefined
     const inline = definition.match(INLINE_FOREIGN_KEY_NAME_PATTERN)
-    return inline ? { column: columnName, name: unquoteIdentifier(inline[1]!) } : undefined
+    return inline ? { column: columnName, name: unquoteIdentifier(inline[1]!) } : { column: columnName }
   }
 
   const tableLevel = definition.match(TABLE_FOREIGN_KEY_PATTERN)
-  return tableLevel?.[1] ? { column: unquoteIdentifier(tableLevel[2]!), name: unquoteIdentifier(tableLevel[1]) } : undefined
+  if (!tableLevel) return undefined
+  const column = unquoteIdentifier(tableLevel[2]!)
+  return tableLevel[1] ? { column, name: unquoteIdentifier(tableLevel[1]) } : { column }
+}
+
+const IDENTIFIER = `(?:${IDENTIFIER_PATTERN})`
+const REFERENCES_CLAUSE_PATTERN = new RegExp(
+  `\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?REFERENCES\\s+${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})?(?:\\s*\\(\\s*${IDENTIFIER}(?:\\s*,\\s*${IDENTIFIER})*\\s*\\))?`
+  + '(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:SET\\s+NULL|SET\\s+DEFAULT|CASCADE|RESTRICT|NO\\s+ACTION)|\\s+MATCH\\s+\\w+|\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)*',
+  'gi',
+)
+const INLINE_UNIQUE_PATTERN = new RegExp(
+  `\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE(?:\\s+ON\\s+CONFLICT\\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE))?\\b`,
+  'gi',
+)
+const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
+
+function removeKeywordClause(definition: string, pattern: RegExp): string | undefined {
+  const masked = maskQuotedText(definition)
+  for (const match of definition.matchAll(pattern)) {
+    const keywordIndex = match.index + match[0].search(/\S/)
+    if (masked[keywordIndex] !== ' ') {
+      return definition.slice(0, match.index) + definition.slice(match.index + match[0].length)
+    }
+  }
+  return undefined
+}
+
+function readTableUniqueColumns(definition: string): string[] | undefined {
+  const match = definition.match(TABLE_UNIQUE_PATTERN)
+  return match?.[1]?.split(',').map(column => readColumnDefinitionName(column.trim()) ?? column.trim())
+}
+
+function removeDefinitions(
+  definitions: readonly string[],
+  rewrite: (definition: string, columnName: string | undefined) => string | null | undefined,
+): string[] | undefined {
+  let removed = false
+  const kept: string[] = []
+  for (const definition of definitions) {
+    const rewritten = rewrite(definition, readColumnDefinitionName(definition))
+    if (rewritten === undefined) {
+      kept.push(definition)
+      continue
+    }
+    removed = true
+    if (rewritten !== null) kept.push(rewritten)
+  }
+  return removed ? kept : undefined
+}
+
+export function removeForeignKeyDefinitions(
+  definitions: readonly string[],
+  matches: (foreignKey: ForeignKeyDefinition) => boolean,
+): string[] | undefined {
+  return removeDefinitions(definitions, (definition, columnName) => {
+    const foreignKey = readForeignKey(definition, columnName)
+    if (!foreignKey || !matches(foreignKey)) return undefined
+    return columnName ? removeKeywordClause(definition, REFERENCES_CLAUSE_PATTERN) : null
+  })
+}
+
+export function removeUniqueDefinitions(definitions: readonly string[], columns: readonly string[]): string[] | undefined {
+  return removeDefinitions(definitions, (definition, columnName) => {
+    if (columnName) {
+      return columns.length === 1 && columns[0] === columnName && readInlineColumnConstraints(definition).unique
+        ? removeKeywordClause(definition, INLINE_UNIQUE_PATTERN)
+        : undefined
+    }
+    return readTableUniqueColumns(definition)?.join('\0') === columns.join('\0') ? null : undefined
+  })
 }
 
 const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i
@@ -132,8 +208,12 @@ export interface InlineColumnConstraints {
   readonly references: boolean
 }
 
+function maskQuotedText(text: string): string {
+  return text.replace(QUOTED_TEXT_PATTERN, quoted => ' '.repeat(quoted.length))
+}
+
 export function readInlineColumnConstraints(definition: string): InlineColumnConstraints {
-  const keywords = definition.replace(QUOTED_TEXT_PATTERN, ' ')
+  const keywords = maskQuotedText(definition)
   return {
     primaryKey: /\bPRIMARY\s+KEY\b/i.test(keywords),
     autoIncrement: /\bAUTOINCREMENT\b/i.test(keywords),

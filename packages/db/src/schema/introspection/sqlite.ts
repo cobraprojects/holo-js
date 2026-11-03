@@ -1,5 +1,5 @@
 import { parseSqlDefault } from './defaults'
-import { readColumnDefinitionName, readEnumChecks, readForeignKeyName, readStringLength, splitTableDefinitions } from './sqlDefinitions'
+import { readColumnDefinitionName, readEnumChecks, readForeignKey, readStringLength, splitTableDefinitions } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
@@ -23,8 +23,8 @@ function readDefinitionDetails(createTableSql: string) {
 
   for (const definition of splitTableDefinitions(createTableSql)) {
     const columnName = readColumnDefinitionName(definition)
-    const foreignKey = readForeignKeyName(definition, columnName)
-    if (foreignKey) foreignKeyNames.set(foreignKey.column, foreignKey.name)
+    const foreignKey = readForeignKey(definition, columnName)
+    if (foreignKey?.name) foreignKeyNames.set(foreignKey.column, foreignKey.name)
     enumChecks.push(...readEnumChecks(definition))
   }
 
