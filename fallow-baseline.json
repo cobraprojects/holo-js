@@ -707,6 +707,7 @@
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:withoutWhereNull",
     "unused-class-member:packages/db/src/schema/SQLSchemaCompiler.ts:SQLSchemaCompiler:compile",
     "unused-class-member:packages/db/src/schema/SchemaRegistry.ts:SchemaRegistry:delete",
+    "unused-class-member:packages/db/src/schema/SchemaRegistry.ts:SchemaRegistry:replace",
     "unused-class-member:packages/db/src/schema/columns.ts:ColumnBuilder:cascadeOnDelete",
     "unused-class-member:packages/db/src/schema/columns.ts:ColumnBuilder:cascadeOnUpdate",
     "unused-class-member:packages/db/src/schema/columns.ts:ColumnBuilder:constrained",

@@ -3,7 +3,7 @@ const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
 
 const QUOTE_PAIRS: Readonly<Record<string, string>> = { '\'': '\'', '"': '"', '`': '`', '[': ']' }
 
-export function unquoteIdentifier(identifier: string): string {
+function unquoteIdentifier(identifier: string): string {
   const first = identifier[0]
   if (first === '"') return identifier.slice(1, -1).replaceAll('""', '"')
   if (first === '`') return identifier.slice(1, -1).replaceAll('``', '`')

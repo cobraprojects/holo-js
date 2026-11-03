@@ -20,7 +20,7 @@ function inferSQLiteAffinity(type: string): LogicalColumnKind | null {
   return null
 }
 
-export function inferColumnKind(dialect: SchemaReadingDialect, physicalType: string): LogicalColumnKind | null {
+function inferColumnKind(dialect: SchemaReadingDialect, physicalType: string): LogicalColumnKind | null {
   const normalized = physicalType.trim().toLowerCase().replace(/\s+(?:unsigned|zerofill)\b/g, '')
   const base = withoutLength(normalized)
   if (normalized.length === 0) return null
