@@ -1,4 +1,5 @@
-import { findClosingParenthesis, unquoteStringLiteral } from './sqlDefinitions'
+import { unquoteStringLiteral } from './sqlDefinitions'
+import { findClosingParenthesis } from './sqliteTokens'
 import type { DatabaseColumnDefault } from './types'
 
 const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME|LOCALTIMESTAMP|LOCALTIME|now)(?:\s*\(\s*\d*\s*\))?$/i

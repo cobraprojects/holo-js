@@ -2,8 +2,10 @@ import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { isAutoIncrementDefinition, isGeneratedColumnDefinition, readColumnDefinitionName, readEnumChecks, readPreservedColumnConstraints, splitCreateTableSql, withoutForeignKeyDefinitions, withoutPrimaryKeyDefinitions, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteIndexKey, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
+import { findStoredColumn, hasAutoIncrement, isGeneratedColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
+import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
+import { sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -17,8 +19,10 @@ type SQLiteForeignKeysRow = {
 
 type SQLiteTableRewrite = (
   structure: DatabaseTableStructure,
-  definitions: readonly string[],
+  table: StoredTable,
 ) => string[]
+
+type UniqueRewrite = (table: StoredTable) => string[] | undefined
 
 export type ForeignKeyConstraintSuspender = <TResult>(callback: () => Promise<TResult>) => Promise<TResult>
 
@@ -33,43 +37,32 @@ export class SQLiteSchemaOperations {
   }
 
   async changeColumn(tableName: string, column: AnyColumnDefinition): Promise<void> {
-    await this.rebuildTable(tableName, (structure, definitions) => {
-      if (!structure.columns.some(existing => existing.name === column.name)) {
+    await this.rebuildTable(tableName, (_structure, table) => {
+      const stored = findStoredColumn(table, column.name)
+      if (!stored) {
         throw new SchemaError(
           `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
         )
       }
-
-      return definitions.flatMap((definition) => {
-        const columnName = readColumnDefinitionName(definition)
-        if (columnName === column.name) {
-          if (column.hasDefault && isGeneratedColumnDefinition(definition)) {
-            throw new SchemaError(`SQLite cannot give column "${column.name}" on table "${tableName}" a default because it is a generated column.`)
-          }
-          return [this.compiler.compileChangedColumn(tableName, column, readPreservedColumnConstraints(definition, column.name))]
-        }
-
-        if (columnName === undefined && readEnumChecks(definition).some(check => check.column === column.name)) {
-          return []
-        }
-
-        return [definition]
-      })
+      if (column.hasDefault && isGeneratedColumn(stored)) {
+        throw new SchemaError(`SQLite cannot give column "${column.name}" on table "${tableName}" a default because it is a generated column.`)
+      }
+      return withChangedColumn(table, stored, this.compiler.compileChangedColumn(tableName, column, readPreservedColumnConstraints(stored)))
     })
   }
 
   async createPrimaryKey(tableName: string, columns: readonly string[], constraintName?: string): Promise<void> {
-    await this.rebuildTable(tableName, (structure, definitions) => {
+    await this.rebuildTable(tableName, (structure, table) => {
       if (structure.columns.some(column => column.primaryKey)) {
         throw new SchemaError(`Table "${tableName}" already has a primary key. Drop it with dropPrimary() first.`)
       }
 
-      return [...definitions, this.compiler.compilePrimaryKeyConstraint(columns, constraintName)]
+      return [...renderDefinitions(table), this.compiler.compilePrimaryKeyConstraint(columns, constraintName)]
     })
   }
 
   async dropPrimaryKey(tableName: string): Promise<void> {
-    await this.rebuildTable(tableName, (_structure, definitions) => withoutPrimaryKeyDefinitions(definitions))
+    await this.rebuildTable(tableName, (_structure, table) => withoutPrimaryKeys(table))
   }
 
   async renameIndex(tableName: string, fromIndexName: string, toIndexName: string): Promise<void> {
@@ -98,18 +91,18 @@ export class SQLiteSchemaOperations {
     constraintName?: string,
   ): Promise<void> {
     const foreignKey = this.compiler.compileTableForeignKey(tableName, columnName, reference, constraintName)
-    await this.rebuildTable(tableName, (structure, definitions) => {
+    await this.rebuildTable(tableName, (structure, table) => {
       if (structure.foreignKeys.some(existing => existing.name === foreignKey.name)) {
         throw new SchemaError(`SQLite cannot add foreign key "${foreignKey.name}" to table "${tableName}" because the table already has a foreign key with that name.`)
       }
-      return [...definitions, foreignKey.definition]
+      return [...renderDefinitions(table), foreignKey.definition]
     })
   }
 
   async dropForeignKey(tableName: string, constraintName: string, columns?: readonly string[]): Promise<void> {
-    await this.rebuildTable(tableName, (_structure, definitions) => {
-      const kept = withoutForeignKeyDefinitions(definitions, foreignKey => foreignKey.name === undefined
-        ? columns?.length === 1 && foreignKey.columns.length === 1 && foreignKey.columns[0] === columns[0]
+    await this.rebuildTable(tableName, (_structure, table) => {
+      const kept = withoutForeignKeys(table, foreignKey => foreignKey.name === undefined
+        ? columns !== undefined && sameIdentifiers(foreignKey.columns, columns)
         : foreignKey.name === constraintName)
       if (!kept) {
         throw new SchemaError(`SQLite cannot drop missing foreign key "${constraintName}" on table "${tableName}".`)
@@ -119,13 +112,13 @@ export class SQLiteSchemaOperations {
   }
 
   async dropInlineUnique(tableName: string, indexName: string, columns?: readonly string[]): Promise<boolean> {
-    const inlineColumns = await this.resolveInlineUniqueColumns(tableName, indexName, columns)
-    if (!inlineColumns) {
+    const rewrite = await this.resolveInlineUniqueRewrite(tableName, indexName, columns)
+    if (!rewrite) {
       return false
     }
 
-    await this.rebuildTable(tableName, (_structure, definitions) => {
-      const kept = withoutUniqueDefinitions(definitions, inlineColumns)
+    await this.rebuildTable(tableName, (_structure, table) => {
+      const kept = rewrite(table)
       if (!kept) {
         throw new SchemaError(`SQLite cannot drop missing unique "${indexName}" on table "${tableName}".`)
       }
@@ -134,22 +127,22 @@ export class SQLiteSchemaOperations {
     return true
   }
 
-  private async resolveInlineUniqueColumns(
+  private async resolveInlineUniqueRewrite(
     tableName: string,
     indexName: string,
     columns: readonly string[] | undefined,
-  ): Promise<readonly string[] | undefined> {
+  ): Promise<UniqueRewrite | undefined> {
     const indexes = (await readTableStructure(this.connection, tableName))?.indexes ?? []
-    const index = indexes.find(candidate => candidate.name === indexName)
-    if (!index) {
-      return columns
+    if (!indexes.some(candidate => candidate.name === indexName)) {
+      return columns === undefined ? undefined : table => withoutUniquesOnColumns(table, columns)
     }
 
-    if (!index.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
+    if (!indexName.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined
     }
 
-    return index.columns
+    const indexKey = await readSQLiteIndexKey(this.connection, tableName, indexName)
+    return table => withoutUniquesBackingIndex(table, indexKey)
   }
 
   private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
@@ -212,19 +205,20 @@ export class SQLiteSchemaOperations {
       )
     }
 
-    const currentSql = splitCreateTableSql(await readSQLiteCreateTableSql(connection, tableName) ?? '')
-    if (!currentSql) {
+    const storedTable = parseCreateTableSql(await readSQLiteCreateTableSql(connection, tableName) ?? '')
+    if (!storedTable) {
       throw new SchemaError(`SQLite cannot read the definition of table "${tableName}" to rebuild it.`)
     }
 
     const schemaObjects = await readSQLiteTableObjects(connection, tableName)
-    const definitions = rewrite(structure, currentSql.definitions)
+    const rebuildStatement = this.compiler.compileRebuildTable(tableName, temporaryTableName, rewrite(structure, storedTable), storedTable.options)
+    const rebuiltTable = parseCreateTableSql(rebuildStatement.sql)
     const copiedColumns = structure.columns.filter(existing => !existing.computed).map(existing => existing.name)
 
     await executeStatements(connection, [
-      this.compiler.compileRebuildTable(tableName, temporaryTableName, definitions, currentSql.options),
+      rebuildStatement,
       this.compiler.compileCopyTableRows(tableName, temporaryTableName, copiedColumns),
-      ...(definitions.some(isAutoIncrementDefinition) ? this.compiler.compileMoveAutoIncrementSequence(tableName, temporaryTableName) : []),
+      ...(rebuiltTable && hasAutoIncrement(rebuiltTable) ? this.compiler.compileMoveAutoIncrementSequence(tableName, temporaryTableName) : []),
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
       ...schemaObjects.map(object => ({ sql: object.sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` })),

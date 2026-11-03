@@ -119,3 +119,23 @@ export function sliceTokens(sql: string, tokens: readonly SqlToken[]): string {
   const last = tokens[tokens.length - 1]
   return first && last ? sql.slice(first.start, last.end) : ''
 }
+
+export function findClosingParenthesis(sql: string, openIndex: number): number {
+  const [group] = tokenizeSql(sql.slice(openIndex))
+  const closeIndex = openIndex + (group?.end ?? 0) - 1
+  return group?.kind === 'group' && group.start === 0 && sql.charAt(closeIndex) === ')' ? closeIndex : -1
+}
+
+const ASCII_UPPERCASE_PATTERN = /[A-Z]/g
+
+function foldAsciiCase(identifier: string): string {
+  return identifier.replace(ASCII_UPPERCASE_PATTERN, letter => letter.toLowerCase())
+}
+
+export function sameIdentifier(left: string, right: string | undefined): boolean {
+  return right !== undefined && foldAsciiCase(left) === foldAsciiCase(right)
+}
+
+export function sameIdentifiers(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((identifier, index) => sameIdentifier(identifier, right[index]))
+}
