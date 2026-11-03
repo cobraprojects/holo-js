@@ -1,6 +1,6 @@
 import { splitTablePath } from '../identifiers'
 import { createIntrospect } from './introspect'
-import { readStringLength } from './sqlDefinitions'
+import { readForeignKeyColumns, readStringLength } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
 
@@ -118,6 +118,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
         indexes: groupedIndexes,
         foreignKeys: foreignKeys.rows.map(row => ({
           name: row.name,
+          columns: readForeignKeyColumns(foreignKeys.rows, row.name),
           table: row.referenced_schema === row.table_schema ? row.table_name : `${row.referenced_schema}.${row.table_name}`,
           from: row.from_column,
           to: row.to_column,

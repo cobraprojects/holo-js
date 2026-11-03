@@ -219,8 +219,10 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
         onUpdate: rows[0].on_update,
         onDelete: rows[0].on_delete,
       })
+      const columns = rows.map(row => row.from)
       foreignKeys.push(...resolved.map(row => ({
         ...(name ? { name } : {}),
+        columns,
         table: row.table,
         from: row.from,
         to: row.to,
