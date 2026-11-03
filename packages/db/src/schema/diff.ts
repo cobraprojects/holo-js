@@ -8,6 +8,7 @@ import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from '.
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
+import { splitTablePath } from './identifiers'
 
 export interface SchemaColumnMismatch {
   readonly column: string
@@ -272,15 +273,17 @@ function lowerLogicalColumnType(column: AnyColumnDefinition, dialectName: string
 
 function isConstraintIndex(table: TableDefinition, index: IntrospectedIndex): boolean {
   if (!index.unique || table.indexes.some(expected => normalizeExpectedIndex(table, expected).name === index.name)) return false
+  const { table: tableName } = splitTablePath(table.tableName)
+  const sqliteAutoindexPrefix = `${SQLITE_AUTOINDEX_PREFIX}${tableName}_`
   const primaryKeys = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
   const matchesPrimaryKey = index.columns.length === primaryKeys.length && index.columns.every((column, position) => column === primaryKeys[position])
-  if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${table.tableName}_pkey` || index.name.startsWith(`${SQLITE_AUTOINDEX_PREFIX}${table.tableName}_`))) return true
-  const column = index.columns.length === 1 ? table.columns[index.columns[0]!] : undefined
-  const unqualifiedTableName = table.tableName.split('.').at(-1)!
+  if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${tableName}_pkey` || index.name.startsWith(sqliteAutoindexPrefix))) return true
+  const [columnName] = index.columns
+  const column = index.columns.length === 1 && columnName ? table.columns[columnName] : undefined
   return Boolean(column?.unique && (index.name === column.name
-    || index.name === `${unqualifiedTableName}_${column.name}_key`
+    || index.name === `${tableName}_${column.name}_key`
     || index.name === createGeneratedUniqueIndexName(table.tableName, [column.name])
-    || index.name.startsWith(`${SQLITE_AUTOINDEX_PREFIX}${unqualifiedTableName}_`)))
+    || index.name.startsWith(sqliteAutoindexPrefix)))
 }
 
 function normalizeExpectedIndex(
