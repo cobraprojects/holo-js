@@ -12,8 +12,6 @@ interface ForeignKeyClause {
   readonly columns: readonly string[]
   readonly onDelete: string
   readonly onUpdate: string
-  readonly match?: string
-  readonly deferral?: string
 }
 
 interface ConstraintSource {
@@ -163,41 +161,28 @@ function readForeignKeyAction(cursor: TokenCursor): string {
   return action.join(' ')
 }
 
-type MatchClause = { readonly kind: 'MATCH', readonly name: string }
-type ActionClause = { readonly kind: 'ON', readonly event: string, readonly action: string }
-type ForeignKeyTailClause = MatchClause | ActionClause
+type ActionClause = { readonly event: string, readonly action: string }
 
-function readForeignKeyTailClause(cursor: TokenCursor): ForeignKeyTailClause {
-  if (cursor.accept('MATCH')) return { kind: 'MATCH', name: cursor.expectName() }
-  cursor.accept('ON')
+function readForeignKeyActions(cursor: TokenCursor): ActionClause[] {
+  if (cursor.accept('MATCH')) {
+    cursor.expectName()
+    return readForeignKeyActions(cursor)
+  }
+  if (!cursor.accept('ON')) return []
   const event = cursor.keyword()
   if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
   cursor.next()
-  return { kind: 'ON', event, action: readForeignKeyAction(cursor) }
-}
-
-function readForeignKeyTailClauses(cursor: TokenCursor): ForeignKeyTailClause[] {
-  if (cursor.keyword() !== 'ON' && cursor.keyword() !== 'MATCH') return []
-  const clause = readForeignKeyTailClause(cursor)
-  return [clause, ...readForeignKeyTailClauses(cursor)]
+  const clause = { event, action: readForeignKeyAction(cursor) }
+  return [clause, ...readForeignKeyActions(cursor)]
 }
 
 function readForeignKeyClause(cursor: TokenCursor): ForeignKeyClause {
   const table = cursor.expectName()
   const columns = cursor.peek()?.kind === 'group' ? readGroupNames(cursor) : []
-  const latestFirst = readForeignKeyTailClauses(cursor).reverse()
-  const actionFor = (event: string): string => latestFirst
-    .find((clause): clause is ActionClause => clause.kind === 'ON' && clause.event === event)?.action ?? DEFAULT_FOREIGN_KEY_ACTION
-  const match = latestFirst.find((clause): clause is MatchClause => clause.kind === 'MATCH')?.name
-  const deferral = readDeferral(cursor)
-  return {
-    table,
-    columns,
-    onDelete: actionFor('DELETE'),
-    onUpdate: actionFor('UPDATE'),
-    ...(match === undefined ? {} : { match }),
-    ...(deferral === undefined ? {} : { deferral }),
-  }
+  const latestFirst = readForeignKeyActions(cursor).reverse()
+  readDeferral(cursor)
+  const actionFor = (event: string): string => latestFirst.find(clause => clause.event === event)?.action ?? DEFAULT_FOREIGN_KEY_ACTION
+  return { table, columns, onDelete: actionFor('DELETE'), onUpdate: actionFor('UPDATE') }
 }
 
 function startsColumnConstraint(cursor: TokenCursor): boolean {
