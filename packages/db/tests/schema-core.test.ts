@@ -659,27 +659,21 @@ describe('native schema core', () => {
     ])
   })
 
-  it('drops foreign keys of a schema-qualified table by their conventional column names', () => {
+  it('keeps column-form drops as columns for the database to resolve and drops keys before their columns', () => {
     const builder = new TableMutationBuilder('tenant.posts')
 
-    builder.dropForeign(['user_id'])
+    builder.dropUnique(['email'])
+    builder.dropUnique('posts_email_key')
     builder.dropConstrainedForeignId('author_id')
-
-    expect(builder.getOperations()).toEqual([
-      { kind: 'dropForeignKey', constraintName: 'tenant_posts_user_id_foreign', columns: ['user_id'] },
-      { kind: 'dropForeignKey', constraintName: 'tenant_posts_author_id_foreign', columns: ['author_id'] },
-      { kind: 'dropColumn', columnName: 'author_id' },
-    ])
-  })
-
-  it('drops the morph index of a schema-qualified table by its conventional name before the morph columns', () => {
-    const builder = new TableMutationBuilder('tenant.posts')
-
     builder.dropMorphs('taggable')
     builder.dropMorphs('owner', 'posts_owner_lookup')
 
     expect(builder.getOperations()).toEqual([
-      { kind: 'dropIndex', indexName: 'tenant_posts_taggable_type_taggable_id_index' },
+      { kind: 'dropUnique', columns: ['email'] },
+      { kind: 'dropUnique', indexName: 'posts_email_key' },
+      { kind: 'dropForeignKey', columns: ['author_id'] },
+      { kind: 'dropColumn', columnName: 'author_id' },
+      { kind: 'dropIndex', columns: ['taggable_type', 'taggable_id'] },
       { kind: 'dropColumn', columnName: 'taggable_type' },
       { kind: 'dropColumn', columnName: 'taggable_id' },
       { kind: 'dropIndex', indexName: 'posts_owner_lookup' },
@@ -707,18 +701,6 @@ describe('native schema core', () => {
       { kind: 'dropColumn', columnName: 'updated_at' },
       { kind: 'dropColumn', columnName: 'deleted_at' },
       { kind: 'dropColumn', columnName: 'archived_at' },
-    ])
-  })
-
-  it('drops uniques of a schema-qualified table by their conventional column names', () => {
-    const builder = new TableMutationBuilder('tenant.posts')
-
-    builder.dropUnique(['email'])
-    builder.dropUnique('posts_email_key')
-
-    expect(builder.getOperations()).toEqual([
-      { kind: 'dropUnique', indexName: 'tenant_posts_email_unique', columns: ['email'] },
-      { kind: 'dropUnique', indexName: 'posts_email_key' },
     ])
   })
 

@@ -1,5 +1,5 @@
 import { findCreatedObjectName, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
-import { sameIdentifier, sameIdentifiers, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
+import { sameIdentifier, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
 
 const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
 const DEFAULT_COLLATION = 'BINARY'
@@ -30,6 +30,10 @@ const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(
 export function readStringLength(type: string): number | undefined {
   const match = type.trim().match(STRING_LENGTH_PATTERN)
   return match ? Number(match[1]) : undefined
+}
+
+export function readForeignKeyColumns(rows: readonly { readonly name: string, readonly from_column: string }[], name: string): string[] {
+  return rows.filter(row => row.name === name).map(row => row.from_column)
 }
 
 export interface EnumCheckDefinition {
@@ -166,10 +170,6 @@ function keyCollation(table: StoredTable, keyColumn: KeyColumn): string {
 
 function withoutUniques(table: StoredTable, matchesKey: (columns: readonly KeyColumn[]) => boolean): string[] | undefined {
   return withoutConstraints(table, constraint => constraint.kind === 'UNIQUE' && matchesKey(constraint.columns))
-}
-
-export function withoutUniquesOnColumns(table: StoredTable, columns: readonly string[]): string[] | undefined {
-  return withoutUniques(table, key => sameIdentifiers(key.map(keyColumn => keyColumn.name), columns))
 }
 
 export function withoutUniquesBackingIndex(table: StoredTable, indexKey: readonly IndexKeyColumn[]): string[] | undefined {

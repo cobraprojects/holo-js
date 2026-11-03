@@ -31,6 +31,7 @@ export interface DatabaseIndexStructure {
 
 export interface DatabaseForeignKeyStructure {
   readonly name?: string
+  readonly columns: readonly string[]
   readonly table: string
   readonly from: string
   readonly to: string

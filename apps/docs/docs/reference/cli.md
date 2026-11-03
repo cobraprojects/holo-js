@@ -146,7 +146,7 @@ Your scaffolded `package.json` already has `"dev": "holo dev"`, so `npm run dev`
 
 ### build
 
-Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection. A SQLite database file that doesn't exist counts as unreadable: `holo build` never creates it. Run `npx holo migrate` to create it.
+Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection. A SQLite database file that doesn't exist counts as unreadable: `holo build` never creates it. Run `npx holo migrate` to create it. A SQLite `:memory:` database is new and empty in every process, so `holo build` can't read your tables from one and writes a generated schema with no tables.
 
 ```bash
 npx holo build [...frameworkArgs]
@@ -477,7 +477,7 @@ npx holo migrate [--step <n>] [--isolated]
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Run at most this many pending migrations. |
-| `--isolated` | Take the `migrations` lock from the default cache store first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time; every server must share the store, such as `redis` or `database`. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
+| `--isolated` | Take the `migrations` lock from the default cache store first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time; every server must share the store, such as `redis` or `database`. If `@holo-js/cache` isn't installed, the store can't be resolved, or the store can't give a lock, the run fails before migrating and the error names that cause. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
 
 ```bash
 npx holo migrate

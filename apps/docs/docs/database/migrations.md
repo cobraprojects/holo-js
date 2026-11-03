@@ -34,7 +34,7 @@ npx holo migrate
 
 ## Migrations and model types
 
-After each `migrate`, `migrate:rollback`, `migrate:fresh`, and `holo build`, Holo reads your default connection's database and regenerates the schema file at `.holo-js/generated/schema.generated.ts` from it. Holo never replays a migration to work out your schema, and it leaves its own tables, such as `_holo_migrations`, out of the file. Holo writes this file for you; don't edit it.
+After each `migrate`, `migrate:rollback`, `migrate:fresh`, and `holo build`, and when `holo dev`, `holo seed`, or `holo media:regenerate` starts, Holo reads your default connection's database and regenerates the schema file at `.holo-js/generated/schema.generated.ts` from it. Holo never replays a migration to work out your schema, and it leaves its own tables, such as `_holo_migrations`, out of the file. Holo writes this file for you; don't edit it.
 
 Your [models](/orm/) read their column types from that file. You never repeat column definitions in the model:
 
@@ -109,7 +109,10 @@ Both functions receive:
 - `schema` — the schema builder for tables, columns, indexes, and foreign keys.
 - `db` — the database connection, for moving or seeding data inside the migration.
 
-Each migration runs inside its own transaction. If `up` throws, its changes roll back and the migration stays pending, so you can fix it and run `migrate` again.
+Each migration runs inside its own transaction, and Holo records it as run in the same transaction. If `up` throws, the migration stays pending, so you can fix it and run `migrate` again. What happens to the changes it already made depends on the database:
+
+- On PostgreSQL and SQLite, schema changes are transactional, so every change the migration made rolls back.
+- On MySQL, each schema statement such as `CREATE TABLE` or `ALTER TABLE` commits at once, as in Laravel. The statements that ran before the failure stay in the database, and running the migration again can fail on them, for example with `Duplicate column name`. Undo those changes by hand before you run `migrate` again, or keep each MySQL migration to one schema change.
 
 ### Changing data in a migration
 
@@ -164,7 +167,15 @@ npx holo migrate --isolated
 
 The first run takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers) and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is released when the run ends. If a runner stops without releasing it, the lock expires after an hour.
 
-`--isolated` needs `@holo-js/cache` installed, and every server must use the same default cache store. Use a `redis` or `database` store when you run more than one server. A `file` store only coordinates processes that share the same cache folder, and a `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). If `@holo-js/cache` isn't installed or the default store can't give a lock, `migrate --isolated` fails with an error that says what to set up.
+As in Laravel, every server must use the same default cache store, and that store must be shared by all of them. Without a `config/cache.ts`, the default store is the `file` store in `storage/framework/cache/data`, which only coordinates processes that share that folder, so replicas on different servers all run the migrations. Set a `redis` or `database` default store when you run more than one server. A `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). When it can't take the lock, `migrate --isolated` fails before it runs any migration, and the error names the cause:
+
+| Cause | The error says |
+| --- | --- |
+| `@holo-js/cache` isn't installed | `@holo-js/cache` isn't installed. |
+| The default store can't be resolved, such as a missing driver package, driver plugin, or database connection | The store and its driver can't be resolved, followed by the reason. |
+| The default store can't give a lock, such as a `database` store without its tables | The store and its driver can't provide a lock, followed by the reason. |
+
+Each error also tells you to use a default cache store that every server shares, such as `database` or `redis`.
 
 A `database` cache store keeps its locks in a table, so create the cache tables before the first isolated run:
 
@@ -674,7 +685,7 @@ table.uuid('id').primaryKey()
 
 ### unique()
 
-Adds a unique constraint on this column, named `{table}_{column}_unique`. On SQLite, Holo creates a unique index with that name. Holo shortens names longer than 63 bytes with a hash, and `dropUnique(['column'])` finds them the same way. Inside `createTable()`, you can also pass a list of columns and a name to create a composite unique index. See [unique(columns)](#unique-columns).
+Adds a unique constraint on this column, named `{table}_{column}_unique`. On SQLite, Holo creates a unique index with that name. Holo shortens names longer than 63 bytes with a hash. `dropUnique(['column'])` finds the constraint whatever its name. Inside `createTable()`, you can also pass a list of columns and a name to create a composite unique index. See [unique(columns)](#unique-columns).
 
 ```ts
 table.string('email').unique()
@@ -932,7 +943,7 @@ Every morph helper accepts an index name as its second argument, for example `ta
 
 ### dropMorphs()
 
-Drops the index `{table}_{name}_type_{name}_id_index`, or the index name you pass, then the `{name}_type` and `{name}_id` columns. Available inside `table()`. Use it to undo any of the morph shortcuts above. When the index doesn't exist, `dropMorphs()` raises an error, as [`dropIndex()`](#dropindex) does.
+Drops the index on the `{name}_type` and `{name}_id` columns, or the index name you pass, then both columns. Available inside `table()`. Use it to undo any of the morph shortcuts above. Holo finds the index by its columns, as [`dropIndex()`](#dropindex) does, so it works whatever the index is called. When no index or more than one index covers those columns, `dropMorphs()` raises an error.
 
 ```ts
 await schema.table('comments', (table) => {
@@ -973,6 +984,8 @@ await schema.table('post_tag', (table) => {
 ```
 
 On PostgreSQL, Holo reads the key's name from the database, so `dropPrimary()` works after [renameTable()](#renametable), when the key keeps its old `{table}_pkey` name. If you pass a name, it must be the key's name, or `dropPrimary()` throws `SchemaError` and changes nothing. MySQL drops the key with `DROP PRIMARY KEY`, and SQLite rebuilds the table, the same way [change()](#change) does. MySQL refuses to drop the key of an auto-increment column such as `id()`. A table without a primary key throws `SchemaError`.
+
+On MySQL, a foreign key needs an index on its columns, and it uses the primary key when the key starts with those columns. MySQL then refuses to drop the primary key, with `Cannot drop index 'PRIMARY': needed in a foreign key constraint`, as in Laravel. Drop the foreign key with [dropForeign()](#dropforeign) first.
 
 ## Indexes
 
@@ -1017,7 +1030,7 @@ await schema.table('comments', (table) => {
 })
 ```
 
-When you pass an array of columns, Holo drops the index with the conventional name `{table}_{columns}_index`. This call drops `comments_post_id_status_index`, and the second drops the index of `morphs('commentable')`:
+When you pass an array of columns, Holo reads the table from the database and drops the index on exactly those columns, in that order, whatever its name. The first call drops `comments_post_id_status_index`, and the second drops the index of `morphs('commentable')`:
 
 ```ts
 await schema.table('comments', (table) => {
@@ -1026,7 +1039,9 @@ await schema.table('comments', (table) => {
 })
 ```
 
-Index names keep the old table name after `renameTable()`, so drop them by their existing name. On PostgreSQL, Holo looks for the index in the table's schema, so a schema-qualified table such as `tenant.comments` works.
+When no index covers those columns, Holo raises an error. When more than one does, the error lists their names, and you drop the one you mean by name. Holo never picks one for you.
+
+Laravel builds the conventional name from the columns and drops that name. Holo reads the actual index instead, because the database is the source of truth for the schema. So the same migration works on a database that an earlier release created, on a fresh one, and after `renameTable()`, where index names keep the old table name. A name you pass is dropped exactly as given. On PostgreSQL, Holo looks for the index in the table's schema, so a schema-qualified table such as `tenant.comments` works.
 
 A `unique()` column is backed by a unique constraint on PostgreSQL, and `dropIndex()` can't drop it. Use [dropUnique()](#dropunique).
 
@@ -1044,7 +1059,7 @@ await schema.table('users', (table) => {
 })
 ```
 
-When you pass an array of columns, Holo drops the unique with the conventional name `{table}_{columns}_unique`, shortened like a `unique()` column's name. This call drops `users_team_id_slug_unique`:
+When you pass an array of columns, Holo reads the table from the database and drops the unique constraint or unique index on exactly those columns, whatever its name, as [`dropIndex()`](#dropindex) does. On a table created by this release, this call drops `users_team_id_slug_unique`:
 
 ```ts
 await schema.table('users', (table) => {
@@ -1052,23 +1067,19 @@ await schema.table('users', (table) => {
 })
 ```
 
-Unique names keep the old table name after `renameTable()`, so drop them by their existing name.
+When no unique covers those columns, Holo raises an error. When more than one does, the error lists their names, and you drop the one you mean by name.
 
-Holo versions before 0.6.0 created `unique()` columns with an inline `UNIQUE`, so the database chose the name: `{table}_{column}_key` on PostgreSQL and `{column}` on MySQL. Drop those constraints by that name:
+On MySQL, a foreign key uses a unique index that starts with its columns as its own index. MySQL then refuses to drop that unique, with `Cannot drop index '...': needed in a foreign key constraint`, as in Laravel. Drop the foreign key with [dropForeign()](#dropforeign) first. To keep the foreign key, add an [index](#index-columns) on its columns in an earlier `table()` call, so the foreign key uses that index instead.
 
-```ts
-await schema.table('tenants', (table) => {
-  table.dropUnique('tenants_owner_email_key')
-})
-```
-
-On SQLite, those columns are unique through an index that SQLite creates itself, named `sqlite_autoindex_{table}_{n}`. SQLite can't drop that index, so Holo rebuilds the table without the unique, as it does for [`change()`](#change). Drop it by its columns, or by that name from `schema.getIndexes()`:
+Holo versions before 0.6.0 created `unique()` columns with an inline `UNIQUE`, so the database chose the name: `{table}_{column}_key` on PostgreSQL, `{column}` on MySQL, and `sqlite_autoindex_{table}_{n}` on SQLite. A fresh database, such as the one `migrate:fresh` or CI creates, names the same unique `{table}_{column}_unique`. Drop it by its columns, so the migration works on both:
 
 ```ts
 await schema.table('tenants', (table) => {
   table.dropUnique(['owner_email'])
 })
 ```
+
+SQLite can't drop its own `sqlite_autoindex_*` index, so Holo rebuilds the table without the unique, as it does for [`change()`](#change).
 
 ### renameIndex()
 
@@ -1101,14 +1112,16 @@ Adds a foreign key to an existing column. Chain `references()`, `on()`, or `cons
 
 ```ts
 await schema.createTable('post_tags', (table) => {
-  table.integer('post_id')
-  table.integer('tag_id')
+  table.bigInteger('post_id')
+  table.bigInteger('tag_id')
   table.foreign('post_id').references('id').on('posts').cascadeOnDelete()
   table.foreign('tag_id', 'post_tags_tag_fk').references('id').on('tags').cascadeOnDelete()
 })
 ```
 
 Holo names foreign keys `{table}_{column}_foreign` by default. The `post_tags` example names its foreign keys `post_tags_post_id_foreign` and `post_tags_tag_fk`.
+
+The column must have the same type as the key it references. `id()` is a big integer, so reference it from a `bigInteger()` or `foreignId()` column. MySQL refuses a foreign key from an `integer()` column to an `id()` column.
 
 Inside `table()`, `foreign()` and `foreignId().constrained()` add the key to an existing table. SQLite can't add a foreign key to an existing table, so Holo rebuilds the table with the new key, as Laravel does. The rebuild keeps every other column, index, trigger and foreign key, and the rows of tables that reference it, as for [`change()`](#change). Existing rows that break the new key make it fail and leave the table unchanged.
 
@@ -1122,7 +1135,7 @@ await schema.table('posts', (table) => {
 })
 ```
 
-When you pass an array of columns, Holo drops the key with the conventional name `{table}_{columns}_foreign`. This call drops `posts_user_id_foreign`:
+When you pass an array of columns, Holo reads the table from the database and drops the key on exactly those columns, whatever its name, as [`dropIndex()`](#dropindex) does. On a table created by this release, this call drops `posts_user_id_foreign`:
 
 ```ts
 await schema.table('posts', (table) => {
@@ -1130,21 +1143,13 @@ await schema.table('posts', (table) => {
 })
 ```
 
-Dropping a foreign key that doesn't exist fails.
+Dropping a foreign key that doesn't exist fails. When more than one key covers those columns, the error lists their names, and you drop the one you mean by name.
 
-On SQLite, Holo versions before 0.6.0 created foreign keys without a constraint name. `dropForeign(['user_id'])` and `dropConstrainedForeignId('user_id')` also drop such an unnamed key on that column.
-
-On PostgreSQL, Holo versions before 0.6.0 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
-
-```ts
-await schema.table('posts', (table) => {
-  table.dropForeign('posts_user_id_fkey')
-})
-```
+Holo versions before 0.6.0 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey` and SQLite left them unnamed. A fresh database names the same key `{table}_{column}_foreign`. Drop it by its columns, so the migration works on both.
 
 ### dropConstrainedForeignId()
 
-Drops the foreign key `{table}_{column}_foreign`, then the column. Available inside `table()`. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
+Drops the foreign key on the column, whatever its name, then the column. Available inside `table()`. Holo finds the key as `dropForeign([column])` does. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
 
 ```ts
 await schema.table('posts', (table) => {

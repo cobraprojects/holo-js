@@ -2,16 +2,16 @@
 
 ## Upgrading from 0.5.6 to 0.6.0
 
-Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate` or `npx holo build` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#unreleased) lists the release changes.
+Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate`, `npx holo build` or `npx holo dev` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#unreleased) lists the release changes.
 
-0.6.0 makes your database the only description of your schema, as in Laravel. Holo no longer keeps a schema registry in memory or replays migrations that already ran. After `migrate`, `migrate:rollback`, `migrate:fresh` and `holo build`, it reads the default connection's database and writes the generated schema from it, and a model's casts set the types the database can't state. See [Migrations and model types](/database/migrations#migrations-and-model-types).
+0.6.0 makes your database the only description of your schema, as in Laravel. Holo no longer keeps a schema registry in memory or replays migrations that already ran. After `migrate`, `migrate:rollback`, `migrate:fresh` and `holo build`, and before `holo dev`, `holo seed` and `holo media:regenerate` start, it reads the default connection's database and writes the generated schema from it, and a model's casts set the types the database can't state. See [Migrations and model types](/database/migrations#migrations-and-model-types).
 
 The release also brings Laravel's [`primary()`](/database/migrations#primary-columns), [`dropPrimary()`](/database/migrations#dropprimary), [`dropUnique()`](/database/migrations#dropunique), [`dropConstrainedForeignId()`](/database/migrations#dropconstrainedforeignid), [`dropMorphs()`](/database/migrations#dropmorphs), [`dropTimestamps()`](/database/migrations#droptimestamps) and [`dropSoftDeletes()`](/database/migrations#dropsoftdeletes). On SQLite, `schema.table()` can now rename and drop columns, rename indexes, and add and drop foreign keys.
 
 ### Deploy checklist
 
 1. Give the build environment access to the default connection's database. `holo build` reads it and fails when it can't. On SQLite, the database file must exist where the build runs.
-2. If you run `npx holo migrate --isolated`, install `@holo-js/cache` and make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
+2. If you run `npx holo migrate --isolated`, make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
 3. Run this one deploy's `npx holo migrate` from a single replica.
 4. Once every replica runs 0.6.0, drop the `_holo_migration_locks` table.
 
@@ -21,7 +21,7 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 
 A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes. Every command, including the `holo prepare` that your install runs, replaces such a file with an empty generated schema, prints a one-line notice and continues. `npx holo migrate`, `npx holo build` and `npx holo dev` then write it again from your database.
 
-`holo dev` now writes the generated schema from the database when it starts, so a fresh clone gets its model types without a separate `migrate`. If it can't read the database, it warns and starts with the schema it has. `holo seed` and `holo media:regenerate` write it before they run, too.
+`holo dev` now writes the generated schema from the database when it starts, so a fresh clone gets its model types without a separate `migrate`. If it can't read the database, it warns and starts with the schema it has. `holo seed` and `holo media:regenerate` write it before they run, too, and continue with the schema they have when they can't read the database.
 
 On SQLite, `holo build` and `holo dev` no longer create a missing database file. `holo build` fails with the error that names the connection instead. `npx holo migrate` creates the file and its directory, so on a fresh clone run it before you build.
 
@@ -84,7 +84,7 @@ On SQLite, `diffSchema()` reports the columns of tables created before 0.6.0 as 
 
 `npx holo migrate --isolated` takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers), as Laravel's does, instead of a row in the `_holo_migration_locks` table. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends, and expires after an hour if a runner stops. Holo doesn't renew it during the run.
 
-`--isolated` now needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`. Without them, it fails with an error that says what to set up. Plain `npx holo migrate` doesn't use the cache. If your app has no cache yet, install one:
+`--isolated` now needs a default store that every server shares, such as `redis` or `database`. Without a `config/cache.ts`, the default store is the `file` store in `storage/framework/cache/data`, which only coordinates processes that share that folder, so replicas on different servers all run the migrations. If Holo can't load the default store, or the store can't give a lock, `--isolated` fails with an error that says what to set up. Plain `npx holo migrate` doesn't use the cache. If your app has no cache config yet, install one:
 
 ```bash
 npx holo install cache --driver redis
@@ -201,7 +201,7 @@ import { diffSchema } from '@holo-js/db' // [!code ++]
 
 `DB.table('name')`, model tables and pivot tables resolve through the generated schema only, and only on the default connection, the one the generated schema is read from. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, uses no definition until the generated schema is written again, so the JSON and boolean values you write to it aren't converted. Pass a table definition to `DB.table()` to use its columns right away. Query-builder reads return the driver's values in both cases. See [Start a query](/database/query-builder/#start-a-query).
 
-A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it. A model with `connectionName` set to another connection is untyped, as in Laravel: its attributes are `unknown` in TypeScript, and at runtime it uses the `id` key, the timestamp and soft-delete columns by convention, your casts, and the driver's values. If it sets only `guarded`, it can write only the table's real columns, as in Laravel. A same-named table on the default connection no longer shapes it. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection).
+A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it. A model with `connectionName` set to another connection is untyped, as in Laravel: its attributes are `unknown` in TypeScript, and at runtime it uses the `id` key, the timestamp and soft-delete columns by convention, your casts, and the driver's values. If it sets only `guarded`, it can write only the table's real columns, as in Laravel. A same-named table on the default connection no longer changes how it reads or writes, but TypeScript still types the model from that table. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection).
 
 On PostgreSQL, `insertGetId()` now returns an integer key as a number, as Laravel's `insertGetId()` does, whether you pass a table name or a definition. Before, it returned the driver's text, such as `'5'`. A UUID or other non-numeric key still comes back as a string. Compare the ID with numbers, not strings.
 
@@ -209,7 +209,7 @@ On PostgreSQL, `insertGetId()` now returns an integer key as a number, as Larave
 
 These changes can make a migration that hasn't run yet fail, as it would in Laravel. Run your pending migrations against a copy of your database first.
 
-- `dropIndex()` with a name that doesn't exist raises an error on SQLite and PostgreSQL, as it already did on MySQL. Indexes keep their old names after `renameTable()`, so drop them by those names. `dropIndex()` also takes columns now. On PostgreSQL, drop the constraint of a `unique()` column with `dropUnique()`. See [dropIndex()](/database/migrations#dropindex).
+- `dropIndex()` with a name that doesn't exist raises an error on SQLite and PostgreSQL, as it already did on MySQL. Indexes keep their old names after `renameTable()`, so drop them by those names or by their columns. `dropIndex()` also takes columns now. On PostgreSQL, drop the constraint of a `unique()` column with `dropUnique()`. See [dropIndex()](/database/migrations#dropindex).
 - On PostgreSQL and SQLite, creating an index whose name another table already uses fails instead of skipping the index. This happens when you create a table under a name you renamed away; give its indexes names of their own. Running the same `createTable()` again still succeeds, now on MySQL too. See [unique(columns)](/database/migrations#unique-columns).
 - A `unique()` column whose generated name another table's index already uses fails the migration instead of skipping the unique.
 - On SQLite, `change()` inside your own transaction throws `SchemaError` when another table references the rebuilt table, because SQLite can't turn off foreign key checks there. Run it in a migration or outside the transaction. A rebuild that would leave a foreign key pointing at a missing row throws `SchemaError` and changes nothing.
@@ -217,17 +217,18 @@ These changes can make a migration that hasn't run yet fail, as it would in Lara
 
 ### Unique and foreign key names
 
-`unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key` and MySQL named them after the column. Existing constraints keep those names, so drop them by name:
+`unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key`, MySQL named them after the column, and SQLite named their index `sqlite_autoindex_{table}_{n}`. Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Before, PostgreSQL named them `{table}_{column}_fkey` and SQLite left them unnamed. Existing constraints keep their old names.
+
+`migrate:fresh` and every new database, such as CI's or a new developer's, run your migrations against tables that this release creates, so they carry the new names. A migration that drops a constraint by its old name, such as `dropUnique('tenants_owner_email_key')`, works on your upgraded database and fails on a fresh one. Drop uniques, indexes and foreign keys by their columns instead:
 
 ```ts
 await schema.table('tenants', (table) => {
-  table.dropUnique('tenants_owner_email_key')
+  table.dropUnique(['owner_email'])
+  table.dropForeign(['owner_id'])
 })
 ```
 
-On SQLite, drop a unique that an earlier release created inline by its columns, such as `table.dropUnique(['owner_email'])`. See [dropUnique()](/database/migrations#dropunique).
-
-Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Existing PostgreSQL keys keep their `{table}_{column}_fkey` names; drop them by that name. On SQLite, `dropForeign(['user_id'])` also drops the unnamed key an earlier release created on that column. `foreign(column, name)` inside `createTable()` now takes a constraint name, as it already did inside `table()`. See [dropForeign()](/database/migrations#dropforeign).
+Holo reads the table from the database and drops the constraint that covers exactly those columns, whatever its name, so the same migration works on both. Laravel computes the conventional name instead. `dropIndex([...])`, `dropConstrainedForeignId()` and `dropMorphs()` work the same way. If more than one constraint covers the columns, the error lists their names; drop by name only in a migration that runs on one database. `foreign(column, name)` inside `createTable()` now takes a constraint name, as it already did inside `table()`. See [dropUnique()](/database/migrations#dropunique) and [dropForeign()](/database/migrations#dropforeign).
 
 ### Composite primary keys
 

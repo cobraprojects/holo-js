@@ -174,7 +174,7 @@ export async function GET() {
 
 :::
 
-Open `/api/posts` in your browser (for example `http://localhost:3000/api/posts`). You see both posts as JSON, newest first.
+Open `/api/posts` in your browser (for example `http://localhost:3000/api/posts`). You see both posts as JSON. `latest()` sorts them by `created_at`, newest first. The seeder creates both posts in the same second, so on a database that stores whole seconds, such as MySQL, they can come back in either order.
 
 Try typing `Post.where('` in your editor: `title`, `body`, and the other columns autocomplete.
 
