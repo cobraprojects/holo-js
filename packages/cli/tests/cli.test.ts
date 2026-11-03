@@ -6671,6 +6671,24 @@ export default defineMigration({
     expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
   }, 60000)
 
+  it('fails holo migrate naming the source file of a migration without a timestamp or a declared name', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './data.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/create_foo_table.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).toBe(1)
+    expect(migrated.stderr).toContain('Registered migration "server/db/migrations/create_foo_table.ts" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.')
+  }, 60000)
+
   it('prepares, builds, starts, migrates and rolls back a 0.5.6 migration file without a timestamp under its declared name', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

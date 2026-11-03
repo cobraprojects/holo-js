@@ -27,17 +27,22 @@ import type * as StorageRuntimeModule from '@holo-js/storage/runtime'
 
 type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOptions>[0]
 
+type RuntimeModuleEntry = {
+  readonly sourcePath: string
+  readonly url: string
+}
+
 type RuntimePayload = {
   readonly kind?: string
   readonly projectRoot?: string
   readonly runtimeConfig?: RuntimeConfigPayload
-  readonly models?: readonly string[]
-  readonly migrations?: readonly string[]
+  readonly models?: readonly RuntimeModuleEntry[]
+  readonly migrations?: readonly RuntimeModuleEntry[]
   readonly migrationPublishers?: readonly {
     readonly packageName: string
     readonly url: string
   }[]
-  readonly seeders?: readonly string[]
+  readonly seeders?: readonly RuntimeModuleEntry[]
   readonly generatedSchemaOutputPath?: string
   readonly generatedSchemaRuntimeOutputPath?: string
   readonly options?: Record<string, unknown>
@@ -145,23 +150,13 @@ function isSeeder(value: unknown): value is RuntimeSeeder {
 
 const RUNTIME_MIGRATION_NAME_PATTERN = /^\d{4}_\d{2}_\d{2}_\d{6}_[a-z0-9_]+$/
 
-function inferRuntimeMigrationName(entry: string): string {
-  const fileName = entry.split('/').pop()?.replace(/\.[^.]+$/, '')
+function inferRuntimeMigrationName(sourcePath: string): string {
+  const fileName = sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '')
   if (!fileName || !RUNTIME_MIGRATION_NAME_PATTERN.test(fileName)) {
-    throw new Error(`Registered migration "${entry}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
+    throw new Error(`Registered migration "${sourcePath}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
   }
 
   return fileName
-}
-
-function normalizeRuntimeMigration(
-  entry: string,
-  migration: RuntimeMigration,
-): RuntimeMigration {
-  return {
-    ...migration,
-    name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry),
-  }
 }
 
 async function dropAllTablesForFresh(
@@ -223,27 +218,40 @@ async function writeGeneratedSchema(
   }
 }
 
+async function loadRuntimeItem<TValue>(
+  entry: RuntimeModuleEntry,
+  matcher: (value: unknown) => value is TValue,
+  label: string,
+): Promise<TValue> {
+  const item = resolveExport(await loadModule(entry.url), matcher)
+  if (!item) {
+    throw new Error(`Registered ${label} "${entry.sourcePath}" does not export a Holo ${label}.`)
+  }
+  return item
+}
+
 async function loadRuntimeItems<TValue>(
-  entries: readonly string[],
+  entries: readonly RuntimeModuleEntry[],
   matcher: (value: unknown) => value is TValue,
   label: string,
 ): Promise<TValue[]> {
   const items: TValue[] = []
-
   for (const entry of entries) {
-    const item = resolveExport(await loadModule(entry), matcher)
-    if (!item) {
-      throw new Error(`Registered ${label} "${entry}" does not export a Holo ${label}.`)
-    }
-    items.push(item)
+    items.push(await loadRuntimeItem(entry, matcher, label))
   }
-
   return items
 }
 
-async function loadMigrations(entries: readonly string[]): Promise<RuntimeMigration[]> {
-  const migrations = await loadRuntimeItems(entries, isMigration, 'migration')
-  return migrations.map((migration, index) => normalizeRuntimeMigration(entries[index] ?? '', migration))
+async function loadMigrations(entries: readonly RuntimeModuleEntry[]): Promise<RuntimeMigration[]> {
+  const migrations: RuntimeMigration[] = []
+  for (const entry of entries) {
+    const migration = await loadRuntimeItem(entry, isMigration, 'migration')
+    migrations.push({
+      ...migration,
+      name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry.sourcePath),
+    })
+  }
+  return migrations
 }
 
 async function loadPublishedMigrations(
@@ -288,7 +296,7 @@ async function loadAllMigrations(): Promise<RuntimeMigration[]> {
   return migrations
 }
 
-async function loadSeeders(entries: readonly string[]): Promise<RuntimeSeeder[]> {
+async function loadSeeders(entries: readonly RuntimeModuleEntry[]): Promise<RuntimeSeeder[]> {
   return loadRuntimeItems(entries, isSeeder, 'seeder')
 }
 
@@ -308,7 +316,7 @@ function printExecutedItems(
   }
 }
 
-function payloadEntries(entries: readonly string[] | undefined): readonly string[] {
+function payloadEntries(entries: readonly RuntimeModuleEntry[] | undefined): readonly RuntimeModuleEntry[] {
   return entries ?? []
 }
 
