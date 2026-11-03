@@ -56,6 +56,21 @@ export function parseInteger(value: unknown): unknown {
   return integer
 }
 
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+export function isCanonicalIntegerText(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value)
+}
+
+export function readIntegerKey(value: unknown): unknown {
+  if (!isCanonicalIntegerText(value)) {
+    return value
+  }
+
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : value
+}
+
 function parseJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value
 }

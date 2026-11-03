@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -147,5 +147,116 @@ describe.each(drivers)('an untyped model on a %s connection', (driver) => {
 
     expectRecent(storedInstant(stored?.created_at))
     expectRecent(storedInstant(stored?.updated_at))
+  })
+  it('reads an incrementing key as the number create() returns', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const sites = await createTable('sites', (table) => {
+      table.id()
+      table.string('host')
+    })
+    const Site = defineModel(sites, { connectionName: 'analytics', fillable: ['host'], timestamps: false })
+
+    const created = await Site.create({ host: 'example.com' })
+    const found = await Site.findOrFail(created.get('id'))
+
+    expect(created.get('id')).toBe(1)
+    expect(found.get('id')).toBe(created.get('id'))
+    expect((await Site.all()).map(site => site.get('id'))).toEqual([1])
+  })
+
+  it('matches relations whose key and foreign key columns have different integer types', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const sites = await createTable('sites', (table) => {
+      table.id()
+      table.string('host')
+    })
+    const posts = await createTable('posts', (table) => {
+      table.id()
+      table.integer('site_id')
+      table.string('title')
+    })
+    const tags = await createTable('tags', (table) => {
+      table.id()
+      table.string('name')
+    })
+    const postTag = await createTable('post_tag', (table) => {
+      table.integer('post_id')
+      table.integer('tag_id')
+    })
+    const Tag = defineModel(tags, { connectionName: 'analytics', name: 'Tag', fillable: ['name'], timestamps: false })
+    const Post = defineModel(posts, { connectionName: 'analytics', name: 'Post', fillable: ['site_id', 'title'], timestamps: false })
+    const Site = defineModel(sites, {
+      connectionName: 'analytics',
+      name: 'Site',
+      fillable: ['host'],
+      timestamps: false,
+      relations: { posts: hasMany(() => Post, 'site_id'), firstPost: hasOne(() => Post, 'site_id') },
+    })
+    const SitePost = defineModel(posts, {
+      connectionName: 'analytics',
+      name: 'SitePost',
+      timestamps: false,
+      relations: { site: belongsTo(() => Site, 'site_id'), tags: belongsToMany(() => Tag, postTag, 'post_id', 'tag_id') },
+    })
+    const site = await Site.create({ host: 'example.com' })
+    const post = await Post.create({ site_id: site.get('id'), title: 'Hello' })
+    const tag = await Tag.create({ name: 'news' })
+    await (await SitePost.findOrFail(post.get('id'))).attach('tags', tag.get('id'))
+
+    const eagerSite = await Site.with('posts', 'firstPost').withCount('posts').findOrFail(site.get('id'))
+    const eagerPost = await SitePost.with('site', 'tags').withCount('tags').findOrFail(post.get('id'))
+    const lazySite = await Site.findOrFail(site.get('id'))
+    const lazyPost = await SitePost.findOrFail(post.get('id'))
+    await lazySite.load('posts', 'firstPost')
+    await lazySite.loadCount('posts')
+    await lazyPost.load('site', 'tags')
+    await lazyPost.loadCount('tags')
+
+    for (const loaded of [eagerSite.toJSON(), lazySite.toJSON()]) {
+      expect(loaded).toMatchObject({ posts: [{ title: 'Hello' }], firstPost: { title: 'Hello' }, posts_count: 1 })
+    }
+    for (const loaded of [eagerPost.toJSON(), lazyPost.toJSON()]) {
+      expect(loaded).toMatchObject({ site: { host: 'example.com' }, tags: [{ name: 'news' }], tags_count: 1 })
+    }
+  })
+})
+
+describe.each(drivers)('relation key matching on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('matches an integer key to the same number stored as text, but not to other text', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const sites = await createTable('sites', (table) => {
+      table.id()
+      table.string('host')
+    })
+    const links = await createTable('links', (table) => {
+      table.id()
+      table.string('site_ref')
+      table.string('url')
+    })
+    const sitesTable = defineGeneratedTable(sites, { id: column.id(), host: column.string() })
+    const linksTable = defineGeneratedTable(links, { id: column.id(), site_ref: column.string(), url: column.string() })
+    const Site = defineModel(sitesTable, { connectionName: 'analytics', name: 'Site', fillable: ['host'], timestamps: false })
+    const Link = defineModel(linksTable, {
+      connectionName: 'analytics',
+      name: 'Link',
+      fillable: ['site_ref', 'url'],
+      timestamps: false,
+      relations: { site: belongsTo(() => Site, 'site_ref') },
+    })
+    await Site.create({ host: 'example.com' })
+    await Link.create({ site_ref: '1', url: '/same' })
+    await Link.create({ site_ref: '01', url: '/padded' })
+
+    const eager = await Link.with('site').orderBy('id').get()
+    const lazy = await Link.orderBy('id').get()
+    await lazy.load('site')
+
+    for (const loaded of [eager, lazy]) {
+      expect(loaded.map(link => link.toJSON())).toMatchObject([{ site: { host: 'example.com' } }, { site: null }])
+    }
   })
 })
