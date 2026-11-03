@@ -19,6 +19,7 @@
 
 - The build environment must reach the default connection's database, because `holo build` writes the generated schema from it.
 - Database: `MigrationService.migrateIsolated()` and the `IsolatedMigrationResult` type are removed from `@holo-js/db`. Use `holo migrate --isolated`.
+- Database: `MigrationService.planSquash()`, `MigrationService.hasRan()`, `MigrationService.getExecutionPolicy()`, the `MigrationSquashPlan` and `MigrationExecutionPolicy` types, and the `createSchemaDiff` alias are removed from `@holo-js/db`. Use `MigrationService.status()` to see which migrations ran, and `diffSchema()` in place of `createSchemaDiff()`.
 - Deploys that run `holo migrate --isolated` on several servers must set the default cache store to a shared `redis` or `database` store. You can drop a leftover `_holo_migration_locks` table.
 
 ### Fixed

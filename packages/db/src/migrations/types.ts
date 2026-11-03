@@ -20,14 +20,6 @@ export interface MigrationStatus {
   readonly migratedAt?: Date
 }
 
-export interface MigrationSquashPlan {
-  readonly archiveName: string
-  readonly includedMigrations: readonly string[]
-  readonly fromBatch?: number
-  readonly toBatch?: number
-  readonly ranCount: number
-}
-
 export interface MigrateOptions {
   step?: number
 }
@@ -35,12 +27,6 @@ export interface MigrateOptions {
 export interface RollbackOptions {
   step?: number
   batch?: number
-}
-
-export interface MigrationExecutionPolicy {
-  readonly mode: 'exclusive'
-  readonly scope: 'adapter'
-  readonly allowsConcurrentMigrations: false
 }
 
 export type MigrationTemplateKind = 'blank' | 'create_table' | 'alter_table' | 'drop_table'

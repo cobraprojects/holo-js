@@ -12,7 +12,7 @@ import {
 import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
-import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
+import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
 
 const runtimeImportMeta = import.meta as ImportMeta & {
@@ -140,82 +140,6 @@ export function mergeRuntimeDatabaseConfig(
     defaultConnection,
     connections,
   }
-}
-
-export const RUNTIME_MIGRATION_NAME_PATTERN = /^\d{4}_\d{2}_\d{2}_\d{6}_[a-z0-9_]+$/
-
-export function inferRuntimeMigrationName(entry: string): string {
-  const fileName = entry.split('/').pop()?.replace(/\.[^.]+$/, '')
-  if (!fileName || !RUNTIME_MIGRATION_NAME_PATTERN.test(fileName)) {
-    throw new Error(`Registered migration "${entry}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
-  }
-
-  return fileName
-}
-
-export function normalizeRuntimeMigration(
-  entry: string,
-  migration: RuntimeMigrationCandidate & Record<string, unknown>,
-): Record<string, unknown> & { name: string, up(...args: unknown[]): unknown } {
-  return {
-    ...migration,
-    name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry),
-  }
-}
-
-type FreshDropConnection = {
-  getDialect(): {
-    name: string
-    quoteIdentifier(identifier: string): string
-  }
-  getSchemaName(): string | undefined
-  executeCompiled(statement: { sql: string, source: string }): Promise<unknown>
-}
-
-type FreshDropSchema = {
-  getTables(): Promise<string[]>
-  dropTable(tableName: string): Promise<void>
-  withoutForeignKeyConstraints<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
-}
-
-export function compileFreshDropIdentifierPath(
-  quoteIdentifier: (identifier: string) => string,
-  identifier: string,
-): string {
-  if (!identifier.includes('.')) {
-    return quoteIdentifier(identifier)
-  }
-
-  return identifier
-    .split('.')
-    .map(part => quoteIdentifier(part))
-    .join('.')
-}
-
-export async function dropAllTablesForFresh(
-  connection: FreshDropConnection,
-  schema: FreshDropSchema,
-): Promise<void> {
-  const tables = await schema.getTables()
-  if (connection.getDialect().name === 'postgres') {
-    const schemaName = connection.getSchemaName()
-    const quoteIdentifier = connection.getDialect().quoteIdentifier
-
-    for (const tableName of tables) {
-      const qualifiedTableName = schemaName ? `${schemaName}.${tableName}` : tableName
-      await connection.executeCompiled({
-        sql: `DROP TABLE IF EXISTS ${compileFreshDropIdentifierPath(quoteIdentifier, qualifiedTableName)} CASCADE`,
-        source: `schema:dropTableFresh:${qualifiedTableName}`,
-      })
-    }
-    return
-  }
-
-  await schema.withoutForeignKeyConstraints(async () => {
-    for (const tableName of tables) {
-      await schema.dropTable(tableName)
-    }
-  })
 }
 
 /* v8 ignore start */

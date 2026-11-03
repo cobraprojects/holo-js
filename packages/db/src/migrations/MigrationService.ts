@@ -11,10 +11,8 @@ import type {
   MigrateOptions,
   MigrationContext,
   MigrationDefinition,
-  MigrationSquashPlan,
   MigrationStatus,
   RollbackOptions,
-  MigrationExecutionPolicy,
 } from './types'
 
 type RegisteredMigrationDefinition = MigrationDefinition & { readonly name: string }
@@ -72,11 +70,6 @@ export class MigrationService {
     return this.migrations.get(name)
   }
 
-  async hasRan(name: string): Promise<boolean> {
-    const ran = await this.getRanRecords()
-    return ran.some(record => record.name === name)
-  }
-
   async status(): Promise<MigrationStatus[]> {
     const ran = await this.getRanRecords()
     const ranMap = new Map(ran.map(record => [record.name, record]))
@@ -97,24 +90,6 @@ export class MigrationService {
         migratedAt: this.normalizeMigratedAt(record.migrated_at),
       }
     })
-  }
-
-  async planSquash(archiveName = 'schema'): Promise<MigrationSquashPlan> {
-    const normalizedArchiveName = archiveName.trim().replace(/\s+/g, '_')
-    if (normalizedArchiveName.length === 0) {
-      throw new DatabaseError('Migration squash archive name must be a non-empty string.', 'INVALID_MIGRATION_ARCHIVE_NAME')
-    }
-
-    const ran = await this.getRanRecords()
-    const batches = ran.map(record => record.batch)
-
-    return {
-      archiveName: normalizedArchiveName,
-      includedMigrations: ran.map(record => record.name),
-      fromBatch: batches.length > 0 ? Math.min(...batches) : undefined,
-      toBatch: batches.length > 0 ? Math.max(...batches) : undefined,
-      ranCount: ran.length,
-    }
   }
 
   async migrate(options: MigrateOptions = {}): Promise<RegisteredMigrationDefinition[]> {
@@ -216,14 +191,6 @@ export class MigrationService {
 
       return rolledBack
     })
-  }
-
-  getExecutionPolicy(): MigrationExecutionPolicy {
-    return {
-      mode: 'exclusive',
-      scope: 'adapter',
-      allowsConcurrentMigrations: false,
-    }
   }
 
   private async runMigrationTransaction<T>(

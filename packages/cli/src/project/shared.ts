@@ -20,10 +20,6 @@ export type CliModelReference = {
   prune(): Promise<number>
 }
 
-export type InactiveGeneratedModelModule = {
-  readonly holoModelPendingSchema: true
-}
-
 export type DiscoveredAppCommand = {
   readonly sourcePath: string
   readonly name: string

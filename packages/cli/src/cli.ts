@@ -2141,9 +2141,7 @@ export function createInternalCommands(
         await executeRuntime(
           context.projectRoot,
           'fresh',
-          {
-            seed: false,
-          },
+          {},
           async (stdout) => {
             for (const line of stdout.split('\n').filter(Boolean)) {
               writeLine(context.stdout, line)
