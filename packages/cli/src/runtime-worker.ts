@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs'
 import { writeTextFile } from './project/atomic-file'
 import { initializeHolo } from '@holo-js/core'
 import {
@@ -18,6 +19,7 @@ import { loadProjectDatabaseDrivers } from './database-drivers'
 import { errorMessage } from './error-message'
 import { runWithMigrationLock } from './migration-lock'
 import { isSchemaChangingKind } from './runtime-kinds'
+import { RUNTIME_FAILURE_FD } from './runtime-failure'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
 import type * as MediaModule from '@holo-js/media'
@@ -86,6 +88,11 @@ async function readRuntimePayload(): Promise<RuntimePayload> {
   const input = Buffer.concat(chunks).toString('utf8')
   return JSON.parse(input.length > 0 ? input : '{}') as RuntimePayload
 }
+
+process.on('uncaughtException', (error) => {
+  writeSync(RUNTIME_FAILURE_FD, errorMessage(error))
+  process.exitCode = 1
+})
 
 const payload = await readRuntimePayload()
 
@@ -337,18 +344,18 @@ if (!applicationRuntime) {
 }
 const writeProjectGeneratedSchema = () => writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
 
-async function writeGeneratedSchemaAfterFailedRun(): Promise<void> {
+async function writeGeneratedSchemaAfterFailedRun(failure: unknown): Promise<unknown> {
   try {
     await writeProjectGeneratedSchema()
+    return failure
   } catch (error) {
-    process.stderr.write(`Unable to write the Generated schema after the failed run: ${errorMessage(error)}\n`)
+    return new Error(`${errorMessage(failure)}\nUnable to write the Generated schema after the failed run: ${errorMessage(error)}`, { cause: failure })
   }
 }
 
 async function changeSchema<TResult>(change: () => Promise<TResult>): Promise<TResult> {
   const result = await change().catch(async (error: unknown) => {
-    await writeGeneratedSchemaAfterFailedRun()
-    throw error
+    throw await writeGeneratedSchemaAfterFailedRun(error)
   })
   await writeProjectGeneratedSchema()
   return result

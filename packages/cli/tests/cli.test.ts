@@ -120,7 +120,6 @@ import {
   DEFAULT_CACHE_DATABASE_LOCK_TABLE,
   DEFAULT_CACHE_DATABASE_TABLE,
   loadCacheConfig,
-  normalizeCacheMigrationName,
   renderCacheTableMigration,
   resolveDatabaseCacheTables,
   runCacheTableCommand,
@@ -160,6 +159,7 @@ import {
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
+  normalizeCacheMigrationName,
 } from '../src/migrations'
 import { installRealtimeIntoProject } from '../src/project/scaffold'
 import {
@@ -952,11 +952,6 @@ const isolatedMigrationCacheNotInstalledError = '[Holo CLI] migrate --isolated t
 function isolatedMigrationStoreUnavailableError(store: string, driver: string): string {
   return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't be resolved. `
     + 'Configure the store, install its driver package, and use a default cache store that every server shares, such as database or redis.'
-}
-
-function isolatedMigrationLockUnsupportedError(store: string, driver: string): string {
-  return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't provide a lock. `
-    + 'Use a default cache store that supports locks and that every server shares, such as database or redis.'
 }
 
 async function writeSqliteUsersMigrationProject(
@@ -6578,6 +6573,113 @@ process.stdout.write('framework build ran\\n')
     }, 60000)
   }
 
+  it('reports the failed SQLite migration before the Generated schema write failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000004_block_generated_schema.ts', `
+import { mkdirSync, rmSync } from 'node:fs'
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    rmSync('.holo-js/generated/schema.mjs', { recursive: true, force: true })
+    mkdirSync('.holo-js/generated/schema.mjs/occupied', { recursive: true })
+    throw new Error('the block_generated_schema migration failed')
+  },
+  async down() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).toBe(1)
+    const failure = migrated.stderr.indexOf('the block_generated_schema migration failed')
+    const schemaWriteFailure = migrated.stderr.indexOf('Unable to write the Generated schema after the failed run: ')
+    expect(failure, migrated.stderr).toBeGreaterThanOrEqual(0)
+    expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
+  }, 60000)
+
+  it('prepares, builds, starts, migrates and rolls back a 0.5.6 migration file without a timestamp under its declared name', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './data.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/create_legacy.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  name: '2024_01_01_000000_create_legacy',
+  async up({ schema }) {
+    await schema.createTable('legacy_notes', (table) => {
+      table.id()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('legacy_notes')
+  },
+})
+`)
+    await writeDevServerProbe(projectRoot)
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('  2024_01_01_000000_create_legacy')
+    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    try {
+      expect(database.prepare('SELECT name FROM _holo_migrations').all().map(row => row.name)).toContain('2024_01_01_000000_create_legacy')
+    } finally {
+      database.close()
+    }
+
+    const migratedAgain = runCliProcess(projectRoot, ['migrate'])
+    expect(migratedAgain.status, migratedAgain.stderr || migratedAgain.stdout).toBe(0)
+    expect(migratedAgain.stdout).toContain('No migrations were executed.')
+
+    const built = runCliProcess(projectRoot, ['build'])
+    expect(built.status, built.stderr || built.stdout).toBe(0)
+    const dev = runCliProcess(projectRoot, ['dev'])
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stdout).toContain('legacy_notes')
+
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
+    expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
+    expect(rolledBack.stdout).toContain('  2024_01_01_000000_create_legacy')
+    expect(sqliteTableNames(projectRoot)).not.toContain('legacy_notes')
+  }, 90000)
+
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('reports why holo migrate could not create the PostgreSQL database before the Generated schema write failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const postgres = isolatedMigrationDatabases[0]
+    const suffix = randomUUID().replaceAll('-', '')
+    const role = `holo_nocreate_${suffix}`
+    const databaseName = `holo_nocreate_${suffix}`
+    await writeSchemaSourceProject(projectRoot, {
+      driver: 'postgres',
+      host: livePostgresServer.host,
+      port: livePostgresServer.port,
+      username: role,
+      password: 'secret',
+      database: databaseName,
+    })
+    await postgres.administer(`CREATE ROLE ${role} LOGIN PASSWORD 'secret' NOCREATEDB`)
+    try {
+      const migrated = runCliProcess(projectRoot, ['migrate'])
+
+      expect(migrated.status).toBe(1)
+      const failure = migrated.stderr.indexOf(`Postgres database "${databaseName}" could not be found or created. Please create the database and try again. Original error: permission denied to create database`)
+      const schemaWriteFailure = migrated.stderr.indexOf('Unable to write the Generated schema after the failed run: Unable to read the database schema of connection "default"')
+      expect(failure, migrated.stderr).toBeGreaterThanOrEqual(0)
+      expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
+    } finally {
+      await postgres.drop(databaseName)
+      await postgres.administer(`DROP ROLE IF EXISTS ${role}`)
+    }
+  }, 60000)
+
   it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1').each([
     { searchPath: 'only the configured schema', query: '' },
     { searchPath: 'a matching search_path in the URL', query: `?options=${encodeURIComponent('-c search_path=tenant')}` },
@@ -6769,15 +6871,29 @@ process.stdout.write('framework build ran\\n')
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 
-  it('fails migrate --isolated when the default cache store cannot provide a lock', async () => {
+  it('fails migrate --isolated with the cache:table step when the database cache store has no table migration', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeSqliteUsersMigrationProject(projectRoot, 'database')
 
     const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
     expect(isolated.status).toBe(1)
-    expect(isolated.stderr).toContain(isolatedMigrationLockUnsupportedError('shared', 'database'))
-    expect(isolated.stderr).toContain('Run "holo cache:table"')
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "shared" (driver "database") has no "cache" and "cache_locks" tables and no migration creates them. Run "holo cache:table", then "holo migrate".')
+    expect(isolated.stderr).not.toContain('can\'t provide a lock')
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated with the migrate step when the database cache store table migration has not run', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSqliteUsersMigrationProject(projectRoot, 'database')
+    const cacheTable = runCliProcess(projectRoot, ['cache:table'])
+    expect(cacheTable.status, cacheTable.stderr || cacheTable.stdout).toBe(0)
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but the "cache" and "cache_locks" tables of cache store "shared" (driver "database") haven\'t been migrated. Run "holo migrate" to create them.')
+    expect(isolated.stderr).not.toContain('cache:table')
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 
@@ -8537,8 +8653,9 @@ export default {
       env: process.env,
       input: JSON.stringify({ kind: 'probe', runtimeConfig: { db: { default: 'sqlite', connections: {} } }, padding: 'x'.repeat(256 * 1024) }),
     })
-    expect(oversizedRuntimePayload.stderr).not.toContain('Runtime payload is missing database configuration.')
-    expect(oversizedRuntimePayload.stderr).toContain('Driver "sqlite" is not registered')
+    expect(oversizedRuntimePayload.status).toBe(1)
+    expect(oversizedRuntimePayload.failure).not.toContain('Runtime payload is missing database configuration.')
+    expect(oversizedRuntimePayload.failure).toContain('Driver "sqlite" is not registered')
     expect(getRuntimeFailureMessage('prune', {
       status: null,
       error: { code: 'ENOENT' },
@@ -12045,17 +12162,18 @@ export default {
       await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo model')
 
       await rm(join(projectRoot, 'server/models/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/Bad.mjs" must use a timestamped file name')
-
-      await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/manual_name.mjs" must use a timestamped file name')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo seeder')
+      await expect(loadRegisteredMigrations(projectRoot, {
+        ...defaultProjectConfig(),
+        migrations: ['server/db/migrations/Bad.mjs'],
+      })).rejects.toThrow('server/db/migrations/Bad.mjs" does not export a Holo migration')
       await expect(loadRegisteredMigrations(projectRoot, {
         ...defaultProjectConfig(),
         migrations: ['server/db/migrations/manual_name.mjs'],
       })).rejects.toThrow('must match YYYY_MM_DD_HHMMSS_description')
 
+      await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
       await rm(join(projectRoot, 'server/db/migrations/manual_name.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo seeder')
 
       await rm(join(projectRoot, 'server/db/seeders/Bad.mjs'))
       await prepareProjectDiscovery(projectRoot, loaded.config)

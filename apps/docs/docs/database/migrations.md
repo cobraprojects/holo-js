@@ -173,9 +173,11 @@ As in Laravel, every server must use the same default cache store, and that stor
 | --- | --- |
 | `@holo-js/cache` isn't installed | `@holo-js/cache` isn't installed. |
 | The default store can't be resolved, such as a missing driver package, driver plugin, or database connection | The store and its driver can't be resolved, followed by the reason. |
-| The default store can't give a lock, such as a `database` store without its tables | The store and its driver can't provide a lock, followed by the reason. |
+| A `database` store whose cache table migration hasn't run | The store's cache tables haven't been migrated. Run `npx holo migrate`. |
+| A `database` store with no cache table migration | The store has no cache tables and no migration creates them. Run `npx holo cache:table`, then `npx holo migrate`. |
+| The default store can't give a lock for another reason | The store and its driver can't provide a lock, followed by the reason. |
 
-Each error also tells you to use a default cache store that every server shares, such as `database` or `redis`.
+The errors for a store that can't be resolved or can't give a lock also tell you to use a default cache store that every server shares, such as `database` or `redis`.
 
 A `database` cache store keeps its locks in a table, so create the cache tables before the first isolated run:
 

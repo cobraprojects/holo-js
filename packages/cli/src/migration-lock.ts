@@ -4,6 +4,8 @@ import {
   initializeCacheMaintenanceEnvironment,
   type CacheStoreDescriptor,
 } from './cache'
+import { migrationExists } from './migration-creation'
+import { normalizeCacheMigrationName } from './migrations'
 import { errorMessage } from './error-message'
 
 const MIGRATION_LOCK_NAME = 'migrations'
@@ -32,6 +34,36 @@ function storeUnavailableRequirement(store: CacheStoreDescriptor): string {
 function lockUnsupportedRequirement(store: CacheStoreDescriptor): string {
   return `${MIGRATION_LOCK_SOURCE} ${describeStore(store)} can't provide a lock. `
     + `Use a default cache store that supports locks and ${SHARED_STORE_EXAMPLES}`
+}
+
+type MissingCacheTables = {
+  readonly tableName: string
+  readonly lockTableName: string
+}
+
+function isMissingCacheTablesError(error: unknown): error is Error & MissingCacheTables {
+  return error instanceof Error
+    && error.name === 'DatabaseCacheTablesMissingError'
+    && 'tableName' in error && typeof error.tableName === 'string'
+    && 'lockTableName' in error && typeof error.lockTableName === 'string'
+}
+
+function unmigratedCacheTablesRequirement(store: CacheStoreDescriptor, tables: MissingCacheTables): string {
+  return `${MIGRATION_LOCK_SOURCE} the "${tables.tableName}" and "${tables.lockTableName}" tables of ${describeStore(store)} haven't been migrated. `
+    + 'Run "holo migrate" to create them.'
+}
+
+function missingCacheTableMigrationRequirement(store: CacheStoreDescriptor, tables: MissingCacheTables): string {
+  return `${MIGRATION_LOCK_SOURCE} ${describeStore(store)} has no "${tables.tableName}" and "${tables.lockTableName}" tables and no migration creates them. `
+    + 'Run "holo cache:table", then "holo migrate".'
+}
+
+async function describeMissingCacheTables(projectRoot: string, store: CacheStoreDescriptor, error: Error & MissingCacheTables): Promise<Error> {
+  const cacheTableMigration = { name: normalizeCacheMigrationName(error.tableName), tableNames: [error.tableName, error.lockTableName] }
+  const requirement = await migrationExists(projectRoot, cacheTableMigration)
+    ? unmigratedCacheTablesRequirement(store, error)
+    : missingCacheTableMigrationRequirement(store, error)
+  return new Error(requirement, { cause: error })
 }
 
 function migrationLockError(requirement: string, cause: unknown): Error {
@@ -73,8 +105,10 @@ export async function runWithMigrationLock<TResult>(
 ): Promise<IsolatedMigrationRun<TResult>> {
   const { lock, store, close } = await openMigrationLock(projectRoot)
   try {
-    const acquired = await lock.get().catch((error: unknown) => {
-      throw describeLockFailure(store, error)
+    const acquired = await lock.get().catch(async (error: unknown) => {
+      throw isMissingCacheTablesError(error)
+        ? await describeMissingCacheTables(projectRoot, store, error)
+        : describeLockFailure(store, error)
     })
     if (!acquired) {
       return { kind: 'skipped' }
