@@ -1,4 +1,4 @@
-import { forgetColumnListings } from './columnListing'
+import { advanceSchemaGeneration } from '../core/schemaGeneration'
 import { isMySQLConnection } from './connectionDialect'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement } from './ddl'
@@ -9,7 +9,7 @@ export async function executeStatements(connection: DatabaseContext, statements:
       await connection.executeCompiled(statement)
     }
   } finally {
-    forgetColumnListings(connection)
+    advanceSchemaGeneration()
   }
 }
 

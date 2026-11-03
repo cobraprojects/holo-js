@@ -15,6 +15,7 @@ import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
+import { advanceSchemaGeneration } from './schemaGeneration'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -651,7 +652,7 @@ export class DatabaseContext {
       try {
         await this._callTransactionHook(
           'rollbackToSavepoint',
-          () => this._adapter.rollbackToSavepoint!(savepointName),
+          () => this._adapter.rollbackToSavepoint!(savepointName).finally(advanceSchemaGeneration),
           undefined,
           savepointName,
         )
@@ -903,6 +904,8 @@ export class DatabaseContext {
     } catch (error) {
       markPinnedTransactionStuck(this._adapter)
       throw error
+    } finally {
+      advanceSchemaGeneration()
     }
   }
 
