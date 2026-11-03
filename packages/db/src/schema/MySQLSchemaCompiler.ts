@@ -89,4 +89,11 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
       source: `schema:dropForeignKey:${tableName}:${constraintName}`,
     }
   }
+
+  override compileDropPrimaryKey(tableName: string): { sql: string, source: string } {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP PRIMARY KEY`,
+      source: `schema:dropPrimaryKey:${tableName}`,
+    }
+  }
 }

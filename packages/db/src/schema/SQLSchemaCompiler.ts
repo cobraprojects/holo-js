@@ -54,6 +54,14 @@ export abstract class SQLSchemaCompiler {
       return [this.compileDropForeignKey(operation.tableName, operation.constraintName)]
     }
 
+    if (operation.kind === 'createPrimaryKey') {
+      return [this.compileCreatePrimaryKey(operation.tableName, operation.columns, operation.constraintName)]
+    }
+
+    if (operation.kind === 'dropPrimaryKey') {
+      return [this.compileDropPrimaryKey(operation.tableName, operation.constraintName)]
+    }
+
     if (operation.kind === 'createIndex') {
       return [this.compileCreateIndex(operation.tableName, operation.index)]
     }
@@ -218,6 +226,23 @@ export abstract class SQLSchemaCompiler {
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
       source: `schema:dropForeignKey:${tableName}:${constraintName}`,
+    }
+  }
+
+  compileCreatePrimaryKey(tableName: string, columns: readonly string[], constraintName?: string): DDLStatement {
+    assertValidIdentifierPath(tableName, 'Table name')
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compilePrimaryKeyConstraint(columns, constraintName)}`,
+      source: `schema:createPrimaryKey:${tableName}`,
+    }
+  }
+
+  compileDropPrimaryKey(tableName: string, constraintName: string): DDLStatement {
+    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidIdentifierSegment(constraintName, 'Primary key name')
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
+      source: `schema:dropPrimaryKey:${tableName}:${constraintName}`,
     }
   }
 

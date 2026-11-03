@@ -78,7 +78,20 @@ export interface DropForeignKeyOperation {
   readonly constraintName: string
 }
 
-export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation
+export interface CreatePrimaryKeyOperation {
+  readonly kind: 'createPrimaryKey'
+  readonly tableName: string
+  readonly columns: readonly string[]
+  readonly constraintName?: string
+}
+
+export interface DropPrimaryKeyOperation {
+  readonly kind: 'dropPrimaryKey'
+  readonly tableName: string
+  readonly constraintName: string
+}
+
+export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation | CreatePrimaryKeyOperation | DropPrimaryKeyOperation
 
 export interface DDLStatement {
   readonly sql: string
@@ -212,4 +225,19 @@ export function dropForeignKeyOperation(
     tableName,
     constraintName,
   }
+}
+
+export function createPrimaryKeyOperation(
+  tableName: string,
+  columns: readonly string[],
+  constraintName?: string,
+): CreatePrimaryKeyOperation {
+  return { kind: 'createPrimaryKey', tableName, columns, constraintName }
+}
+
+export function dropPrimaryKeyOperation(
+  tableName: string,
+  constraintName: string,
+): DropPrimaryKeyOperation {
+  return { kind: 'dropPrimaryKey', tableName, constraintName }
 }
