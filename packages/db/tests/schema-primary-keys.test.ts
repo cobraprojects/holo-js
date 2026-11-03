@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, onTestFinished } from 'vitest'
-import { holoRuntimeInternals, SchemaError } from '../src'
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { clearGeneratedTables, defineModel, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, resetDB, SchemaError, type DatabaseDependencyInvalidationEvent } from '../src'
+import type { DatabaseMutationEvent } from '../src/cache'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -145,6 +146,87 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.table(name, table => { table.dropPrimary(`${name}_custom_pk`) })
 
       expect(await primaryIndex()).toBeUndefined()
+    })
+  })
+}
+
+for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+  describe(`${driver} composite primary keys in the Generated schema`, () => {
+    const pivotTable = `primary_keys_post_tag_${driver}`
+
+    beforeEach(() => {
+      resetDB()
+      clearGeneratedTables()
+    })
+
+    async function openPivotDatabase() {
+      const { db, schema } = await openDatabase(driver)
+      await schema.dropTable(pivotTable)
+      onTestFinished(() => schema.dropTable(pivotTable))
+      await schema.createTable(pivotTable, table => {
+        table.integer('post_id')
+        table.integer('tag_id')
+        table.integer('weight').default(0)
+        table.primary(['post_id', 'tag_id'])
+      })
+      const table = (await createSchemaReader(db).readTable(pivotTable))!
+      registerGeneratedTables({ [pivotTable]: table })
+      await db.table(pivotTable).insert([
+        { post_id: 2, tag_id: 1, weight: 0 },
+        { post_id: 1, tag_id: 2, weight: 0 },
+        { post_id: 1, tag_id: 1, weight: 0 },
+        { post_id: 2, tag_id: 2, weight: 0 },
+      ])
+      return { db, table }
+    }
+
+    it('writes the Generated schema module the composite-key type tests compile against', async () => {
+      const { table } = await openPivotDatabase()
+
+      await expect(renderGeneratedSchemaModule([table])).toMatchFileSnapshot(`./fixtures/primary-keys/${driver}.generated.ts`)
+    })
+
+    it('chunks and cursor-paginates every row of a composite-key table in key order', async () => {
+      const { db, table } = await openPivotDatabase()
+      const chunked: unknown[] = []
+
+      await db.table(table).chunk(1, rows => { chunked.push(...rows.map(row => [row.post_id, row.tag_id])) })
+      const firstPage = await db.table(pivotTable).cursorPaginate(3)
+      const secondPage = await db.table(pivotTable).cursorPaginate(3, firstPage.nextCursor)
+
+      const ordered = [[1, 1], [1, 2], [2, 1], [2, 2]]
+      expect(chunked).toEqual(ordered)
+      expect([...firstPage.data, ...secondPage.data].map(row => [row.post_id, row.tag_id])).toEqual(ordered)
+    })
+
+    it('increments matching rows of a composite-key table and publishes each row by its full key', async () => {
+      const { db } = await openPivotDatabase()
+      const mutations: DatabaseMutationEvent[] = []
+      onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
+      queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+        mutations.push(...event.mutations ?? [])
+      })
+
+      await db.table(pivotTable).where('post_id', 1).increment('weight', 2)
+
+      expect(mutations.map(mutation => ({
+        key: mutation.predicates?.map(predicate => 'column' in predicate ? [predicate.column, predicate.value] : []),
+        weight: mutation.values?.weight,
+      })).sort((left, right) => JSON.stringify(left.key).localeCompare(JSON.stringify(right.key)))).toEqual([
+        { key: [['post_id', 1], ['tag_id', 1]], weight: 2 },
+        { key: [['post_id', 1], ['tag_id', 2]], weight: 2 },
+      ])
+
+      expect((await db.table(pivotTable).orderBy('post_id').orderBy('tag_id').get()).map(row => Number(row.weight))).toEqual([2, 2, 0, 0])
+    })
+
+    it('rejects insertGetId and models on a composite-key table', async () => {
+      const { db } = await openPivotDatabase()
+
+      await expect(db.table(pivotTable).insertGetId({ post_id: 3, tag_id: 3, weight: 0 })).rejects.toThrow(SchemaError)
+      const PostTag = defineModel(pivotTable)
+      expect(() => PostTag.query()).toThrow(SchemaError)
+      expect(await db.table(pivotTable).count()).toBe(4)
     })
   })
 }
