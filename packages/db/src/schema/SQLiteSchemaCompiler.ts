@@ -83,24 +83,19 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   compileRebuildTable(
     tableName: string,
     temporaryTableName: string,
-    definitions: readonly (string | AnyColumnDefinition)[],
+    definitions: readonly string[],
     options: string,
   ): DDLStatement {
     assertValidIdentifierPath(temporaryTableName, 'Table name')
-    const compiledDefinitions = definitions.map(definition => typeof definition === 'string'
-      ? definition
-      : this.compileRebuiltColumn(tableName, definition))
     const tableOptions = options ? ` ${options}` : ''
     return {
-      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${compiledDefinitions.join(', ')})${tableOptions}`,
+      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${definitions.join(', ')})${tableOptions}`,
       source: `schema:sqliteRebuild:create:${tableName}`,
     }
   }
 
-  compileRebuiltColumn(tableName: string, column: AnyColumnDefinition, storedReferencesClause?: string): string {
-    const definition = this.compileColumn(tableName, column)
-    const unique = column.unique && !column.primaryKey ? ' UNIQUE' : ''
-    const references = storedReferencesClause ? ` ${storedReferencesClause}` : ''
-    return `${definition}${unique}${references}`
+  compileChangedColumn(tableName: string, column: AnyColumnDefinition, preservedConstraints: readonly string[]): string {
+    const changedParts = this.compileColumn(tableName, { ...column, primaryKey: false, references: undefined })
+    return [changedParts, ...preservedConstraints].join(' ')
   }
 }
