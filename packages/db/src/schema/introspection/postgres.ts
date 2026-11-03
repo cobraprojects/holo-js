@@ -1,9 +1,10 @@
 import { parseSqlDefault } from './defaults'
-import { readStringLiterals } from './sqlDefinitions'
+import { readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
+type TableRow = { schema: string }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, is_computed: boolean, primary_key: boolean }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -116,8 +117,9 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
     async readTableStructure(tableName) {
       const { schema, table } = splitTableName(tableName)
       const bindings = [schema ?? configuredSchema, table]
-      const exists = await introspect<TableNameRow>(`SELECT t.relname AS name ${TABLE_RELATION}`, bindings, `schema:introspect:table:${tableName}`)
-      if (exists.rows.length === 0) return undefined
+      const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION}`, bindings, `schema:introspect:table:${tableName}`)
+      const resolvedSchema = exists.rows[0]?.schema
+      if (resolvedSchema === undefined) return undefined
 
       const columns = await introspect<ColumnRow>(COLUMNS_SQL, bindings, `schema:introspect:columns:${tableName}`)
       const indexes = await introspect<IndexRow>(INDEXES_SQL, bindings, `schema:introspect:indexes:${tableName}`)
@@ -127,12 +129,14 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
       return {
         dialect: 'postgres',
         tableName,
+        schema: resolvedSchema,
         columns: columns.rows.map((row) => {
           const autoIncrement = row.is_identity || (row.default_value?.startsWith('nextval(') ?? false)
           return {
             name: row.name,
             dataType: row.data_type,
             fullType: row.full_type,
+            length: readStringLength(row.full_type),
             notNull: row.not_null,
             defaultExpression: row.default_value,
             default: autoIncrement ? { kind: 'none' } : parseSqlDefault(row.default_value),

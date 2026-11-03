@@ -6,7 +6,7 @@ import { onTestFinished } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, type DatabaseContextOptions, type DriverAdapter } from '../../src'
 import { defineTable } from './internal'
 
-export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
+export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'schemaName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
   const { wrapAdapter, ...databaseOptions } = options
   const database = process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
   const createdAdapter = driver === 'sqlite' ? createSQLiteAdapter({ filename: ':memory:' })

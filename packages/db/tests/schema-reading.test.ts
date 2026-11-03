@@ -1,0 +1,232 @@
+import { randomUUID } from 'node:crypto'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { holoRuntimeInternals } from '../src'
+import { openDatabase } from './support/database'
+
+const { createSchemaReader } = holoRuntimeInternals
+
+function uniqueName(prefix: string, length = 16): string {
+  return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, length)}`
+}
+
+const expectedKinds = {
+  sqlite: { foreignId: 'integer', json: 'text', timestamp: 'datetime' },
+  postgres: { foreignId: 'bigInteger', json: 'json', timestamp: 'timestamp' },
+  mysql: { foreignId: 'bigInteger', json: 'json', timestamp: 'timestamp' },
+} as const
+
+for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+  describe(`native ${driver} schema reading`, () => {
+    it('reads a table the schema builder created into its table definition', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const users = uniqueName('holo_read_users')
+      const posts = uniqueName('holo_read_posts')
+      onTestFinished(async () => {
+        await schema.dropTable(posts)
+        await schema.dropTable(users)
+      })
+      await schema.createTable(users, table => {
+        table.id()
+      })
+      await schema.createTable(posts, table => {
+        table.id()
+        table.foreignId('user_id').constrained(users).onDelete('cascade')
+        table.string('title')
+        table.text('body').nullable()
+        table.boolean('published').default(false)
+        table.integer('views').default(7)
+        table.json('meta').nullable()
+        table.enum('status', ['draft', 'live'] as const).default('draft')
+        table.timestamp('published_at').defaultNow()
+        table.date('due_on').nullable()
+        table.decimal('price')
+        table.index(['title'])
+      })
+
+      const definition = await createSchemaReader(db).readTable(posts)
+      const kinds = expectedKinds[driver]
+
+      expect(definition).toEqual({
+        kind: 'table',
+        tableName: posts,
+        columns: {
+          id: { kind: 'id', name: 'id', nullable: false, hasDefault: false, generated: true, primaryKey: true, unique: false, idStrategy: 'autoIncrement' },
+          user_id: {
+            kind: kinds.foreignId,
+            name: 'user_id',
+            nullable: false,
+            hasDefault: false,
+            generated: false,
+            primaryKey: false,
+            unique: false,
+            references: { table: users, column: 'id', constraintName: `${posts}_user_id_foreign`, onDelete: 'cascade' },
+          },
+          title: { kind: 'string', name: 'title', nullable: false, hasDefault: false, generated: false, primaryKey: false, unique: false },
+          body: { kind: 'text', name: 'body', nullable: true, hasDefault: false, generated: false, primaryKey: false, unique: false },
+          published: { kind: 'boolean', name: 'published', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'value', defaultValue: false },
+          views: { kind: 'integer', name: 'views', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'value', defaultValue: 7 },
+          meta: { kind: kinds.json, name: 'meta', nullable: true, hasDefault: false, generated: false, primaryKey: false, unique: false },
+          status: { kind: 'enum', name: 'status', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'value', defaultValue: 'draft', enumValues: ['draft', 'live'] },
+          published_at: { kind: kinds.timestamp, name: 'published_at', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'now' },
+          due_on: { kind: 'date', name: 'due_on', nullable: true, hasDefault: false, generated: false, primaryKey: false, unique: false },
+          price: { kind: 'decimal', name: 'price', nullable: false, hasDefault: false, generated: false, primaryKey: false, unique: false },
+        },
+        indexes: expect.arrayContaining([{ name: `${posts}_title_index`, columns: ['title'], unique: false }]),
+      })
+      await expect(createSchemaReader(db).readTable(uniqueName('holo_read_missing'))).resolves.toBeUndefined()
+    })
+
+    it('reads single-column unique indexes with conventional or native default names as unique columns', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_unique')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('inline_code').unique()
+        table.string('email')
+        table.string('handle')
+        table.string('first_name')
+        table.string('last_name')
+        table.unique(['email'])
+        table.unique(['handle'], `${name}_handle_lookup`)
+        table.unique(['first_name', 'last_name'])
+      })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(Object.fromEntries(Object.values(definition.columns).map(column => [column.name, column.unique]))).toEqual({
+        id: false,
+        inline_code: true,
+        email: true,
+        handle: false,
+        first_name: false,
+        last_name: false,
+      })
+      expect(definition.indexes).toEqual(expect.arrayContaining([
+        { name: `${name}_handle_lookup`, columns: ['handle'], unique: true },
+        { name: `${name}_first_name_last_name_unique`, columns: ['first_name', 'last_name'], unique: true },
+      ]))
+      expect(definition.indexes.flatMap(index => index.columns)).not.toContain('email')
+      expect(definition.indexes.flatMap(index => index.columns)).not.toContain('inline_code')
+    })
+
+    it('reads referential actions, string lengths and primary-key structure', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const parents = uniqueName('holo_read_parents')
+      const children = uniqueName('holo_read_children')
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, table => {
+        table.id()
+      })
+      await schema.createTable(children, table => {
+        table.id()
+        table.foreignId('parent_id').nullable().constrained(parents).onDelete('set null').onUpdate('restrict')
+        table.string('label')
+      })
+
+      const reader = createSchemaReader(db)
+      const definition = (await reader.readTable(children))!
+      const structure = (await reader.readTableStructure(children))!
+
+      expect(definition.columns.parent_id?.references).toEqual({
+        table: parents,
+        column: 'id',
+        constraintName: `${children}_parent_id_foreign`,
+        onDelete: 'set null',
+        onUpdate: 'restrict',
+      })
+      expect(structure.columns.find(column => column.name === 'label')?.length).toBe(255)
+      expect(structure.columns.filter(column => column.primaryKey).map(column => column.name)).toEqual(['id'])
+      expect(structure.foreignKeys).toEqual([expect.objectContaining({ name: `${children}_parent_id_foreign`, from: 'parent_id', table: parents, to: 'id' })])
+    })
+
+    it('reads enum check constraint names for renames', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_checks')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.enum('state', ['open', 'closed'] as const)
+      })
+
+      const structure = (await createSchemaReader(db).readTableStructure(name))!
+
+      expect(structure.enumChecks).toEqual([{
+        ...(driver === 'mysql' ? {} : { name: `${name}_state_check` }),
+        column: 'state',
+        values: ['open', 'closed'],
+      }])
+    })
+
+    it.runIf(driver === 'sqlite')('reads an INTEGER PRIMARY KEY as an auto-incrementing id', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_rowid')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.integer('id').primaryKey()
+        table.string('label')
+      })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns.id).toEqual({ kind: 'id', name: 'id', nullable: false, hasDefault: false, generated: true, primaryKey: true, unique: false, idStrategy: 'autoIncrement' })
+    })
+
+    it.runIf(driver === 'postgres')('reads vector dimensions, uuid and jsonb columns', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_vectors')
+      onTestFinished(() => schema.dropTable(name))
+      await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
+      await schema.createTable(name, table => {
+        table.uuid('id').primaryKey()
+        table.vector('embedding', { dimensions: 3 }).nullable()
+        table.json('settings').default({ theme: 'dark' })
+      })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns).toEqual({
+        id: { kind: 'uuid', name: 'id', nullable: false, hasDefault: false, generated: false, primaryKey: true, unique: false },
+        embedding: { kind: 'vector', name: 'embedding', nullable: true, hasDefault: false, generated: false, primaryKey: false, unique: false, vectorDimensions: 3 },
+        settings: { kind: 'json', name: 'settings', nullable: false, hasDefault: true, generated: false, primaryKey: false, unique: false, defaultKind: 'value', defaultValue: { theme: 'dark' } },
+      })
+    })
+
+    it.runIf(driver === 'postgres')('reads tables, unique columns and foreign keys from the configured non-public schema', async () => {
+      const tenant = uniqueName('tenant', 8)
+      const { db, schema } = await openDatabase(driver, { schemaName: tenant })
+      const customers = uniqueName('customers', 8)
+      const orders = uniqueName('orders', 8)
+      onTestFinished(async () => {
+        await db.executeCompiled({ sql: `DROP SCHEMA IF EXISTS "${tenant}" CASCADE`, source: 'schema' })
+        await schema.dropTable(`public.${orders}`)
+      })
+      await db.executeCompiled({ sql: `CREATE SCHEMA "${tenant}"`, source: 'schema' })
+      await schema.createTable(`public.${orders}`, table => {
+        table.id()
+        table.string('public_only')
+      })
+      await schema.createTable(`${tenant}.${customers}`, table => {
+        table.id()
+      })
+      await schema.createTable(`${tenant}.${orders}`, table => {
+        table.id()
+        table.string('email')
+        table.foreignId('customer_id').constrained(`${tenant}.${customers}`)
+        table.unique(['email'])
+      })
+
+      const reader = createSchemaReader(db)
+
+      await expect(reader.listTables()).resolves.toEqual([customers, orders].sort())
+      const definition = (await reader.readTable(orders))!
+      expect(Object.keys(definition.columns)).toEqual(['id', 'email', 'customer_id'])
+      expect(definition.columns.email?.unique).toBe(true)
+      expect(definition.columns.customer_id?.references).toEqual({ table: customers, column: 'id', constraintName: `${tenant}_${orders}_customer_id_foreign` })
+      expect((await reader.readGeneratedSchema()).map(table => table.tableName).sort()).toEqual([customers, orders].sort())
+    })
+  })
+}

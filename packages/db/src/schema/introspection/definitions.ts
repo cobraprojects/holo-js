@@ -1,3 +1,4 @@
+import { createConventionalIndexName } from '../generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableColumnsShape, TableDefinition, TableIndexDefinition } from '../types'
 import type { DatabaseColumnStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, SchemaReadingDialect } from './types'
 
@@ -80,11 +81,17 @@ function toForeignKeyReference(foreignKey: DatabaseForeignKeyStructure): Foreign
   }
 }
 
-function isUniqueColumnIndex(tableName: string, index: DatabaseIndexStructure): boolean {
+function conventionalUniqueNames(structure: DatabaseTableStructure, columnName: string): string[] {
+  const table = structure.tableName.split('.').at(-1)!
+  const tableNames = new Set([structure.tableName, table, ...(structure.schema ? [`${structure.schema}.${table}`] : [])])
+  return [...tableNames].map(tableName => createConventionalIndexName(tableName, [columnName], 'unique'))
+}
+
+function isUniqueColumnIndex(structure: DatabaseTableStructure, index: DatabaseIndexStructure): boolean {
   const [columnName] = index.columns
   if (!index.unique || index.primary || !index.representable || index.columns.length !== 1 || !columnName) return false
-  const table = tableName.split('.').at(-1)!
-  return index.name === `${table}_${columnName}_unique`
+  const table = structure.tableName.split('.').at(-1)!
+  return conventionalUniqueNames(structure, columnName).includes(index.name)
     || index.name === `${table}_${columnName}_key`
     || index.name === columnName
     || index.name.startsWith('sqlite_autoindex_')
@@ -123,7 +130,7 @@ function toColumnDefinition(
 }
 
 export function toTableDefinition(structure: DatabaseTableStructure): TableDefinition {
-  const uniqueIndexes = structure.indexes.filter(index => isUniqueColumnIndex(structure.tableName, index))
+  const uniqueIndexes = structure.indexes.filter(index => isUniqueColumnIndex(structure, index))
   const uniqueColumns = new Set(uniqueIndexes.flatMap(index => index.columns))
   const columns: TableColumnsShape = Object.fromEntries(structure.columns.map(column => [
     column.name,

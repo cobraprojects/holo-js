@@ -1,30 +1,5 @@
 /* v8 ignore file -- type declarations only */
-import type { LogicalColumnKind } from '../types'
-
 export type SchemaReadingDialect = 'sqlite' | 'postgres' | 'mysql'
-
-export interface IntrospectedColumn {
-  name: string
-  type: string
-  logicalType: LogicalColumnKind | null
-  notNull: boolean
-  defaultValue: string | null
-  primaryKey: boolean
-}
-
-export interface IntrospectedIndex {
-  name: string
-  unique: boolean
-  columns: string[]
-}
-
-export interface IntrospectedForeignKey {
-  table: string
-  from: string
-  to: string
-  onUpdate: string
-  onDelete: string
-}
 
 export type DatabaseColumnDefault
   = | { readonly kind: 'none' }
@@ -36,6 +11,7 @@ export interface DatabaseColumnStructure {
   readonly name: string
   readonly dataType: string
   readonly fullType: string
+  readonly length?: number
   readonly notNull: boolean
   readonly defaultExpression: string | null
   readonly default: DatabaseColumnDefault
@@ -70,6 +46,7 @@ export interface DatabaseEnumCheckStructure {
 export interface DatabaseTableStructure {
   readonly dialect: SchemaReadingDialect
   readonly tableName: string
+  readonly schema?: string
   readonly columns: readonly DatabaseColumnStructure[]
   readonly indexes: readonly DatabaseIndexStructure[]
   readonly foreignKeys: readonly DatabaseForeignKeyStructure[]

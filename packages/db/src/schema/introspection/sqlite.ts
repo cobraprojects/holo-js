@@ -1,5 +1,5 @@
 import { parseSqlDefault } from './defaults'
-import { declaresAutoIncrement, readColumnDefinitionName, readEnumChecks, readForeignKeyName, splitTableDefinitions } from './sqlDefinitions'
+import { readColumnDefinitionName, readEnumChecks, readForeignKeyName, readStringLength, splitTableDefinitions } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
@@ -18,19 +18,17 @@ function splitTableName(tableName: string): { schema: string, table: string } {
 }
 
 function readDefinitionDetails(createTableSql: string) {
-  const autoIncrementColumns = new Set<string>()
   const foreignKeyNames = new Map<string, string>()
   const enumChecks: DatabaseEnumCheckStructure[] = []
 
   for (const definition of splitTableDefinitions(createTableSql)) {
     const columnName = readColumnDefinitionName(definition)
-    if (columnName && declaresAutoIncrement(definition)) autoIncrementColumns.add(columnName)
     const foreignKey = readForeignKeyName(definition, columnName)
     if (foreignKey) foreignKeyNames.set(foreignKey.column, foreignKey.name)
     enumChecks.push(...readEnumChecks(definition))
   }
 
-  return { autoIncrementColumns, foreignKeyNames, enumChecks }
+  return { foreignKeyNames, enumChecks }
 }
 
 export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSchemaReader {
@@ -82,6 +80,8 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
       const details = readDefinitionDetails(createTableSql ?? '')
       const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
+      const primaryKeyColumns = columns.rows.filter(row => row.pk > 0)
+      const rowIdAlias = primaryKeyColumns.length === 1 && primaryKeyColumns[0]!.type.toLowerCase() === 'integer' ? primaryKeyColumns[0]!.name : undefined
       const structure: DatabaseTableStructure = {
         dialect: 'sqlite',
         tableName,
@@ -89,11 +89,12 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           name: row.name,
           dataType: row.type,
           fullType: row.type,
+          length: readStringLength(row.type),
           notNull: row.notnull === 1,
           defaultExpression: row.dflt_value,
           default: parseSqlDefault(row.dflt_value),
           primaryKey: row.pk > 0,
-          autoIncrement: details.autoIncrementColumns.has(row.name),
+          autoIncrement: row.name === rowIdAlias,
           computed: row.hidden === 2 || row.hidden === 3,
         })),
         indexes: await readIndexes(schema, table),

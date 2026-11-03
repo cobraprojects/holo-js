@@ -104,6 +104,9 @@ export function readForeignKeyName(definition: string, columnName: string | unde
   return tableLevel?.[1] ? { column: unquoteIdentifier(tableLevel[2]!), name: unquoteIdentifier(tableLevel[1]) } : undefined
 }
 
-export function declaresAutoIncrement(definition: string): boolean {
-  return /\bPRIMARY\s+KEY\b(?:\s+(?:ASC|DESC))?(?:\s+ON\s+CONFLICT\s+\w+)?\s+AUTOINCREMENT\b/i.test(definition)
+const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i
+
+export function readStringLength(type: string): number | undefined {
+  const match = type.trim().match(STRING_LENGTH_PATTERN)
+  return match ? Number(match[1]) : undefined
 }
