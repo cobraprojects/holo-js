@@ -1,15 +1,18 @@
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
-import { readEnumChecks, readForeignKeys, readStringLength, splitTableDefinitions, type ForeignKeyDefinition } from './sqlDefinitions'
+import { readEnumChecks, readForeignKeys, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
+import { parseCreateTableSql, type ForeignKeyConstraint } from './sqliteDefinitionGrammar'
+import { sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
-import type { DatabaseEnumCheckStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
+import type { DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
 type TableSqlRow = { sql: string | null }
 type ColumnRow = { name: string, type: string, notnull: number, dflt_value: string | null, pk: number, hidden: number }
 type IndexRow = { name: string, unique: number, origin: string, partial: number }
 type IndexColumnRow = { cid: number, name: string | null }
+type IndexKeyRow = { name: string, coll: string }
 type ForeignKeyRow = { id: number, seq: number, table: string, from: string, to: string | null, on_update: string, on_delete: string }
 type PrimaryKeyColumnRow = { name: string }
 
@@ -44,6 +47,16 @@ export async function readSQLiteTableObjects(connection: DatabaseContext, tableN
   return result.rows
 }
 
+export async function readSQLiteIndexKey(connection: DatabaseContext, tableName: string, indexName: string): Promise<IndexKeyColumn[]> {
+  const { schema } = splitTableName(tableName)
+  const result = await connection.introspectCompiled<IndexKeyRow>({
+    sql: 'SELECT name, coll FROM pragma_index_xinfo(?, ?) WHERE "key" = 1 ORDER BY seqno',
+    bindings: [indexName, schema],
+    source: `schema:introspect:indexKey:${tableName}:${indexName}`,
+  })
+  return result.rows.map(row => ({ name: row.name, collation: row.coll }))
+}
+
 export async function listSQLiteReferencingTables(connection: DatabaseContext, tableName: string): Promise<string[]> {
   const result = await connection.introspectCompiled<TableNameRow>({
     sql: 'SELECT DISTINCT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = \'table\' AND f."table" = ? ORDER BY m.name',
@@ -53,30 +66,30 @@ export async function listSQLiteReferencingTables(connection: DatabaseContext, t
   return result.rows.map(row => row.name)
 }
 
-function readDefinitionDetails(createTableSql: string) {
-  const declaredForeignKeys: ForeignKeyDefinition[] = []
-  const enumChecks: DatabaseEnumCheckStructure[] = []
-
-  for (const definition of splitTableDefinitions(createTableSql)) {
-    declaredForeignKeys.push(...readForeignKeys(definition))
-    enumChecks.push(...readEnumChecks(definition))
-  }
-
-  return { declaredForeignKeys, enumChecks }
+interface ForeignKeySignature {
+  readonly table: string
+  readonly from: readonly string[]
+  readonly to: readonly string[]
+  readonly onUpdate: string
+  readonly onDelete: string
 }
 
-function sameIdentifier(left: string, right: string | undefined): boolean {
-  return left.toLowerCase() === right?.toLowerCase()
+interface DeclaredForeignKey {
+  readonly name?: string
+  readonly signature: ForeignKeySignature
 }
 
-function sameIdentifiers(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((name, index) => sameIdentifier(name, right[index]))
+function sameForeignKeySignature(left: ForeignKeySignature, right: ForeignKeySignature): boolean {
+  return sameIdentifier(left.table, right.table)
+    && sameIdentifiers(left.from, right.from)
+    && sameIdentifiers(left.to, right.to)
+    && left.onUpdate === right.onUpdate
+    && left.onDelete === right.onDelete
 }
 
-function claimForeignKeyName(declared: ForeignKeyDefinition[], rows: readonly ForeignKeyRow[]): string | undefined {
-  const columns = rows.map(row => row.from)
-  const index = declared.findIndex(foreignKey => sameIdentifier(foreignKey.table, rows[0]?.table) && sameIdentifiers(foreignKey.columns, columns))
-  const [claimed] = index === -1 ? [] : declared.splice(index, 1)
+function claimForeignKeyName(unclaimed: DeclaredForeignKey[], signature: ForeignKeySignature): string | undefined {
+  const index = unclaimed.findIndex(declared => sameForeignKeySignature(declared.signature, signature))
+  const [claimed] = index === -1 ? [] : unclaimed.splice(index, 1)
   return claimed?.name
 }
 
@@ -112,7 +125,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     return result.rows.map(row => row.name)
   }
 
-  async function readForeignKeyStructures(schema: string, table: string, declared: readonly ForeignKeyDefinition[]): Promise<DatabaseForeignKeyStructure[]> {
+  async function readForeignKeyStructures(schema: string, table: string, declared: readonly ForeignKeyConstraint[]): Promise<DatabaseForeignKeyStructure[]> {
     const result = await introspect<ForeignKeyRow>('SELECT id, seq, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq', [table, schema], `schema:introspect:foreignKeys:${table}`)
     const parentPrimaryKeys = new Map<string, string[]>()
     const readParentPrimaryKey = async (parent: string): Promise<string[]> => {
@@ -120,24 +133,42 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       parentPrimaryKeys.set(parent, primaryKey)
       return primaryKey
     }
-    const unclaimed = [...declared]
-    const names = new Map<number, string | undefined>()
-    for (const id of new Set(result.rows.map(row => row.id))) {
-      names.set(id, claimForeignKeyName(unclaimed, result.rows.filter(row => row.id === id)))
-    }
+    const declaredForeignKey = async (foreignKey: ForeignKeyConstraint): Promise<DeclaredForeignKey> => ({
+      ...(foreignKey.name === undefined ? {} : { name: foreignKey.name }),
+      signature: {
+        table: foreignKey.references.table,
+        from: foreignKey.columns,
+        to: foreignKey.references.columns.length > 0 ? foreignKey.references.columns : await readParentPrimaryKey(foreignKey.references.table),
+        onUpdate: foreignKey.references.onUpdate,
+        onDelete: foreignKey.references.onDelete,
+      },
+    })
+    const unclaimed: DeclaredForeignKey[] = []
+    for (const foreignKey of [...declared].reverse()) unclaimed.push(await declaredForeignKey(foreignKey))
+
     const foreignKeys: DatabaseForeignKeyStructure[] = []
-    for (const row of result.rows) {
-      const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
-      if (to === undefined) continue
-      const name = names.get(row.id)
-      foreignKeys.push({
+    for (const id of new Set(result.rows.map(row => row.id))) {
+      const rows = result.rows.filter(row => row.id === id)
+      const resolved: (ForeignKeyRow & { to: string })[] = []
+      for (const row of rows) {
+        const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
+        if (to !== undefined) resolved.push({ ...row, to })
+      }
+      const name = rows[0] && claimForeignKeyName(unclaimed, {
+        table: rows[0].table,
+        from: rows.map(row => row.from),
+        to: resolved.map(row => row.to),
+        onUpdate: rows[0].on_update,
+        onDelete: rows[0].on_delete,
+      })
+      foreignKeys.push(...resolved.map(row => ({
         ...(name ? { name } : {}),
         table: row.table,
         from: row.from,
-        to,
+        to: row.to,
         onUpdate: row.on_update,
         onDelete: row.on_delete,
-      })
+      })))
     }
     return foreignKeys
   }
@@ -153,7 +184,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       const createTableSql = await readSQLiteCreateTableSql(connection, tableName)
       if (createTableSql === undefined) return undefined
 
-      const details = readDefinitionDetails(createTableSql ?? '')
+      const storedTable = parseCreateTableSql(createTableSql ?? '')
       const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
       const indexes = await readIndexes(schema, table)
       const rowIdAlias = readRowIdAlias(columns.rows, indexes)
@@ -173,8 +204,8 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           computed: row.hidden === 2 || row.hidden === 3,
         })),
         indexes,
-        foreignKeys: await readForeignKeyStructures(schema, table, details.declaredForeignKeys),
-        enumChecks: details.enumChecks,
+        foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
+        enumChecks: storedTable ? readEnumChecks(storedTable) : [],
       }
       return structure
     },

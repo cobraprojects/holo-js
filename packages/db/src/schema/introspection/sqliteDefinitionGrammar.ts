@@ -1,48 +1,68 @@
+import { SchemaError } from '../../core/errors'
 import { readNameToken, sliceTokens, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
 
-export type ColumnConstraintKind = 'PRIMARY KEY' | 'NOT NULL' | 'NULL' | 'UNIQUE' | 'CHECK' | 'DEFAULT' | 'COLLATE' | 'REFERENCES' | 'GENERATED' | 'DEFERRABLE' | 'UNKNOWN'
-export type TableConstraintKind = 'PRIMARY KEY' | 'UNIQUE' | 'CHECK' | 'FOREIGN KEY'
+export interface KeyColumn {
+  readonly name: string
+  readonly collation?: string
+  readonly descending: boolean
+}
 
-export interface ForeignKeyTarget {
+interface ForeignKeyClause {
   readonly table: string
   readonly columns: readonly string[]
+  readonly onDelete: string
+  readonly onUpdate: string
+  readonly match?: string
+  readonly deferral?: string
 }
 
-export interface ColumnConstraint {
-  readonly kind: ColumnConstraintKind
+interface ConstraintSource {
   readonly name?: string
   readonly text: string
-  readonly autoIncrement: boolean
-  readonly check?: SqlToken
-  readonly references?: ForeignKeyTarget
 }
 
-export interface ColumnDefinitionSql {
-  readonly kind: 'column'
+type PrimaryKeyConstraint = ConstraintSource & { readonly kind: 'PRIMARY KEY', readonly columns: readonly KeyColumn[], readonly autoIncrement: boolean }
+type UniqueConstraint = ConstraintSource & { readonly kind: 'UNIQUE', readonly columns: readonly KeyColumn[] }
+type CheckConstraint = ConstraintSource & { readonly kind: 'CHECK', readonly expression: readonly SqlToken[] }
+export type ForeignKeyConstraint = ConstraintSource & { readonly kind: 'FOREIGN KEY', readonly columns: readonly string[], readonly references: ForeignKeyClause }
+type CollateConstraint = ConstraintSource & { readonly kind: 'COLLATE', readonly collation: string }
+type ColumnAttributeConstraint = ConstraintSource & { readonly kind: 'NOT NULL' | 'NULL' | 'DEFAULT' | 'GENERATED' | 'DEFERRABLE' | 'NAME' }
+
+export type StoredConstraint
+  = | PrimaryKeyConstraint
+    | UniqueConstraint
+    | CheckConstraint
+    | ForeignKeyConstraint
+    | CollateConstraint
+    | ColumnAttributeConstraint
+
+export interface StoredColumn {
   readonly name: string
-  readonly nameAndType: string
-  readonly constraints: readonly ColumnConstraint[]
+  readonly type: string
+  readonly declaration: string
+  readonly text: string
+  readonly constraints: readonly StoredConstraint[]
 }
 
-export interface TableConstraintSql {
-  readonly kind: TableConstraintKind
-  readonly name?: string
-  readonly columns: readonly string[]
-  readonly check?: SqlToken
-  readonly references?: ForeignKeyTarget
+export interface StoredTable {
+  readonly columns: readonly StoredColumn[]
+  readonly constraints: readonly StoredConstraint[]
+  readonly options: string
 }
 
-export type TableDefinitionSql = ColumnDefinitionSql | TableConstraintSql
+type WithoutSource<TConstraint> = TConstraint extends ConstraintSource ? Omit<TConstraint, keyof ConstraintSource> : never
+type ConstraintBody = WithoutSource<StoredConstraint>
 
-const COLUMN_CONSTRAINT_STARTS = new Set(['CONSTRAINT', 'PRIMARY', 'NOT', 'NULL', 'UNIQUE', 'CHECK', 'DEFAULT', 'COLLATE', 'REFERENCES', 'GENERATED', 'AS', 'DEFERRABLE'])
 const TABLE_CONSTRAINT_STARTS = new Set(['CONSTRAINT', 'PRIMARY', 'UNIQUE', 'CHECK', 'FOREIGN'])
+const COLUMN_CONSTRAINT_KEYWORDS = new Set(['CONSTRAINT', 'NULL', 'UNIQUE', 'DEFAULT', 'COLLATE', 'REFERENCES', 'DEFERRABLE'])
 const FOREIGN_KEY_EVENTS = new Set(['DELETE', 'UPDATE', 'INSERT'])
-const TWO_WORD_FOREIGN_KEY_ACTIONS = new Set(['SET', 'NO'])
+const FOREIGN_KEY_ACTIONS = [['SET', 'NULL'], ['SET', 'DEFAULT'], ['CASCADE'], ['RESTRICT'], ['NO', 'ACTION']] as const
+const DEFAULT_FOREIGN_KEY_ACTION = 'NO ACTION'
 
 class TokenCursor {
   index = 0
 
-  constructor(private readonly tokens: readonly SqlToken[]) {}
+  constructor(private readonly sql: string, private readonly tokens: readonly SqlToken[]) {}
 
   get done(): boolean {
     return this.index >= this.tokens.length
@@ -53,7 +73,8 @@ class TokenCursor {
   }
 
   keyword(offset = 0): string | undefined {
-    return this.peek(offset)?.keyword
+    const token = this.peek(offset)
+    return token?.kind === 'word' ? token.keyword : undefined
   }
 
   next(): SqlToken | undefined {
@@ -62,160 +83,233 @@ class TokenCursor {
     return token
   }
 
-  skip(count: number): void {
-    this.index = Math.min(this.index + count, this.tokens.length)
-  }
-
   accept(...keywords: string[]): boolean {
     if (!keywords.every((keyword, offset) => this.keyword(offset) === keyword)) return false
-    this.skip(keywords.length)
+    this.index += keywords.length
     return true
   }
 
-  acceptGroup(): SqlToken | undefined {
-    return this.peek()?.kind === 'group' ? this.next() : undefined
+  expectGroup(): SqlToken {
+    const token = this.peek()
+    if (token?.kind !== 'group') this.fail()
+    this.index += 1
+    return token
   }
 
-  slice(start: number): SqlToken[] {
-    return this.tokens.slice(start, this.index)
+  expectName(): string {
+    const name = readNameToken(this.peek())
+    if (name === undefined) this.fail()
+    this.index += 1
+    return name
+  }
+
+  groupItems(): TokenCursor[] {
+    return splitTokensOnCommas(this.expectGroup().children ?? []).map(item => new TokenCursor(this.sql, item))
+  }
+
+  textFrom(start: number): string {
+    return sliceTokens(this.sql, this.tokens.slice(start, this.index))
+  }
+
+  fail(): never {
+    const token = this.peek()
+    const found = token ? `"${this.sql.slice(token.start, token.end)}"` : 'the end of the definition'
+    throw new SchemaError(`SQLite cannot read the stored table definition: unexpected ${found}.`)
   }
 }
 
-function readGroupNames(group: SqlToken | undefined): string[] {
-  return splitTokensOnCommas(group?.children ?? []).flatMap(item => readNameToken(item[0]) ?? [])
+function readGroupNames(cursor: TokenCursor): string[] {
+  return cursor.groupItems().map((item) => {
+    const name = item.expectName()
+    if (!item.done) item.fail()
+    return name
+  })
 }
 
-function readOptionalConstraintName(cursor: TokenCursor): string | undefined {
-  if (cursor.keyword() !== 'CONSTRAINT') return undefined
-  cursor.skip(1)
-  return readNameToken(cursor.next())
+function readDescending(cursor: TokenCursor): boolean {
+  if (cursor.accept('DESC')) return true
+  cursor.accept('ASC')
+  return false
+}
+
+function readKeyColumns(cursor: TokenCursor): { columns: KeyColumn[], autoIncrement: boolean } {
+  let autoIncrement = false
+  const columns = cursor.groupItems().map((item) => {
+    const name = item.expectName()
+    const collation = item.accept('COLLATE') ? item.expectName() : undefined
+    const descending = readDescending(item)
+    autoIncrement = item.accept('AUTOINCREMENT') || autoIncrement
+    if (!item.done) item.fail()
+    return { name, ...(collation === undefined ? {} : { collation }), descending }
+  })
+  return { columns, autoIncrement }
 }
 
 function skipConflictClause(cursor: TokenCursor): void {
-  if (cursor.accept('ON', 'CONFLICT')) cursor.skip(1)
+  if (cursor.accept('ON', 'CONFLICT')) cursor.expectName()
 }
 
-function skipDeferrableClause(cursor: TokenCursor): boolean {
-  if (!cursor.accept('NOT', 'DEFERRABLE') && !cursor.accept('DEFERRABLE')) return false
-  if (cursor.accept('INITIALLY')) cursor.skip(1)
-  return true
+function readDeferral(cursor: TokenCursor): string | undefined {
+  const start = cursor.index
+  if (!cursor.accept('NOT', 'DEFERRABLE') && !cursor.accept('DEFERRABLE')) return undefined
+  if (cursor.accept('INITIALLY') && !cursor.accept('DEFERRED') && !cursor.accept('IMMEDIATE')) cursor.fail()
+  return cursor.textFrom(start)
 }
 
-function skipForeignKeyArgument(cursor: TokenCursor): boolean {
-  if (cursor.keyword() === 'ON' && FOREIGN_KEY_EVENTS.has(cursor.keyword(1) ?? '')) {
-    cursor.skip(TWO_WORD_FOREIGN_KEY_ACTIONS.has(cursor.keyword(2) ?? '') ? 4 : 3)
-    return true
+function readForeignKeyAction(cursor: TokenCursor): string {
+  const action = FOREIGN_KEY_ACTIONS.find(words => cursor.accept(...words))
+  if (!action) cursor.fail()
+  return action.join(' ')
+}
+
+function readForeignKeyClause(cursor: TokenCursor): ForeignKeyClause {
+  const table = cursor.expectName()
+  const columns = cursor.peek()?.kind === 'group' ? readGroupNames(cursor) : []
+  const actions: Record<string, string> = {}
+  let match: string | undefined
+  while (cursor.keyword() === 'ON' || cursor.keyword() === 'MATCH') {
+    if (cursor.accept('MATCH')) {
+      match = cursor.expectName()
+      continue
+    }
+    cursor.accept('ON')
+    const event = cursor.keyword()
+    if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
+    cursor.next()
+    actions[event] = readForeignKeyAction(cursor)
   }
-  if (!cursor.accept('MATCH')) return false
-  cursor.skip(1)
-  return true
+  const deferral = readDeferral(cursor)
+  return {
+    table,
+    columns,
+    onDelete: actions.DELETE ?? DEFAULT_FOREIGN_KEY_ACTION,
+    onUpdate: actions.UPDATE ?? DEFAULT_FOREIGN_KEY_ACTION,
+    ...(match === undefined ? {} : { match }),
+    ...(deferral === undefined ? {} : { deferral }),
+  }
 }
 
-function readForeignKeyClause(cursor: TokenCursor): ForeignKeyTarget {
-  const table = readNameToken(cursor.next()) ?? ''
-  const columns = readGroupNames(cursor.acceptGroup())
-  while (skipForeignKeyArgument(cursor));
-  skipDeferrableClause(cursor)
-  return { table, columns }
+function startsColumnConstraint(cursor: TokenCursor): boolean {
+  const keyword = cursor.keyword()
+  if (keyword === undefined) return false
+  if (COLUMN_CONSTRAINT_KEYWORDS.has(keyword)) return true
+  switch (keyword) {
+    case 'PRIMARY': return cursor.keyword(1) === 'KEY'
+    case 'NOT': return cursor.keyword(1) === 'NULL' || cursor.keyword(1) === 'DEFERRABLE'
+    case 'CHECK':
+    case 'AS': return cursor.peek(1)?.kind === 'group'
+    case 'GENERATED': return cursor.keyword(1) === 'ALWAYS' && cursor.keyword(2) === 'AS'
+    default: return false
+  }
 }
 
 function skipDefaultValue(cursor: TokenCursor): void {
   const value = cursor.next()
-  if (value?.kind === 'symbol' && (value.value === '+' || value.value === '-')) cursor.skip(1)
+  if (value?.kind === 'symbol' && (value.value === '+' || value.value === '-')) cursor.next()
+  else if (value === undefined || value.kind === 'symbol') cursor.fail()
 }
 
-function skipGeneratedTail(cursor: TokenCursor): void {
-  cursor.accept('AS')
-  cursor.acceptGroup()
-  if (cursor.keyword() === 'STORED' || cursor.keyword() === 'VIRTUAL') cursor.skip(1)
+function readGeneratedTail(cursor: TokenCursor): ConstraintBody {
+  cursor.accept('GENERATED', 'ALWAYS')
+  if (!cursor.accept('AS')) cursor.fail()
+  cursor.expectGroup()
+  if (!cursor.accept('STORED')) cursor.accept('VIRTUAL')
+  return { kind: 'GENERATED' }
 }
 
-interface ConstraintBody {
-  readonly kind: ColumnConstraintKind
-  readonly autoIncrement?: boolean
-  readonly check?: SqlToken
-  readonly references?: ForeignKeyTarget
-}
-
-function readColumnConstraintBody(cursor: TokenCursor): ConstraintBody {
+function readColumnConstraintBody(cursor: TokenCursor, columnName: string): ConstraintBody {
+  if (cursor.done || cursor.keyword() === 'CONSTRAINT') return { kind: 'NAME' }
   if (cursor.accept('PRIMARY', 'KEY')) {
-    if (cursor.keyword() === 'ASC' || cursor.keyword() === 'DESC') cursor.skip(1)
+    const descending = readDescending(cursor)
     skipConflictClause(cursor)
-    return { kind: 'PRIMARY KEY', autoIncrement: cursor.accept('AUTOINCREMENT') }
+    return { kind: 'PRIMARY KEY', columns: [{ name: columnName, descending }], autoIncrement: cursor.accept('AUTOINCREMENT') }
   }
-  if (skipDeferrableClause(cursor)) return { kind: 'DEFERRABLE' }
-  if (cursor.accept('NOT', 'NULL')) {
-    skipConflictClause(cursor)
-    return { kind: 'NOT NULL' }
-  }
-  for (const kind of ['NULL', 'UNIQUE'] as const) {
-    if (cursor.accept(kind)) {
+  if (readDeferral(cursor) !== undefined) return { kind: 'DEFERRABLE' }
+  for (const kind of ['NOT NULL', 'NULL', 'UNIQUE'] as const) {
+    if (cursor.accept(...kind.split(' '))) {
       skipConflictClause(cursor)
-      return { kind }
+      return kind === 'UNIQUE' ? { kind, columns: [{ name: columnName, descending: false }] } : { kind }
     }
   }
-  if (cursor.accept('CHECK')) return { kind: 'CHECK', check: cursor.acceptGroup() }
+  if (cursor.accept('CHECK')) return { kind: 'CHECK', expression: cursor.expectGroup().children ?? [] }
   if (cursor.accept('DEFAULT')) {
     skipDefaultValue(cursor)
     return { kind: 'DEFAULT' }
   }
-  if (cursor.accept('COLLATE')) {
-    cursor.skip(1)
-    return { kind: 'COLLATE' }
-  }
-  if (cursor.accept('REFERENCES')) return { kind: 'REFERENCES', references: readForeignKeyClause(cursor) }
-  if (cursor.accept('GENERATED', 'ALWAYS') || cursor.keyword() === 'AS') {
-    skipGeneratedTail(cursor)
-    return { kind: 'GENERATED' }
-  }
-  cursor.skip(1)
-  return { kind: 'UNKNOWN' }
+  if (cursor.accept('COLLATE')) return { kind: 'COLLATE', collation: cursor.expectName() }
+  if (cursor.accept('REFERENCES')) return { kind: 'FOREIGN KEY', columns: [columnName], references: readForeignKeyClause(cursor) }
+  if (cursor.keyword() === 'GENERATED' || cursor.keyword() === 'AS') return readGeneratedTail(cursor)
+  return cursor.fail()
 }
 
-function readColumnConstraint(definition: string, cursor: TokenCursor): ColumnConstraint {
+function readConstraintName(cursor: TokenCursor): string | undefined {
+  return cursor.accept('CONSTRAINT') ? cursor.expectName() : undefined
+}
+
+function withSource(cursor: TokenCursor, start: number, name: string | undefined, body: ConstraintBody): StoredConstraint {
+  return { ...body, ...(name === undefined ? {} : { name }), text: cursor.textFrom(start) }
+}
+
+function readColumnConstraint(cursor: TokenCursor, columnName: string): StoredConstraint {
   const start = cursor.index
-  const name = readOptionalConstraintName(cursor)
-  const { kind, autoIncrement = false, check, references } = readColumnConstraintBody(cursor)
-  return {
-    kind,
-    ...(name === undefined ? {} : { name }),
-    text: sliceTokens(definition, cursor.slice(start)),
-    autoIncrement,
-    ...(check ? { check } : {}),
-    ...(references ? { references } : {}),
-  }
+  const name = readConstraintName(cursor)
+  return withSource(cursor, start, name, readColumnConstraintBody(cursor, columnName))
 }
 
 function skipTypeName(cursor: TokenCursor): void {
-  while (!cursor.done && !COLUMN_CONSTRAINT_STARTS.has(cursor.keyword() ?? '')) {
-    if (cursor.next()?.kind === 'group') return
+  while (!cursor.done && !startsColumnConstraint(cursor)) {
+    if (cursor.peek()?.kind === 'group') {
+      cursor.next()
+      return
+    }
+    cursor.expectName()
   }
 }
 
-function readColumnDefinition(definition: string, cursor: TokenCursor): ColumnDefinitionSql {
-  const name = readNameToken(cursor.next()) ?? ''
+function readColumn(sql: string, tokens: readonly SqlToken[]): StoredColumn {
+  const cursor = new TokenCursor(sql, tokens)
+  const name = cursor.expectName()
+  const typeStart = cursor.index
   skipTypeName(cursor)
-  const nameAndType = sliceTokens(definition, cursor.slice(0))
-  const constraints: ColumnConstraint[] = []
-  while (!cursor.done) constraints.push(readColumnConstraint(definition, cursor))
-  return { kind: 'column', name, nameAndType, constraints }
+  const type = cursor.textFrom(typeStart)
+  const declaration = cursor.textFrom(0)
+  const constraints: StoredConstraint[] = []
+  while (!cursor.done) constraints.push(readColumnConstraint(cursor, name))
+  return { name, type, declaration, text: cursor.textFrom(0), constraints }
 }
 
-function readTableConstraint(cursor: TokenCursor): TableConstraintSql {
-  const name = readOptionalConstraintName(cursor)
-  const named = name === undefined ? {} : { name }
+function readTableConstraintBody(cursor: TokenCursor): ConstraintBody {
+  if (cursor.done || cursor.keyword() === 'CONSTRAINT') return { kind: 'NAME' }
   if (cursor.accept('CHECK')) {
-    const check = cursor.acceptGroup()
-    return { kind: 'CHECK', ...named, columns: [], ...(check ? { check } : {}) }
+    const expression = cursor.expectGroup().children ?? []
+    skipConflictClause(cursor)
+    return { kind: 'CHECK', expression }
   }
   if (cursor.accept('FOREIGN', 'KEY')) {
-    const columns = readGroupNames(cursor.acceptGroup())
-    cursor.accept('REFERENCES')
-    return { kind: 'FOREIGN KEY', ...named, columns, references: readForeignKeyClause(cursor) }
+    const columns = readGroupNames(cursor)
+    if (!cursor.accept('REFERENCES')) cursor.fail()
+    return { kind: 'FOREIGN KEY', columns, references: readForeignKeyClause(cursor) }
   }
-  const kind = cursor.accept('PRIMARY', 'KEY') ? 'PRIMARY KEY' : 'UNIQUE'
-  cursor.accept('UNIQUE')
-  return { kind, ...named, columns: readGroupNames(cursor.acceptGroup()) }
+  if (cursor.accept('PRIMARY', 'KEY')) {
+    const key = readKeyColumns(cursor)
+    skipConflictClause(cursor)
+    return { kind: 'PRIMARY KEY', ...key }
+  }
+  if (!cursor.accept('UNIQUE')) cursor.fail()
+  const { columns } = readKeyColumns(cursor)
+  skipConflictClause(cursor)
+  return { kind: 'UNIQUE', columns }
+}
+
+function readTableConstraints(sql: string, tokens: readonly SqlToken[]): StoredConstraint[] {
+  const cursor = new TokenCursor(sql, tokens)
+  const constraints: StoredConstraint[] = []
+  while (!cursor.done) {
+    const start = cursor.index
+    const name = readConstraintName(cursor)
+    constraints.push(withSource(cursor, start, name, readTableConstraintBody(cursor)))
+  }
+  return constraints
 }
 
 function startsTableConstraint(tokens: readonly SqlToken[]): boolean {
@@ -223,35 +317,29 @@ function startsTableConstraint(tokens: readonly SqlToken[]): boolean {
   return first?.kind === 'word' && TABLE_CONSTRAINT_STARTS.has(first.keyword ?? '')
 }
 
-export function parseTableDefinition(definition: string): TableDefinitionSql {
-  const tokens = tokenizeSql(definition)
-  const cursor = new TokenCursor(tokens)
-  return startsTableConstraint(tokens) ? readTableConstraint(cursor) : readColumnDefinition(definition, cursor)
-}
-
-export interface CreateTableSql {
-  readonly definitions: string[]
-  readonly options: string
-}
-
-export function splitCreateTableSql(createTableSql: string): CreateTableSql | undefined {
+export function parseCreateTableSql(createTableSql: string): StoredTable | undefined {
   const tokens = tokenizeSql(createTableSql)
   const bodyIndex = tokens.findIndex(token => token.kind === 'group')
   const body = tokens[bodyIndex]
   if (!body?.children) return undefined
+  const definitions = splitTokensOnCommas(body.children)
+  const constraintsStart = definitions.findIndex(startsTableConstraint)
+  const columnDefinitions = constraintsStart === -1 ? definitions : definitions.slice(0, constraintsStart)
+  const constraintDefinitions = constraintsStart === -1 ? [] : definitions.slice(constraintsStart)
   return {
-    definitions: splitTokensOnCommas(body.children).map(item => sliceTokens(createTableSql, item)),
+    columns: columnDefinitions.map(definition => readColumn(createTableSql, definition)),
+    constraints: constraintDefinitions.flatMap(definition => readTableConstraints(createTableSql, definition)),
     options: sliceTokens(createTableSql, tokens.slice(bodyIndex + 1)),
   }
 }
 
 export function findCreateIndexNameToken(createIndexSql: string): SqlToken | undefined {
-  const cursor = new TokenCursor(tokenizeSql(createIndexSql))
+  const cursor = new TokenCursor(createIndexSql, tokenizeSql(createIndexSql))
   if (!cursor.accept('CREATE')) return undefined
   cursor.accept('UNIQUE')
   if (!cursor.accept('INDEX')) return undefined
   cursor.accept('IF', 'NOT', 'EXISTS')
-  if (cursor.peek(1)?.value === '.') cursor.skip(2)
+  if (cursor.peek(1)?.value === '.') cursor.index += 2
   const name = cursor.peek()
   return readNameToken(name) === undefined ? undefined : name
 }
