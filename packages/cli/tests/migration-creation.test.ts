@@ -122,12 +122,12 @@ describe('migration creation commands', () => {
   })
 
   it('retains and reports completed files when project preparation fails', async () => {
-    await write('server/db/migrations/2026_01_01_000000_existing.ts', "import missing from 'missing-migration-package'; export default missing\n")
-    await expect(runMakeMigration(io, root, { args: ['create_users_table'], flags: {} })).rejects.toThrow()
-    expect(await migrationFiles()).toHaveLength(2)
+    await write('server/models/Broken.ts', "import missing from 'missing-model-package'; export default missing\n")
+    await expect(runMakeMigration(io, root, { args: ['create_users_table'], flags: {} })).rejects.toThrow('missing-model-package')
+    expect(await migrationFiles()).toHaveLength(1)
     expect(output).toContain('Created migration: server/db/migrations/')
     await expect(runMakeMigration(io, root, { args: ['create_users_table'], flags: {} })).rejects.toThrow('already exists')
-    expect(await migrationFiles()).toHaveLength(2)
+    expect(await migrationFiles()).toHaveLength(1)
   })
 
   it('rejects a cache lock table hidden in an on-disk multi-table migration before writing a batch', async () => {
@@ -224,12 +224,12 @@ describe('migration creation commands', () => {
       first: { driver: 'database', table: 'first_cache', lockTable: 'first_locks' },
       second: { driver: 'database', table: 'second_cache', lockTable: 'second_locks' },
     } }`)
-    await write('server/db/migrations/2026_01_01_000000_existing.ts', "import missing from 'missing-migration-package'; export default missing\n")
-    await expect(runCacheTableCommand(io, root)).rejects.toThrow()
-    expect(await migrationFiles()).toHaveLength(3)
+    await write('server/models/Broken.ts', "import missing from 'missing-model-package'; export default missing\n")
+    await expect(runCacheTableCommand(io, root)).rejects.toThrow('missing-model-package')
+    expect(await migrationFiles()).toHaveLength(2)
     expect(output.split('Created migration:')).toHaveLength(3)
     await expect(runCacheTableCommand(io, root)).rejects.toThrow('already exists')
-    expect(await migrationFiles()).toHaveLength(3)
+    expect(await migrationFiles()).toHaveLength(2)
   })
 
   it('preserves Media skip-if-exists for a stale differently named physical-table migration', async () => {

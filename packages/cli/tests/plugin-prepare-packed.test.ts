@@ -88,6 +88,7 @@ async function createProjectWithPackedPlugin(tarballPath: string): Promise<strin
   temporaryDirectories.push(projectRoot)
   await mkdir(join(projectRoot, 'config'), { recursive: true })
   await mkdir(join(projectRoot, 'data'), { recursive: true })
+  await writeFile(join(projectRoot, 'data/database.sqlite'), '')
   await writeFile(join(projectRoot, 'package.json'), `${JSON.stringify({
     name: 'packed-plugin-project',
     private: true,

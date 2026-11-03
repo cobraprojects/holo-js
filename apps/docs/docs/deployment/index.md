@@ -43,7 +43,7 @@ npm run build
 `holo build` refreshes Holo's generated files (model and job registries, generated schema types) and then runs your framework's build. Extra arguments are passed to the framework.
 
 ::: warning
-`holo build` reads the tables and columns of your default connection's database and writes the generated schema types from them. It doesn't load or run migrations. The build environment needs the same database settings as production, and the database must be reachable: if it isn't, `holo build` fails with an error that names the connection. Run your migrations before building.
+`holo build` reads the tables and columns of your default connection's database and writes the generated schema types from them. It doesn't load or run migrations. The build environment needs the same database settings as production, and the database must be reachable: if it isn't, `holo build` fails with an error that names the connection. On SQLite, the database file must already exist where the build runs: `holo build` never creates it, so a fresh checkout or a Docker build stage without the file fails instead of building against an empty database. Run your migrations before building. `holo build` doesn't load your migration files either, so a migration that imports a development-only package doesn't break the build.
 :::
 
 ## Start the server
