@@ -3,12 +3,13 @@ import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
 import { readEnumChecks, readForeignKeys, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
 import { parseCreateTableSql, type ForeignKeyConstraint } from './sqliteDefinitionGrammar'
-import { sameIdentifier, sameIdentifiers } from './sqliteTokens'
+import { readNamesInSql, sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
-type TableSqlRow = { sql: string | null }
+type TableSqlRow = { name: string, sql: string | null }
+type ReferencingTableRow = { name: string, parent: string }
 type ColumnRow = { name: string, type: string, notnull: number, dflt_value: string | null, pk: number, hidden: number }
 type IndexRow = { name: string, unique: number, origin: string, partial: number }
 type IndexColumnRow = { cid: number, name: string | null }
@@ -20,31 +21,79 @@ export const SQLITE_AUTOINDEX_PREFIX = 'sqlite_autoindex_'
 
 export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
 
+export type SQLiteDependentObject = { schema: string, type: 'view' | 'trigger', name: string, sql: string }
+
+type SchemaObjectRow = SQLiteDependentObject & { tbl_name: string }
+
 const MAIN_SCHEMA = 'main'
+const TEMP_SCHEMA = 'temp'
 
 function splitTableName(tableName: string): { schema: string, table: string } {
   const { schema = MAIN_SCHEMA, table } = splitTablePath(tableName)
   return { schema, table }
 }
 
-export async function readSQLiteCreateTableSql(connection: DatabaseContext, tableName: string): Promise<string | null | undefined> {
+async function readSQLiteStoredTable(connection: DatabaseContext, tableName: string): Promise<TableSqlRow | undefined> {
   const { schema, table } = splitTableName(tableName)
   const result = await connection.introspectCompiled<TableSqlRow>({
-    sql: `SELECT sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type = 'table' AND name = ?`,
+    sql: `SELECT name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`,
     bindings: [table],
     source: `schema:introspect:table:${tableName}`,
   })
-  return result.rows[0]?.sql
+  return result.rows[0]
+}
+
+export async function readSQLiteCreateTableSql(connection: DatabaseContext, tableName: string): Promise<string | null | undefined> {
+  return (await readSQLiteStoredTable(connection, tableName))?.sql
+}
+
+export async function readSQLiteStoredTableName(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  const storedName = (await readSQLiteStoredTable(connection, tableName))?.name
+  const { schema } = splitTablePath(tableName)
+  return storedName === undefined || schema === undefined ? storedName : `${schema}.${storedName}`
 }
 
 export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
   const { schema, table } = splitTableName(tableName)
   const result = await connection.introspectCompiled<SQLiteTableObject>({
-    sql: `SELECT type, name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name`,
+    sql: `SELECT type, name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE tbl_name = ? COLLATE NOCASE AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name`,
     bindings: [table],
     source: `schema:introspect:objects:${tableName}`,
   })
   return result.rows
+}
+
+function referencesAny(object: SchemaObjectRow, names: readonly string[]): boolean {
+  return readNamesInSql(object.sql).some(referenced => names.some(name => sameIdentifier(name, referenced)))
+}
+
+function collectDependentViews(views: readonly SchemaObjectRow[], dependencies: readonly string[]): SchemaObjectRow[] {
+  const dependents = views.filter(view => referencesAny(view, dependencies))
+  if (dependents.length === 0) return []
+  const remaining = views.filter(view => !dependents.includes(view))
+  return [...dependents, ...collectDependentViews(remaining, dependents.map(view => view.name))]
+}
+
+async function readViewsAndTriggers(connection: DatabaseContext, schema: string): Promise<SchemaObjectRow[]> {
+  const result = await connection.introspectCompiled<Omit<SchemaObjectRow, 'schema'>>({
+    sql: `SELECT type, name, tbl_name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid`,
+    source: `schema:introspect:viewsAndTriggers:${schema}`,
+  })
+  return result.rows.map(row => ({ ...row, schema }))
+}
+
+export async function readSQLiteDependentObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteDependentObject[]> {
+  const { schema, table } = splitTableName(tableName)
+  const schemas = sameIdentifier(schema, TEMP_SCHEMA) ? [schema] : [schema, TEMP_SCHEMA]
+  const rows: SchemaObjectRow[] = []
+  for (const candidateSchema of schemas) rows.push(...await readViewsAndTriggers(connection, candidateSchema))
+  const views = collectDependentViews(rows.filter(row => row.type === 'view'), [table])
+  const dependencies = [table, ...views.map(view => view.name)]
+  const isOwnTrigger = (row: SchemaObjectRow): boolean => sameIdentifier(row.schema, schema) && sameIdentifier(row.tbl_name, table)
+  const triggers = rows.filter(row => row.type === 'trigger'
+    && !isOwnTrigger(row)
+    && (dependencies.some(name => sameIdentifier(name, row.tbl_name)) || referencesAny(row, dependencies)))
+  return [...views, ...triggers].map(({ schema: objectSchema, type, name, sql }) => ({ schema: objectSchema, type, name, sql }))
 }
 
 export async function readSQLiteIndexKey(connection: DatabaseContext, tableName: string, indexName: string): Promise<IndexKeyColumn[]> {
@@ -58,12 +107,13 @@ export async function readSQLiteIndexKey(connection: DatabaseContext, tableName:
 }
 
 export async function listSQLiteReferencingTables(connection: DatabaseContext, tableName: string): Promise<string[]> {
-  const result = await connection.introspectCompiled<TableNameRow>({
-    sql: 'SELECT DISTINCT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = \'table\' AND f."table" = ? ORDER BY m.name',
-    bindings: [tableName],
+  const { schema, table } = splitTableName(tableName)
+  const result = await connection.introspectCompiled<ReferencingTableRow>({
+    sql: `SELECT m.name, f."table" AS parent FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master m, pragma_foreign_key_list(m.name, ?) f WHERE m.type = 'table' ORDER BY m.name`,
+    bindings: [schema],
     source: `schema:introspect:referencingTables:${tableName}`,
   })
-  return result.rows.map(row => row.name)
+  return [...new Set(result.rows.filter(row => sameIdentifier(row.parent, table)).map(row => row.name))]
 }
 
 interface ForeignKeySignature {
@@ -175,7 +225,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
   return {
     async listTables() {
-      const result = await introspect<TableNameRow>('SELECT name FROM sqlite_master WHERE type = \'table\' AND name NOT LIKE \'sqlite_%\' ORDER BY name', [], 'schema:introspect:tables')
+      const result = await introspect<TableNameRow>('SELECT name FROM pragma_table_list WHERE schema = ? AND type IN (\'table\', \'virtual\') AND name NOT LIKE \'sqlite_%\' ORDER BY name', [MAIN_SCHEMA], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 

@@ -519,6 +519,104 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(children).pluck('parent_id')).toEqual([null])
     })
 
+    it.runIf(driver === 'sqlite')('refuses to rebuild a parent that a child references in another letter case inside a transaction', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "${parents.toUpperCase()}" ("id") ON DELETE CASCADE)`)
+      await db.table(parents).insert({ name: 'first' })
+      await db.table(children).insert({ parent_id: 1 })
+
+      for (const target of [parents, parents.toUpperCase(), `main.${parents}`, `MAIN.${parents.toUpperCase()}`]) {
+        await expect(db.transaction(tx => createSchemaService(tx).table(target, (table) => {
+          table.string('name').nullable().default('unnamed').change()
+        }))).rejects.toThrow(new SchemaError(
+          `SQLite cannot rebuild table "${target}" inside a transaction while foreign-key enforcement is on, because table "${children}" references it. Run the change outside the transaction or in a migration.`,
+        ))
+      }
+
+      expect(await db.table(children).pluck('parent_id')).toEqual([1])
+      await db.table(parents).insert({ id: 2 })
+      expect(await db.table(parents).orderBy('id').pluck('name')).toEqual(['first', null])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps views and other tables\' triggers that depend on a table working after change() rebuilds it', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const records = `holo_records_${suffix}`
+      const inbox = `holo_inbox_${suffix}`
+      const recordsView = `holo_records_view_${suffix}`
+      const namesView = `holo_names_view_${suffix}`
+      const sessionView = `holo_session_view_${suffix}`
+      onTestFinished(async () => {
+        await adapter.execute(`DROP VIEW IF EXISTS temp."${sessionView}"`)
+        await adapter.execute(`DROP VIEW IF EXISTS "${namesView}"`)
+        await adapter.execute(`DROP VIEW IF EXISTS "${recordsView}"`)
+        await schema.dropTable(inbox)
+        await schema.dropTable(records)
+      })
+      await schema.createTable(records, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(inbox, (table) => {
+        table.string('message')
+      })
+      await adapter.execute(`CREATE VIEW "${recordsView}" AS SELECT "id", "name" FROM "${records}"`)
+      await adapter.execute(`CREATE VIEW "${namesView}" AS SELECT "name" FROM "${recordsView}"`)
+      await adapter.execute(`CREATE TEMP VIEW "${sessionView}" AS SELECT "name" FROM main."${records}"`)
+      await adapter.execute(`CREATE TRIGGER "inbox_files_${suffix}" AFTER INSERT ON "${inbox}" BEGIN INSERT INTO "${records}" ("name") VALUES (NEW."message"); END`)
+      await adapter.execute(`CREATE TRIGGER "names_insert_${suffix}" INSTEAD OF INSERT ON "${namesView}" BEGIN INSERT INTO "${records}" ("name") VALUES (NEW."name"); END`)
+      await db.table(records).insert({ name: 'first' })
+
+      await schema.table(records, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(inbox).insert({ message: 'filed' })
+      await db.table(namesView).insert({ name: 'through view' })
+      await db.table(records).insert({ id: 4 })
+      expect(await db.table(recordsView).orderBy('id').pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+      expect(await db.table(namesView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+      expect(await db.table(sessionView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+    })
+
+    it.runIf(driver === 'sqlite')('rebuilds a mixed-case parent named in another letter case and keeps its rows, children, and triggers', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `Holo_Parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      const audits = `holo_audits_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+        await schema.dropTable(audits)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("id" INTEGER PRIMARY KEY, "name" TEXT)`)
+      await adapter.execute(`CREATE TABLE "${audits}" ("name" TEXT)`)
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "${parents.toLowerCase()}" ("id") ON DELETE CASCADE)`)
+      await adapter.execute(`CREATE TRIGGER "parents_audit_${suffix}" AFTER INSERT ON "${parents.toLowerCase()}" BEGIN INSERT INTO "${audits}" ("name") VALUES (NEW."name"); END`)
+      await db.table(parents).insert({ id: 1, name: 'first' })
+      await db.table(children).insert({ parent_id: 1 })
+
+      await schema.table(parents.toLowerCase(), (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      expect(await schema.getTables()).toContain(parents)
+      expect(await db.table(children).pluck('parent_id')).toEqual([1])
+      await db.table(parents).insert({ id: 2 })
+      expect(await db.table(parents).orderBy('id').pluck('name')).toEqual(['first', 'unnamed'])
+      expect(await db.table(audits).pluck('name')).toEqual(['first', 'unnamed'])
+      await db.table(parents).where('id', 1).delete()
+      expect(await db.table(children).count()).toBe(0)
+    })
+
     it.runIf(driver === 'postgres')('renames enum checks of a table created by raw SQL with its columns and the table', async () => {
       const { db, schema, adapter } = await openDatabase(driver)
       const name = `holo_raw_enum_${randomUUID().replaceAll('-', '').slice(0, 20)}`

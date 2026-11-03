@@ -10,8 +10,8 @@ export interface SqlToken {
 }
 
 const IDENTIFIER_QUOTES: Readonly<Record<string, string>> = { '"': '"', '`': '`', '[': ']' }
-const WORD_START_PATTERN = /[\p{L}_]/u
-const WORD_CHARACTER_PATTERN = /[\p{L}\p{N}_$]/u
+const WORD_START_PATTERN = /[A-Za-z_\u0080-\u{10FFFF}]/u
+const WORD_CHARACTER_PATTERN = /[\w$\u0080-\u{10FFFF}]/u
 const LITERAL_PATTERN = /x'[\da-f]*'|0x[\da-f]+|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/iy
 
 interface LexResult {
@@ -103,6 +103,14 @@ export function tokenizeSql(sql: string): SqlToken[] {
 
 export function readNameToken(token: SqlToken | undefined): string | undefined {
   return token?.kind === 'word' || token?.kind === 'quotedIdentifier' || token?.kind === 'string' ? token.value : undefined
+}
+
+export function readNamesInSql(sql: string): string[] {
+  const namesIn = (tokens: readonly SqlToken[]): string[] => tokens.flatMap((token) => {
+    const name = readNameToken(token)
+    return name === undefined ? namesIn(token.children ?? []) : [name]
+  })
+  return namesIn(tokenizeSql(sql))
 }
 
 export function splitTokensOnCommas(tokens: readonly SqlToken[]): SqlToken[][] {

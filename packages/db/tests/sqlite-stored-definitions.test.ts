@@ -222,6 +222,34 @@ describe('SQLite schema changes on tables created by raw SQL', () => {
     expect(await db.table('g').pluck('y')).toEqual([1])
   })
 
+  it('reads and changes a table whose unquoted column type uses a non-letter character SQLite accepts in identifiers', async () => {
+    const { db, schema, adapter } = await openDatabase('sqlite')
+    await adapter.execute('CREATE TABLE prices (id INTEGER PRIMARY KEY, amount €uro NOT NULL, note TEXT)')
+    await db.table('prices').insert({ id: 1, amount: 5, note: 'kept' })
+
+    await schema.table('prices', (table) => { table.text('note').nullable().change() })
+
+    expect((await readStructure(db, 'prices')).columns.map(({ name, fullType, notNull }) => ({ name, fullType, notNull }))).toEqual([
+      { name: 'id', fullType: 'INTEGER', notNull: false },
+      { name: 'amount', fullType: '€uro', notNull: true },
+      { name: 'note', fullType: 'TEXT', notNull: false },
+    ])
+    expect(await db.table('prices').pluck('amount')).toEqual([5])
+    await expect(db.table('prices').insert({ id: 2, note: 'missing amount' })).rejects.toThrow()
+  })
+
+  it('keeps the AUTOINCREMENT sequence of a table-level primary key when change() rebuilds the table', async () => {
+    const { db, schema, adapter } = await openDatabase('sqlite')
+    await adapter.execute('CREATE TABLE tickets (id INTEGER, title TEXT, PRIMARY KEY (id AUTOINCREMENT))')
+    await db.table('tickets').insert([{ title: 'first' }, { title: 'second' }])
+    await db.table('tickets').where('id', 2).delete()
+
+    await schema.table('tickets', (table) => { table.text('title').nullable().change() })
+
+    await db.table('tickets').insert({ title: 'third' })
+    expect(await db.table('tickets').orderBy('id').pluck('id')).toEqual([1, 3])
+  })
+
   it('treats a single-quoted CHECK operand as a string literal, not as an enum check on a column', async () => {
     const { db, schema, adapter } = await openDatabase('sqlite')
     await adapter.execute('CREATE TABLE s (id INTEGER PRIMARY KEY, status TEXT, CHECK (\'status\' IN (\'a\', \'b\')))')

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { holoRuntimeInternals, renderGeneratedSchemaModule } from '../src'
+import { holoRuntimeInternals, renderGeneratedSchemaModule, SchemaError } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -210,6 +210,24 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const rendered = renderGeneratedSchemaModule(definitions)
       expect(rendered).toContain('"parent_id": column.integer().nullable(),')
       expect(rendered).toContain('"keyless_code": column.text().nullable(),')
+    })
+
+    it.runIf(driver === 'sqlite')('reads an FTS5 virtual table from its columns, leaves out its shadow tables, and refuses to rebuild it', async () => {
+      const { db, schema, table } = await openDatabase(driver)
+      const docs = uniqueName('holo_read_docs')
+      onTestFinished(() => schema.dropTable(docs))
+      await db.executeCompiled({ sql: `CREATE VIRTUAL TABLE "${docs}" USING fts5(title, body, tokenize='porter')`, source: 'schema' })
+      await db.table(docs).insert({ title: 'Running', body: 'runners run' })
+
+      const definitions = await createSchemaReader(db).readGeneratedSchema()
+
+      expect(definitions.map(definition => definition.tableName).sort()).toEqual([docs, table.tableName].sort())
+      const rendered = renderGeneratedSchemaModule(definitions)
+      expect(rendered).toContain('"title": column.text().nullable(),')
+      expect(rendered).toContain('"body": column.text().nullable(),')
+      await expect(schema.table(docs, (table) => { table.text('title').change() }))
+        .rejects.toThrow(new SchemaError(`SQLite cannot read the definition of table "${docs}" to rebuild it.`))
+      expect((await db.queryCompiled<{ title: string }>({ sql: `SELECT title FROM "${docs}" WHERE "${docs}" MATCH 'run'`, source: 'test' })).rows).toEqual([{ title: 'Running' }])
     })
 
     it.runIf(driver === 'sqlite')('reads a parenthesized string default that contains parentheses as its literal value', async () => {

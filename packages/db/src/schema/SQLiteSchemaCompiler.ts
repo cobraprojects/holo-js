@@ -4,6 +4,7 @@ import { assertValidIdentifierPath } from './identifiers'
 import { withIndexName } from './introspection/sqlDefinitions'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
+import type { SQLiteDependentObject } from './introspection/sqlite'
 import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
@@ -59,6 +60,13 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
       { sql: 'DELETE FROM sqlite_sequence WHERE name = ?', bindings: [temporaryTableName], source },
       { sql: 'UPDATE sqlite_sequence SET name = ? WHERE name = ?', bindings: [temporaryTableName, tableName], source },
     ]
+  }
+
+  compileDropDependentObjects(objects: readonly SQLiteDependentObject[]): DDLStatement[] {
+    return [...objects].reverse().map(object => ({
+      sql: `DROP ${object.type === 'view' ? 'VIEW' : 'TRIGGER'} ${this.quoteIdentifier(object.schema)}.${this.quoteIdentifier(object.name)}`,
+      source: `schema:sqliteRebuild:detach:${object.type}:${object.name}`,
+    }))
   }
 
   compileRecreateIndex(tableName: string, fromIndexName: string, toIndexName: string, createIndexSql: string): DDLStatement[] | undefined {

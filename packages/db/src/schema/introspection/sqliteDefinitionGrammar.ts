@@ -12,8 +12,6 @@ interface ForeignKeyClause {
   readonly columns: readonly string[]
   readonly onDelete: string
   readonly onUpdate: string
-  readonly match?: string
-  readonly deferral?: string
 }
 
 interface ConstraintSource {
@@ -132,17 +130,18 @@ function readDescending(cursor: TokenCursor): boolean {
   return false
 }
 
+function readKeyColumn(item: TokenCursor): { column: KeyColumn, autoIncrement: boolean } {
+  const name = item.expectName()
+  const collation = item.accept('COLLATE') ? item.expectName() : undefined
+  const descending = readDescending(item)
+  const autoIncrement = item.accept('AUTOINCREMENT')
+  if (!item.done) item.fail()
+  return { column: { name, ...(collation === undefined ? {} : { collation }), descending }, autoIncrement }
+}
+
 function readKeyColumns(cursor: TokenCursor): { columns: KeyColumn[], autoIncrement: boolean } {
-  let autoIncrement = false
-  const columns = cursor.groupItems().map((item) => {
-    const name = item.expectName()
-    const collation = item.accept('COLLATE') ? item.expectName() : undefined
-    const descending = readDescending(item)
-    autoIncrement = item.accept('AUTOINCREMENT') || autoIncrement
-    if (!item.done) item.fail()
-    return { name, ...(collation === undefined ? {} : { collation }), descending }
-  })
-  return { columns, autoIncrement }
+  const keyColumns = cursor.groupItems().map(readKeyColumn)
+  return { columns: keyColumns.map(keyColumn => keyColumn.column), autoIncrement: keyColumns.some(keyColumn => keyColumn.autoIncrement) }
 }
 
 function skipConflictClause(cursor: TokenCursor): void {
@@ -162,31 +161,28 @@ function readForeignKeyAction(cursor: TokenCursor): string {
   return action.join(' ')
 }
 
+type ActionClause = { readonly event: string, readonly action: string }
+
+function readForeignKeyActions(cursor: TokenCursor): ActionClause[] {
+  if (cursor.accept('MATCH')) {
+    cursor.expectName()
+    return readForeignKeyActions(cursor)
+  }
+  if (!cursor.accept('ON')) return []
+  const event = cursor.keyword()
+  if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
+  cursor.next()
+  const clause = { event, action: readForeignKeyAction(cursor) }
+  return [clause, ...readForeignKeyActions(cursor)]
+}
+
 function readForeignKeyClause(cursor: TokenCursor): ForeignKeyClause {
   const table = cursor.expectName()
   const columns = cursor.peek()?.kind === 'group' ? readGroupNames(cursor) : []
-  const actions: Record<string, string> = {}
-  let match: string | undefined
-  while (cursor.keyword() === 'ON' || cursor.keyword() === 'MATCH') {
-    if (cursor.accept('MATCH')) {
-      match = cursor.expectName()
-      continue
-    }
-    cursor.accept('ON')
-    const event = cursor.keyword()
-    if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
-    cursor.next()
-    actions[event] = readForeignKeyAction(cursor)
-  }
-  const deferral = readDeferral(cursor)
-  return {
-    table,
-    columns,
-    onDelete: actions.DELETE ?? DEFAULT_FOREIGN_KEY_ACTION,
-    onUpdate: actions.UPDATE ?? DEFAULT_FOREIGN_KEY_ACTION,
-    ...(match === undefined ? {} : { match }),
-    ...(deferral === undefined ? {} : { deferral }),
-  }
+  const latestFirst = readForeignKeyActions(cursor).reverse()
+  readDeferral(cursor)
+  const actionFor = (event: string): string => latestFirst.find(clause => clause.event === event)?.action ?? DEFAULT_FOREIGN_KEY_ACTION
+  return { table, columns, onDelete: actionFor('DELETE'), onUpdate: actionFor('UPDATE') }
 }
 
 function startsColumnConstraint(cursor: TokenCursor): boolean {
@@ -317,8 +313,15 @@ function startsTableConstraint(tokens: readonly SqlToken[]): boolean {
   return first?.kind === 'word' && TABLE_CONSTRAINT_STARTS.has(first.keyword ?? '')
 }
 
+function declaresOrdinaryTable(cursor: TokenCursor): boolean {
+  if (!cursor.accept('CREATE')) return false
+  if (!cursor.accept('TEMP')) cursor.accept('TEMPORARY')
+  return cursor.accept('TABLE')
+}
+
 export function parseCreateTableSql(createTableSql: string): StoredTable | undefined {
   const tokens = tokenizeSql(createTableSql)
+  if (!declaresOrdinaryTable(new TokenCursor(createTableSql, tokens))) return undefined
   const bodyIndex = tokens.findIndex(token => token.kind === 'group')
   const body = tokens[bodyIndex]
   if (!body?.children) return undefined
