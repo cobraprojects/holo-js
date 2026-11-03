@@ -570,7 +570,11 @@ type PivotRecordOfRelation<TRelation>
   = TRelation extends { readonly pivotModel: () => infer TModel extends ModelDefinitionLike }
     ? Entity<ModelDefinitionTable<TModel>, RelatedRelationsOfDefinition<TModel>>
     : TRelation extends { readonly pivotTable: infer TPivotTable extends string | TableDefinition }
-      ? InferSelect<TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable>
+      ? InferSelect<ModelCastedTable<
+        TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable,
+        EmptyModelCastMap,
+        TRelation extends { readonly pivotTimestamps: true } ? 'created_at' | 'updated_at' : never
+      >>
       : Record<never, never>
 
 type LoadedPivotOfRelation<TRelation>
@@ -811,10 +815,42 @@ type CastedColumns<TColumns extends TableColumnsShape, TCasts extends ModelCastM
   [K in keyof TColumns]: CastedColumn<TColumns[K], K extends keyof TCasts ? TCasts[K] : never>
 }
 
-export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap>
-  = string extends keyof TCasts ? TTable
-    : [Extract<keyof TCasts, keyof TTable['columns']>] extends [never] ? TTable
-      : Omit<TTable, 'columns'> & { readonly columns: CastedColumns<TTable['columns'], TCasts> }
+type CastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap>
+  = [Extract<keyof TCasts, keyof TTable['columns']>] extends [never] ? TTable
+    : Omit<TTable, 'columns'> & { readonly columns: CastedColumns<TTable['columns'], TCasts> }
+
+type KnownCasts<TCasts extends ModelCastMap> = string extends keyof TCasts ? EmptyModelCastMap : TCasts
+
+type ColumnValueOf<TColumn> = TColumn extends ColumnDefinition<infer TValue, boolean, boolean, boolean, boolean> ? TValue : never
+
+type ModelDateCasts<TTable extends TableDefinition, TDateColumns extends string, TCasts extends ModelCastMap> = {
+  readonly [K in Extract<Exclude<TDateColumns, keyof KnownCasts<TCasts>>, keyof TTable['columns']> as string extends ColumnValueOf<TTable['columns'][K]> ? K : never]: 'datetime'
+}
+
+export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap, TDateColumns extends string = never>
+  = CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>
+
+export interface ModelDateOptions {
+  readonly timestamps?: boolean
+  readonly createdAtColumn?: string
+  readonly updatedAtColumn?: string
+  readonly softDeletes?: boolean
+  readonly deletedAtColumn?: string
+}
+
+export type EmptyModelDateOptions = Record<never, never>
+
+type TimestampColumns<TOptions extends ModelDateOptions>
+  = TOptions extends { readonly timestamps: false } ? never
+    : | (TOptions extends { readonly createdAtColumn: infer TColumn extends string } ? TColumn : 'created_at')
+      | (TOptions extends { readonly updatedAtColumn: infer TColumn extends string } ? TColumn : 'updated_at')
+
+type SoftDeleteColumn<TOptions extends ModelDateOptions>
+  = TOptions extends { readonly softDeletes: true }
+    ? TOptions extends { readonly deletedAtColumn: infer TColumn extends string } ? TColumn : 'deleted_at'
+    : never
+
+export type ModelDateColumns<TOptions extends ModelDateOptions> = TimestampColumns<TOptions> | SoftDeleteColumn<TOptions>
 
 export type ModelAccessor = (value: unknown, entity: AnyEntity) => unknown
 export type ModelMutator = (value: unknown, entity?: AnyEntity) => unknown

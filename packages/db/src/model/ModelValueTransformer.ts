@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { normalizeDialectReadValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { normalizeDialectReadValue, normalizeDialectWriteValue, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -110,7 +110,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   serializeAttributeValue(key: string, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(ownEntry(this.definition.casts, key))
+    const builtInCast = this.parseBuiltInCast(this.resolveCast(key))
     if (
       value instanceof Date
       && builtInCast
@@ -129,11 +129,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     source: 'serialized' | 'database' = 'serialized',
     dialect: SchemaDialectName = this.getSchemaDialectName(),
   ): Partial<ModelRecord<TTable>> {
-    const casts = { ...this.definition.casts, ...extraCasts }
     return Object.fromEntries(
       Object.entries(values).map(([key, value]) => {
+        const cast = ownEntry(extraCasts, key) ?? this.resolveCast(key)
         const normalized = this.applySchemaReadNormalization(key, value, source, dialect)
-        return [key, this.isNativeJsonCast(key, casts[key]) ? normalized : this.applyCastGet(casts[key], normalized)]
+        return [key, this.isNativeJsonCast(key, cast) ? normalized : this.applyCastGet(cast, normalized)]
       }),
     ) as Partial<ModelRecord<TTable>>
   }
@@ -170,9 +170,23 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   castForStorage(key: string, value: unknown): unknown {
-    const cast = ownEntry(this.definition.casts, key)
+    const cast = this.resolveCast(key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
+  }
+
+  resolveCast(key: string): ModelCastDefinition | undefined {
+    return ownEntry(this.definition.casts, key) ?? (this.isModelDateColumn(key) ? 'datetime' : undefined)
+  }
+
+  private isModelDateColumn(key: string): boolean {
+    const { createdAtColumn, updatedAtColumn, deletedAtColumn } = this.definition
+    if (key !== createdAtColumn && key !== updatedAtColumn && key !== deletedAtColumn) {
+      return false
+    }
+
+    const column = ownEntry(this.definition.table.columns, key)
+    return !!column && storesText(column)
   }
 
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {

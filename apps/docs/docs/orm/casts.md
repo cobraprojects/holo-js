@@ -158,6 +158,8 @@ export default defineModel('users', {
 })
 ```
 
+The model's `created_at`, `updated_at` and soft-delete `deleted_at` columns, and the pivot columns of `withTimestamps()`, need no cast. Holo reads and types them as `Date` whatever the column type, as Laravel does. A cast you set on one of them wins.
+
 ### Vector dimensions
 
 Add the expected number of dimensions to `'vector'` and Holo rejects arrays of any other length:

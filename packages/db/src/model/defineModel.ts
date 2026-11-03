@@ -32,12 +32,15 @@ import type {
   DefineModelOptions,
   EntityWithLoaded,
   EmptyModelCastMap,
+  EmptyModelDateOptions,
   EmptyScopeMap,
   GeneratedSchemaTable,
   ModelAttributeKey,
   ModelCastedTable,
   ModelCastMap,
   ModelColumnName,
+  ModelDateColumns,
+  ModelDateOptions,
   ModelDefinition,
   ModelRecord,
   ModelScopesDefinition,
@@ -62,7 +65,13 @@ type CastedModelOptions<
   TRelations extends RelationMap,
   THidden extends readonly string[],
   TCasts extends ModelCastMap,
-> = DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden, readonly casts?: TCasts }
+  TDateOptions extends ModelDateOptions,
+> = DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden, readonly casts?: TCasts } & TDateOptions
+type ModelTable<
+  TTable extends TableDefinition,
+  TCasts extends ModelCastMap,
+  TDateOptions extends ModelDateOptions,
+> = ModelCastedTable<TTable, TCasts, ModelDateColumns<TDateOptions>>
 type SharedModelDefinitionFields<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
@@ -133,10 +142,11 @@ export function defineModel<
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   table: TTable,
-  options?: CastedModelOptions<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden, TCasts>,
-): StaticModelApi<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TColumns extends ColumnShapeInput,
@@ -144,21 +154,23 @@ export function defineModel<
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   tableName: TName,
   builder: (table: TableDefinitionBuilder<TName, EmptyColumnShape>) => ModelTableBuilderResult<TName, TColumns>,
-  options?: CastedModelOptions<ModelCastedTable<BoundTableDefinition<TName, TColumns>, TCasts>, TScopes, TRelations, THidden, TCasts>,
-): StaticModelApi<ModelCastedTable<BoundTableDefinition<TName, TColumns>, TCasts>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   tableName: TName,
-  options?: CastedModelOptions<ModelCastedTable<GeneratedSchemaTable<TName>, TCasts>, TScopes, TRelations, THidden, TCasts>,
-): StaticModelApi<ModelCastedTable<GeneratedSchemaTable<TName>, TCasts>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel(
   tableOrName: string | TableDefinition,
   builderOrOptions?:
@@ -189,10 +201,11 @@ export function defineModelFromTable<
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
   const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   table: TTable,
-  options?: CastedModelOptions<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden, TCasts>,
-): StaticModelApi<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,

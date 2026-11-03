@@ -45,6 +45,28 @@ export default defineModel('users', {
 })
 ```
 
+You can instead give those columns the new SQLite types with a migration that redeclares each one with [`change()`](/database/migrations#change). Holo rebuilds the table with Laravel's type name and keeps the rows, and the next `npx holo migrate` writes the column's real type to the generated schema. This is the only way to type a pivot column, such as one read through `withPivot()`, because pivot columns have no model casts. It also makes the generated types from your existing database match those from a fresh database, such as one in CI, that ran the same migrations:
+
+```ts [server/db/migrations/2026_01_01_000000_restore_sqlite_column_types.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('post_tag', (table) => {
+      table.boolean('is_primary').default(false).change()
+    })
+    await schema.table('users', (table) => {
+      table.datetime('email_verified_at').nullable().change()
+      table.json('preferences').nullable().change()
+    })
+  },
+})
+```
+
+Restate `nullable()` and `default()` on each changed column, because `change()` replaces the column's definition. A `json()` column is still `TEXT` on SQLite, so keep its `'json'` cast.
+
+The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as ISO 8601 text, as Holo writes SQLite dates.
+
 PostgreSQL and MySQL state booleans, JSON, timestamps and enum values themselves, so their models need no new casts. See [SQLite tables created before 0.6](/orm/casts#sqlite-tables-created-before-0-6).
 
 Two cast writes change:

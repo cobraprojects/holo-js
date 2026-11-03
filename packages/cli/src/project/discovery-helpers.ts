@@ -230,6 +230,12 @@ export function collectBuiltInCasts(casts: Readonly<Record<string, unknown>> | u
   return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
+export function collectModelDateColumns(definition: CliModelReference['definition']): readonly string[] | undefined {
+  const columns = [definition.createdAtColumn, definition.updatedAtColumn, definition.deletedAtColumn]
+    .filter((column): column is string => typeof column === 'string')
+  return columns.length > 0 ? [...new Set(columns)] : undefined
+}
+
 export function isUnresolvedModelSchemaError(error: unknown): boolean {
   return error instanceof Error
     && (error.message.includes('is not present in the Generated schema')
