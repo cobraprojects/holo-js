@@ -11,13 +11,13 @@ import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
 import { createSchemaReader } from './introspection'
 import { toTableDefinition } from './introspection/definitions'
-import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, splitCreateTableSql, withoutInlinePrimaryKey } from './introspection/sqlDefinitions'
+import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, withoutForeignKeyDefinitions, withoutUniqueDefinitions, splitCreateTableSql, withoutInlinePrimaryKey } from './introspection/sqlDefinitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement, UniqueBacking } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
-import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
   name: string
@@ -543,14 +543,6 @@ export class SchemaService {
     }
   }
 
-  private assertForeignKeyCapability(action: string): void {
-    if (this.isSqlite() || !this.connection.getCapabilities().ddlAlterSupport) {
-      throw new CapabilityError(
-        `SchemaService does not support ${action} for dialect "${this.connection.getDialect().name}".`,
-      )
-    }
-  }
-
   private resolveColumnDefinition(columnName: string, column: AnyColumnBuilder): AnyColumnDefinition {
     return column.toDefinition({ name: columnName })
   }
@@ -686,6 +678,9 @@ export class SchemaService {
         await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, operation.indexName)))
         return
       case 'dropUnique':
+        if (this.isSqlite() && await this.dropSqliteInlineUnique(tableName, operation.indexName, operation.columns)) {
+          return
+        }
         await this.execute(this.createCompiler().compile(
           dropUniqueOperation(tableName, operation.indexName, await this.resolveUniqueBacking(tableName, operation.indexName)),
         ))
@@ -700,16 +695,24 @@ export class SchemaService {
         ))
         return
       case 'createForeignKey':
-        this.assertForeignKeyCapability('adding foreign keys')
         assertValidIdentifierSegment(operation.columnName, 'Foreign key column')
         assertValidIdentifierPath(operation.reference.table, 'Foreign key table')
         assertValidIdentifierSegment(operation.reference.column, 'Foreign key column')
+        if (this.isSqlite()) {
+          await this.addSqliteForeignKey(tableName, operation.columnName, operation.reference, operation.constraintName)
+          return
+        }
+        this.assertAlterCapability('adding foreign keys')
         await this.execute(this.createCompiler().compile(
           createForeignKeyOperation(tableName, operation.columnName, operation.reference, operation.constraintName),
         ))
         return
       case 'dropForeignKey':
-        this.assertForeignKeyCapability('dropping foreign keys')
+        if (this.isSqlite()) {
+          await this.dropSqliteForeignKey(tableName, operation.constraintName, operation.columns)
+          return
+        }
+        this.assertAlterCapability('dropping foreign keys')
         await this.execute(this.createCompiler().compile(
           dropForeignKeyOperation(tableName, operation.constraintName),
         ))
@@ -860,6 +863,53 @@ export class SchemaService {
     await this.connection.transaction(async (tx) => {
       await new SchemaService(tx).execute(statements)
     })
+  }
+
+  private async addSqliteForeignKey(
+    tableName: string,
+    columnName: string,
+    reference: ForeignKeyReference,
+    constraintName?: string,
+  ): Promise<void> {
+    const foreignKey = new SQLiteSchemaCompiler(identifier => this.connection.getDialect().quoteIdentifier(identifier))
+      .compileTableForeignKey(tableName, columnName, reference, constraintName)
+    await this.rebuildSqliteTable(tableName, (structure, definitions) => {
+      if (structure.foreignKeys.some(existing => existing.name === foreignKey.name)) {
+        throw new SchemaError(`SQLite cannot add foreign key "${foreignKey.name}" to table "${tableName}" because the table already has a foreign key with that name.`)
+      }
+      return [...definitions, foreignKey.definition]
+    })
+  }
+
+  private async dropSqliteForeignKey(tableName: string, constraintName: string, columns?: readonly string[]): Promise<void> {
+    const unnamedColumn = columns?.length === 1 ? columns[0] : undefined
+    await this.rebuildSqliteTable(tableName, (_structure, definitions) => {
+      const kept = withoutForeignKeyDefinitions(definitions, foreignKey => foreignKey.name === undefined
+        ? foreignKey.column === unnamedColumn
+        : foreignKey.name === constraintName)
+      if (!kept) {
+        throw new SchemaError(`SQLite cannot drop missing foreign key "${constraintName}" on table "${tableName}".`)
+      }
+      return kept
+    })
+  }
+
+  private async dropSqliteInlineUnique(tableName: string, indexName: string, columns?: readonly string[]): Promise<boolean> {
+    const indexes = (await createSchemaReader(this.connection).readTableStructure(tableName))?.indexes ?? []
+    const index = indexes.find(candidate => candidate.name === indexName)
+    const inlineColumns = index ? (index.name.startsWith('sqlite_autoindex_') ? index.columns : undefined) : columns
+    if (!inlineColumns) {
+      return false
+    }
+
+    await this.rebuildSqliteTable(tableName, (_structure, definitions) => {
+      const kept = withoutUniqueDefinitions(definitions, inlineColumns)
+      if (!kept) {
+        throw new SchemaError(`SQLite cannot drop missing unique "${indexName}" on table "${tableName}".`)
+      }
+      return kept
+    })
+    return true
   }
 
   private async rebuildSqliteTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {

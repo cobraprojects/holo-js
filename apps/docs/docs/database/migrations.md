@@ -1048,7 +1048,13 @@ await schema.table('tenants', (table) => {
 })
 ```
 
-On SQLite, those columns are unique through an index that SQLite creates itself, and `dropUnique()` can't drop it.
+On SQLite, those columns are unique through an index that SQLite creates itself, named `sqlite_autoindex_{table}_{n}`. SQLite can't drop that index, so Holo rebuilds the table without the unique, as it does for [`change()`](#change). Drop it by its columns, or by that name from `schema.getIndexes()`:
+
+```ts
+await schema.table('tenants', (table) => {
+  table.dropUnique(['owner_email'])
+})
+```
 
 ### renameIndex()
 
@@ -1090,9 +1096,11 @@ await schema.createTable('post_tags', (table) => {
 
 Holo names foreign keys `{table}_{column}_foreign` by default. The `post_tags` example names its foreign keys `post_tags_post_id_foreign` and `post_tags_tag_fk`.
 
+Inside `table()`, `foreign()` and `foreignId().constrained()` add the key to an existing table. SQLite can't add a foreign key to an existing table, so Holo rebuilds the table with the new key, as Laravel does. The rebuild keeps every other column, index, trigger and foreign key, and the rows of tables that reference it, as for [`change()`](#change). Existing rows that break the new key make it fail and leave the table unchanged.
+
 ### dropForeign()
 
-Drops a foreign key by its constraint name, or by its columns. Available inside `table()`. Not supported on SQLite.
+Drops a foreign key by its constraint name, or by its columns. Available inside `table()`. On SQLite, Holo rebuilds the table without the key, as for [`change()`](#change).
 
 ```ts
 await schema.table('posts', (table) => {
@@ -1110,6 +1118,8 @@ await schema.table('posts', (table) => {
 
 Dropping a foreign key that doesn't exist fails.
 
+On SQLite, Holo versions before 0.5.7 created foreign keys without a constraint name. `dropForeign(['user_id'])` and `dropConstrainedForeignId('user_id')` also drop such an unnamed key on that column.
+
 On PostgreSQL, Holo versions before 0.5.7 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
 
 ```ts
@@ -1120,7 +1130,7 @@ await schema.table('posts', (table) => {
 
 ### dropConstrainedForeignId()
 
-Drops the foreign key `{table}_{column}_foreign`, then the column. Available inside `table()`. Not supported on SQLite. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
+Drops the foreign key `{table}_{column}_foreign`, then the column. Available inside `table()`. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
 
 ```ts
 await schema.table('posts', (table) => {
@@ -1154,8 +1164,8 @@ await schema.table('users', (table) => {
 })
 ```
 
-::: warning SQLite limits
-On SQLite, `schema.table()` can add, change, rename and drop columns, and add, drop and rename indexes. It **can't** add or drop foreign keys on an existing table, so `foreign()`, `dropForeign()` and `dropConstrainedForeignId()` throw a `CapabilityError` instead of guessing. Put foreign keys in `createTable()` so they work on every database.
+::: tip SQLite table rebuilds
+On SQLite, `schema.table()` can add, change, rename and drop columns, add, drop and rename indexes, and add and drop primary and foreign keys. Changing a column, adding or dropping a primary or foreign key, and dropping a unique that SQLite created inline rebuild the table, as described under [`change()`](#change).
 :::
 
 ## Command reference

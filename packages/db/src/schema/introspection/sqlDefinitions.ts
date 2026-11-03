@@ -111,14 +111,22 @@ const TABLE_FOREIGN_KEY_PATTERN = new RegExp(
   'i',
 )
 
-export function readForeignKeyName(definition: string, columnName: string | undefined): { column: string, name: string } | undefined {
+export interface ForeignKeyDefinition {
+  readonly column: string
+  readonly name?: string
+}
+
+export function readForeignKey(definition: string, columnName: string | undefined): ForeignKeyDefinition | undefined {
   if (columnName) {
+    if (!readInlineColumnConstraints(definition).references) return undefined
     const inline = definition.match(INLINE_FOREIGN_KEY_NAME_PATTERN)
-    return inline ? { column: columnName, name: unquoteIdentifier(inline[1]!) } : undefined
+    return inline ? { column: columnName, name: unquoteIdentifier(inline[1]!) } : { column: columnName }
   }
 
   const tableLevel = definition.match(TABLE_FOREIGN_KEY_PATTERN)
-  return tableLevel?.[1] ? { column: unquoteIdentifier(tableLevel[2]!), name: unquoteIdentifier(tableLevel[1]) } : undefined
+  if (!tableLevel) return undefined
+  const column = unquoteIdentifier(tableLevel[2]!)
+  return tableLevel[1] ? { column, name: unquoteIdentifier(tableLevel[1]) } : { column }
 }
 
 const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i
@@ -154,4 +162,67 @@ const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
 
 export function withoutInlinePrimaryKey(definition: string): string {
   return definition.replace(INLINE_PRIMARY_KEY_PATTERN, (match, quoted: string | undefined) => quoted ?? '')
+}
+
+const IDENTIFIER = `(?:${IDENTIFIER_PATTERN})`
+const QUOTED_TEXT_GROUP = `(${QUOTED_TEXT_PATTERN.source})`
+const INLINE_FOREIGN_KEY_PATTERN = new RegExp(
+  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?REFERENCES\\s+${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})?(?:\\s*\\(\\s*${IDENTIFIER}(?:\\s*,\\s*${IDENTIFIER})*\\s*\\))?`
+  + '(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:SET\\s+NULL|SET\\s+DEFAULT|CASCADE|RESTRICT|NO\\s+ACTION)|\\s+MATCH\\s+\\w+|\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)*',
+  'gi',
+)
+const INLINE_UNIQUE_PATTERN = new RegExp(
+  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE(?:\\s+ON\\s+CONFLICT\\s+\\w+)?\\b`,
+  'gi',
+)
+const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
+
+function withoutInlineClause(definition: string, pattern: RegExp): string | undefined {
+  const rewritten = definition.replace(pattern, (match, quoted: string | undefined) => quoted ?? '')
+  return rewritten === definition ? undefined : rewritten
+}
+
+function readTableUniqueColumns(definition: string): string[] | undefined {
+  const match = definition.match(TABLE_UNIQUE_PATTERN)
+  return match?.[1]?.split(',').map(column => readColumnDefinitionName(column.trim()) ?? column.trim())
+}
+
+function rewriteDefinitions(
+  definitions: readonly string[],
+  rewrite: (definition: string, columnName: string | undefined) => string | null | undefined,
+): string[] | undefined {
+  let rewroteAny = false
+  const kept: string[] = []
+  for (const definition of definitions) {
+    const rewritten = rewrite(definition, readColumnDefinitionName(definition))
+    if (rewritten === undefined) {
+      kept.push(definition)
+      continue
+    }
+    rewroteAny = true
+    if (rewritten !== null) kept.push(rewritten)
+  }
+  return rewroteAny ? kept : undefined
+}
+
+export function withoutForeignKeyDefinitions(
+  definitions: readonly string[],
+  matches: (foreignKey: ForeignKeyDefinition) => boolean,
+): string[] | undefined {
+  return rewriteDefinitions(definitions, (definition, columnName) => {
+    const foreignKey = readForeignKey(definition, columnName)
+    if (!foreignKey || !matches(foreignKey)) return undefined
+    return columnName ? withoutInlineClause(definition, INLINE_FOREIGN_KEY_PATTERN) : null
+  })
+}
+
+export function withoutUniqueDefinitions(definitions: readonly string[], columns: readonly string[]): string[] | undefined {
+  return rewriteDefinitions(definitions, (definition, columnName) => {
+    if (columnName) {
+      return columns.length === 1 && columns[0] === columnName && readInlineColumnConstraints(definition).unique
+        ? withoutInlineClause(definition, INLINE_UNIQUE_PATTERN)
+        : undefined
+    }
+    return readTableUniqueColumns(definition)?.join('\0') === columns.join('\0') ? null : undefined
+  })
 }
