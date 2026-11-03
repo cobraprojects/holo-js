@@ -15,7 +15,16 @@ const posts = await DB.table('posts')
 
 ## Joins
 
-Every join takes the table, the left column, an operator, and the right column. Qualify columns with the table name (`users.id`) when both tables have a column with the same name.
+Every join takes the table, the left column, an operator, and the right column. Qualify columns with the table name (`users.id`) when both tables have a column with the same name. Select every column of one table with `table.*`, as in Laravel:
+
+```ts
+const posts = await Post.query()
+  .join('post_stats', 'post_stats.post_id', '=', 'posts.id')
+  .select('posts.*')
+  .get()
+```
+
+A model query accepts `table.*` for its own table and for the tables it joined.
 
 ### join()
 
@@ -93,7 +102,7 @@ Holo adds `null` to the types that an outer join can leave empty:
 - `leftJoin()` makes the joined table's columns nullable.
 - `rightJoin()` makes the earlier tables' columns nullable.
 
-When two tables share a column name, select them with distinct aliases (`'posts.id as postId'`).
+When two tables share a column name, select them with distinct aliases (`'posts.id as postId'`). `select('posts.*')` adds every column of `posts` to the result type.
 
 Joins to a table name (a string) or to a subquery are not typed by column, so select their columns with plain string names.
 
