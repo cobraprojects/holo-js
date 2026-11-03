@@ -367,6 +367,36 @@ describe.each(drivers)('an untyped model with a boolean cast on %s', (driver) =>
     expect((await Untyped.findOrFail(created.get('id'))).toJSON()).toMatchObject({ active: true, enabled: false })
     expect(await Untyped.where('active', 1).count()).toBe(2)
   })
+
+  it('finds the rows it wrote when where() compares a text or integer column with a boolean', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const name = await createTable('toggles', (table) => {
+      table.id()
+      table.string('label')
+      table.integer('active')
+    })
+    const Toggle = defineModel(name, { connectionName: 'analytics', name: 'UntypedToggle', fillable: ['label', 'active'], timestamps: false, casts: { label: 'boolean', active: 'boolean' } })
+
+    await Toggle.create({ label: true, active: true })
+    await Toggle.create({ label: false, active: false })
+
+    expect(await Toggle.where('label', true).count()).toBe(1)
+    expect(await Toggle.where('active', true).count()).toBe(1)
+    expect(await Toggle.where('active', false).count()).toBe(1)
+  })
+
+  it('binds a real boolean to a boolean column that a definition describes', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const name = await createTable('switches', (table) => {
+      table.id()
+      table.boolean('enabled')
+    })
+    const switches = defineGeneratedTable(name, { id: column.id(), enabled: column.boolean() })
+    await DB.table(switches, 'analytics').insert([{ enabled: true }, { enabled: false }])
+
+    expect(DB.table(switches, 'analytics').where('enabled', true).toSQL().bindings).toEqual([driver === 'postgres' ? true : 1])
+    expect(await DB.table(switches, 'analytics').where('enabled', true).count()).toBe(1)
+  })
 })
 
 describe.each(drivers)('an untyped model with guarded: [] on %s', (driver) => {
