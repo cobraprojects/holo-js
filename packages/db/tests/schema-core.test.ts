@@ -672,6 +672,18 @@ describe('native schema core', () => {
     ])
   })
 
+  it('drops uniques of a schema-qualified table by their conventional column names', () => {
+    const builder = new TableMutationBuilder('tenant.posts')
+
+    builder.dropUnique(['email'])
+    builder.dropUnique('posts_email_key')
+
+    expect(builder.getOperations()).toEqual([
+      { kind: 'dropUnique', indexName: 'tenant_posts_email_unique' },
+      { kind: 'dropUnique', indexName: 'posts_email_key' },
+    ])
+  })
+
   it('supports chained foreign key helpers', () => {
     const builder = new TableMutationBuilder('users')
 
