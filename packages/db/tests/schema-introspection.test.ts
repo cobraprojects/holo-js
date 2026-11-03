@@ -116,7 +116,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         await schema.dropTable(`public.${orders}`)
         await schema.dropTable(`public.${customers}`)
       })
-      await db.executeCompiled({ sql: `CREATE SCHEMA "${tenant}"`, source: 'schema' })
       await schema.createTable(`public.${customers}`, table => {
         table.id()
       })
@@ -160,7 +159,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         await db.executeCompiled({ sql: `DROP SCHEMA IF EXISTS "${tenant}" CASCADE`, source: 'schema' })
         await schema.dropTable(`public.${orders}`)
       })
-      await db.executeCompiled({ sql: `CREATE SCHEMA "${tenant}"`, source: 'schema' })
       await schema.createTable(`public.${orders}`, table => {
         table.id()
         table.string('code').unique()

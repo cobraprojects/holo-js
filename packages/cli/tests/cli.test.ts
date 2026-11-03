@@ -6539,6 +6539,38 @@ process.stdout.write('framework build ran\\n')
     }
   }, 90000)
 
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('migrates into and writes the Generated schema from the schema an explicit search_path selects when the configured schema is missing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const postgres = isolatedMigrationDatabases[0]
+    const databaseName = `holo_search_path_${randomUUID().replaceAll('-', '')}`
+    const credentials = `${encodeURIComponent(livePostgresServer.user)}:${encodeURIComponent(livePostgresServer.password)}`
+    const searchPath = encodeURIComponent('-c search_path=tenant,public')
+    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}?options=${searchPath}`
+    await writeSchemaSourceProject(projectRoot, { driver: 'postgres', url, schema: 'tenant' })
+    await postgres.create(databaseName)
+    try {
+      const migrated = runCliProcess(projectRoot, ['migrate'])
+      expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+      for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+        expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+        for (const line of generatedUsersColumns.postgres) expect(generated).toContain(line)
+      }
+      const database = postgres.open(databaseName)
+      try {
+        const tables = await database.queryCompiled<{ table_name: string }>({
+          sql: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+          source: 'test',
+        })
+        expect(tables.rows.map(row => row.table_name)).toEqual(['_holo_migrations', 'profiles', 'users'])
+      } finally {
+        await database.disconnect()
+      }
+    } finally {
+      await postgres.drop(databaseName)
+    }
+  }, 90000)
+
   it('runs plain migrate without @holo-js/cache and fails migrate --isolated with the documented error', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
