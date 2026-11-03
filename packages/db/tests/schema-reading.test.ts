@@ -120,7 +120,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.string(longColumn).unique()
       })
 
-      const definition = (await createSchemaReader(db).readGeneratedSchema()).find(table => table.tableName === name)!
+      const definition = (await createSchemaReader(db).readTable(name))!
 
       expect(definition.columns[longColumn]?.unique).toBe(true)
       expect(definition.indexes).toEqual([])
