@@ -59,6 +59,17 @@ interface DropForeignKeyMutationOperation {
   constraintName: string
 }
 
+interface CreatePrimaryKeyMutationOperation {
+  kind: 'createPrimaryKey'
+  columns: readonly string[]
+  constraintName?: string
+}
+
+interface DropPrimaryKeyMutationOperation {
+  kind: 'dropPrimaryKey'
+  constraintName?: string
+}
+
 interface MutableColumnMutationOperation {
   kind: ColumnMutationMode
   columnName: string
@@ -76,6 +87,8 @@ type TableMutationOperation
     | RenameIndexMutationOperation
     | CreateForeignKeyMutationOperation
     | DropForeignKeyMutationOperation
+    | CreatePrimaryKeyMutationOperation
+    | DropPrimaryKeyMutationOperation
 
 type ColumnMutationMode = 'addColumn' | 'alterColumn'
 type ColumnFactory<TBuilder extends AnyColumnBuilder = AnyColumnBuilder> = () => TBuilder
@@ -474,6 +487,14 @@ export class TableMutationBuilder {
       kind: 'createIndex',
       index: { columns, name, unique: true },
     })
+  }
+
+  primary(columns: readonly string[], name?: string): void {
+    this.operations.push({ kind: 'createPrimaryKey', columns, constraintName: name })
+  }
+
+  dropPrimary(name?: string): void {
+    this.operations.push({ kind: 'dropPrimaryKey', constraintName: name })
   }
 
   dropIndex(index: string | readonly string[]): void {

@@ -662,7 +662,7 @@ table.timestamp('joined_at').defaultNow()
 
 ### primaryKey()
 
-Makes the column the table's primary key.
+Makes the column the table's primary key. For a key on several columns, use [primary(columns)](#primary-columns).
 
 ```ts
 table.uuid('id').primaryKey()
@@ -910,6 +910,40 @@ table.nullableSnowflakeMorphs('reactable')
 ```
 
 Every morph helper accepts an index name as its second argument, for example `table.morphs('commentable', 'comments_commentable_lookup')`.
+
+## Primary keys
+
+Mark one column as the key with [`id()`](#id) or the [`primaryKey()`](#primarykey) modifier, or several columns with the table methods below.
+
+### primary(columns)
+
+Makes one or more columns the table's primary key. Use it for a pivot table whose rows are unique by a pair of columns. Inside `createTable()`, declare the columns first.
+
+```ts
+await schema.createTable('post_tag', (table) => {
+  table.foreignId('post_id').constrained('posts')
+  table.foreignId('tag_id').constrained('tags')
+  table.primary(['post_id', 'tag_id'])
+})
+```
+
+Inside `table()`, `primary()` adds a key to an existing table that has none. Adding it fails, and changes nothing, when existing rows repeat a key.
+
+The optional second argument names the key on PostgreSQL. Without it, PostgreSQL names the key `{table}_pkey`. MySQL always names it `PRIMARY`, and SQLite doesn't name it. On SQLite, `primary()` inside `table()` rebuilds the table, the same way [change()](#change) does.
+
+Models don't support composite primary keys, as in Laravel. Query the table with `DB.table()` or use it as a `belongsToMany` pivot. See [Primary keys](/orm/#primary-keys).
+
+### dropPrimary()
+
+Drops the table's primary key and keeps its rows. Available inside `table()`.
+
+```ts
+await schema.table('post_tag', (table) => {
+  table.dropPrimary()
+})
+```
+
+On PostgreSQL, Holo reads the key's name from the database, so `dropPrimary()` works after [renameTable()](#renametable), when the key keeps its old `{table}_pkey` name. If you pass a name, it must be the key's name, or `dropPrimary()` throws `SchemaError` and changes nothing. MySQL drops the key with `DROP PRIMARY KEY`, and SQLite rebuilds the table, the same way [change()](#change) does. MySQL refuses to drop the key of an auto-increment column such as `id()`. A table without a primary key throws `SchemaError`.
 
 ## Indexes
 

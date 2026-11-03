@@ -1,5 +1,5 @@
 import { rebindDatabaseQueryObservationResult } from '../cache'
-import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
+import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import type { QueryDirection } from './ast'
@@ -27,7 +27,7 @@ export async function* queryBatches<
 ): AsyncGenerator<readonly TValue[], void, unknown> {
   const plan = input.getPlan()
   const tableName = plan.source.alias ?? plan.source.tableName
-  const primaryKey = traversal.primaryKey ?? resolveTablePrimaryKey(plan.source.table)
+  const primaryKeys = traversal.primaryKey !== undefined ? [traversal.primaryKey] : resolveTablePrimaryKeyColumns(plan.source.table)
   const idColumn = traversal.column === undefined ? undefined : traversal.column.includes('.') ? traversal.column : `${tableName}.${traversal.column}`
   const selectedColumn = plan.selections.find(selection =>
     selection.kind === 'column' && (selection.column === traversal.column || selection.column === idColumn),
@@ -42,7 +42,7 @@ export async function* queryBatches<
     if (canOrder) query = query.reorder(orderColumn as keyof TAvailableColumns & string, traversal.direction)
   }
   const idDefinition = traversal.column ? plan.source.table?.columns[traversal.column.split('.').at(-1)!] : undefined
-  const nullableId = idDefinition?.nullable ?? (idColumn !== undefined && idColumn !== `${tableName}.${primaryKey}`)
+  const nullableId = idDefinition?.nullable ?? (idColumn !== undefined && !primaryKeys.some(key => idColumn === `${tableName}.${key}`))
   const requiresRowNullOrder = traversal.column !== undefined && traversal.fallbackOrder !== 'database'
     && nullableId && query.getConnection().getDialect().name.includes('postgres')
   const hasPrimaryKey = plan.source.table !== undefined
@@ -76,7 +76,7 @@ export async function* queryBatches<
         ...(traversal.fallbackOrder === 'database' ? [] : requestedOrders.filter(order => order.column !== traversal.column && order.column !== idColumn)),
       ]
     : requestedOrders
-  for (const key of [...new Set([primaryKey, ...(plan.source.table ? [resolveTablePrimaryKey(plan.source.table)] : [])])]) {
+  for (const key of [...new Set([...primaryKeys, ...(plan.source.table ? resolveTablePrimaryKeyColumns(plan.source.table) : [])])]) {
     if (!orders.some(order => order.column === key || order.column === `${tableName}.${key}`)) {
       orders.push({ column: `${tableName}.${key}`, direction: 'asc' })
     }

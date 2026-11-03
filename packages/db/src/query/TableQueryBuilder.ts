@@ -94,7 +94,7 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
-import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
+import { resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -2713,14 +2713,13 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const primaryKeyColumn = this.resolvePrimaryKeyColumn()
     const captureReturningRows = await this.shouldCaptureInsertReturningRows()
     const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && returnGeneratedId)
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, {
             returning: captureReturningRows,
-            returningColumn: captureReturningRows ? undefined : primaryKeyColumn,
+            returningColumn: captureReturningRows ? undefined : this.resolvePrimaryKeyColumn(),
           }),
           true,
         )
@@ -2762,6 +2761,7 @@ export class TableQueryBuilder<
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
+    this.resolvePrimaryKeyColumn()
     const result = await this.executeInsert(values, true)
     return result.lastInsertId
   }
@@ -3185,7 +3185,8 @@ export class TableQueryBuilder<
       return undefined
     }
 
-    const value = rows[0]?.[this.resolvePrimaryKeyColumn()]
+    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const value = primaryKeys.length === 1 ? rows[0]?.[primaryKeys[0]] : undefined
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
@@ -3303,28 +3304,8 @@ export class TableQueryBuilder<
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const primaryKey = this.resolvePrimaryKeyColumn()
-    const previousRows = new Map(numericColumns.length > 0
-      ? capturedRows?.previousRows?.map(row => [
-          typeof values[primaryKey] === 'undefined'
-            ? row[primaryKey]
-            : this.applyCapturedUpdateValue(row[primaryKey], values[primaryKey]),
-          row,
-        ])
-      : [])
     const mutations = !hasInvalidationListeners ? [] : numericColumns.length > 0 && capturedRows?.rows
-      ? capturedRows.rows.map((row) => {
-          const previousRow = previousRows.get(row[primaryKey])
-          return createDatabaseMutationEvent(
-            'update',
-            this.connection.getConnectionName(),
-            this.source.tableName,
-            [{ kind: 'comparison', column: primaryKey, operator: '=', value: previousRow?.[primaryKey] ?? row[primaryKey] }],
-            Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
-            [row],
-            previousRow ? [previousRow] : undefined,
-          )
-        })
+      ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
           this.connection.getConnectionName(),
@@ -3340,6 +3321,35 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private createNumericUpdateMutationEvents(
+    values: Readonly<Record<string, unknown>>,
+    numericColumns: readonly string[],
+    rows: readonly Readonly<Record<string, unknown>>[],
+    previousRows: readonly Readonly<Record<string, unknown>>[],
+  ): ReturnType<typeof createDatabaseMutationEvent>[] {
+    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const keyOf = (keyValues: readonly unknown[]): unknown => keyValues.length === 1
+      ? keyValues[0]
+      : JSON.stringify(keyValues, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
+    const updatedKeyValues = (row: Readonly<Record<string, unknown>>) => primaryKeys.map(key => typeof values[key] === 'undefined'
+      ? row[key]
+      : this.applyCapturedUpdateValue(row[key], values[key]))
+    const previousRowsByKey = new Map(previousRows.map(row => [keyOf(updatedKeyValues(row)), row]))
+
+    return rows.map((row) => {
+      const previousRow = previousRowsByKey.get(keyOf(primaryKeys.map(key => row[key])))
+      return createDatabaseMutationEvent(
+        'update',
+        this.connection.getConnectionName(),
+        this.source.tableName,
+        primaryKeys.map(key => ({ kind: 'comparison' as const, column: key, operator: '=', value: previousRow?.[key] ?? row[key] })),
+        Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
+        [row],
+        previousRow ? [previousRow] : undefined,
+      )
+    })
   }
 
   private getCompiler(): SQLQueryCompiler {
@@ -3366,11 +3376,10 @@ export class TableQueryBuilder<
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
     const columns = Object.keys(amounts)
-    const primaryKey = this.resolvePrimaryKeyColumn()
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [primaryKey, ...columns] as never[]),
+      withSelections(this.plan, [...resolveTablePrimaryKeyColumns(this.source.table), ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
@@ -3391,6 +3400,7 @@ export class TableQueryBuilder<
       return this.update(values)
     }
 
+    const primaryKey = this.resolvePrimaryKeyColumn()
     const plan = this.plan.predicates.length === 0
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
@@ -3464,22 +3474,26 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
-    if (this.plan.orderBy.length === 0) {
-      if (!this.source.table) {
+    if (!this.source.table) {
+      if (this.plan.orderBy.length === 0) {
         throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
       }
 
-      const primaryKey = this.resolvePrimaryKeyColumn()
-      const column = this.plan.joins.length === 0 ? primaryKey : `${this.source.alias ?? this.source.tableName}.${primaryKey}`
-      return this.clone(withOrderBy(this.plan, { kind: 'column', column, direction: 'asc' }))
+      return this
     }
 
-    const primaryKey = this.source.table && this.resolvePrimaryKeyColumn()
-    const qualifiedKey = `${this.source.alias ?? this.source.tableName}.${primaryKey}`
-    if (primaryKey && !this.plan.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))) {
-      return this.clone(withOrderBy(this.plan, { kind: 'column', column: this.plan.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' }))
-    }
-    return this
+    return this.withPrimaryKeyTieBreakers()
+  }
+
+  private withPrimaryKeyTieBreakers(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const tableName = this.source.alias ?? this.source.tableName
+    const plan = resolveTablePrimaryKeyColumns(this.source.table).reduce((current, primaryKey) => {
+      const qualifiedKey = `${tableName}.${primaryKey}`
+      return current.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))
+        ? current
+        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' })
+    }, this.plan)
+    return plan === this.plan ? this : this.clone(plan)
   }
 
   private resolveCursorOrders(): readonly { readonly column: string, readonly direction: 'asc' | 'desc' }[] {

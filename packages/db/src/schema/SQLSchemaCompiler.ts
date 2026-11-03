@@ -57,6 +57,14 @@ export abstract class SQLSchemaCompiler {
       return [this.compileDropForeignKey(operation.tableName, operation.constraintName)]
     }
 
+    if (operation.kind === 'createPrimaryKey') {
+      return [this.compileCreatePrimaryKey(operation.tableName, operation.columns, operation.constraintName)]
+    }
+
+    if (operation.kind === 'dropPrimaryKey') {
+      return [this.compileDropPrimaryKey(operation.tableName, operation.constraintName)]
+    }
+
     if (operation.kind === 'createIndex') {
       return [this.compileCreateIndex(operation.tableName, operation.index)]
     }
@@ -86,11 +94,13 @@ export abstract class SQLSchemaCompiler {
 
   compileCreateTable(table: TableDefinition): DDLStatement[] {
     assertValidIdentifierPath(table.tableName, 'Table name')
-    const columnUniqueIndexes = this.resolveColumnUniqueIndexes(table.tableName, Object.values(table.columns))
+    const { table: definedTable, primaryKeyConstraint } = this.resolveTablePrimaryKeyConstraint(table)
+    const columnUniqueIndexes = this.resolveColumnUniqueIndexes(table.tableName, Object.values(definedTable.columns))
     const declaredIndexes = table.indexes.filter(index => !columnUniqueIndexes.some(columnUnique => this.isSameIndex(table.tableName, columnUnique, index)))
     assertUniqueResolvedIndexNames(table.tableName, [...declaredIndexes, ...columnUniqueIndexes])
     const columnSql = [
-      ...this.compileTableDefinitions(table),
+      ...this.compileTableDefinitions(definedTable),
+      ...(primaryKeyConstraint ? [primaryKeyConstraint] : []),
       ...this.compileUniqueConstraints(table.tableName, columnUniqueIndexes),
     ]
     const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
@@ -105,6 +115,28 @@ export abstract class SQLSchemaCompiler {
 
     statements.push(...this.compileStandaloneUniqueIndexes(table.tableName, columnUniqueIndexes))
     return statements
+  }
+
+  private resolveTablePrimaryKeyConstraint(table: TableDefinition): { table: TableDefinition, primaryKeyConstraint?: string } {
+    const primaryKeyColumns = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
+    if (primaryKeyColumns.length < 2 && !table.primaryKeyName) {
+      return { table }
+    }
+
+    const columns = Object.fromEntries(Object.entries(table.columns).map(([name, column]) => [name, { ...column, primaryKey: false }]))
+    return {
+      table: { ...table, columns },
+      primaryKeyConstraint: this.compilePrimaryKeyConstraint(primaryKeyColumns, table.primaryKeyName),
+    }
+  }
+
+  compilePrimaryKeyConstraint(columns: readonly string[], name?: string): string {
+    const quotedColumns = columns.map((column) => {
+      assertValidIdentifierSegment(column, 'Primary key column')
+      return this.quoteIdentifier(column)
+    }).join(', ')
+    const constraint = name ? `${this.compileNamedConstraint(name, 'Primary key name')} ` : ''
+    return `${constraint}PRIMARY KEY (${quotedColumns})`
   }
 
   resolveColumnUniqueIndexes(tableName: string, columns: readonly AnyColumnDefinition[]): TableIndexDefinition[] {
@@ -198,8 +230,8 @@ export abstract class SQLSchemaCompiler {
     return `${this.compileNamedConstraint(constraintName)} ${this.compileReferencesClause(column.name, column.references)}`
   }
 
-  private compileNamedConstraint(constraintName: string): string {
-    assertValidIdentifierSegment(constraintName, 'Foreign key name')
+  private compileNamedConstraint(constraintName: string, label = 'Foreign key name'): string {
+    assertValidIdentifierSegment(constraintName, label)
     return `CONSTRAINT ${this.quoteIdentifier(constraintName)}`
   }
 
@@ -232,6 +264,23 @@ export abstract class SQLSchemaCompiler {
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
       source: `schema:dropForeignKey:${tableName}:${constraintName}`,
+    }
+  }
+
+  compileCreatePrimaryKey(tableName: string, columns: readonly string[], constraintName?: string): DDLStatement {
+    assertValidIdentifierPath(tableName, 'Table name')
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compilePrimaryKeyConstraint(columns, constraintName)}`,
+      source: `schema:createPrimaryKey:${tableName}`,
+    }
+  }
+
+  compileDropPrimaryKey(tableName: string, constraintName: string): DDLStatement {
+    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidIdentifierSegment(constraintName, 'Primary key name')
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
+      source: `schema:dropPrimaryKey:${tableName}:${constraintName}`,
     }
   }
 
