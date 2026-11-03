@@ -6516,8 +6516,9 @@ export const migrations = [defineMigration({
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
     expect(migrated.stdout).toContain('2026_07_29_000001_create_plugin_roles')
-    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
-      .resolves.toContain('defineGeneratedTable("plugin_roles"')
+    for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+      expect(generated).toContain('export const pluginRoles = defineGeneratedTable("plugin_roles", {\n  "id": column.id(),\n  "name": column.string(),\n})')
+    }
 
     const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
     expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
