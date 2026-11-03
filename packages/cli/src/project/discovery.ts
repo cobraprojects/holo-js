@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
@@ -265,7 +265,7 @@ async function discoverProjectRegistry(
 
   const migrations: GeneratedMigrationRegistryEntry[] = migrationFiles.map((filePath) => {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    return { sourcePath: relativePath, name: inferMigrationNameFromEntry(relativePath) }
+    return { sourcePath: relativePath, name: basename(relativePath, extname(relativePath)) }
   })
   assertUniqueEntries('migration', migrations)
 

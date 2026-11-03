@@ -6604,6 +6604,56 @@ export default defineMigration({
     expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
   }, 60000)
 
+  it('prepares, builds, starts, migrates and rolls back a 0.5.6 migration file without a timestamp under its declared name', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './data.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/create_legacy.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  name: '2024_01_01_000000_create_legacy',
+  async up({ schema }) {
+    await schema.createTable('legacy_notes', (table) => {
+      table.id()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('legacy_notes')
+  },
+})
+`)
+    await writeDevServerProbe(projectRoot)
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('  2024_01_01_000000_create_legacy')
+    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    try {
+      expect(database.prepare('SELECT name FROM _holo_migrations').all().map(row => row.name)).toContain('2024_01_01_000000_create_legacy')
+    } finally {
+      database.close()
+    }
+
+    const migratedAgain = runCliProcess(projectRoot, ['migrate'])
+    expect(migratedAgain.status, migratedAgain.stderr || migratedAgain.stdout).toBe(0)
+    expect(migratedAgain.stdout).toContain('No migrations were executed.')
+
+    const built = runCliProcess(projectRoot, ['build'])
+    expect(built.status, built.stderr || built.stdout).toBe(0)
+    const dev = runCliProcess(projectRoot, ['dev'])
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stdout).toContain('legacy_notes')
+
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
+    expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
+    expect(rolledBack.stdout).toContain('  2024_01_01_000000_create_legacy')
+    expect(sqliteTableNames(projectRoot)).not.toContain('legacy_notes')
+  }, 90000)
+
   it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('reports why holo migrate could not create the PostgreSQL database before the Generated schema write failure', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -12016,17 +12066,18 @@ export default {
       await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo model')
 
       await rm(join(projectRoot, 'server/models/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/Bad.mjs" must use a timestamped file name')
-
-      await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/manual_name.mjs" must use a timestamped file name')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo seeder')
+      await expect(loadRegisteredMigrations(projectRoot, {
+        ...defaultProjectConfig(),
+        migrations: ['server/db/migrations/Bad.mjs'],
+      })).rejects.toThrow('server/db/migrations/Bad.mjs" does not export a Holo migration')
       await expect(loadRegisteredMigrations(projectRoot, {
         ...defaultProjectConfig(),
         migrations: ['server/db/migrations/manual_name.mjs'],
       })).rejects.toThrow('must match YYYY_MM_DD_HHMMSS_description')
 
+      await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
       await rm(join(projectRoot, 'server/db/migrations/manual_name.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo seeder')
 
       await rm(join(projectRoot, 'server/db/seeders/Bad.mjs'))
       await prepareProjectDiscovery(projectRoot, loaded.config)
