@@ -100,6 +100,25 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(structure.columns.some(column => column.primaryKey)).toBe(false)
     })
 
+    it('accepts a primary key name when creating and adding the key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueTableName('holo_post_tag')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.integer('post_id')
+        table.integer('tag_id')
+        table.primary(['post_id', 'tag_id'], `${name}_pk`)
+      })
+      await schema.table(name, table => { table.dropPrimary() })
+
+      await schema.table(name, table => { table.primary(['tag_id', 'post_id'], `${name}_pk`) })
+
+      await db.table(name).insert({ post_id: 1, tag_id: 2 })
+      await expect(db.table(name).insert({ post_id: 1, tag_id: 2 })).rejects.toThrow()
+      const columns = (await createSchemaReader(db).readTable(name))!.columns
+      expect([columns.post_id?.primaryKey, columns.tag_id?.primaryKey]).toEqual([true, true])
+    })
+
     it('raises when the table has no primary key to drop', async () => {
       const { schema } = await openDatabase(driver)
       const name = uniqueTableName('holo_keyless')
