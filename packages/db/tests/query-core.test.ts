@@ -3,6 +3,9 @@ import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   CompilerError,
   DB,
+  clearGeneratedTables,
+  defineGeneratedTable,
+  registerGeneratedTables,
   MySQLQueryCompiler,
   PostgresQueryCompiler,
   SecurityError,
@@ -1190,15 +1193,23 @@ describe('query core slice', () => {
     expect(await DB.table(users).whereJson('settings->profile->region', 'mena').whereJson('settings->profile->language', 'en').pluck('id')).toEqual([1])
   })
 
-  it('uses registered schema metadata when writing through a string table name', async () => {
+  it('resolves a string table name through the Generated schema only', async () => {
     await createRealQueryDatabase()
+    onTestFinished(() => clearGeneratedTables())
     await createSchemaService(DB.connection()).createTable('registered_records', table => {
       table.id()
       table.json('settings')
       table.boolean('enabled')
     })
+    await DB.connection().executeCompiled({ sql: 'INSERT INTO registered_records (settings, enabled) VALUES (\'{"active":true}\', 1)', source: 'test' })
+    expect(await DB.table('registered_records').first()).toEqual({ id: 1, settings: '{"active":true}', enabled: 1 })
+
+    registerGeneratedTables({
+      registered_records: defineGeneratedTable('registered_records', { id: column.id(), settings: column.json(), enabled: column.boolean() }),
+    })
+    expect(await DB.table('registered_records').first()).toEqual({ id: 1, settings: { active: true }, enabled: true })
     const id = await DB.table('registered_records').insertGetId({ settings: { tags: ['native'], active: true }, enabled: true })
-    expect(await DB.table('registered_records').whereJson('settings->active', true).where('enabled', true).pluck('id')).toEqual([id])
+    expect(await DB.table('registered_records').whereJson('settings->active', true).where('enabled', true).pluck('id')).toEqual([1, id])
     await DB.table('registered_records').where('id', id).update({ settings: { tags: [], active: false }, enabled: false })
     expect(await DB.table('registered_records').whereJson('settings->active', false).where('enabled', false).pluck('id')).toEqual([id])
   })

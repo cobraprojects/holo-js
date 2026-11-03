@@ -115,7 +115,7 @@ describe('model core slice', () => {
     expect(User.definition.name).toBe('User')
     expect(User.definition.fillable).toEqual(['name'])
     expect(() => User.getTableName()).toThrow(
-      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
   })
 
@@ -131,7 +131,7 @@ describe('model core slice', () => {
 
     expect(SecondUser.definition.name).toBe(FirstUser.definition.name)
     expect(() => SecondUser.getTableName()).toThrow(
-      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
   })
 
@@ -306,7 +306,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -316,7 +316,7 @@ describe('model core slice', () => {
       morphClass: { value: 'other-ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -326,7 +326,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -336,7 +336,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -359,7 +359,7 @@ describe('model core slice', () => {
       },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -413,30 +413,26 @@ describe('model core slice', () => {
     expect(MissingUser.definition.name).toBe('MissingUser')
     expect(MissingUser.definition.morphClass).toBe('MissingUser')
     expect(() => MissingUser.getTableName()).toThrow(
-      'Model "missing_users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "missing_users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
     expect(Untimestamped.definition.createdAtColumn).toBeUndefined()
     expect(Untimestamped.definition.updatedAtColumn).toBeUndefined()
-    expect(() => Untimestamped.definition.uniqueIdConfig).toThrow('not present in the generated schema registry')
+    expect(() => Untimestamped.definition.uniqueIdConfig).toThrow('not present in the Generated schema')
   })
 
-  it('resolves deferred generated models from the configured runtime schema registry', () => {
-    const admins = defineTable('admins', {
-      id: column.id(),
-      name: column.string(),
+  it('resolves deferred models from the Generated schema, not from tables created at runtime', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ connectionName: 'default', adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('admins', (table) => {
+      table.id()
+      table.string('name')
     })
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter: createSQLiteAdapter({ filename: ':memory:' }),
-          dialect: createDatabaseDialect('sqlite'),
-        }),
-      },
-    }))
-    DB.connection().getSchemaRegistry().replace(admins)
 
+    expect(() => defineModel('admins').getTableName()).toThrow('Model "admins" is not present in the Generated schema.')
+
+    registerGeneratedTables({ admins: defineTable('admins', { id: column.id(), name: column.string() }) })
     const Admin = defineModel('admins')
 
     expect(Admin.getTableName()).toBe('admins')
@@ -1730,9 +1726,8 @@ describe('model core slice', () => {
     await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
     await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })
     const documents = defineTable(table.tableName, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
-    schema.register(documents)
     const Document = defineModelFromTable(documents)
-    await db.table(table.tableName).insert([
+    await db.table(documents).insert([
       { id: 1, name: 'Nearest', active: true, embedding: [1, 0, 0] },
       { id: 2, name: 'Orthogonal', active: true, embedding: [0, 1, 0] },
       { id: 3, name: 'Opposite', active: true, embedding: [-1, 0, 0] },

@@ -87,10 +87,6 @@ export class ColumnBuilder<
     })
   }
 
-  generated(): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey> {
-    return this.clone({ generated: true })
-  }
-
   primaryKey(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, true> {
     return this.clone({ primaryKey: true })
   }

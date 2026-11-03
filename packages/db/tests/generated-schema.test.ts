@@ -67,7 +67,6 @@ describe('generated schema helpers', () => {
       vector_value: column.vector({ dimensions: 3 }),
       enum_value: column.enum(['draft', 'published'] as const).default('draft'),
       nullable_value: column.string().nullable(),
-      generated_value: column.string().generated(),
       public_uuid: column.uuid().primaryKey(),
     }, {
       indexes: [
@@ -161,7 +160,6 @@ describe('generated schema helpers', () => {
     expect(rendered).toContain('"vector_value": column.vector({ dimensions: 3 }),')
     expect(rendered).toContain('"enum_value": column.enum(["draft","published"]).default("draft"),')
     expect(rendered).toContain('"nullable_value": column.string().nullable(),')
-    expect(rendered).toContain('"generated_value": column.string().generated(),')
     expect(rendered).toContain('"public_uuid": column.uuid().primaryKey(),')
     expect(rendered).toContain('"maybe": column.string().default(undefined),')
     expect(rendered).toContain('"nullable_note": column.string().nullable().default(null),')

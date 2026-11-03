@@ -97,7 +97,13 @@ async function createPublicFeatureHarness() {
   })
 
   const schema = createSchemaService(DB.connection())
-  await schema.sync([users])
+  await schema.createTable('users', (table) => {
+    table.id()
+    table.string('name')
+    table.string('status')
+    table.integer('loginCount')
+    table.timestamps()
+  })
   await cacheDbInternals.prepareCacheDatabaseTables(DB.connection())
 
   const driver = createDatabaseCacheDriver({

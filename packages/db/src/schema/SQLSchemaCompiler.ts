@@ -38,7 +38,7 @@ export abstract class SQLSchemaCompiler {
     }
 
     if (operation.kind === 'alterColumn') {
-      return this.compileAlterColumn(operation.tableName, operation.column, operation.previousColumn)
+      return this.compileAlterColumn(operation.tableName, operation.column)
     }
 
     if (operation.kind === 'createForeignKey') {
@@ -121,7 +121,7 @@ export abstract class SQLSchemaCompiler {
     }
   }
 
-  compileAlterColumn(tableName: string, column: AnyColumnDefinition, _previousColumn?: AnyColumnDefinition): DDLStatement[] {
+  compileAlterColumn(tableName: string, column: AnyColumnDefinition): DDLStatement[] {
     assertValidIdentifierPath(tableName, 'Table name')
     this.assertSupportedAlterColumnDefinition(column)
     return [{

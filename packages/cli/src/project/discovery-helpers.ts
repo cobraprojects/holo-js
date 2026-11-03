@@ -228,7 +228,7 @@ export function isCliModelReference(value: unknown): value is CliModelReference 
 
 export function isUnresolvedModelSchemaError(error: unknown): boolean {
   return error instanceof Error
-    && (error.message.includes('is not present in the generated schema registry')
+    && (error.message.includes('is not present in the Generated schema')
       || ('code' in error && error.code === 'SCHEMA_ERROR'
         && /^Table ".+" does not define a primary key column\.$/.test(error.message)))
 }

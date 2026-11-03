@@ -38,10 +38,15 @@ function findClosingParenthesis(sql: string, openIndex: number): number {
   return -1
 }
 
-export function splitTableDefinitions(createTableSql: string): string[] {
+export interface CreateTableSqlParts {
+  readonly definitions: string[]
+  readonly options: string
+}
+
+export function splitCreateTableSql(createTableSql: string): CreateTableSqlParts | undefined {
   const openIndex = createTableSql.indexOf('(')
   const closeIndex = openIndex === -1 ? -1 : findClosingParenthesis(createTableSql, openIndex)
-  if (closeIndex === -1) return []
+  if (closeIndex === -1) return undefined
 
   const body = createTableSql.slice(openIndex + 1, closeIndex)
   const definitions: string[] = []
@@ -63,7 +68,14 @@ export function splitTableDefinitions(createTableSql: string): string[] {
     }
   }
   definitions.push(body.slice(start).trim())
-  return definitions.filter(definition => definition.length > 0)
+  return {
+    definitions: definitions.filter(definition => definition.length > 0),
+    options: createTableSql.slice(closeIndex + 1).trim(),
+  }
+}
+
+export function splitTableDefinitions(createTableSql: string): string[] {
+  return splitCreateTableSql(createTableSql)?.definitions ?? []
 }
 
 const TABLE_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?(?:PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY)\b/i
@@ -109,4 +121,23 @@ const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(
 export function readStringLength(type: string): number | undefined {
   const match = type.trim().match(STRING_LENGTH_PATTERN)
   return match ? Number(match[1]) : undefined
+}
+
+const QUOTED_TEXT_PATTERN = new RegExp(`${STRING_LITERAL_PATTERN}|"(?:[^"]|"")*"|\`(?:[^\`]|\`\`)*\`|\\[[^\\]]*\\]`, 'g')
+
+export interface InlineColumnConstraints {
+  readonly primaryKey: boolean
+  readonly autoIncrement: boolean
+  readonly unique: boolean
+  readonly references: boolean
+}
+
+export function readInlineColumnConstraints(definition: string): InlineColumnConstraints {
+  const keywords = definition.replace(QUOTED_TEXT_PATTERN, ' ')
+  return {
+    primaryKey: /\bPRIMARY\s+KEY\b/i.test(keywords),
+    autoIncrement: /\bAUTOINCREMENT\b/i.test(keywords),
+    unique: /\bUNIQUE\b/i.test(keywords),
+    references: /\bREFERENCES\b/i.test(keywords),
+  }
 }

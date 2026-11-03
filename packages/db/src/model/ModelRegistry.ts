@@ -7,7 +7,7 @@ function resolveDefinition(reference: ModelDefinitionLike): AnyModelDefinition {
 
 function isMissingGeneratedSchemaModelError(error: unknown): boolean {
   return error instanceof Error
-    && error.message.includes('is not present in the generated schema registry')
+    && error.message.includes('is not present in the Generated schema')
 }
 
 function tryGetDefinitionTableName(definition: AnyModelDefinition): string | undefined {

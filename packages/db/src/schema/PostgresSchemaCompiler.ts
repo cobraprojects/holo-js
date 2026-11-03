@@ -20,13 +20,12 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
   override compileAlterColumn(
     tableName: string,
     column: ColumnDefinition,
-    previousColumn?: ColumnDefinition,
   ): Array<{ sql: string, source: string }> {
     this.assertSupportedAlterColumnDefinition(column)
     const tableIdentifier = this.compileIdentifierPath(tableName)
     const columnIdentifier = this.quoteIdentifier(column.name)
     const statements: Array<{ sql: string, source: string }> = []
-    if (column.kind === 'enum' || previousColumn?.kind === 'enum') {
+    if (column.kind === 'enum') {
       statements.push({
         sql: `ALTER TABLE ${tableIdentifier} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(resolveGeneratedCheckName(tableName, column.name))}`,
         source: `schema:alterColumn:${tableName}:${column.name}:dropCheck`,

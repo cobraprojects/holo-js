@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, HydrationError, belongsToMany, column, defineGeneratedTable, defineModel, morphToMany, morphedByMany, resetDB } from '../src'
+import { DB, HydrationError, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, morphToMany, morphedByMany, registerGeneratedTables, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 async function openBigintScenario() {
@@ -22,7 +22,10 @@ async function openBigintScenario() {
 }
 
 describe('postgres bigint keys', () => {
-  afterEach(() => resetDB())
+  afterEach(() => {
+    resetDB()
+    clearGeneratedTables()
+  })
 
   it('loads, counts and filters pivot relations keyed by id() and foreignId() columns', async () => {
     const { schema, names } = await openBigintScenario()
@@ -85,7 +88,7 @@ describe('postgres bigint keys', () => {
       expect(await DB.table(memberships).pluck('member_id')).toEqual([7])
       expect(await DB.table(memberships).value('group_id')).toBe(group.id)
       expect(joined).toEqual({ groupKey: group.id, member_id: 7, name: 'g' })
-      schema.register(memberships)
+      registerGeneratedTables({ memberships })
       expect(await DB.table(names.memberships).first()).toEqual({ id: '1', group_id: String(group.id), member_id: '7' })
       expect(await DB.table(names.memberships)
         .join(names.groups, `${names.memberships}.group_id`, '=', `${names.groups}.id`)

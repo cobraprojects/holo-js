@@ -74,7 +74,7 @@ await Post.where('titel', 'Hello')
 Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default.
 
 ::: tip
-If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo migrate` or `npx holo build` writes the full types. A model whose table isn't in the generated schema throws `Model "posts" is not present in the generated schema registry` at runtime.
+If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo migrate` or `npx holo build` writes the full types. A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema` at runtime.
 :::
 
 ## Conventions
