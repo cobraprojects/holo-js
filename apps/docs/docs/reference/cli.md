@@ -144,7 +144,7 @@ Your scaffolded `package.json` already has `"dev": "holo dev"`, so `npm run dev`
 
 ### build
 
-Refresh Holo's generated files, then run your framework's production build.
+Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection.
 
 ```bash
 npx holo build [...frameworkArgs]
@@ -462,7 +462,7 @@ npx holo make:channel orders.{orderId}
 
 ### migrate
 
-Run every [migration](/database/migrations) that hasn't run yet.
+Run every [migration](/database/migrations) that hasn't run yet, then write the generated schema types from the database. A skipped `--isolated` run leaves them unchanged. `migrate:rollback` and `migrate:fresh` write them too.
 
 ```bash
 npx holo migrate [--step <n>] [--isolated]

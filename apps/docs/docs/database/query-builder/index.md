@@ -353,7 +353,7 @@ const postsPerUser = await DB.table('posts')
 
 When you pass a table **name**, rows are typed as `Record<string, unknown>`. You have two ways to get precise types.
 
-**Pass a table definition.** Holo generates a definition for every table in your migrations into `.holo-js/generated/schema.generated.ts` (Holo regenerates this file; don't edit it). Each table is exported in camelCase (`posts`, `postTags`, `users`). Pass one to `DB.table()` and column names autocomplete everywhere, and results carry the real column types:
+**Pass a table definition.** Holo generates a definition for every table in your database into `.holo-js/generated/schema.generated.ts` (Holo regenerates this file; don't edit it). Each table is exported in camelCase (`posts`, `postTags`, `users`). Pass one to `DB.table()` and column names autocomplete everywhere, and results carry the real column types:
 
 ```ts [server/lib/posts.ts]
 import { DB } from '@holo-js/db'

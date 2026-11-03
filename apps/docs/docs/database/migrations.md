@@ -34,7 +34,7 @@ npx holo migrate
 
 ## Migrations and model types
 
-After each `migrate`, `migrate:rollback`, or `migrate:fresh`, Holo regenerates the schema file at `.holo-js/generated/schema.generated.ts`. Holo writes this file for you; don't edit it.
+After each `migrate`, `migrate:rollback`, `migrate:fresh`, and `holo build`, Holo reads your default connection's database and regenerates the schema file at `.holo-js/generated/schema.generated.ts` from it. Holo never replays a migration to work out your schema, and it leaves its own tables, such as `_holo_migrations`, out of the file. Holo writes this file for you; don't edit it.
 
 Your [models](/orm/) read their column types from that file. You never repeat column definitions in the model:
 
