@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import {
-  DB, collectDatabaseQueryDependencies, column, configureDB, createConnectionManager,
-  createDatabase, createDialect, createSchemaService, queryCacheInternals, resetDB,
-  type DatabaseContext, type DatabaseLogger, type DatabaseDependencyInvalidationEvent,
+  DB, clearGeneratedTables, collectDatabaseQueryDependencies, column, configureDB, createConnectionManager,
+  createDatabase, createDialect, createSchemaService, queryCacheInternals, registerGeneratedTables, resetDB,
+  type DatabaseContext, type DatabaseLogger, type TableDefinition, type DatabaseDependencyInvalidationEvent,
 } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { invalidateQueryCacheDependencies, type DatabaseMutationEvent, type RemoteDatabaseDependencyInvalidation } from '../src/cache'
@@ -397,6 +397,58 @@ describe('native database and cache integration', () => {
     expect(result.value.total).toBe(30)
     expect(result.dependencies).toContain('db:main:users')
     expect(Object.keys(result)).toEqual(['value', 'dependencies'])
+  })
+
+  describe('string table names keyed by their Generated schema', () => {
+    const voucherShapes = {
+      'single-column key': {
+        columns: { code: column.string().primaryKey(), region: column.string(), id: column.integer(), label: column.string() },
+        keyValues: { code: 'SPRING' },
+      },
+      'composite key': {
+        columns: { code: column.string().primaryKey(), region: column.string().primaryKey(), id: column.integer(), label: column.string() },
+        keyValues: { code: 'SPRING', region: 'eu' },
+      },
+      'no key': {
+        columns: { code: column.string(), region: column.string(), id: column.integer(), label: column.string() },
+        keyValues: { code: 'SPRING' },
+      },
+    }
+
+    async function createVouchers<TColumns extends typeof voucherShapes[keyof typeof voucherShapes]['columns']>(columns: TColumns) {
+      onTestFinished(() => clearGeneratedTables())
+      const vouchers = defineTable('vouchers', columns)
+      registerGeneratedTables({ vouchers })
+      await createSchemaService(db).createTable('vouchers', (table) => {
+        table.string('code'); table.string('region'); table.integer('id'); table.string('label')
+      })
+      await DB.table('vouchers').insert({ code: 'SPRING', region: 'eu', id: 7, label: 'old' })
+      return vouchers
+    }
+
+    for (const [shape, { columns, keyValues }] of Object.entries(voucherShapes)) {
+      it(`refreshes a cached read by a non-key id column after an update by key on a table with a ${shape}`, async () => {
+        const vouchers = await createVouchers(columns)
+        const cachedVoucher = () => DB.table('vouchers').where('id', 7).cache(60).get()
+        expect(await cachedVoucher()).toEqual([{ code: 'SPRING', region: 'eu', id: 7, label: 'old' }])
+
+        await Object.entries(keyValues)
+          .reduce((query, [key, value]) => query.where(key, value), DB.table<TableDefinition>(vouchers))
+          .update({ label: 'new' })
+
+        expect(await cachedVoucher()).toEqual([{ code: 'SPRING', region: 'eu', id: 7, label: 'new' }])
+      })
+    }
+
+    it('refreshes a cached read by a single-column key after inserting that key', async () => {
+      await createVouchers(voucherShapes['single-column key'].columns)
+      const cachedWinter = () => DB.table('vouchers').where('code', 'WINTER').cache(60).first()
+      expect(await cachedWinter()).toBeUndefined()
+
+      await DB.table('vouchers').insert({ code: 'WINTER', region: 'us', id: 8, label: 'cold' })
+
+      expect(await cachedWinter()).toEqual({ code: 'WINTER', region: 'us', id: 8, label: 'cold' })
+    })
   })
 
   it('fails clearly for missing runtime configuration and invalid cache dependencies', async () => {

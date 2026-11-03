@@ -5,7 +5,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
-import type { QueryOperator, QueryPredicateNode, QuerySelection, SelectQueryPlan } from './query/ast'
+import { getGeneratedTableDefinition } from './schema/generated'
+import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
+import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -1307,6 +1309,20 @@ function getPrimaryKeyColumn(plan: SelectQueryPlan): string {
   return Object.values(columns).find(column => column.primaryKey)?.name ?? 'id'
 }
 
+function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>): string | undefined {
+  const table = source.table ?? getGeneratedTableDefinition(source.tableName)
+  if (!table) return 'id'
+  const [primaryKey, ...otherPrimaryKeys] = listTablePrimaryKeyColumns(table)
+  return otherPrimaryKeys.length === 0 ? primaryKey : undefined
+}
+
+function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string): string | undefined {
+  const primaryKey = resolveRowDependencyKey(plan.source)
+  return primaryKey === undefined
+    ? undefined
+    : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
+}
+
 function hasDisjunctivePredicate(predicates: readonly QueryPredicateNode[]): boolean {
   return predicates.some((predicate) => {
     if (predicate.boolean === 'or') {
@@ -1949,14 +1965,7 @@ export function inferAutomaticQueryCacheDependencies(
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const primaryKeyColumn = getPrimaryKeyColumn(plan)
-    const primaryKeyValue = findExactPrimaryKeyValue(plan.predicates, primaryKeyColumn)
-    const primaryKeyDependency = createTableRowCacheDependency(
-      connectionName,
-      plan.source.tableName,
-      primaryKeyColumn,
-      primaryKeyValue,
-    )
+    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName)
     if (primaryKeyDependency) {
       return Object.freeze([
         primaryKeyDependency,
@@ -2022,15 +2031,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   const mutationDependency = createTableMutationCacheDependency(connectionName, plan.source.tableName)
   dependencies.push(mutationDependency)
   directDependencies.push(mutationDependency)
-  const primaryKeyColumn = getPrimaryKeyColumn(plan)
-  const primaryKeyValue = findExactPrimaryKeyValue(plan.predicates, primaryKeyColumn)
-  const primaryKeyDependency = createTableRowCacheDependency(
-    connectionName,
-    plan.source.tableName,
-    primaryKeyColumn,
-    primaryKeyValue,
-  )
-  const rowDependency = primaryKeyDependency ?? createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
+  const rowDependency = createExactPrimaryKeyRowDependency(plan, connectionName) ?? createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
   dependencies.push(rowDependency)
   directDependencies.push(rowDependency)
 
@@ -2090,20 +2091,25 @@ export function inferAutomaticQueryCacheInvalidationPlan(
 
 export function inferAutomaticInsertCacheInvalidationDependencies(
   connectionName: string,
-  tableName: string,
+  source: Pick<QuerySource, 'tableName' | 'table'>,
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
 ): readonly string[] {
-  return inferAutomaticInsertCacheInvalidationPlan(connectionName, tableName, rows, lastInsertId).dependencies
+  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId).dependencies
 }
 
 export function inferAutomaticInsertCacheInvalidationPlan(
   connectionName: string,
-  tableName: string,
+  source: Pick<QuerySource, 'tableName' | 'table'>,
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
   includeMetadata = false,
 ): DatabaseDependencyInvalidationPlan {
+  const { tableName } = source
+  const primaryKey = resolveRowDependencyKey(source)
+  const createRowDependency = (value: unknown) => primaryKey === undefined
+    ? undefined
+    : createTableRowCacheDependency(connectionName, tableName, primaryKey, value)
   const tableKey = createTableCacheDependency(connectionName, tableName)
   const dependencies = new Set<string>([
     tableKey,
@@ -2112,7 +2118,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   const exactPredicates = new Map<string, DatabaseDependencyPredicateEntry>()
   const predicates = new Map<string, DatabaseDependencyPredicateEntry>()
   for (const row of rows) {
-    const dependency = createTableRowCacheDependency(connectionName, tableName, 'id', row.id)
+    const dependency = primaryKey === undefined ? undefined : createRowDependency(row[primaryKey])
     if (dependency) {
       dependencies.add(dependency)
       directDependencies.add(dependency)
@@ -2144,7 +2150,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
       dependencies.add(dependency)
     }
   }
-  const lastInsertDependency = createTableRowCacheDependency(connectionName, tableName, 'id', lastInsertId)
+  const lastInsertDependency = createRowDependency(lastInsertId)
   if (lastInsertDependency) {
     dependencies.add(lastInsertDependency)
     directDependencies.add(lastInsertDependency)
