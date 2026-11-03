@@ -3791,7 +3791,7 @@ export class ModelRepository<
   }
 
   private guardsByColumnListing(): boolean {
-    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
+    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.guarded.length > 0
   }
 
   private isGuardableColumn(

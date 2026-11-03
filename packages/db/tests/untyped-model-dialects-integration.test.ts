@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, type Entity, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
+import { DB, DatabaseError, type Entity, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -296,5 +296,28 @@ describe.each(drivers)('relation key matching on %s', (driver) => {
     for (const loaded of [eager, lazy]) {
       expect(loaded.map(link => link.toJSON())).toMatchObject([{ site: { host: 'example.com' } }, { site: null }])
     }
+  })
+})
+
+describe.each(drivers)('an untyped model with guarded: [] on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('writes any attribute, leaving unknown columns to the database as Eloquent does', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const name = await createTable('page_views', (table) => {
+      table.id()
+      table.string('path')
+      table.integer('hits').default(0)
+      table.json('meta').nullable()
+    })
+    const PageView = defineModel(name, { connectionName: 'analytics', name: 'OpenPageView', guarded: [], timestamps: false, casts: { meta: 'json' } })
+
+    const view = await PageView.create({ path: '/a', hits: 9, meta: { role: 'guest' } })
+    await view.update({ 'meta->role': 'admin' })
+
+    expect((await PageView.findOrFail(view.get('id'))).toJSON()).toMatchObject({ path: '/a', hits: 9, meta: { role: 'admin' } })
+    await expect(PageView.create({ path: '/b', referrer: 'ad' })).rejects.toThrow(DatabaseError)
   })
 })
