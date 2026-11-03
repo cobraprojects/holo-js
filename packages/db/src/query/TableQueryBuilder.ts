@@ -3271,7 +3271,7 @@ export class TableQueryBuilder<
       : []
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
-      this.source.tableName,
+      this.source,
       rows,
       lastInsertId,
       hasInvalidationListeners,
