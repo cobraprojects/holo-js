@@ -12,6 +12,8 @@ type IndexRow = { name: string, unique: number, origin: string, partial: number 
 type IndexColumnRow = { cid: number, name: string | null }
 type ForeignKeyRow = { id: number, table: string, from: string, to: string | null, on_update: string, on_delete: string }
 
+export const SQLITE_AUTOINDEX_PREFIX = 'sqlite_autoindex_'
+
 export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
 
 const MAIN_SCHEMA = 'main'

@@ -1,5 +1,6 @@
 import { createGeneratedUniqueIndexName } from '../generatedNames'
 import { splitTablePath } from '../identifiers'
+import { SQLITE_AUTOINDEX_PREFIX } from './sqlite'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableColumnsShape, TableDefinition, TableIndexDefinition } from '../types'
 import type { DatabaseColumnStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, SchemaReadingDialect } from './types'
 
@@ -95,7 +96,7 @@ function isUniqueColumnIndex(structure: DatabaseTableStructure, index: DatabaseI
   return conventionalUniqueNames(structure, columnName).includes(index.name)
     || index.name === `${table}_${columnName}_key`
     || index.name === columnName
-    || index.name.startsWith('sqlite_autoindex_')
+    || index.name.startsWith(SQLITE_AUTOINDEX_PREFIX)
 }
 
 function toColumnDefinition(

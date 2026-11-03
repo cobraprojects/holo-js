@@ -3,7 +3,7 @@ import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader } from './introspection'
 import { toTableDefinition } from './introspection/definitions'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects } from './introspection/sqlite'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
 import { createSQLiteSchemaCompiler, executeStatements, readTableStructure } from './schemaConnection'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -116,7 +116,7 @@ export class SQLiteSchemaOperations {
   async dropInlineUnique(tableName: string, indexName: string, columns?: readonly string[]): Promise<boolean> {
     const indexes = (await readTableStructure(this.connection, tableName))?.indexes ?? []
     const index = indexes.find(candidate => candidate.name === indexName)
-    const inlineColumns = index ? (index.name.startsWith('sqlite_autoindex_') ? index.columns : undefined) : columns
+    const inlineColumns = index ? (index.name.startsWith(SQLITE_AUTOINDEX_PREFIX) ? index.columns : undefined) : columns
     if (!inlineColumns) {
       return false
     }
