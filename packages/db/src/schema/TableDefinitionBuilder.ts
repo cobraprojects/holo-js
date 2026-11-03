@@ -121,8 +121,8 @@ class TableCreateColumnBuilder<
     return this
   }
 
-  foreign(columnName: string): TableCreateForeignKeyBuilder<TName, TColumns> {
-    return this.root.foreign(columnName)
+  foreign(columnName: string, constraintName?: string): TableCreateForeignKeyBuilder<TName, TColumns> {
+    return this.root.foreign(columnName, constraintName)
   }
 
   foreignId<TColumnName extends string>(
@@ -491,8 +491,12 @@ class TableCreateForeignKeyBuilder<
     private readonly root: TableDefinitionBuilder<TName, TColumns>,
     private readonly builderRef: ColumnReference,
     columnName: string,
+    constraintName?: string,
   ) {
     this.foreignKeyState = new ForeignKeyBuilderState(columnName)
+    if (constraintName) {
+      this.builderRef.builder = this.builderRef.builder.constraintName(constraintName)
+    }
   }
 
   references(columnName: string): this {
@@ -799,13 +803,13 @@ export class TableDefinitionBuilder<
     return this
   }
 
-  foreign(columnName: string): TableCreateForeignKeyBuilder<TName, TColumns> {
+  foreign(columnName: string, constraintName?: string): TableCreateForeignKeyBuilder<TName, TColumns> {
     const builderRef = this.columnRefs.get(columnName)
     if (!builderRef) {
       throw new SchemaError(`Cannot attach a foreign key to unknown column "${columnName}". Declare the column first.`)
     }
 
-    return new TableCreateForeignKeyBuilder(this, builderRef, columnName)
+    return new TableCreateForeignKeyBuilder(this, builderRef, columnName, constraintName)
   }
 
   timestamps(): TableDefinitionBuilder<TName, WithTimestamps<TColumns>> {
