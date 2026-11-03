@@ -204,6 +204,48 @@ describe.each(drivers)('an untyped model on a %s connection', (driver) => {
     expect((await Site.all()).map(site => site.get('id'))).toEqual([1])
   })
 
+  it('keeps a numeric-looking string key it names as primaryKey, so update and delete touch only that row', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const accounts = await createTable('accounts', (table) => {
+      table.string('number').primaryKey()
+      table.string('owner')
+    })
+    const Account = defineModel(accounts, { connectionName: 'analytics', primaryKey: 'number', fillable: ['number', 'owner'], timestamps: false })
+    await Account.create({ number: '42', owner: 'alice' })
+    await Account.create({ number: '042', owner: 'bob' })
+
+    const alice = await Account.findOrFail('42')
+    expect(alice.get('number')).toBe('42')
+
+    await alice.update({ owner: 'alice2' })
+    expect(await DB.table(accounts, 'analytics').orderBy('number').get()).toEqual([
+      { number: '042', owner: 'bob' },
+      { number: '42', owner: 'alice2' },
+    ])
+
+    await alice.delete()
+    expect(await DB.table(accounts, 'analytics').get()).toEqual([{ number: '042', owner: 'bob' }])
+  })
+
+  it('reads a non-canonical integer id as the text the driver returns', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const codes = await createTable('codes', (table) => {
+      table.string('id').primaryKey()
+      table.string('label')
+    })
+    const Code = defineModel(codes, { connectionName: 'analytics', fillable: ['id', 'label'], timestamps: false })
+    await Code.create({ id: '42', label: 'canonical' })
+    await Code.create({ id: '042', label: 'padded' })
+
+    const padded = await Code.findOrFail('042')
+    expect(padded.get('id')).toBe('042')
+    expect((await Code.findOrFail('42')).get('id')).toBe(42)
+
+    await padded.update({ label: 'padded2' })
+    await padded.delete()
+    expect(await DB.table(codes, 'analytics').get()).toEqual([{ id: '42', label: 'canonical' }])
+  })
+
   it('matches relations whose key and foreign key columns have different integer types', async () => {
     const { createTable } = await openAnalyticsConnection(driver)
     const sites = await createTable('sites', (table) => {
