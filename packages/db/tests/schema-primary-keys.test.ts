@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
-import { clearGeneratedTables, defineModel, getGeneratedTableDefinition, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, SchemaError, type DatabaseContext, type DatabaseDependencyInvalidationEvent, type TableDefinition } from '../src'
+import { clearGeneratedTables, defineModel, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, SchemaError, type DatabaseContext, type DatabaseDependencyInvalidationEvent, type TableDefinition } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { openDatabase } from './support/database'
 
@@ -317,7 +317,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       return { ...opened, parent, child }
     }
 
-    async function chunkedKeys(db: DatabaseContext, table: TableDefinition) {
+    async function chunkedKeys(db: DatabaseContext, table: string | TableDefinition) {
       const keys: number[][] = []
       await db.table(table).chunk(1, (rows) => { keys.push(...rows.map(row => [Number(row.b), Number(row.a)])) })
       return keys
@@ -335,6 +335,17 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       })
     }
 
+    it.runIf(driver !== 'mysql')('chunks and cursor-paginates a string table name in the key order of its Generated schema', async () => {
+      const { db, parent } = await createReversedKeyTable('createTable')
+      registerGeneratedTables({ [parent]: (await createSchemaReader(db).readTable(parent))! })
+
+      const firstPage = await db.table(parent).cursorPaginate(1)
+      const secondPage = await db.table(parent).cursorPaginate(1, firstPage.nextCursor)
+
+      expect(await chunkedKeys(db, parent)).toEqual([[1, 2], [2, 1]])
+      expect([...firstPage.data, ...secondPage.data].map(row => [Number(row.b), Number(row.a)])).toEqual([[1, 2], [2, 1]])
+    })
+
     it('keeps the key column order through the Generated schema', async () => {
       const { db, parent } = await createReversedKeyTable('createTable')
       const definition = (await createSchemaReader(db).readTable(parent))!
@@ -345,7 +356,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       await import(pathToFileURL(modulePath).href)
 
-      expect(await chunkedKeys(db, getGeneratedTableDefinition(parent)!)).toEqual([[1, 2], [2, 1]])
+      expect(await chunkedKeys(db, parent)).toEqual([[1, 2], [2, 1]])
     })
   })
 }
