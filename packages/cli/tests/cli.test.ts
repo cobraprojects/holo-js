@@ -6339,6 +6339,25 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
   }, 60000)
 
+  it('runs prepare, migrate, build and dev on a fresh clone of a SQLite project whose storage directory is gitignored', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['prepare', 'migrate', 'build']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+      expect(result.stderr, command).toBe('')
+    }
+    await rm(join(projectRoot, '.holo-js/generated'), { recursive: true, force: true })
+    const dev = runCliProcess(projectRoot, ['dev'])
+
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stderr).toBe('')
+    expect(dev.stdout).toContain('dev server tables: profiles,users')
+  }, 90000)
+
   it.each(['migrate', 'migrate:fresh'])('creates the missing directory and file of the SQLite database on %s', async (command) => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
