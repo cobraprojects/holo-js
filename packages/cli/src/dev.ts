@@ -119,7 +119,7 @@ export async function runProjectBuildPrepare(
     child.on('close', code => resolvePromise({ code }))
   })
   if ('error' in result) throw result.error
-  if (result.code !== 0) throw new Error(stderr.trim() || 'Project preparation failed after generated schema hydration.')
+  if (result.code !== 0) throw new Error(stderr.trim() || 'Project preparation failed after writing the generated schema.')
 }
 
 async function runProjectHotPrepare(

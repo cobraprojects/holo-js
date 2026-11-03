@@ -1320,7 +1320,7 @@ export function createInternalCommands(
         const runProjectBuild = await resolveProjectExecutor(projectExecutors, 'runProjectBuild')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
         await prepareProjectSchema(context.projectRoot)
-        await executeRuntime(context.projectRoot, 'hydrate-schema', {}, async () => undefined)
+        await executeRuntime(context.projectRoot, 'generate-schema', {}, async () => undefined)
         await runProjectBuildPrepare(context, context.projectRoot)
         const passthroughArgs = serializePassthroughInput(input)
         if (passthroughArgs.length > 0) {
