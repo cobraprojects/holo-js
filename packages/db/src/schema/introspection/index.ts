@@ -1,3 +1,4 @@
+import { assertValidIdentifierPath } from '../identifiers'
 import { toTableDefinition } from './definitions'
 import { createMySQLSchemaReader } from './mysql'
 import { createPostgresSchemaReader } from './postgres'
@@ -46,4 +47,9 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
       return tables
     },
   }
+}
+
+export function readTableStructure(connection: DatabaseContext, tableName: string): Promise<DatabaseTableStructure | undefined> {
+  assertValidIdentifierPath(tableName, 'Table name')
+  return createSchemaReader(connection).readTableStructure(tableName)
 }
