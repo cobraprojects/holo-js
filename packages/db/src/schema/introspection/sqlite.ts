@@ -253,6 +253,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           autoIncrement: row.name === rowIdAlias,
           computed: row.hidden === 2 || row.hidden === 3,
         })),
+        primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
         indexes,
         foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
         enumChecks: storedTable ? readEnumChecks(storedTable) : [],

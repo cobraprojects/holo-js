@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
-import { clearGeneratedTables, defineModel, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, resetDB, SchemaError, type DatabaseDependencyInvalidationEvent } from '../src'
+import { clearGeneratedTables, defineModel, getGeneratedTableDefinition, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, SchemaError, type DatabaseContext, type DatabaseDependencyInvalidationEvent, type TableDefinition } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { openDatabase } from './support/database'
 
@@ -281,6 +285,67 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const PostTag = defineModel(pivotTable)
       expect(() => PostTag.query()).toThrow(SchemaError)
       expect(await db.table(pivotTable).count()).toBe(4)
+    })
+  })
+}
+
+for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+  describe(`${driver} composite primary key column order`, () => {
+    beforeEach(() => {
+      resetDB()
+      clearGeneratedTables()
+    })
+
+    async function createReversedKeyTable(declare: 'createTable' | 'schema.table') {
+      const opened = await openDatabase(driver)
+      const { db, schema } = opened
+      const parent = uniqueTableName('holo_key_order')
+      const child = uniqueTableName('holo_key_order_child')
+      onTestFinished(async () => {
+        await schema.dropTable(child)
+        await schema.dropTable(parent)
+      })
+      await schema.createTable(parent, (table) => {
+        table.integer('a')
+        table.integer('b')
+        if (declare === 'createTable') table.primary(['b', 'a'])
+      })
+      if (declare === 'schema.table') await schema.table(parent, (table) => { table.primary(['b', 'a']) })
+      const reference = driver === 'mysql' ? `${db.getDialect().quoteIdentifier(parent)} (b, a)` : db.getDialect().quoteIdentifier(parent)
+      await db.executeCompiled({ sql: `CREATE TABLE ${db.getDialect().quoteIdentifier(child)} (parent_b integer NOT NULL, parent_a integer NOT NULL, FOREIGN KEY (parent_b, parent_a) REFERENCES ${reference})`, source: 'schema' })
+      await db.table(parent).insert([{ a: 1, b: 2 }, { a: 2, b: 1 }])
+      return { ...opened, parent, child }
+    }
+
+    async function chunkedKeys(db: DatabaseContext, table: TableDefinition) {
+      const keys: number[][] = []
+      await db.table(table).chunk(1, (rows) => { keys.push(...rows.map(row => [Number(row.b), Number(row.a)])) })
+      return keys
+    }
+
+    for (const declare of ['createTable', 'schema.table'] as const) {
+      it(`creates the key in the order primary() lists its columns through ${declare}`, async () => {
+        const { db, parent, child } = await createReversedKeyTable(declare)
+
+        await db.table(child).insert({ parent_b: 2, parent_a: 1 })
+        const definition = (await createSchemaReader(db).readTable(parent))!
+
+        expect(await db.table(child).count()).toBe(1)
+        expect(await chunkedKeys(db, definition)).toEqual([[1, 2], [2, 1]])
+      })
+    }
+
+    it('keeps the key column order through the Generated schema', async () => {
+      const { db, parent } = await createReversedKeyTable('createTable')
+      const definition = (await createSchemaReader(db).readTable(parent))!
+      const directory = await mkdtemp(join(tmpdir(), 'holo-generated-schema-'))
+      onTestFinished(() => rm(directory, { recursive: true, force: true }))
+      const modulePath = join(directory, 'schema.generated.ts')
+      await writeFile(modulePath, renderGeneratedSchemaRuntimeModule([definition]))
+
+      await import(pathToFileURL(modulePath).href)
+
+      expect(await chunkedKeys(db, getGeneratedTableDefinition(parent)!)).toEqual([[1, 2], [2, 1]])
     })
   })
 }

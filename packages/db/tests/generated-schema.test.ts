@@ -10,6 +10,7 @@ import {
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
   renderGeneratedSchemaRuntimeModule,
+  SchemaError,
   type TableDefinition,
 } from '../src'
 
@@ -203,5 +204,12 @@ describe('generated schema helpers', () => {
     expect(fallback.tableName).toBe('missing_users')
     expect(Object.keys(fallback.columns)).toEqual(['id'])
     expect(fallback.columns.id?.kind).toBe('id')
+  })
+
+  it('rejects a primary key column order that does not list exactly the primary-key columns', () => {
+    const columns = { a: column.integer().primaryKey(), b: column.integer().primaryKey(), c: column.integer() }
+
+    expect(() => defineGeneratedTable('post_tags', columns, { primaryKeyColumns: ['b', 'c'] })).toThrow(SchemaError)
+    expect(() => defineGeneratedTable('post_tags', columns, { primaryKeyColumns: ['b'] })).toThrow(SchemaError)
   })
 })

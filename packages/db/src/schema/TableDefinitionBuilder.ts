@@ -570,6 +570,7 @@ export class TableDefinitionBuilder<
   private readonly columnRefs = new Map<string, ColumnReference>()
   private readonly indexes: TableIndexDefinition[] = []
   private primaryKeyName?: string
+  private primaryKeyColumns?: readonly string[]
 
   constructor(readonly tableName: TName) {}
 
@@ -577,6 +578,7 @@ export class TableDefinitionBuilder<
     const options: DefineTableOptions = {
       indexes: Object.freeze([...this.indexes]),
       primaryKeyName: this.primaryKeyName,
+      primaryKeyColumns: this.primaryKeyColumns,
     }
 
     return defineTable(this.tableName, this.columns as TColumns, options) as BoundTableDefinition<TName, TColumns>
@@ -812,6 +814,7 @@ export class TableDefinitionBuilder<
     }
 
     this.primaryKeyName = name
+    this.primaryKeyColumns = columns
     return this
   }
 
