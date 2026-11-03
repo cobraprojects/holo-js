@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { projectTsconfigInternals } from '../src/projectTsconfig'
 import { runtimeModuleInternals } from '../src/runtimeModule'
 
@@ -114,27 +114,27 @@ describe('project tsconfig loading for bundled definitions', () => {
     expect(parseTsconfigText('[]')).toBeUndefined()
   })
 
-  it('bundles definitions while .nuxt/tsconfig.json is being truncated concurrently', async () => {
+  it('bundles definitions while Nuxt rewrites .nuxt/tsconfig.json before and during the build', async () => {
     const { projectRoot, nuxtTsconfigPath, entryPath } = await createNuxtProject()
-    let stopped = false
-    const truncator = (async () => {
-      let empty = true
-      while (!stopped) {
-        await writeFile(nuxtTsconfigPath, empty ? '' : nuxtTsconfigContents)
-        empty = !empty
-      }
-      await writeFile(nuxtTsconfigPath, nuxtTsconfigContents)
-    })()
+    const states = ['', nuxtTsconfigContents.slice(0, Math.floor(nuxtTsconfigContents.length / 2)), nuxtTsconfigContents]
+    const runEsbuild = runtimeModuleInternals.runEsbuild
+    let duringBuild = ''
+    const rewriteDuringBuild = vi.spyOn(runtimeModuleInternals, 'runEsbuild').mockImplementation(async (options) => {
+      await writeFile(nuxtTsconfigPath, duringBuild)
+      return runEsbuild(options)
+    })
+    onTestFinished(() => rewriteDuringBuild.mockRestore())
 
-    try {
-      for (let attempt = 0; attempt < 30; attempt++) {
+    for (const beforeBuild of states) {
+      for (const rewritten of states) {
+        await writeFile(nuxtTsconfigPath, beforeBuild)
+        duringBuild = rewritten
         const bundle = await importBundled(projectRoot, entryPath)
-        expect(bundle.definition).toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'tool' })
+        expect(bundle.definition, `before: ${JSON.stringify(beforeBuild)}, during: ${JSON.stringify(rewritten)}`)
+          .toEqual({ title: 'post', util: 'util', helper: 'imports', tool: 'tool' })
       }
-    } finally {
-      stopped = true
-      await truncator
     }
+    expect(rewriteDuringBuild).toHaveBeenCalledTimes(states.length * states.length)
   })
 
   it('resolves the project tsconfig own baseUrl and paths from the bundle temp directory', async () => {
