@@ -309,7 +309,7 @@ export abstract class SQLSchemaCompiler {
     assertValidIndexName(indexName)
 
     return {
-      sql: `DROP INDEX IF EXISTS ${this.quoteIdentifier(indexName)}`,
+      sql: `DROP INDEX ${this.compileTableSchemaIndexPath(tableName, indexName)}`,
       source: `schema:dropIndex:${tableName}:${indexName}`,
     }
   }
@@ -319,7 +319,7 @@ export abstract class SQLSchemaCompiler {
     assertValidIndexName(indexName)
     const sql = backedBy === 'constraint'
       ? `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(indexName)}`
-      : `DROP INDEX ${this.compileIdentifierPath([...tableName.split('.').slice(0, -1), indexName].join('.'))}`
+      : `DROP INDEX ${this.compileTableSchemaIndexPath(tableName, indexName)}`
 
     return {
       sql,
@@ -343,9 +343,13 @@ export abstract class SQLSchemaCompiler {
     assertValidIndexName(toIndexName)
 
     return {
-      sql: `ALTER INDEX ${this.quoteIdentifier(fromIndexName)} RENAME TO ${this.quoteIdentifier(toIndexName)}`,
+      sql: `ALTER INDEX ${this.compileTableSchemaIndexPath(tableName, fromIndexName)} RENAME TO ${this.quoteIdentifier(toIndexName)}`,
       source: `schema:renameIndex:${tableName}:${fromIndexName}:${toIndexName}`,
     }
+  }
+
+  private compileTableSchemaIndexPath(tableName: string, indexName: string): string {
+    return this.compileIdentifierPath([...tableName.split('.').slice(0, -1), indexName].join('.'))
   }
 
   protected compileTableDefinitions(table: TableDefinition): string[] {
