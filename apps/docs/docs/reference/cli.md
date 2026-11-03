@@ -546,7 +546,7 @@ npx holo seed [--only <names>] [--quietly] [--force]
 npx holo seed --only roles,admin
 ```
 
-`seed` writes the generated schema types from the database before it runs your seeders, so models resolve against the current tables. When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
+`seed` writes the generated schema types from the database before it runs your seeders, so models resolve against the current tables. If it can't read the database, it warns and runs them with the generated schema it has. When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
 
 ### prune
 
