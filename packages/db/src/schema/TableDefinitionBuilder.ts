@@ -82,11 +82,6 @@ class TableCreateColumnBuilder<
     return this
   }
 
-  generated(): this {
-    this.builderRef.builder = this.builderRef.builder.generated()
-    return this
-  }
-
   primaryKey(): this {
     this.builderRef.builder = this.builderRef.builder.primaryKey()
     return this

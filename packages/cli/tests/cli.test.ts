@@ -10018,7 +10018,7 @@ export default {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeProjectFile(projectRoot, 'server/models/admins/User.mjs', `
-throw new Error('Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.')
+throw new Error('Model "users" is not present in the Generated schema. Run "holo migrate" to regenerate it.')
 `)
 
     const registry = await (async () => prepareProjectDiscovery(projectRoot))()

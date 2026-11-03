@@ -115,7 +115,7 @@ describe('model core slice', () => {
     expect(User.definition.name).toBe('User')
     expect(User.definition.fillable).toEqual(['name'])
     expect(() => User.getTableName()).toThrow(
-      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
   })
 
@@ -131,7 +131,7 @@ describe('model core slice', () => {
 
     expect(SecondUser.definition.name).toBe(FirstUser.definition.name)
     expect(() => SecondUser.getTableName()).toThrow(
-      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
   })
 
@@ -306,7 +306,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -316,7 +316,7 @@ describe('model core slice', () => {
       morphClass: { value: 'other-ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -326,7 +326,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -336,7 +336,7 @@ describe('model core slice', () => {
       morphClass: { value: 'ghost' },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -359,7 +359,7 @@ describe('model core slice', () => {
       },
       table: {
         get() {
-          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+          throw new SchemaError('Model "ghosts" is not present in the Generated schema.')
         },
       },
     }) as typeof Person.definition
@@ -413,30 +413,26 @@ describe('model core slice', () => {
     expect(MissingUser.definition.name).toBe('MissingUser')
     expect(MissingUser.definition.morphClass).toBe('MissingUser')
     expect(() => MissingUser.getTableName()).toThrow(
-      'Model "missing_users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+      'Model "missing_users" is not present in the Generated schema. Run "holo migrate" to regenerate it.',
     )
     expect(Untimestamped.definition.createdAtColumn).toBeUndefined()
     expect(Untimestamped.definition.updatedAtColumn).toBeUndefined()
-    expect(() => Untimestamped.definition.uniqueIdConfig).toThrow('not present in the generated schema registry')
+    expect(() => Untimestamped.definition.uniqueIdConfig).toThrow('not present in the Generated schema')
   })
 
-  it('resolves deferred generated models from the configured runtime schema registry', () => {
-    const admins = defineTable('admins', {
-      id: column.id(),
-      name: column.string(),
+  it('resolves deferred models from the Generated schema, not from tables created at runtime', async () => {
+    const adapter = createSQLiteAdapter({ filename: ':memory:' })
+    onTestFinished(() => adapter.disconnect())
+    const db = createDatabase({ connectionName: 'default', adapter, dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    await createSchemaService(db).createTable('admins', (table) => {
+      table.id()
+      table.string('name')
     })
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: createDatabase({
-          connectionName: 'default',
-          adapter: createSQLiteAdapter({ filename: ':memory:' }),
-          dialect: createDatabaseDialect('sqlite'),
-        }),
-      },
-    }))
-    DB.connection().getSchemaRegistry().replace(admins)
 
+    expect(() => defineModel('admins').getTableName()).toThrow('Model "admins" is not present in the Generated schema.')
+
+    registerGeneratedTables({ admins: defineTable('admins', { id: column.id(), name: column.string() }) })
     const Admin = defineModel('admins')
 
     expect(Admin.getTableName()).toBe('admins')
@@ -629,6 +625,7 @@ describe('model core slice', () => {
       table.integer('minScore')
       table.integer('maxScore')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), status: column.string(), minScore: column.integer(), maxScore: column.integer() }) })
     const User = defineModel('users', { fillable: ['name', 'status', 'minScore', 'maxScore'] })
     await User.createMany([
       { name: 'Mohamed', status: 'active', minScore: 1, maxScore: 2 },
@@ -659,6 +656,10 @@ describe('model core slice', () => {
       table.id()
       table.integer('userId')
       table.string('title')
+    })
+    registerGeneratedTables({
+      users: defineTable('users', { id: column.id(), name: column.string(), status: column.string(), settings: column.json(), created_at: column.timestamp() }),
+      posts: defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() }),
     })
     const User = defineModel('users', { fillable: ['name', 'status', 'settings', 'created_at'] })
     const Post = defineModel('posts', { fillable: ['userId', 'title'] })
@@ -696,6 +697,7 @@ describe('model core slice', () => {
       table.string('name')
       table.integer('score').nullable()
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), score: column.integer().nullable() }) })
     const User = defineModel('users', { fillable: ['name', 'score'] })
     await User.createMany([{ name: 'Mohamed', score: 10 }, { name: 'Amina', score: 20 }, { name: 'Salma', score: null }])
     expect(await User.count()).toBe(3)
@@ -782,6 +784,7 @@ describe('model core slice', () => {
       table.integer('score')
       table.boolean('active')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), score: column.integer(), active: column.boolean() }) })
     const User = defineModel('users', { fillable: ['name', 'score', 'active'] })
     await User.createMany([
       { name: 'Mohamed', score: 10, active: true },
@@ -817,6 +820,7 @@ describe('model core slice', () => {
       table.string('email').unique()
       table.string('name')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), email: column.string().unique(), name: column.string() }) })
     const User = defineModel('users', { fillable: ['email', 'name'] })
     await User.query().upsert({ email: 'm@example.com', name: 'Mohamed' }, ['email'], ['name'])
     const id = (await User.firstOrFail()).get('id')
@@ -1128,6 +1132,7 @@ describe('model core slice', () => {
       table.string('name')
       table.string('email').unique()
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), email: column.string().unique() }) })
     const User = defineModel('users', { fillable: ['name', 'email'] })
     const users = await Promise.all(Array.from({ length: 16 }, (_, index) => User.firstOrCreate(
       { email: 'race@example.com' }, { name: `Caller ${index}` },
@@ -1150,6 +1155,7 @@ describe('model core slice', () => {
       table.string('email').unique()
       table.string('status')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), email: column.string().unique(), status: column.string() }) })
     const User = defineModel('users', { fillable: ['name', 'email', 'status'] })
     await expect(User.firstOrCreate({ email: 'failure@example.com' })).rejects.toThrow(/not null/i)
     expect(await User.count()).toBe(0)
@@ -1730,9 +1736,8 @@ describe('model core slice', () => {
     await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
     await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })
     const documents = defineTable(table.tableName, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })
-    schema.register(documents)
     const Document = defineModelFromTable(documents)
-    await db.table(table.tableName).insert([
+    await db.table(documents).insert([
       { id: 1, name: 'Nearest', active: true, embedding: [1, 0, 0] },
       { id: 2, name: 'Orthogonal', active: true, embedding: [0, 1, 0] },
       { id: 3, name: 'Opposite', active: true, embedding: [-1, 0, 0] },

@@ -1541,8 +1541,8 @@ export default defineSessionConfig({
       provider: 'google',
       provider_user_id: 'admin-fallback',
       email_verified: false,
-      profile: {},
-      tokens: {},
+      profile: '{}',
+      tokens: '{}',
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
     })

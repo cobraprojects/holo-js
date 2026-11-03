@@ -3,7 +3,6 @@ export type { TransactionScopeKind, ConcurrencyOptions, QueryStartLog, QuerySucc
 /* v8 ignore file -- type declarations only */
 import type { DatabaseCapabilities } from './capabilities'
 import type { SecurityPolicy } from '../security/policy'
-import type { SchemaRegistry } from '../schema/SchemaRegistry'
 import type { ModelRegistry } from '../model/ModelRegistry'
 import type { SchedulingMode } from './QueryScheduler'
 
@@ -135,6 +134,5 @@ export interface DatabaseContextOptions {
   logger?: DatabaseLogger
   security?: Partial<SecurityPolicy>
   concurrency?: ConcurrencyOptions
-  schemaRegistry?: SchemaRegistry
   modelRegistry?: ModelRegistry
 }

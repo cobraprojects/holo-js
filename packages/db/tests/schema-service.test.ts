@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { CapabilityError, column, createSchemaService, defineModel, type DriverAdapter, SchemaError, TransactionError, unsafeSql } from '../src'
+import { CapabilityError, column, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
+
+const { createSchemaReader } = holoRuntimeInternals
 
 for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   describe(`native ${driver} schema service`, () => {
@@ -22,7 +24,14 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.index(['active'])
       })
       expect(await schema.hasTable(name)).toBe(true)
-      const definition = db.getSchemaRegistry().get(name)!
+      const definition = defineTable(name, {
+        id: column.id(),
+        email: column.string().unique(),
+        active: column.boolean().default(true),
+        visits: column.integer().default(7),
+        settings: column.json().nullable(),
+        created_at: column.timestamp().nullable(),
+      })
       const createdAt = new Date('2026-01-01T00:00:00Z')
       await db.table(definition).insert({ email: 'native@example.com', settings: { enabled: true }, created_at: createdAt })
       const row = (await db.table(definition).first())!
@@ -35,24 +44,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(definition).count()).toBe(1)
       expect((await schema.getColumns(name)).find(column => column.name === 'id')).toMatchObject({ primaryKey: true, notNull: true })
       expect(await schema.getIndexes(name)).toEqual(expect.arrayContaining([expect.objectContaining({ columns: ['active'], unique: false })]))
-    })
-
-    it('syncs missing registered tables without destroying existing rows', async () => {
-      const { db, schema, table } = await openDatabase(driver)
-      const name = `holo_sync_${randomUUID().replaceAll('-', '')}`
-      onTestFinished(() => schema.dropTable(name))
-      const definition = defineTable(name, { id: column.id(), name: column.string() })
-      schema.register(definition)
-      const preview = await schema.previewSync([definition])
-      expect(preview).toMatchObject({ mode: 'create_missing_only', tablesToCreate: [name], destructiveChanges: false })
-      expect(await schema.hasTable(name)).toBe(false)
-      await db.table(table).insert({ id: 1, name: 'Preserved', active: true })
-      await schema.sync([definition])
-      await db.table(definition).insert({ name: 'Created' })
-      await schema.sync([definition])
-      expect(await db.table(definition).pluck('name')).toEqual(['Created'])
-      expect(await db.table(table).pluck('name')).toEqual(['Preserved'])
-      expect((await schema.previewSync([definition])).tablesToCreate).toEqual([])
     })
 
     it('renames tables and columns and preserves persisted rows', async () => {
@@ -94,6 +85,127 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.table(name, table => { table.dropColumn('nickname') })
       expect((await schema.getColumns(name)).map(column => column.name)).not.toContain('nickname')
       expect(await db.table(name).orderBy('id').pluck('name')).toEqual(['Original', 'Second'])
+    })
+
+    it('changes a column of a table created by raw SQL to exactly the modifiers given', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_change_${randomUUID().replaceAll('-', '')}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE ${name} (id integer PRIMARY KEY, nickname varchar(40) NULL DEFAULT 'guest')`)
+      await db.table(name).insert({ id: 1 })
+
+      await schema.table(name, table => { table.string('nickname').change() })
+
+      expect((await schema.getColumns(name)).find(column => column.name === 'nickname')).toMatchObject({ notNull: true, defaultValue: null })
+      await expect(db.table(name).insert({ id: 2 })).rejects.toThrow()
+      await expect(db.table(name).insert({ id: 2, nickname: null })).rejects.toThrow()
+
+      await schema.table(name, table => { table.string('nickname').nullable().change() })
+
+      await db.table(name).insert({ id: 2 })
+      expect(await db.table(name).orderBy('id').pluck('nickname')).toEqual(['guest', null])
+    })
+
+    it.runIf(driver === 'sqlite')('rebuilds a table on change() keeping undeclared columns, data, indexes, foreign keys, and triggers', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const members = `holo_members_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(members)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${members}" (
+        "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+        "parent_id" INTEGER CONSTRAINT "members_parent" REFERENCES "${parents}" ("id") ON DELETE CASCADE ON UPDATE RESTRICT,
+        "email" TEXT NOT NULL UNIQUE,
+        "code" TEXT COLLATE NOCASE CHECK (length("code") <= 5),
+        "status" TEXT NOT NULL DEFAULT 'active' CONSTRAINT "members_status_check" CHECK ("status" IN ('active', 'banned')),
+        "nickname" TEXT DEFAULT 'guest',
+        "visits" INTEGER NOT NULL DEFAULT 0,
+        UNIQUE ("parent_id", "code")
+      )`)
+      await adapter.execute(`CREATE INDEX "members_visits_index" ON "${members}" ("visits")`)
+      await adapter.execute(`CREATE TRIGGER "members_count_visit" AFTER INSERT ON "${members}" BEGIN UPDATE "${members}" SET "visits" = "visits" + 1 WHERE "id" = NEW."id"; END`)
+      await db.table(parents).insert([{ id: 1 }, { id: 2 }])
+      await db.table(members).insert([
+        { parent_id: 1, email: 'a@example.com', code: 'abc', status: 'active' },
+        { parent_id: 2, email: 'b@example.com', code: 'xyz', status: 'banned' },
+      ])
+      await db.table(members).where('id', 2).delete()
+      const reader = createSchemaReader(db)
+      const before = (await reader.readTableStructure(members))!
+
+      await schema.table(members, table => { table.string('nickname').nullable().change() })
+
+      const after = (await reader.readTableStructure(members))!
+      expect(after.columns.filter(column => column.name !== 'nickname')).toEqual(before.columns.filter(column => column.name !== 'nickname'))
+      expect(after.columns.find(column => column.name === 'nickname')).toMatchObject({ fullType: 'varchar(255)', notNull: false, default: { kind: 'none' } })
+      expect(after.foreignKeys).toEqual(before.foreignKeys)
+      expect(after.enumChecks).toEqual(before.enumChecks)
+      expect(after.indexes.map(index => [index.columns, index.unique])).toEqual(before.indexes.map(index => [index.columns, index.unique]))
+      expect(await db.table(members).select('id', 'parent_id', 'email', 'code', 'status', 'nickname', 'visits').get()).toEqual([
+        { id: 1, parent_id: 1, email: 'a@example.com', code: 'abc', status: 'active', nickname: 'guest', visits: 1 },
+      ])
+
+      const id = await db.table(members).insertGetId({ parent_id: 2, email: 'c@example.com', code: 'ABC' })
+      expect(id).toBe(3)
+      expect(await db.table(members).where('id', id).first()).toMatchObject({ nickname: null, visits: 1 })
+      await expect(db.table(members).insert({ parent_id: 1, email: 'a@example.com', code: 'new' })).rejects.toThrow()
+      await expect(db.table(members).insert({ parent_id: 1, email: 'd@example.com', code: 'ABC' })).rejects.toThrow()
+      await expect(db.table(members).insert({ parent_id: 1, email: 'e@example.com', code: 'toolong' })).rejects.toThrow()
+      await expect(db.table(members).insert({ parent_id: 1, email: 'f@example.com', status: 'gone' })).rejects.toThrow()
+      await expect(db.table(members).insert({ parent_id: 99, email: 'g@example.com' })).rejects.toThrow()
+      await db.table(parents).where('id', 1).delete()
+      expect(await db.table(members).pluck('email')).toEqual(['c@example.com'])
+    })
+
+    it.runIf(driver === 'postgres')('renames enum checks of a table created by raw SQL with its columns and the table', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_raw_enum_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const moved = `${name}_moved`
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await schema.dropTable(moved)
+      })
+      const checkNames = async (tableName: string): Promise<string[]> => (await adapter.query<{ conname: string }>(
+        'SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = \'c\' ORDER BY conname',
+        [tableName],
+      )).rows.map(row => row.conname)
+      await adapter.execute(`CREATE TABLE "${name}" (id integer PRIMARY KEY, status varchar(20) NOT NULL CHECK (status IN ('open', 'closed')), total integer CHECK (total > 0))`)
+
+      await schema.table(name, table => { table.renameColumn('status', 'state') })
+      expect(await checkNames(name)).toEqual([`${name}_state_check`, `${name}_total_check`])
+
+      await schema.renameTable(name, moved)
+      expect(await checkNames(moved)).toEqual([`${moved}_state_check`, `${name}_total_check`])
+      await expect(db.table(moved).insert({ id: 1, state: 'lost' })).rejects.toThrow()
+
+      await schema.table(moved, table => { table.string('state').change() })
+      expect(await checkNames(moved)).toEqual([`${name}_total_check`])
+      await db.table(moved).insert({ id: 1, state: 'lost' })
+    })
+
+    it.runIf(driver === 'sqlite')('keeps enum check names when renaming a table and when a later change() rebuilds it', async () => {
+      const { db } = await openDatabase(driver)
+      const schema = createSchemaService(db)
+      const name = `holo_kept_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const moved = `${name}_moved`
+      onTestFinished(() => schema.dropTable(moved))
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.enum('status', ['open', 'closed'] as const).default('open')
+        table.string('note').nullable()
+      })
+
+      await schema.renameTable(name, moved)
+      await schema.table(moved, table => { table.text('note').nullable().change() })
+
+      expect((await createSchemaReader(db).readTableStructure(moved))?.enumChecks).toEqual([
+        { name: `${name}_status_check`, column: 'status', values: ['open', 'closed'] },
+      ])
+      await expect(db.table(moved).insert({ status: 'lost' })).rejects.toThrow()
     })
 
     it('restricts enum columns to their allowed values and replaces them on change()', async () => {
@@ -229,12 +341,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const name = `holo_legacy_${randomUUID().replaceAll('-', '')}`
       onTestFinished(() => schema.dropTable(name))
       await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY, "status" TEXT NOT NULL DEFAULT 'active', "tier" TEXT NOT NULL DEFAULT 'free' check (tier in ('free', 'pro')), "bio" TEXT NOT NULL DEFAULT 'CHECK (status IN (')`)
-      schema.register(defineTable(name, {
-        id: column.integer().primaryKey(),
-        status: column.enum(['active', 'disabled'] as const).default('active'),
-        tier: column.enum(['free', 'pro'] as const).default('free'),
-        bio: column.text().default('CHECK (status IN ('),
-      }))
       await db.table(name).insert({ status: 'legacy' })
 
       await schema.table(name, table => { table.text('bio').nullable().change() })
@@ -384,7 +490,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(definition).where('id', 2).first()).toEqual({ id: 2, active: 0, born_on: '2001-02-03T00:00:00.000Z', code: '1e3', settings: '"7"', nickname: '007' })
     })
 
-    it.runIf(driver === 'mysql')('registers a table renamed out of another database under its new location', async () => {
+    it.runIf(driver === 'mysql')('keeps enum values of a table renamed out of another database', async () => {
       const { db, schema, adapter } = await openDatabase(driver)
       const tenant = `holo_tenant_${randomUUID().replaceAll('-', '').slice(0, 12)}`
       const purchases = `holo_purchases_${randomUUID().replaceAll('-', '')}`
@@ -401,8 +507,8 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.renameTable(`${tenant}.orders`, purchases)
 
       expect(await schema.hasTable(purchases)).toBe(true)
-      expect(db.getSchemaRegistry().get(purchases)?.columns.state?.enumValues).toEqual(['open', 'closed'])
-      expect(db.getSchemaRegistry().has(`${tenant}.purchases`)).toBe(false)
+      expect((await createSchemaReader(db).readTable(purchases))?.columns.state?.enumValues).toEqual(['open', 'closed'])
+      await expect(db.table(purchases).insert({ state: 'lost' })).rejects.toThrow()
     })
 
     it('creates and drops indexes and preserves index names across column renames', async () => {

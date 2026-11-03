@@ -62,7 +62,6 @@ export interface AlterColumnOperation {
   readonly kind: 'alterColumn'
   readonly tableName: string
   readonly column: AnyColumnDefinition
-  readonly previousColumn?: AnyColumnDefinition
 }
 
 export interface CreateForeignKeyOperation {
@@ -185,11 +184,8 @@ export function renameColumnOperation(
 export function alterColumnOperation(
   tableName: string,
   column: AnyColumnDefinition,
-  previousColumn?: AnyColumnDefinition,
 ): AlterColumnOperation {
-  return previousColumn
-    ? { kind: 'alterColumn', tableName, column, previousColumn }
-    : { kind: 'alterColumn', tableName, column }
+  return { kind: 'alterColumn', tableName, column }
 }
 
 export function createForeignKeyOperation(

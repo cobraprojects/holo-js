@@ -3,7 +3,7 @@ import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
-import type { ColumnDefinition, TableDefinition } from './types'
+import type { AnyColumnDefinition, ColumnDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   protected override getDialectLabel(): string {
@@ -25,17 +25,19 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   }
 
   compileRebuildTable(
-    table: TableDefinition,
+    tableName: string,
     temporaryTableName: string,
-    uncheckedEnumColumns: ReadonlySet<string>,
+    definitions: readonly (string | AnyColumnDefinition)[],
+    options: string,
   ): DDLStatement {
     assertValidIdentifierPath(temporaryTableName, 'Table name')
-    const definitions = Object.values(table.columns).map(column => uncheckedEnumColumns.has(column.name)
-      ? this.compileColumnDefinition(table.tableName, column)
-      : this.compileColumn(table.tableName, column))
+    const compiledDefinitions = definitions.map(definition => typeof definition === 'string'
+      ? definition
+      : this.compileColumn(tableName, definition))
+    const tableOptions = options ? ` ${options}` : ''
     return {
-      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${definitions.join(', ')})`,
-      source: `schema:sqliteRebuild:create:${table.tableName}`,
+      sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${compiledDefinitions.join(', ')})${tableOptions}`,
+      source: `schema:sqliteRebuild:create:${tableName}`,
     }
   }
 }

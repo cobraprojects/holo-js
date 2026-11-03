@@ -1,20 +1,22 @@
 import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
-import { defineTable } from './defineTable'
-import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
 import { MySQLSchemaCompiler } from './MySQLSchemaCompiler'
 import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
+import { createSchemaReader } from './introspection'
+import { toTableDefinition } from './introspection/definitions'
+import { readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, splitCreateTableSql } from './introspection/sqlDefinitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement } from './ddl'
+import type { DatabaseTableStructure } from './introspection'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
@@ -38,13 +40,6 @@ export interface IntrospectedForeignKey {
   to: string
   onUpdate: string
   onDelete: string
-}
-
-export interface SchemaSyncPlan {
-  readonly mode: 'create_missing_only'
-  readonly tablesToCreate: readonly string[]
-  readonly existingTables: readonly string[]
-  readonly destructiveChanges: false
 }
 
 type SQLiteTableRow = {
@@ -148,10 +143,6 @@ export class SchemaService {
     return this.connection.getDialect().name
   }
 
-  register<TTable extends TableDefinition>(table: TTable): TTable {
-    return this.connection.getSchemaRegistry().register(table)
-  }
-
   async createTable<TName extends string>(
     tableName: TName,
     callback: (table: TableDefinitionBuilder<TName>) => void | Promise<void>,
@@ -163,9 +154,6 @@ export class SchemaService {
   async dropTable(tableName: string): Promise<void> {
     assertValidIdentifierPath(tableName, 'Table name')
     await this.execute(this.createCompiler().compile(dropTableOperation(tableName)))
-    mutateSchemaRegistry(this.connection, [tableName], () => {
-      this.connection.getSchemaRegistry().delete(tableName)
-    })
   }
 
   async renameTable(
@@ -175,10 +163,7 @@ export class SchemaService {
     assertValidIdentifierPath(fromTableName, 'Table name')
     assertValidIdentifierPath(toTableName, 'Table name')
     const destinationTableName = this.resolveRenamedTablePath(fromTableName, toTableName)
-    const registered = this.findRegisteredTable(fromTableName)
-    const enumColumnNames = Object.values(registered?.columns ?? {})
-      .filter(column => column.kind === 'enum')
-      .map(column => column.name)
+    const enumColumnNames = (await this.readPostgresEnumChecks(fromTableName)).map(check => check.column)
     await this.executeRename(
       this.createCompiler().compile(renameTableOperation(fromTableName, toTableName)),
       destinationTableName,
@@ -187,7 +172,6 @@ export class SchemaService {
         to: resolveGeneratedCheckName(destinationTableName, columnName),
       })),
     )
-    this.renameRegisteredTable(registered, destinationTableName)
   }
 
   async table(
@@ -248,30 +232,6 @@ export class SchemaService {
     } finally {
       await closePinnedConnection(pinned)
       await this.restoreForeignKeyConstraints()
-    }
-  }
-
-  async sync(tables?: readonly TableDefinition[]): Promise<void> {
-    const plan = await this.previewSync(tables)
-    const tableMap = new Map((tables ?? this.connection.getSchemaRegistry().list()).map(table => [table.tableName, table]))
-
-    for (const tableName of plan.tablesToCreate) {
-      await this.createDefinedTable(tableMap.get(tableName)!)
-    }
-  }
-
-  async previewSync(tables?: readonly TableDefinition[]): Promise<SchemaSyncPlan> {
-    const toSync = tables ?? this.connection.getSchemaRegistry().list()
-    const existingTables = await this.getTables()
-    const existingSet = new Set(existingTables)
-
-    return {
-      mode: 'create_missing_only',
-      tablesToCreate: toSync
-        .map(table => table.tableName)
-        .filter(tableName => !existingSet.has(tableName)),
-      existingTables,
-      destructiveChanges: false,
     }
   }
 
@@ -583,19 +543,7 @@ export class SchemaService {
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
-    const statements = this.createCompiler().compile(createTableOperation(table))
-    const registry = this.connection.getSchemaRegistry()
-    const declared = registry.has(table.tableName)
-    for (const [position, statement] of statements.entries()) {
-      await this.connection.executeCompiled(statement)
-      if (!declared) {
-        mutateSchemaRegistry(this.connection, [table.tableName], () => {
-          registry.replace(defineTable(table.tableName, table.columns, {
-            indexes: table.indexes.slice(0, position),
-          }))
-        })
-      }
-    }
+    await this.execute(this.createCompiler().compile(createTableOperation(table)))
   }
 
   private assertTableMutationIndexNames(
@@ -641,7 +589,6 @@ export class SchemaService {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
         await this.execute(this.createCompiler().compile(addColumnOperation(tableName, definition)))
-        this.updateRegisteredTable(tableName, table => this.withColumn(table, definition))
         return
       }
       case 'alterColumn': {
@@ -650,48 +597,42 @@ export class SchemaService {
           await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
         } else {
           this.assertAlterCapability('altering columns')
-          const previousDefinition = this.findRegisteredTable(tableName)?.columns[definition.name]
-          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition, previousDefinition))
+          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
           if (this.isPostgres()) {
+            const enumChecks = (await this.readPostgresEnumChecks(tableName)).filter(check => check.column === definition.name)
             await this.connection.transaction(async (tx) => {
-              await new SchemaService(tx).execute(statements)
+              const service = new SchemaService(tx)
+              await service.dropPostgresChecks(tableName, enumChecks.flatMap(check => check.name ? [check.name] : []))
+              await service.execute(statements)
             })
           } else {
             await this.execute(statements)
           }
         }
-        this.updateRegisteredTable(tableName, table => this.withAlteredColumn(table, definition))
         return
       }
       case 'dropColumn':
         this.assertAlterCapability('dropping columns')
         await this.execute(this.createCompiler().compile(dropColumnOperation(tableName, operation.columnName)))
-        this.updateRegisteredTable(tableName, table => this.withoutColumn(table, operation.columnName))
         return
       case 'renameColumn':
         this.assertAlterCapability('renaming columns')
         await this.executeRename(
           this.createCompiler().compile(renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName)),
           tableName,
-          this.findRegisteredTable(tableName)?.columns[operation.fromColumnName]?.kind === 'enum'
-            ? [{
-                from: resolveGeneratedCheckName(tableName, operation.fromColumnName),
-                to: resolveGeneratedCheckName(tableName, operation.toColumnName),
-              }]
-            : [],
-        )
-        this.updateRegisteredTable(
-          tableName,
-          table => this.renameRegisteredColumn(table, operation.fromColumnName, operation.toColumnName),
+          (await this.readPostgresEnumChecks(tableName))
+            .filter(check => check.column === operation.fromColumnName)
+            .map(() => ({
+              from: resolveGeneratedCheckName(tableName, operation.fromColumnName),
+              to: resolveGeneratedCheckName(tableName, operation.toColumnName),
+            })),
         )
         return
       case 'createIndex':
         await this.execute(this.createCompiler().compile(createIndexOperation(tableName, operation.index)))
-        this.updateRegisteredTable(tableName, table => this.withIndex(table, operation.index))
         return
       case 'dropIndex':
         await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, operation.indexName)))
-        this.updateRegisteredTable(tableName, table => this.withoutIndex(table, operation.indexName))
         return
       case 'renameIndex':
         if (this.isSqlite()) {
@@ -700,10 +641,6 @@ export class SchemaService {
         await this.execute(this.createCompiler().compile(
           renameIndexOperation(tableName, operation.fromIndexName, operation.toIndexName),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.renameRegisteredIndex(table, operation.fromIndexName, operation.toIndexName),
-        )
         return
       case 'createForeignKey':
         this.assertForeignKeyCapability('adding foreign keys')
@@ -713,20 +650,12 @@ export class SchemaService {
         await this.execute(this.createCompiler().compile(
           createForeignKeyOperation(tableName, operation.columnName, operation.reference, operation.constraintName),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.withForeignKey(table, operation.columnName, operation.reference, operation.constraintName),
-        )
         return
       case 'dropForeignKey':
         this.assertForeignKeyCapability('dropping foreign keys')
         await this.execute(this.createCompiler().compile(
           dropForeignKeyOperation(tableName, operation.constraintName),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.withoutForeignKey(table, operation.constraintName),
-        )
         return
     }
   }
@@ -748,15 +677,23 @@ export class SchemaService {
     })
   }
 
-  private findRegisteredTable(tableName: string): TableDefinition | undefined {
-    const registry = this.connection.getSchemaRegistry()
-    const defaultSchema = this.connection.getSchemaName() ?? (this.isPostgres() ? 'public' : undefined)
-    const segments = tableName.split('.')
-    const equivalentName = !defaultSchema ? undefined
-      : segments.length === 1 ? `${defaultSchema}.${tableName}`
-        : segments.length === 2 && segments[0] === defaultSchema ? segments[1]! : undefined
+  private async readPostgresEnumChecks(tableName: string): Promise<DatabaseTableStructure['enumChecks']> {
+    if (!this.isPostgres()) {
+      return []
+    }
 
-    return registry.get(tableName) ?? (equivalentName ? registry.get(equivalentName) : undefined)
+    return (await createSchemaReader(this.connection).readTableStructure(tableName))?.enumChecks ?? []
+  }
+
+  private async dropPostgresChecks(tableName: string, checkNames: readonly string[]): Promise<void> {
+    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
+    const tableIdentifier = tableName.split('.').map(quote).join('.')
+    for (const checkName of checkNames) {
+      await this.connection.executeCompiled({
+        sql: `ALTER TABLE ${tableIdentifier} DROP CONSTRAINT ${quote(checkName)}`,
+        source: `schema:dropCheck:${tableName}:${checkName}`,
+      })
+    }
   }
 
   private resolveRenamedTablePath(fromTableName: string, toTableName: string): string {
@@ -822,14 +759,12 @@ export class SchemaService {
     tableName: string,
     column: AnyColumnDefinition,
   ): Promise<void> {
-    const registered = this.connection.getSchemaRegistry().get(tableName)
-    if (!registered) {
-      throw new SchemaError(
-        `SQLite column changes require table "${tableName}" to be registered before calling change().`,
-      )
+    const structure = await createSchemaReader(this.connection).readTableStructure(tableName)
+    if (!structure) {
+      throw new SchemaError(`SQLite cannot change column "${column.name}" because table "${tableName}" does not exist.`)
     }
 
-    if (!registered.columns[column.name]) {
+    if (!structure.columns.some(existing => existing.name === column.name)) {
       throw new SchemaError(
         `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
       )
@@ -842,7 +777,16 @@ export class SchemaService {
       )
     }
 
-    const rebuilt = this.withAlteredColumn(registered, column)
+    const currentTable = await this.connection.introspectCompiled<SQLiteTableSqlRow>({
+      sql: 'SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?',
+      bindings: [tableName],
+      source: `schema:sqliteRebuild:table:${tableName}`,
+    })
+    const currentSql = splitCreateTableSql(currentTable.rows[0]?.sql ?? '')
+    if (!currentSql) {
+      throw new SchemaError(`SQLite cannot read the definition of table "${tableName}" to rebuild it.`)
+    }
+
     const schemaObjects = await this.connection.introspectCompiled<SQLiteSchemaObjectRow>({
       sql: 'SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? AND type IN (\'index\', \'trigger\') AND sql IS NOT NULL ORDER BY type, name',
       bindings: [tableName],
@@ -850,25 +794,17 @@ export class SchemaService {
     })
     const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
     const compiler = new SQLiteSchemaCompiler(quote)
-    const columns = Object.keys(rebuilt.columns).map(quote).join(', ')
+    const definitions = this.rebuildSqliteDefinitions(structure, currentSql.definitions, column)
+    const columns = structure.columns.filter(existing => !existing.computed).map(existing => quote(existing.name)).join(', ')
 
-    const currentTable = await this.connection.introspectCompiled<SQLiteTableSqlRow>({
-      sql: 'SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?',
-      bindings: [tableName],
-      source: `schema:sqliteRebuild:table:${tableName}`,
-    })
-    const currentSql = (currentTable.rows[0]?.sql ?? '').replace(/'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g, ' ')
-    const uncheckedEnumColumns = new Set(Object.values(registered.columns)
-      .filter(definition => definition.kind === 'enum' && definition.name !== column.name)
-      .filter(definition => !new RegExp(`CHECK\\s*\\(\\s*["\`[]?${definition.name}["\`\\]]?\\s+IN\\s*\\(`, 'i').test(currentSql))
-      .map(definition => definition.name))
-
-    await this.connection.executeCompiled(compiler.compileRebuildTable(rebuilt, temporaryTableName, uncheckedEnumColumns))
+    await this.connection.executeCompiled(compiler.compileRebuildTable(tableName, temporaryTableName, definitions, currentSql.options))
     await this.connection.executeCompiled({
       sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
       source: `schema:sqliteRebuild:copy:${tableName}`,
     })
-    if (Object.values(rebuilt.columns).some(definition => definition.idStrategy === 'autoIncrement')) {
+    if (definitions.some(definition => typeof definition === 'string'
+      ? readInlineColumnConstraints(definition).autoIncrement
+      : definition.idStrategy === 'autoIncrement')) {
       await this.connection.executeCompiled({
         sql: 'DELETE FROM sqlite_sequence WHERE name = ?',
         bindings: [temporaryTableName],
@@ -891,6 +827,41 @@ export class SchemaService {
     }
   }
 
+  private rebuildSqliteDefinitions(
+    structure: DatabaseTableStructure,
+    definitions: readonly string[],
+    column: AnyColumnDefinition,
+  ): Array<string | AnyColumnDefinition> {
+    return definitions.flatMap((definition): Array<string | AnyColumnDefinition> => {
+      const columnName = readColumnDefinitionName(definition)
+      if (columnName === column.name) {
+        return [this.keepSqliteColumnConstraints(structure, definition, column)]
+      }
+
+      if (columnName === undefined && readEnumChecks(definition).some(check => check.column === column.name)) {
+        return []
+      }
+
+      return [definition]
+    })
+  }
+
+  private keepSqliteColumnConstraints(
+    structure: DatabaseTableStructure,
+    definition: string,
+    column: AnyColumnDefinition,
+  ): AnyColumnDefinition {
+    const inline = readInlineColumnConstraints(definition)
+    const references = inline.references ? toTableDefinition(structure).columns[column.name]?.references : undefined
+    return {
+      ...column,
+      primaryKey: inline.primaryKey,
+      unique: inline.unique,
+      references,
+      ...(inline.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
+    }
+  }
+
   private async buildTableDefinition<TName extends string>(
     tableName: TName,
     callback?: (table: TableDefinitionBuilder<TName>) => void | Promise<void>,
@@ -906,162 +877,8 @@ export class SchemaService {
     return builder.build()
   }
 
-  private updateRegisteredTable(
-    tableName: string,
-    update: (table: TableDefinition) => TableDefinition,
-  ): void {
-    const existing = this.findRegisteredTable(tableName)
-    if (!existing) {
-      return
-    }
-
-    mutateSchemaRegistry(this.connection, [existing.tableName], () => {
-      this.connection.getSchemaRegistry().replace(update(existing))
-    })
-  }
-
-  private renameRegisteredTable(existing: TableDefinition | undefined, toTableName: string): void {
-    if (!existing) {
-      return
-    }
-
-    const registry = this.connection.getSchemaRegistry()
-    mutateSchemaRegistry(this.connection, [existing.tableName, toTableName], () => {
-      registry.delete(existing.tableName)
-      registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
-    })
-  }
-
-  private withColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [column.name]: column,
-    }, { indexes: table.indexes })
-  }
-
-  private withAlteredColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {
-    const existing = table.columns[column.name]
-    if (!existing) {
-      return this.withColumn(table, column)
-    }
-
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [column.name]: Object.freeze({
-        ...column,
-        primaryKey: existing.primaryKey,
-        unique: existing.unique,
-        references: existing.references,
-      }),
-    }, { indexes: table.indexes })
-  }
-
-  private withoutColumn(table: TableDefinition, columnName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).filter(([name]) => name !== columnName),
-    )
-    const nextIndexes = table.indexes.filter(index => !index.columns.includes(columnName))
-    return defineTable(table.tableName, nextColumns, { indexes: nextIndexes })
-  }
-
-  private renameRegisteredColumn(table: TableDefinition, fromColumnName: string, toColumnName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).map(([name, column]) => {
-        if (name !== fromColumnName) {
-          return [name, column]
-        }
-
-        return [toColumnName, Object.freeze({
-          ...column,
-          name: toColumnName,
-          references: column.references
-            ? {
-                ...column.references,
-                constraintName: column.references.constraintName
-                  ?? this.resolveForeignKeyName(table.tableName, fromColumnName),
-              }
-            : undefined,
-        })]
-      }),
-    )
-    const nextIndexes = table.indexes.map(index => ({
-      ...index,
-      name: index.name
-        ?? (
-          index.columns.includes(fromColumnName)
-            ? this.resolveIndexName(table.tableName, index)
-            : undefined
-        ),
-      columns: index.columns.map(columnName => columnName === fromColumnName ? toColumnName : columnName),
-    }))
-    return defineTable(table.tableName, nextColumns, { indexes: nextIndexes })
-  }
-
-  private withIndex(table: TableDefinition, index: TableIndexDefinition): TableDefinition {
-    return defineTable(table.tableName, table.columns, {
-      indexes: [...table.indexes, index],
-    })
-  }
-
-  private withoutIndex(table: TableDefinition, indexName: string): TableDefinition {
-    const nextIndexes = table.indexes.filter(index => this.resolveIndexName(table.tableName, index) !== indexName)
-    return defineTable(table.tableName, table.columns, { indexes: nextIndexes })
-  }
-
-  private renameRegisteredIndex(table: TableDefinition, fromIndexName: string, toIndexName: string): TableDefinition {
-    const nextIndexes = table.indexes.map(index => (
-      this.resolveIndexName(table.tableName, index) === fromIndexName
-        ? { ...index, name: toIndexName }
-        : index
-    ))
-    return defineTable(table.tableName, table.columns, { indexes: nextIndexes })
-  }
-
-  private withForeignKey(
-    table: TableDefinition,
-    columnName: string,
-    reference: ForeignKeyReference,
-    constraintName?: string,
-  ): TableDefinition {
-    const target = table.columns[columnName]
-    if (!target) {
-      return table
-    }
-
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [columnName]: Object.freeze({
-        ...target,
-        references: { ...reference, ...(constraintName ? { constraintName } : {}) },
-      }),
-    }, { indexes: table.indexes })
-  }
-
-  private withoutForeignKey(table: TableDefinition, constraintName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).map(([name, column]) => {
-        const generatedConstraintName = this.resolveForeignKeyName(table.tableName, name)
-        const registeredConstraintName = column.references?.constraintName ?? generatedConstraintName
-        if (!column.references || registeredConstraintName !== constraintName) {
-          return [name, column]
-        }
-
-        return [name, Object.freeze({
-          ...column,
-          references: undefined,
-        })]
-      }),
-    )
-
-    return defineTable(table.tableName, nextColumns, { indexes: table.indexes })
-  }
-
   private resolveIndexName(tableName: string, index: TableIndexDefinition): string {
     return resolveGeneratedIndexName(tableName, index)
-  }
-
-  private resolveForeignKeyName(tableName: string, columnName: string): string {
-    return resolveGeneratedForeignKeyName(tableName, columnName)
   }
 
   private createForeignKeyConstraintStatement(enable: boolean): { sql: string, source: string } {

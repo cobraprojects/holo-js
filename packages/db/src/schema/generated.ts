@@ -195,10 +195,6 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
     }
   }
 
-  if (columnDefinition.generated && columnDefinition.kind !== 'id') {
-    chains.push('.generated()')
-  }
-
   if (columnDefinition.unique && !columnDefinition.primaryKey) {
     chains.push('.unique()')
   }

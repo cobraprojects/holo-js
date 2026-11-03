@@ -216,7 +216,7 @@ function defineModelFromGeneratedTableName<
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
   const resolveTableDefinition = (): GeneratedSchemaTable<TName> => (
-    resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName>
+    resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
   )
   const resolvePrimaryKeyFromTable = (
     table: GeneratedSchemaTable<TName>,

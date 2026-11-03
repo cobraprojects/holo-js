@@ -176,11 +176,6 @@ class TableColumnMutationBuilder {
     return this
   }
 
-  generated(): this {
-    this.operation.column = this.operation.column.generated()
-    return this
-  }
-
   primaryKey(): this {
     this.operation.column = this.operation.column.primaryKey()
     return this
