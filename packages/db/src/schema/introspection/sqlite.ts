@@ -19,7 +19,7 @@ type PrimaryKeyColumnRow = { name: string }
 
 export const SQLITE_AUTOINDEX_PREFIX = 'sqlite_autoindex_'
 
-export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
+export type SQLiteTableObject = { schema: string, type: 'index' | 'trigger', name: string, sql: string }
 
 export type SQLiteDependentObject = { schema: string, type: 'view' | 'trigger', name: string, sql: string }
 
@@ -55,12 +55,12 @@ export async function readSQLiteStoredTableName(connection: DatabaseContext, tab
 
 export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
   const { schema, table } = splitTableName(tableName)
-  const result = await connection.introspectCompiled<SQLiteTableObject>({
+  const result = await connection.introspectCompiled<Omit<SQLiteTableObject, 'schema'>>({
     sql: `SELECT type, name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE tbl_name = ? COLLATE NOCASE AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name`,
     bindings: [table],
     source: `schema:introspect:objects:${tableName}`,
   })
-  return result.rows
+  return result.rows.map(row => ({ ...row, schema }))
 }
 
 function referencesAny(object: SchemaObjectRow, names: readonly string[]): boolean {

@@ -1,10 +1,11 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
-import { withIndexName } from './introspection/sqlDefinitions'
+import { SchemaError } from '../core/errors'
+import { withIndexName, withSchemaQualifiedName } from './introspection/sqlDefinitions'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
-import type { SQLiteDependentObject } from './introspection/sqlite'
+import type { SQLiteDependentObject, SQLiteTableObject } from './introspection/sqlite'
 import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
@@ -67,6 +68,16 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
       sql: `DROP ${object.type === 'view' ? 'VIEW' : 'TRIGGER'} ${this.quoteIdentifier(object.schema)}.${this.quoteIdentifier(object.name)}`,
       source: `schema:sqliteRebuild:detach:${object.type}:${object.name}`,
     }))
+  }
+
+  compileRestoreSchemaObjects(objects: readonly (SQLiteTableObject | SQLiteDependentObject)[]): DDLStatement[] {
+    return objects.map((object) => {
+      const sql = withSchemaQualifiedName(object.sql, this.quoteIdentifier(object.schema))
+      if (sql === undefined) {
+        throw new SchemaError(`SQLite cannot read the definition of ${object.type} "${object.name}" to restore it.`)
+      }
+      return { sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` }
+    })
   }
 
   compileRecreateIndex(tableName: string, fromIndexName: string, toIndexName: string, createIndexSql: string): DDLStatement[] | undefined {

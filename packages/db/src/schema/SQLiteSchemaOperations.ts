@@ -224,7 +224,7 @@ export class SQLiteSchemaOperations {
       ...this.compiler.compileDropDependentObjects(dependentObjects),
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
-      ...[...schemaObjects, ...dependentObjects].map(object => ({ sql: object.sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` })),
+      ...this.compiler.compileRestoreSchemaObjects([...schemaObjects, ...dependentObjects]),
     ])
   }
 

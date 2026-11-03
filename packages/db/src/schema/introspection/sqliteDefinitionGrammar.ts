@@ -336,13 +336,20 @@ export function parseCreateTableSql(createTableSql: string): StoredTable | undef
   }
 }
 
-export function findCreateIndexNameToken(createIndexSql: string): SqlToken | undefined {
-  const cursor = new TokenCursor(createIndexSql, tokenizeSql(createIndexSql))
+export interface CreatedObjectName {
+  readonly qualifiedStart: number
+  readonly name: SqlToken
+}
+
+export function findCreatedObjectName(createSql: string): CreatedObjectName | undefined {
+  const cursor = new TokenCursor(createSql, tokenizeSql(createSql))
   if (!cursor.accept('CREATE')) return undefined
+  if (!cursor.accept('TEMP')) cursor.accept('TEMPORARY')
   cursor.accept('UNIQUE')
-  if (!cursor.accept('INDEX')) return undefined
+  if (!cursor.accept('INDEX') && !cursor.accept('VIEW') && !cursor.accept('TRIGGER')) return undefined
   cursor.accept('IF', 'NOT', 'EXISTS')
+  const qualifiedStart = cursor.peek()?.start
   if (cursor.peek(1)?.value === '.') cursor.index += 2
   const name = cursor.peek()
-  return readNameToken(name) === undefined ? undefined : name
+  return qualifiedStart === undefined || name === undefined || readNameToken(name) === undefined ? undefined : { qualifiedStart, name }
 }
