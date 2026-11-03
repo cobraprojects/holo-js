@@ -28,7 +28,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_value,
   a.attidentity <> '' AS is_identity,
   a.attgenerated <> '' AS is_computed,
-  EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = t.oid AND i.indisprimary AND a.attnum = ANY (i.indkey)) AS primary_key
+  EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conrelid = t.oid AND con.contype = 'p' AND a.attnum = ANY (con.conkey)) AS primary_key
   ${TABLE_RELATION}
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -41,7 +41,7 @@ const INDEXES_SQL = `SELECT ic.relname AS name,
   i.indisprimary AS is_primary,
   EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u', 'x')) AS is_constraint,
   (i.indexprs IS NULL AND i.indpred IS NULL) AS representable,
-  ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.position) AS columns
+  ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum WHERE k.position <= i.indnkeyatts ORDER BY k.position) AS columns
   FROM pg_catalog.pg_index i
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
