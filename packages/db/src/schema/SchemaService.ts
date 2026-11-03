@@ -75,6 +75,15 @@ type SQLiteTableSqlRow = {
   sql: string
 }
 
+type SQLiteForeignKeysRow = {
+  foreign_keys: number
+}
+
+type SQLiteTableRewrite = (
+  structure: DatabaseTableStructure,
+  definitions: readonly string[],
+) => Array<string | AnyColumnDefinition>
+
 type SQLiteSchemaObjectRow = {
   type: 'index' | 'trigger'
   name: string
@@ -598,7 +607,7 @@ export class SchemaService {
       case 'alterColumn': {
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
         if (this.isSqlite()) {
-          await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
+          await this.rebuildSqliteTable(tableName, (structure, definitions) => this.rebuildSqliteDefinitions(tableName, structure, definitions, definition))
         } else {
           this.assertAlterCapability('altering columns')
           const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
@@ -768,28 +777,62 @@ export class SchemaService {
     })
   }
 
-  private async rebuildSqliteTableForAlteredColumn(
-    tableName: string,
-    column: AnyColumnDefinition,
-  ): Promise<void> {
-    await this.connection.transaction(async (tx) => {
-      await new SchemaService(tx).rebuildSqliteTable(tableName, column)
-    })
-  }
-
-  private async rebuildSqliteTable(
-    tableName: string,
-    column: AnyColumnDefinition,
-  ): Promise<void> {
-    const structure = await createSchemaReader(this.connection).readTableStructure(tableName)
-    if (!structure) {
-      throw new SchemaError(`SQLite cannot change column "${column.name}" because table "${tableName}" does not exist.`)
+  private async rebuildSqliteTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+    if (!(await this.sqliteForeignKeysEnabled())) {
+      await this.connection.transaction(tx => new SchemaService(tx).copySqliteTable(tableName, rewrite))
+      return
     }
 
-    if (!structure.columns.some(existing => existing.name === column.name)) {
+    if (this.connection.isInTransaction() || currentPinnedConnection(this.connection.getAdapter())) {
+      await this.assertSqliteTableUnreferenced(tableName)
+      await this.connection.transaction(tx => new SchemaService(tx).copySqliteTable(tableName, rewrite))
+      return
+    }
+
+    await this.withoutForeignKeyConstraints(() => this.connection.transaction(async (tx) => {
+      const service = new SchemaService(tx)
+      await service.copySqliteTable(tableName, rewrite)
+      await service.assertNoSqliteForeignKeyViolations(tableName)
+    }))
+  }
+
+  private async sqliteForeignKeysEnabled(): Promise<boolean> {
+    const result = await this.connection.introspectCompiled<SQLiteForeignKeysRow>({
+      sql: 'PRAGMA foreign_keys',
+      source: 'schema:sqliteRebuild:foreignKeys',
+    })
+    return Number(result.rows[0]?.foreign_keys) === 1
+  }
+
+  private async assertSqliteTableUnreferenced(tableName: string): Promise<void> {
+    const result = await this.connection.introspectCompiled<SQLiteTableRow>({
+      sql: 'SELECT DISTINCT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = \'table\' AND f."table" = ?',
+      bindings: [tableName],
+      source: `schema:sqliteRebuild:referencingTables:${tableName}`,
+    })
+    if (result.rows.length > 0) {
       throw new SchemaError(
-        `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
+        `SQLite cannot rebuild table "${tableName}" inside a transaction while foreign-key enforcement is on, because table "${result.rows.map(row => row.name).join('", "')}" references it. Run the change outside the transaction or in a migration.`,
       )
+    }
+  }
+
+  private async assertNoSqliteForeignKeyViolations(tableName: string): Promise<void> {
+    const result = await this.connection.introspectCompiled({
+      sql: 'PRAGMA foreign_key_check',
+      source: `schema:sqliteRebuild:foreignKeyCheck:${tableName}`,
+    })
+    if (result.rows.length > 0) {
+      throw new SchemaError(
+        `SQLite cannot rebuild table "${tableName}" because it would leave ${result.rows.length} foreign key violation${result.rows.length === 1 ? '' : 's'}.`,
+      )
+    }
+  }
+
+  private async copySqliteTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+    const structure = await createSchemaReader(this.connection).readTableStructure(tableName)
+    if (!structure) {
+      throw new SchemaError(`SQLite cannot rebuild table "${tableName}" because it does not exist.`)
     }
 
     const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
@@ -816,7 +859,7 @@ export class SchemaService {
     })
     const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
     const compiler = new SQLiteSchemaCompiler(quote)
-    const definitions = this.rebuildSqliteDefinitions(structure, currentSql.definitions, column)
+    const definitions = rewrite(structure, currentSql.definitions)
     const columns = structure.columns.filter(existing => !existing.computed).map(existing => quote(existing.name)).join(', ')
 
     await this.connection.executeCompiled(compiler.compileRebuildTable(tableName, temporaryTableName, definitions, currentSql.options))
@@ -850,10 +893,17 @@ export class SchemaService {
   }
 
   private rebuildSqliteDefinitions(
+    tableName: string,
     structure: DatabaseTableStructure,
     definitions: readonly string[],
     column: AnyColumnDefinition,
   ): Array<string | AnyColumnDefinition> {
+    if (!structure.columns.some(existing => existing.name === column.name)) {
+      throw new SchemaError(
+        `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
+      )
+    }
+
     return definitions.flatMap((definition): Array<string | AnyColumnDefinition> => {
       const columnName = readColumnDefinitionName(definition)
       if (columnName === column.name) {

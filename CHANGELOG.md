@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- Database: on SQLite, `change()` rebuilds the table with foreign key checks off, as in Laravel, then checks every foreign key and puts the checks back as they were. Before, outside a migration, rebuilding a table deleted every row of the tables that reference it with `ON DELETE CASCADE`, and failed when they reference it with `RESTRICT` or `NO ACTION`. A rebuild that would leave a foreign key pointing at a missing row throws `SchemaError` and changes nothing. Inside your own transaction, where SQLite can't turn the checks off, `change()` throws `SchemaError` when another table references the rebuilt table. See [change()](apps/docs/docs/database/migrations.md#change).
 - Database: foreign keys declared inside `createTable()` or added with a new column on PostgreSQL and SQLite are now named `{table}_{column}_foreign`, or the name given to `constraintName()`, like foreign keys added with `table.foreign()` and every MySQL foreign key. Before, Holo created them without a name, so PostgreSQL named them `{table}_{column}_fkey` and `dropForeign('{table}_{column}_foreign')` failed. Existing PostgreSQL constraints keep their `_fkey` names; drop them by that name. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign).
 
 ## 0.5.6 - 2026-11-01

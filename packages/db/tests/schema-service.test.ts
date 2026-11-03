@@ -151,6 +151,162 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(members).pluck('email')).toEqual(['c@example.com'])
     })
 
+    it.runIf(driver === 'sqlite')('keeps every child row when change() rebuilds a parent referenced with ON DELETE CASCADE', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(children, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+      })
+      await db.table(parents).insert([{ name: 'first' }, { name: 'second' }])
+      await db.table(children).insert([{ parent_id: 1 }, { parent_id: 2 }, { parent_id: 2 }])
+
+      await schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 2, 2])
+      await db.table(parents).where('id', 2).delete()
+      expect(await db.table(children).pluck('parent_id')).toEqual([1])
+    })
+
+    it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const restricted = `holo_restricted_${suffix}`
+      const unchecked = `holo_unchecked_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(restricted)
+        await schema.dropTable(unchecked)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(restricted, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).restrictOnDelete()
+      })
+      await schema.createTable(unchecked, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).noActionOnDelete()
+      })
+      await db.table(parents).insert([{ name: 'first' }, { name: 'second' }])
+      await db.table(restricted).insert({ parent_id: 1 })
+      await db.table(unchecked).insert({ parent_id: 2 })
+
+      await schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      expect(await db.table(restricted).pluck('parent_id')).toEqual([1])
+      expect(await db.table(unchecked).pluck('parent_id')).toEqual([2])
+      await expect(db.table(parents).where('id', 1).delete()).rejects.toThrow()
+      await expect(db.table(parents).where('id', 2).delete()).rejects.toThrow()
+      await expect(db.table(restricted).insert({ parent_id: 99 })).rejects.toThrow()
+      expect(await db.table(parents).count()).toBe(2)
+    })
+
+    it.runIf(driver === 'sqlite')('leaves foreign-key enforcement off after change() when it was off before', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await adapter.execute('PRAGMA foreign_keys = ON')
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(children, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+      })
+      await db.table(parents).insert({ name: 'first' })
+      await db.table(children).insert({ parent_id: 1 })
+      await adapter.execute('PRAGMA foreign_keys = OFF')
+
+      await schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(children).insert({ parent_id: 99 })
+      expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 99])
+    })
+
+    it.runIf(driver === 'sqlite')('rejects a change() rebuild that would leave a foreign key violation and rolls it back', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(children, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+      })
+      await db.table(parents).insert({ name: 'first' })
+      await schema.withoutForeignKeyConstraints(() => db.table(children).insert([{ parent_id: 1 }, { parent_id: 99 }]))
+
+      await expect(schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() }))
+        .rejects.toThrow(new SchemaError(`SQLite cannot rebuild table "${parents}" because it would leave 1 foreign key violation.`))
+
+      await db.table(parents).insert({ id: 2 })
+      expect(await db.table(parents).where('id', 2).pluck('name')).toEqual([null])
+      expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 99])
+      await expect(db.table(children).insert({ parent_id: 98 })).rejects.toThrow()
+    })
+
+    it.runIf(driver === 'sqlite')('refuses to rebuild a referenced parent inside a transaction while foreign-key enforcement is on', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await schema.createTable(parents, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(children, (table) => {
+        table.id()
+        table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+      })
+      await db.table(parents).insert({ name: 'first' })
+      await db.table(children).insert({ parent_id: 1 })
+
+      await expect(db.transaction(tx => createSchemaService(tx).table(parents, (table) => {
+        table.string('name').nullable().default('unnamed').change()
+      }))).rejects.toThrow(SchemaError)
+      await db.transaction(tx => createSchemaService(tx).table(children, (table) => {
+        table.foreignId('parent_id').nullable().change()
+      }))
+
+      expect(await db.table(children).pluck('parent_id')).toEqual([1])
+      await db.table(children).insert({ parent_id: null })
+      await db.table(parents).insert({ id: 2 })
+      expect(await db.table(parents).where('id', 2).pluck('name')).toEqual([null])
+      await db.table(parents).where('id', 1).delete()
+      expect(await db.table(children).pluck('parent_id')).toEqual([null])
+    })
+
     it.runIf(driver === 'postgres')('renames enum checks of a table created by raw SQL with its columns and the table', async () => {
       const { db, schema, adapter } = await openDatabase(driver)
       const name = `holo_raw_enum_${randomUUID().replaceAll('-', '').slice(0, 20)}`

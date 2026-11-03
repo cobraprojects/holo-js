@@ -804,6 +804,8 @@ The column keeps its primary key, unique constraint and foreign key; change thos
 
 On SQLite, Holo rebuilds the table from the database: it reads the table's definition, replaces only the changed column, copies the rows, and restores the table's indexes and triggers. Every other column keeps its stored type, constraints and collation, including columns your migrations never declared, so tables created by raw SQL can be changed too.
 
+As in Laravel, the rebuild runs with foreign key checks off, so rows in other tables that reference the rebuilt table are kept, even with `ON DELETE CASCADE`, and `RESTRICT` keys don't block it. Holo then checks every foreign key and puts the checks back as they were. If a foreign key would be left pointing at a missing row, `change()` throws `SchemaError` and the table is left unchanged. Inside a migration the checks are already off for the whole migration. Inside your own transaction SQLite can't turn them off, so `change()` throws `SchemaError` when another table references the rebuilt table; run it outside the transaction or in a migration.
+
 ## Shortcut columns
 
 ### timestamps()
