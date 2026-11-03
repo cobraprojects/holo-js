@@ -6577,6 +6577,63 @@ process.stdout.write('framework build ran\\n')
     }, 60000)
   }
 
+  it('reports the failed SQLite migration before the Generated schema write failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000004_block_generated_schema.ts', `
+import { mkdirSync, rmSync } from 'node:fs'
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    rmSync('.holo-js/generated/schema.mjs', { recursive: true, force: true })
+    mkdirSync('.holo-js/generated/schema.mjs/occupied', { recursive: true })
+    throw new Error('the block_generated_schema migration failed')
+  },
+  async down() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).toBe(1)
+    const failure = migrated.stderr.indexOf('the block_generated_schema migration failed')
+    const schemaWriteFailure = migrated.stderr.indexOf('Unable to write the Generated schema after the failed run: ')
+    expect(failure, migrated.stderr).toBeGreaterThanOrEqual(0)
+    expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
+  }, 60000)
+
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('reports why holo migrate could not create the PostgreSQL database before the Generated schema write failure', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const postgres = isolatedMigrationDatabases[0]
+    const suffix = randomUUID().replaceAll('-', '')
+    const role = `holo_nocreate_${suffix}`
+    const databaseName = `holo_nocreate_${suffix}`
+    await writeSchemaSourceProject(projectRoot, {
+      driver: 'postgres',
+      host: livePostgresServer.host,
+      port: livePostgresServer.port,
+      username: role,
+      password: 'secret',
+      database: databaseName,
+    })
+    await postgres.administer(`CREATE ROLE ${role} LOGIN PASSWORD 'secret' NOCREATEDB`)
+    try {
+      const migrated = runCliProcess(projectRoot, ['migrate'])
+
+      expect(migrated.status).toBe(1)
+      const failure = migrated.stderr.indexOf(`Postgres database "${databaseName}" could not be found or created. Please create the database and try again. Original error: permission denied to create database`)
+      const schemaWriteFailure = migrated.stderr.indexOf('Unable to write the Generated schema after the failed run: Unable to read the database schema of connection "default"')
+      expect(failure, migrated.stderr).toBeGreaterThanOrEqual(0)
+      expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
+    } finally {
+      await postgres.drop(databaseName)
+      await postgres.administer(`DROP ROLE IF EXISTS ${role}`)
+    }
+  }, 60000)
+
   it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1').each([
     { searchPath: 'only the configured schema', query: '' },
     { searchPath: 'a matching search_path in the URL', query: `?options=${encodeURIComponent('-c search_path=tenant')}` },
@@ -8450,8 +8507,9 @@ export default {
       env: process.env,
       input: JSON.stringify({ kind: 'probe', runtimeConfig: { db: { default: 'sqlite', connections: {} } }, padding: 'x'.repeat(256 * 1024) }),
     })
-    expect(oversizedRuntimePayload.stderr).not.toContain('Runtime payload is missing database configuration.')
-    expect(oversizedRuntimePayload.stderr).toContain('Driver "sqlite" is not registered')
+    expect(oversizedRuntimePayload.status).toBe(1)
+    expect(oversizedRuntimePayload.failure).not.toContain('Runtime payload is missing database configuration.')
+    expect(oversizedRuntimePayload.failure).toContain('Driver "sqlite" is not registered')
     expect(getRuntimeFailureMessage('prune', {
       status: null,
       error: { code: 'ENOENT' },
