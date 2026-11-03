@@ -1201,13 +1201,12 @@ describe('query core slice', () => {
       table.json('settings')
       table.boolean('enabled')
     })
-    await DB.connection().executeCompiled({ sql: 'INSERT INTO registered_records (settings, enabled) VALUES (\'{"active":true}\', 1)', source: 'test' })
-    expect(await DB.table('registered_records').first()).toEqual({ id: 1, settings: '{"active":true}', enabled: 1 })
+    await expect(DB.table('registered_records').insert({ settings: { active: true }, enabled: true })).rejects.toThrow()
 
     registerGeneratedTables({
       registered_records: defineGeneratedTable('registered_records', { id: column.id(), settings: column.json(), enabled: column.boolean() }),
     })
-    expect(await DB.table('registered_records').first()).toEqual({ id: 1, settings: { active: true }, enabled: true })
+    await DB.table('registered_records').insert({ settings: { active: true }, enabled: true })
     const id = await DB.table('registered_records').insertGetId({ settings: { tags: ['native'], active: true }, enabled: true })
     expect(await DB.table('registered_records').whereJson('settings->active', true).where('enabled', true).pluck('id')).toEqual([1, id])
     await DB.table('registered_records').where('id', id).update({ settings: { tags: [], active: false }, enabled: false })

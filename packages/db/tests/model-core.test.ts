@@ -625,6 +625,7 @@ describe('model core slice', () => {
       table.integer('minScore')
       table.integer('maxScore')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), status: column.string(), minScore: column.integer(), maxScore: column.integer() }) })
     const User = defineModel('users', { fillable: ['name', 'status', 'minScore', 'maxScore'] })
     await User.createMany([
       { name: 'Mohamed', status: 'active', minScore: 1, maxScore: 2 },
@@ -655,6 +656,10 @@ describe('model core slice', () => {
       table.id()
       table.integer('userId')
       table.string('title')
+    })
+    registerGeneratedTables({
+      users: defineTable('users', { id: column.id(), name: column.string(), status: column.string(), settings: column.json(), created_at: column.timestamp() }),
+      posts: defineTable('posts', { id: column.id(), userId: column.integer(), title: column.string() }),
     })
     const User = defineModel('users', { fillable: ['name', 'status', 'settings', 'created_at'] })
     const Post = defineModel('posts', { fillable: ['userId', 'title'] })
@@ -692,6 +697,7 @@ describe('model core slice', () => {
       table.string('name')
       table.integer('score').nullable()
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), score: column.integer().nullable() }) })
     const User = defineModel('users', { fillable: ['name', 'score'] })
     await User.createMany([{ name: 'Mohamed', score: 10 }, { name: 'Amina', score: 20 }, { name: 'Salma', score: null }])
     expect(await User.count()).toBe(3)
@@ -778,6 +784,7 @@ describe('model core slice', () => {
       table.integer('score')
       table.boolean('active')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), score: column.integer(), active: column.boolean() }) })
     const User = defineModel('users', { fillable: ['name', 'score', 'active'] })
     await User.createMany([
       { name: 'Mohamed', score: 10, active: true },
@@ -813,6 +820,7 @@ describe('model core slice', () => {
       table.string('email').unique()
       table.string('name')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), email: column.string().unique(), name: column.string() }) })
     const User = defineModel('users', { fillable: ['email', 'name'] })
     await User.query().upsert({ email: 'm@example.com', name: 'Mohamed' }, ['email'], ['name'])
     const id = (await User.firstOrFail()).get('id')
@@ -1124,6 +1132,7 @@ describe('model core slice', () => {
       table.string('name')
       table.string('email').unique()
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), email: column.string().unique() }) })
     const User = defineModel('users', { fillable: ['name', 'email'] })
     const users = await Promise.all(Array.from({ length: 16 }, (_, index) => User.firstOrCreate(
       { email: 'race@example.com' }, { name: `Caller ${index}` },
@@ -1146,6 +1155,7 @@ describe('model core slice', () => {
       table.string('email').unique()
       table.string('status')
     })
+    registerGeneratedTables({ users: defineTable('users', { id: column.id(), name: column.string(), email: column.string().unique(), status: column.string() }) })
     const User = defineModel('users', { fillable: ['name', 'email', 'status'] })
     await expect(User.firstOrCreate({ email: 'failure@example.com' })).rejects.toThrow(/not null/i)
     expect(await User.count()).toBe(0)
