@@ -40,6 +40,7 @@ import {
   captureAuthorizationDefinitionNames,
   collectBuiltInCasts,
   collectFiles,
+  collectModelDateColumns,
   deriveBroadcastNameFromPath,
   deriveChannelPatternFromPath,
   deriveCommandNameFromPath,
@@ -255,6 +256,7 @@ async function discoverProjectRegistry(
       }
 
       const casts = collectBuiltInCasts(exportedModel.value.definition.casts)
+      const dateColumns = collectModelDateColumns(exportedModel.value.definition)
       models.push({
         sourcePath: relativePath,
         name: exportedModel.value.definition.name,
@@ -262,6 +264,7 @@ async function discoverProjectRegistry(
         prunable: Boolean(exportedModel.value.definition.prunable),
         ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
         ...(casts ? { casts } : {}),
+        ...(dateColumns ? { dateColumns } : {}),
       })
     } catch (error) {
       if (!isUnresolvedModelSchemaError(error)) {

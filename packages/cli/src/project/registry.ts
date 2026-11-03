@@ -162,20 +162,33 @@ export function renderGeneratedIndexModule(): string {
   ].join('\n')
 }
 
-type ModelTableTypeEntry = Pick<GeneratedModelRegistryEntry, 'tableName' | 'casts'>
+type ModelTableTypeEntry = Pick<GeneratedModelRegistryEntry, 'tableName' | 'casts' | 'dateColumns'>
+
+function renderModelCasts(casts: readonly (readonly [string, string])[]): string {
+  return casts.length === 0
+    ? 'Record<never, never>'
+    : `{ ${casts.map(([key, cast]) => `readonly ${JSON.stringify(key)}: ${JSON.stringify(cast)}`).join(', ')} }`
+}
+
+function hasModelTableCasts(entry: ModelTableTypeEntry): boolean {
+  return Object.keys(entry.casts ?? {}).length > 0 || (entry.dateColumns?.length ?? 0) > 0
+}
 
 function renderModelTableType(entry: ModelTableTypeEntry): string {
   const generatedTable = `GeneratedSchemaTable<${JSON.stringify(entry.tableName)}>`
-  const casts = Object.entries(entry.casts ?? {})
-  if (casts.length === 0) {
+  if (!hasModelTableCasts(entry)) {
     return generatedTable
   }
 
-  return `ModelCastedTable<${generatedTable}, { ${casts.map(([key, cast]) => `readonly ${JSON.stringify(key)}: ${JSON.stringify(cast)}`).join(', ')} }>`
+  const casts = renderModelCasts(Object.entries(entry.casts ?? {}))
+  const dateColumns = entry.dateColumns ?? []
+  return dateColumns.length === 0
+    ? `ModelCastedTable<${generatedTable}, ${casts}>`
+    : `ModelCastedTable<${generatedTable}, ${casts}, ${dateColumns.map(column => JSON.stringify(column)).join(' | ')}>`
 }
 
 function renderModelTableTypeImports(entries: readonly ModelTableTypeEntry[]): readonly string[] {
-  return entries.some(entry => Object.keys(entry.casts ?? {}).length > 0)
+  return entries.some(hasModelTableCasts)
     ? ['GeneratedSchemaTable', 'ModelCastedTable']
     : ['GeneratedSchemaTable']
 }
@@ -552,7 +565,7 @@ export function renderGeneratedQueueTypes(
   ].join('\n')
 }
 
-type AuthTypeModelRegistryEntry = Pick<GeneratedModelRegistryEntry, 'name' | 'tableName' | 'casts'>
+type AuthTypeModelRegistryEntry = Pick<GeneratedModelRegistryEntry, 'name' | 'tableName' | 'casts' | 'dateColumns'>
 
 function getAuthProviderModelNames(
   auth: Pick<NormalizedHoloAuthConfig, 'guards' | 'providers'> | undefined,
