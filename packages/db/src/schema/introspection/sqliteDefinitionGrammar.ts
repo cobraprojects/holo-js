@@ -132,17 +132,18 @@ function readDescending(cursor: TokenCursor): boolean {
   return false
 }
 
+function readKeyColumn(item: TokenCursor): { column: KeyColumn, autoIncrement: boolean } {
+  const name = item.expectName()
+  const collation = item.accept('COLLATE') ? item.expectName() : undefined
+  const descending = readDescending(item)
+  const autoIncrement = item.accept('AUTOINCREMENT')
+  if (!item.done) item.fail()
+  return { column: { name, ...(collation === undefined ? {} : { collation }), descending }, autoIncrement }
+}
+
 function readKeyColumns(cursor: TokenCursor): { columns: KeyColumn[], autoIncrement: boolean } {
-  let autoIncrement = false
-  const columns = cursor.groupItems().map((item) => {
-    const name = item.expectName()
-    const collation = item.accept('COLLATE') ? item.expectName() : undefined
-    const descending = readDescending(item)
-    autoIncrement = item.accept('AUTOINCREMENT') || autoIncrement
-    if (!item.done) item.fail()
-    return { name, ...(collation === undefined ? {} : { collation }), descending }
-  })
-  return { columns, autoIncrement }
+  const keyColumns = cursor.groupItems().map(readKeyColumn)
+  return { columns: keyColumns.map(keyColumn => keyColumn.column), autoIncrement: keyColumns.some(keyColumn => keyColumn.autoIncrement) }
 }
 
 function skipConflictClause(cursor: TokenCursor): void {
@@ -162,28 +163,38 @@ function readForeignKeyAction(cursor: TokenCursor): string {
   return action.join(' ')
 }
 
+type MatchClause = { readonly kind: 'MATCH', readonly name: string }
+type ActionClause = { readonly kind: 'ON', readonly event: string, readonly action: string }
+type ForeignKeyTailClause = MatchClause | ActionClause
+
+function readForeignKeyTailClause(cursor: TokenCursor): ForeignKeyTailClause {
+  if (cursor.accept('MATCH')) return { kind: 'MATCH', name: cursor.expectName() }
+  cursor.accept('ON')
+  const event = cursor.keyword()
+  if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
+  cursor.next()
+  return { kind: 'ON', event, action: readForeignKeyAction(cursor) }
+}
+
+function readForeignKeyTailClauses(cursor: TokenCursor): ForeignKeyTailClause[] {
+  if (cursor.keyword() !== 'ON' && cursor.keyword() !== 'MATCH') return []
+  const clause = readForeignKeyTailClause(cursor)
+  return [clause, ...readForeignKeyTailClauses(cursor)]
+}
+
 function readForeignKeyClause(cursor: TokenCursor): ForeignKeyClause {
   const table = cursor.expectName()
   const columns = cursor.peek()?.kind === 'group' ? readGroupNames(cursor) : []
-  const actions: Record<string, string> = {}
-  let match: string | undefined
-  while (cursor.keyword() === 'ON' || cursor.keyword() === 'MATCH') {
-    if (cursor.accept('MATCH')) {
-      match = cursor.expectName()
-      continue
-    }
-    cursor.accept('ON')
-    const event = cursor.keyword()
-    if (event === undefined || !FOREIGN_KEY_EVENTS.has(event)) cursor.fail()
-    cursor.next()
-    actions[event] = readForeignKeyAction(cursor)
-  }
+  const latestFirst = readForeignKeyTailClauses(cursor).reverse()
+  const actionFor = (event: string): string => latestFirst
+    .find((clause): clause is ActionClause => clause.kind === 'ON' && clause.event === event)?.action ?? DEFAULT_FOREIGN_KEY_ACTION
+  const match = latestFirst.find((clause): clause is MatchClause => clause.kind === 'MATCH')?.name
   const deferral = readDeferral(cursor)
   return {
     table,
     columns,
-    onDelete: actions.DELETE ?? DEFAULT_FOREIGN_KEY_ACTION,
-    onUpdate: actions.UPDATE ?? DEFAULT_FOREIGN_KEY_ACTION,
+    onDelete: actionFor('DELETE'),
+    onUpdate: actionFor('UPDATE'),
     ...(match === undefined ? {} : { match }),
     ...(deferral === undefined ? {} : { deferral }),
   }

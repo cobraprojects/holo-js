@@ -238,6 +238,18 @@ describe('SQLite schema changes on tables created by raw SQL', () => {
     await expect(db.table('prices').insert({ id: 2, note: 'missing amount' })).rejects.toThrow()
   })
 
+  it('keeps the AUTOINCREMENT sequence of a table-level primary key when change() rebuilds the table', async () => {
+    const { db, schema, adapter } = await openDatabase('sqlite')
+    await adapter.execute('CREATE TABLE tickets (id INTEGER, title TEXT, PRIMARY KEY (id AUTOINCREMENT))')
+    await db.table('tickets').insert([{ title: 'first' }, { title: 'second' }])
+    await db.table('tickets').where('id', 2).delete()
+
+    await schema.table('tickets', (table) => { table.text('title').nullable().change() })
+
+    await db.table('tickets').insert({ title: 'third' })
+    expect(await db.table('tickets').orderBy('id').pluck('id')).toEqual([1, 3])
+  })
+
   it('treats a single-quoted CHECK operand as a string literal, not as an enum check on a column', async () => {
     const { db, schema, adapter } = await openDatabase('sqlite')
     await adapter.execute('CREATE TABLE s (id INTEGER PRIMARY KEY, status TEXT, CHECK (\'status\' IN (\'a\', \'b\')))')
