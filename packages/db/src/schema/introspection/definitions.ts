@@ -82,7 +82,7 @@ function toForeignKeyReference(foreignKey: DatabaseForeignKeyStructure): Foreign
 }
 
 function conventionalUniqueNames(structure: DatabaseTableStructure, columnName: string): string[] {
-  const table = structure.tableName.split('.').at(-1)!
+  const table = structure.tableName.split('.').at(-1) ?? structure.tableName
   const tableNames = new Set([structure.tableName, table, ...(structure.schema ? [`${structure.schema}.${table}`] : [])])
   return [...tableNames].map(tableName => createGeneratedUniqueIndexName(tableName, [columnName]))
 }
@@ -90,7 +90,7 @@ function conventionalUniqueNames(structure: DatabaseTableStructure, columnName: 
 function isUniqueColumnIndex(structure: DatabaseTableStructure, index: DatabaseIndexStructure): boolean {
   const [columnName] = index.columns
   if (!index.unique || index.primary || !index.representable || index.columns.length !== 1 || !columnName) return false
-  const table = structure.tableName.split('.').at(-1)!
+  const table = structure.tableName.split('.').at(-1) ?? structure.tableName
   return conventionalUniqueNames(structure, columnName).includes(index.name)
     || index.name === `${table}_${columnName}_key`
     || index.name === columnName

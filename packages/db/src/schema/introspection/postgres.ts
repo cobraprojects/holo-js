@@ -93,8 +93,8 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
   const literal = '\'(?:[^\']|\'\')*\'(?:::[\\w\\s]+)?'
   const anyArray = new RegExp(`^CHECK \\(+${castedColumn} = ANY \\(+ARRAY\\[(${literal}(?:, ${literal})*)\\]\\)*(?:::[\\w\\s]+\\[\\])?\\)+$`)
   const single = new RegExp(`^CHECK \\(+${castedColumn} = (${literal})\\)+$`)
-  const match = row.definition.match(anyArray) ?? row.definition.match(single)
-  return match ? { name: row.name, column: row.column_name, values: readStringLiterals(match[1]!) } : undefined
+  const literals = (row.definition.match(anyArray) ?? row.definition.match(single))?.[1]
+  return literals === undefined ? undefined : { name: row.name, column: row.column_name, values: readStringLiterals(literals) }
 }
 
 function splitTableName(tableName: string): { schema: string | null, table: string } {

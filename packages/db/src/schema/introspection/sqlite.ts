@@ -111,8 +111,8 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
       const details = readDefinitionDetails(createTableSql ?? '')
       const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
-      const primaryKeyColumns = columns.rows.filter(row => row.pk > 0)
-      const rowIdAlias = primaryKeyColumns.length === 1 && primaryKeyColumns[0]!.type.toLowerCase() === 'integer' ? primaryKeyColumns[0]!.name : undefined
+      const [onlyPrimaryKey, ...otherPrimaryKeys] = columns.rows.filter(row => row.pk > 0)
+      const rowIdAlias = onlyPrimaryKey && otherPrimaryKeys.length === 0 && onlyPrimaryKey.type.toLowerCase() === 'integer' ? onlyPrimaryKey.name : undefined
       const structure: DatabaseTableStructure = {
         dialect: 'sqlite',
         tableName,
