@@ -7152,6 +7152,131 @@ export const deletedAtIsDate: Equal<UserRecord['deleted_at'], Date | null> = tru
     expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   }, 90000)
 
+  it('discovers a soft-deleting model on another connection whose name the default connection also uses', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: { driver: 'sqlite', url: './data.sqlite' },
+    secondary: { driver: 'sqlite', url: './secondary.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_notes.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('notes', table => {
+      table.id()
+      table.string('heading')
+      table.timestamps()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('notes')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/Note.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('notes', { name: 'Note', connectionName: 'secondary', softDeletes: true })
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).resolves.toContain('"Note"')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')).resolves.not.toContain('connectionName')
+  }, 90000)
+
+  it('discovers a model on another connection from a Generated schema file that names no connection', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: { driver: 'sqlite', url: './data.sqlite' },
+    secondary: { driver: 'sqlite', url: './secondary.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const notes = defineGeneratedTable("notes", {
+  "id": column.id(),
+  "heading": column.string(),
+})
+
+export const tables = { "notes": notes } as const
+
+registerGeneratedTables(tables)
+`)
+    await writeProjectFile(projectRoot, 'server/models/Note.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('notes', { name: 'Note', connectionName: 'secondary', softDeletes: true })
+`)
+
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).resolves.toContain('"Note"')
+  }, 90000)
+
+  it('discovers a model on a composite-key table and leaves the key error to the operations that need one key', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_post_tag.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('post_tag', table => {
+      table.integer('post_id')
+      table.integer('tag_id')
+      table.primary(['post_id', 'tag_id'])
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('post_tag')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/PostTag.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('post_tag', { name: 'PostTag', timestamps: false })
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    const prepared = runCliProcess(projectRoot, ['prepare'])
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).resolves.toContain('"PostTag"')
+  }, 90000)
+
   it('recovers migration metadata when a discovered model uses a generated table without a primary key', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

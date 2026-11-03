@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { normalizeDialectReadValue, normalizeDialectWriteValue, storesText } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, readIntegerKey, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -189,6 +189,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return column ? storesText(column) : this.definition.untyped
   }
 
+  private isUntypedIncrementingKey(key: string): boolean {
+    const { untyped, primaryKey, uniqueIdConfig } = this.definition
+    return untyped && key === primaryKey && !uniqueIdConfig?.columns.includes(key as never)
+  }
+
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {
     return ownEntry(this.definition.table.columns, key)?.kind === 'json' && this.parseBuiltInCast(cast)?.name === 'json'
   }
@@ -196,7 +201,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database', dialect: SchemaDialectName): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
-      return value
+      return this.isUntypedIncrementingKey(key) ? readIntegerKey(value) : value
     }
 
     if (column.kind === 'json' && source === 'database' && dialect !== 'sqlite') {
@@ -209,7 +214,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
-      return value
+      return this.applyDefinitionlessWriteNormalization(key, value)
     }
 
     if (column.kind === 'json') {
@@ -217,6 +222,19 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)
+  }
+
+  private applyDefinitionlessWriteNormalization(key: string, value: unknown): unknown {
+    switch (this.parseBuiltInCast(this.resolveCast(key))?.name) {
+      case 'date':
+      case 'datetime':
+      case 'timestamp':
+        return dateLikeWriteValue(this.getSchemaDialectName(), value)
+      case 'boolean':
+        return booleanStorageValue(value)
+      default:
+        return value
+    }
   }
 
   private getSchemaDialectName(): SchemaDialectName {

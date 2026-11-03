@@ -3,7 +3,7 @@ import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
 } from '@holo-js/kernel'
-import { renderGeneratedSchemaPlaceholder, type MigrationDefinition, type SeederDefinition } from '@holo-js/db'
+import { holoRuntimeInternals, renderGeneratedSchemaPlaceholder, type MigrationDefinition, type SeederDefinition } from '@holo-js/db'
 import { writeTextFile } from './atomic-file'
 import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
@@ -177,6 +177,48 @@ async function importGeneratedSchema(
   }
 }
 
+async function discoverModels(
+  projectRoot: string,
+  modelFiles: readonly string[],
+  modules: ProjectModuleBatch,
+  defaultConnectionName: string,
+): Promise<GeneratedModelRegistryEntry[]> {
+  const models: GeneratedModelRegistryEntry[] = []
+  const restoreGeneratedSchemaConnection = holoRuntimeInternals.useGeneratedSchemaConnection(defaultConnectionName)
+  try {
+    for (const filePath of modelFiles) {
+      const relativePath = makeProjectRelativePath(projectRoot, filePath)
+      try {
+        const moduleValue = await modules.import(filePath)
+        const exportedModel = resolveNamedExportEntry(moduleValue, isCliModelReference)
+        if (!exportedModel) {
+          throw new Error(`Discovered model "${relativePath}" does not export a Holo model.`)
+        }
+
+        const casts = collectBuiltInCasts(exportedModel.value.definition.casts)
+        const dateColumns = collectModelDateColumns(exportedModel.value.definition)
+        models.push({
+          sourcePath: relativePath,
+          name: exportedModel.value.definition.name,
+          tableName: exportedModel.value.definition.table.tableName,
+          prunable: Boolean(exportedModel.value.definition.prunable),
+          ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
+          ...(casts ? { casts } : {}),
+          ...(dateColumns ? { dateColumns } : {}),
+        })
+      } catch (error) {
+        if (!isUnresolvedModelSchemaError(error)) {
+          throw error
+        }
+      }
+    }
+  } finally {
+    restoreGeneratedSchemaConnection()
+  }
+
+  return models
+}
+
 async function discoverProjectRegistry(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
@@ -234,33 +276,12 @@ async function discoverProjectRegistry(
   }
   const commandBundleErrors = await bundleCommandModules(modules, commandFiles)
 
-  const models: GeneratedModelRegistryEntry[] = []
-  for (const filePath of modelFiles) {
-    const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    try {
-      const moduleValue = await modules.import(filePath)
-      const exportedModel = resolveNamedExportEntry(moduleValue, isCliModelReference)
-      if (!exportedModel) {
-        throw new Error(`Discovered model "${relativePath}" does not export a Holo model.`)
-      }
-
-      const casts = collectBuiltInCasts(exportedModel.value.definition.casts)
-      const dateColumns = collectModelDateColumns(exportedModel.value.definition)
-      models.push({
-        sourcePath: relativePath,
-        name: exportedModel.value.definition.name,
-        tableName: exportedModel.value.definition.table.tableName,
-        prunable: Boolean(exportedModel.value.definition.prunable),
-        ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
-        ...(casts ? { casts } : {}),
-        ...(dateColumns ? { dateColumns } : {}),
-      })
-    } catch (error) {
-      if (!isUnresolvedModelSchemaError(error)) {
-        throw error
-      }
-    }
-  }
+  const models = await discoverModels(
+    projectRoot,
+    modelFiles,
+    modules,
+    holoRuntimeInternals.resolveRuntimeDefaultConnectionName({ db: loadedConfig.database }),
+  )
   assertUniqueEntries('model', models)
 
   const migrations: GeneratedMigrationRegistryEntry[] = migrationFiles.map((filePath) => {

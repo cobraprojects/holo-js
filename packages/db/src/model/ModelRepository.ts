@@ -1810,6 +1810,10 @@ export class ModelRepository<
     return timestamped
   }
 
+  softDeleteWrite(deletedAtColumn: string, deletedAt = new Date().toISOString()): Record<string, unknown> {
+    return this.withWriteTimestamps({ [deletedAtColumn]: this.castForStorage(deletedAtColumn, deletedAt) }, 'update', deletedAt)
+  }
+
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
@@ -1963,7 +1967,7 @@ export class ModelRepository<
       const deletedAtColumn = this.getDeletedAtColumn()
       if (deletedAtColumn) {
         const deletedAt = new Date().toISOString()
-        const written = this.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt)
+        const written = this.softDeleteWrite(deletedAtColumn, deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
         entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.valueTransformer.resolveCast(deletedAtColumn), deletedAt) } as never)
@@ -3719,12 +3723,9 @@ export class ModelRepository<
     return Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
         const definition = typeof table === 'string' ? undefined : table.columns[column]
-        if (!definition) {
-          return [column, value]
-        }
-
-        const normalized = normalizeDialectReadValue(dialect, definition, value)
-        return [column, timestampColumns.includes(column) && storesText(definition) ? this.applyCastGet('datetime', normalized) : normalized]
+        const normalized = definition ? normalizeDialectReadValue(dialect, definition, value) : value
+        const readsAsDate = timestampColumns.includes(column) && (!definition || storesText(definition))
+        return [column, readsAsDate ? this.applyCastGet('datetime', normalized) : normalized]
       }),
     )
   }
@@ -3790,7 +3791,7 @@ export class ModelRepository<
   }
 
   private guardsByColumnListing(): boolean {
-    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
+    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.guarded.length > 0
   }
 
   private isGuardableColumn(
@@ -3889,9 +3890,7 @@ export class ModelRepository<
 
           await query.getTableQueryBuilder()
             .where(relation.ownerKey, ownerId)
-            .update({
-              [related.definition.updatedAtColumn]: touchedAt,
-            })
+            .update(related.withWriteTimestamps({}, 'update', touchedAt))
           break
         }
         case 'morphTo': {
@@ -3910,9 +3909,7 @@ export class ModelRepository<
 
           await query.getTableQueryBuilder()
             .where(related.definition.primaryKey, ownerId)
-            .update({
-              [related.definition.updatedAtColumn]: touchedAt,
-            })
+            .update(related.withWriteTimestamps({}, 'update', touchedAt))
           break
         }
       }

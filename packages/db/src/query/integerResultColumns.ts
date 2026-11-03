@@ -1,13 +1,17 @@
-import { parseInteger, readsAsInteger } from '../schema/normalization'
-import type { TableDefinition } from '../schema/types'
+import { readIntegerColumnValue, readsAsInteger } from '../schema/normalization'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
-type SelectedColumn = readonly [key: string, integer: boolean]
+type SelectedColumn = readonly [key: string, integer: AnyColumnDefinition | undefined]
+
+function integerColumn(column: AnyColumnDefinition | undefined): AnyColumnDefinition | undefined {
+  return column && readsAsInteger(column) ? column : undefined
+}
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
-  return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, readsAsInteger(column)])
+  return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, integerColumn(column)])
 }
 
 function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undefined> {
@@ -28,38 +32,36 @@ function selectedColumns(
   const name = selection.column.slice(separator + 1)
   if (name === '*') return columnsOf(table)
   const column = table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined
-  return [[selection.alias ?? name, column ? readsAsInteger(column) : false]]
+  return [[selection.alias ?? name, integerColumn(column)]]
 }
 
-export function resolveIntegerResultColumns(plan: SelectQueryPlan): readonly string[] {
-  const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
-  if (plan.selections.length === 0) {
-    return columnsOf(unqualifiedTable).filter(([, integer]) => integer).map(([key]) => key)
-  }
+export type IntegerResultColumns = ReadonlyMap<string, AnyColumnDefinition>
 
+export function resolveIntegerResultColumns(plan: SelectQueryPlan): IntegerResultColumns {
+  const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
   const tables = queryTables(plan)
-  const keys = new Set<string>()
-  for (const selection of plan.selections) {
-    const selected: readonly SelectedColumn[] = selection.kind === 'column'
+  const selected: readonly SelectedColumn[] = plan.selections.length === 0
+    ? columnsOf(unqualifiedTable)
+    : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
       ? selectedColumns(selection, tables, unqualifiedTable)
-      : 'alias' in selection ? [[selection.alias, false]] : []
-    for (const [key, integer] of selected) {
-      if (integer) keys.add(key)
-      else keys.delete(key)
-    }
+      : 'alias' in selection ? [[selection.alias, undefined]] : [])
+  const columns = new Map<string, AnyColumnDefinition>()
+  for (const [key, integer] of selected) {
+    if (integer) columns.set(key, integer)
+    else columns.delete(key)
   }
-  return [...keys]
+  return columns
 }
 
 function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 
-export function readIntegerResultColumns(row: Record<string, unknown>, columns: readonly string[]): Record<string, unknown> {
+export function readIntegerResultColumns(row: Record<string, unknown>, columns: IntegerResultColumns): Record<string, unknown> {
   const values: Record<string, unknown> = { ...row }
-  for (const column of columns) {
-    const value = row[column]
-    if (readsIntegerText(value)) values[column] = parseInteger(value)
+  for (const [key, column] of columns) {
+    const value = row[key]
+    if (readsIntegerText(value)) values[key] = readIntegerColumnValue(column, value)
   }
   return values
 }
@@ -71,5 +73,7 @@ export function readInsertedKey(
 ): number | string | undefined {
   const definition = table && Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
   const readsInteger = table ? definition !== undefined && readsAsInteger(definition) : true
-  return readsInteger && readsIntegerText(value) ? Number(parseInteger(value)) : value
+  if (!readsInteger || !readsIntegerText(value)) return value
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : value
 }

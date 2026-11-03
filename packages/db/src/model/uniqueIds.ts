@@ -138,7 +138,7 @@ function isUniqueIdTrait<TTable extends TableDefinition>(
 
 export function resolveUniqueIdConfig<TTable extends TableDefinition>(
   traits: readonly ModelTrait<TTable>[] | undefined,
-  primaryKey: ModelAttributeKey<TTable>,
+  primaryKey: () => ModelAttributeKey<TTable>,
   uniqueIds?: readonly ModelAttributeKey<TTable>[],
   newUniqueId?: () => string,
 ): UniqueIdRuntimeConfig<TTable> | null {
@@ -156,7 +156,7 @@ export function resolveUniqueIdConfig<TTable extends TableDefinition>(
   }
 
   const trait = uniqueIdTraits[0]!
-  const columns = uniqueIds ?? trait.columns ?? [primaryKey]
+  const columns = uniqueIds ?? trait.columns ?? [primaryKey()]
   if (columns.length === 0) {
     throw new SchemaError('uniqueIds must contain at least one column.')
   }

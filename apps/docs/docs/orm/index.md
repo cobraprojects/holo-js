@@ -110,7 +110,7 @@ export default defineModel('countries', {
 })
 ```
 
-Models don't support composite primary keys, as in Laravel. A model on a table whose primary key has several columns throws `SchemaError` unless you set `primaryKey` to one of them. Use such a table as a `belongsToMany` pivot instead. See [primary(columns)](/database/migrations#primary-columns).
+Models don't support composite primary keys, as in Laravel. A model on a table whose primary key has several columns throws `SchemaError` when an operation needs its key, such as `find()`, `create()` or `save()`, unless you set `primaryKey` to one of them. Use such a table as a `belongsToMany` pivot instead. See [primary(columns)](/database/migrations#primary-columns).
 
 ### Timestamps
 
