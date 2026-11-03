@@ -2,10 +2,10 @@ import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteIndexKey, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { findStoredColumn, hasAutoIncrement, isGeneratedColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
-import { sameIdentifiers } from './introspection/sqliteTokens'
+import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -67,7 +67,7 @@ export class SQLiteSchemaOperations {
 
   async renameIndex(tableName: string, fromIndexName: string, toIndexName: string): Promise<void> {
     const index = (await readTableStructure(this.connection, tableName))?.indexes
-      .find(candidate => candidate.name === fromIndexName)
+      .find(candidate => sameIdentifier(candidate.name, fromIndexName))
     if (!index) {
       throw new SchemaError(`SQLite cannot rename missing index "${fromIndexName}" on table "${tableName}".`)
     }
@@ -76,8 +76,8 @@ export class SQLiteSchemaOperations {
     }
 
     const createIndexSql = (await readSQLiteTableObjects(this.connection, tableName))
-      .find(object => object.type === 'index' && object.name === fromIndexName)?.sql
-    const statements = createIndexSql === undefined ? undefined : this.compiler.compileRecreateIndex(tableName, fromIndexName, toIndexName, createIndexSql)
+      .find(object => object.type === 'index' && sameIdentifier(object.name, index.name))?.sql
+    const statements = createIndexSql === undefined ? undefined : this.compiler.compileRecreateIndex(tableName, index.name, toIndexName, createIndexSql)
     if (!statements) {
       throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it backs a constraint declared in the table definition.`)
     }
@@ -132,16 +132,16 @@ export class SQLiteSchemaOperations {
     indexName: string,
     columns: readonly string[] | undefined,
   ): Promise<UniqueRewrite | undefined> {
-    const indexes = (await readTableStructure(this.connection, tableName))?.indexes ?? []
-    if (!indexes.some(candidate => candidate.name === indexName)) {
+    const index = (await readTableStructure(this.connection, tableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
+    if (!index) {
       return columns === undefined ? undefined : table => withoutUniquesOnColumns(table, columns)
     }
 
-    if (!indexName.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
+    if (!index.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined
     }
 
-    const indexKey = await readSQLiteIndexKey(this.connection, tableName, indexName)
+    const indexKey = await readSQLiteIndexKey(this.connection, tableName, index.name)
     return table => withoutUniquesBackingIndex(table, indexKey)
   }
 
@@ -192,14 +192,15 @@ export class SQLiteSchemaOperations {
     }
   }
 
-  private async copyTable(connection: DatabaseContext, tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
-    const structure = await readTableStructure(connection, tableName)
-    if (!structure) {
-      throw new SchemaError(`SQLite cannot rebuild table "${tableName}" because it does not exist.`)
+  private async copyTable(connection: DatabaseContext, requestedTableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+    const tableName = await readSQLiteStoredTableName(connection, requestedTableName)
+    const structure = tableName === undefined ? undefined : await readTableStructure(connection, tableName)
+    if (tableName === undefined || !structure) {
+      throw new SchemaError(`SQLite cannot rebuild table "${requestedTableName}" because it does not exist.`)
     }
 
     const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
-    if ((await createSchemaReader(connection).listTables()).includes(temporaryTableName)) {
+    if ((await createSchemaReader(connection).listTables()).some(existing => sameIdentifier(existing, temporaryTableName))) {
       throw new SchemaError(
         `SQLite cannot rebuild table "${tableName}" because temporary table "${temporaryTableName}" already exists.`,
       )
