@@ -709,6 +709,105 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getIndexes(name)).toEqual(before)
     })
 
+    it('raises when dropIndex() names an index that does not exist and keeps the existing indexes', async () => {
+      const { schema, table } = await openDatabase(driver)
+      const name = table.tableName.split('.').at(-1)!
+      await schema.table(name, table => { table.index(['name']) })
+      const before = await schema.getIndexes(name)
+
+      await expect(schema.table(name, table => { table.dropIndex(`${name}_missing_index`) })).rejects.toThrow()
+
+      expect(await schema.getIndexes(name)).toEqual(before)
+      expect(before.map(index => index.name)).toContain(`${name}_name_index`)
+    })
+
+    it('drops conventional indexes by their columns, including a morphs index', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_ic_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('a')
+        table.string('b')
+        table.morphs('taggable')
+        table.index(['a', 'b'])
+      })
+      expect((await schema.getIndexes(name)).map(index => index.name)).toEqual(expect.arrayContaining([
+        `${name}_a_b_index`,
+        `${name}_taggable_type_taggable_id_index`,
+      ]))
+
+      await schema.table(name, table => {
+        table.dropIndex(['a', 'b'])
+        table.dropIndex(['taggable_type', 'taggable_id'])
+      })
+
+      expect((await schema.getIndexes(name)).filter(index => !index.columns.includes('id'))).toEqual([])
+    })
+
+    it('drops an index by its original name after the table is renamed and raises for the new table name', async () => {
+      const { schema } = await openDatabase(driver)
+      const original = `holo_index_ren_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const renamed = `${original}_new`
+      onTestFinished(() => schema.dropTable(renamed))
+      await schema.createTable(original, table => {
+        table.id()
+        table.string('email').index()
+      })
+      await schema.renameTable(original, renamed)
+
+      await expect(schema.table(renamed, table => { table.dropIndex(`${renamed}_email_index`) })).rejects.toThrow()
+      expect((await schema.getIndexes(renamed)).map(index => index.name)).toContain(`${original}_email_index`)
+
+      await schema.table(renamed, table => { table.dropIndex(`${original}_email_index`) })
+
+      expect((await schema.getIndexes(renamed)).filter(index => index.columns.includes('email'))).toEqual([])
+    })
+
+    it.runIf(driver === 'postgres')('renames and drops indexes of a table in a schema outside the search path', async () => {
+      const tenant = `holo_tenant_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      const { db, schema } = await openDatabase(driver)
+      onTestFinished(async () => { await db.executeCompiled({ sql: `DROP SCHEMA IF EXISTS "${tenant}" CASCADE`, source: 'schema' }) })
+      await db.executeCompiled({ sql: `CREATE SCHEMA "${tenant}"`, source: 'schema' })
+      const posts = `${tenant}.posts`
+      await schema.createTable(posts, table => {
+        table.id()
+        table.string('title')
+        table.string('slug')
+        table.index(['title'])
+        table.index(['slug'])
+      })
+      const indexNames = async () => (await createSchemaReader(db).readTableStructure(posts))!.indexes
+        .filter(index => !index.primary)
+        .map(index => index.name)
+        .sort()
+      expect(await indexNames()).toEqual([`${tenant}_posts_slug_index`, `${tenant}_posts_title_index`])
+
+      await schema.table(posts, table => { table.renameIndex(`${tenant}_posts_title_index`, 'posts_title_lookup') })
+      expect(await indexNames()).toEqual([`${tenant}_posts_slug_index`, 'posts_title_lookup'])
+
+      await schema.table(posts, table => {
+        table.dropIndex('posts_title_lookup')
+        table.dropIndex(['slug'])
+      })
+      expect(await indexNames()).toEqual([])
+    })
+
+    it.runIf(driver === 'postgres')('raises when dropIndex() names the constraint of a unique column and keeps it enforced', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_index_uniq_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('email').unique()
+      })
+
+      await expect(schema.table(name, table => { table.dropIndex(`${name}_email_unique`) })).rejects.toThrow()
+
+      await db.table(name).insert({ email: 'same@example.com' })
+      await expect(db.table(name).insert({ email: 'same@example.com' })).rejects.toThrow()
+    })
+
     it.runIf(driver === 'sqlite')('refuses to rename a partial index instead of recreating it without its condition', async () => {
       const { db, schema, table, adapter } = await openDatabase(driver)
       const name = table.tableName
