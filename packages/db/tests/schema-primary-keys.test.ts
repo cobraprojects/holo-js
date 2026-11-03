@@ -31,6 +31,21 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect([columns.post_id?.primaryKey, columns.tag_id?.primaryKey]).toEqual([true, true])
     })
 
+    it('keeps a unique column that is part of a composite primary key unique on its own', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueTableName('holo_post_tag')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.integer('post_id').unique()
+        table.integer('tag_id')
+        table.primary(['post_id', 'tag_id'])
+      })
+
+      await db.table(name).insert({ post_id: 1, tag_id: 1 })
+
+      await expect(db.table(name).insert({ post_id: 1, tag_id: 2 })).rejects.toThrow()
+    })
+
     it('drops the primary key and keeps the data', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueTableName('holo_post_tag')
