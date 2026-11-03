@@ -6287,7 +6287,7 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
 
     const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
     expect(rolledBack.status, rolledBack.stdout).toBe(1)
-    expect(rolledBack.stderr).toContain('does not exist. Run "holo migrate" to create it.')
+    expect(rolledBack.stderr).toContain('Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.')
     const seeded = runCliProcess(projectRoot, ['seed'], { env: { APP_ENV: 'development' } })
     expect(seeded.status, seeded.stderr).toBe(0)
 
