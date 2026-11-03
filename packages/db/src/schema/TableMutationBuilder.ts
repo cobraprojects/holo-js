@@ -467,8 +467,10 @@ export class TableMutationBuilder {
     return this.columnMutation(columnName, () => column.enum(values))
   }
 
-  dropColumn(columnName: string): void {
-    this.operations.push({ kind: 'dropColumn', columnName })
+  dropColumn(columns: string | readonly string[]): void {
+    for (const columnName of typeof columns === 'string' ? [columns] : columns) {
+      this.operations.push({ kind: 'dropColumn', columnName })
+    }
   }
 
   renameColumn(fromColumnName: string, toColumnName: string): void {
@@ -533,6 +535,31 @@ export class TableMutationBuilder {
   dropConstrainedForeignId(columnName: string): void {
     this.dropForeign([columnName])
     this.dropColumn(columnName)
+  }
+
+  timestamps(): this {
+    this.timestamp('created_at').defaultNow()
+    this.timestamp('updated_at').defaultNow()
+    return this
+  }
+
+  softDeletes(columnName = 'deleted_at'): this {
+    this.timestamp(columnName).nullable()
+    return this
+  }
+
+  dropTimestamps(): void {
+    this.dropColumn(['created_at', 'updated_at'])
+  }
+
+  dropSoftDeletes(columnName = 'deleted_at'): void {
+    this.dropColumn(columnName)
+  }
+
+  dropMorphs(name: string, indexName?: string): void {
+    const morphColumns = [`${name}_type`, `${name}_id`]
+    this.dropIndex(indexName ?? morphColumns)
+    this.dropColumn(morphColumns)
   }
 
   morphs(name: string, indexName?: string): this {

@@ -865,6 +865,107 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(name).count()).toBe(2)
     })
 
+    it('drops every column named in a dropColumn() list and keeps the remaining records', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_drop_list_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('name')
+        table.string('a').nullable()
+        table.string('b').nullable()
+      })
+      await db.table(name).insert({ name: 'Kept', a: 'x', b: 'y' })
+
+      await schema.table(name, table => { table.dropColumn(['a', 'b']) })
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'name'])
+      expect(await db.table(name).pluck('name')).toEqual(['Kept'])
+    })
+
+    it('drops the morph columns and their index with dropMorphs()', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_dm_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('name')
+        table.morphs('taggable')
+        table.morphs('owner', `${name}_owner_lookup`)
+      })
+      await db.table(name).insert({ name: 'Kept', taggable_type: 'post', taggable_id: 1, owner_type: 'user', owner_id: 2 })
+
+      await schema.table(name, table => {
+        table.dropMorphs('taggable')
+        table.dropMorphs('owner', `${name}_owner_lookup`)
+      })
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'name'])
+      expect((await schema.getIndexes(name)).filter(index => !index.columns.includes('id'))).toEqual([])
+      expect(await db.table(name).pluck('name')).toEqual(['Kept'])
+    })
+
+    it('raises when dropMorphs() finds no morph index and keeps the morph columns', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_dm_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.morphs('taggable')
+      })
+      await schema.table(name, table => { table.dropIndex(['taggable_type', 'taggable_id']) })
+
+      await expect(schema.table(name, table => { table.dropMorphs('taggable') })).rejects.toThrow()
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'taggable_type', 'taggable_id'])
+    })
+
+    it('drops the timestamp and soft-delete columns with dropTimestamps() and dropSoftDeletes()', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_drop_ts_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('name')
+        table.timestamps()
+        table.softDeletes()
+        table.softDeletes('archived_at')
+      })
+      await db.table(name).insert({ name: 'Kept' })
+
+      await schema.table(name, table => {
+        table.dropTimestamps()
+        table.dropSoftDeletes()
+        table.dropSoftDeletes('archived_at')
+      })
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'name'])
+      expect(await db.table(name).pluck('name')).toEqual(['Kept'])
+    })
+
+    it('adds timestamp and soft-delete columns in table() with the same definitions as createTable()', async () => {
+      const { schema } = await openDatabase(driver)
+      const created = `holo_ts_created_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const altered = `holo_ts_altered_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      onTestFinished(async () => {
+        await schema.dropTable(created)
+        await schema.dropTable(altered)
+      })
+      await schema.createTable(created, table => {
+        table.id()
+        table.timestamps()
+        table.softDeletes()
+        table.softDeletes('archived_at')
+      })
+      await schema.createTable(altered, table => { table.id() })
+
+      await schema.table(altered, table => {
+        table.timestamps().softDeletes().softDeletes('archived_at')
+      })
+
+      expect(await schema.getColumns(altered)).toEqual(await schema.getColumns(created))
+    })
+
     it.runIf(driver === 'sqlite')('raises SQLite\'s error when dropping an indexed column and leaves the table unchanged', async () => {
       const { db, schema, table } = await openDatabase(driver)
       const name = table.tableName
