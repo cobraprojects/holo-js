@@ -28,7 +28,8 @@ export abstract class SQLSchemaCompiler {
     if (operation.kind === 'addColumn') {
       return [
         this.compileAddColumn(operation.tableName, operation.column),
-        ...this.compileStandaloneUniqueIndexes(operation.tableName, this.resolveColumnUniqueIndexes(operation.tableName, [operation.column])),
+        ...this.resolveStandaloneUniqueIndexes(this.resolveColumnUniqueIndexes(operation.tableName, [operation.column]))
+          .map(index => this.compileCreateIndex(operation.tableName, index)),
       ]
     }
 
@@ -93,28 +94,33 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileCreateTable(table: TableDefinition): DDLStatement[] {
+    return [
+      this.compileTableCreation(table),
+      ...this.resolveCreateTableIndexes(table).map(index => this.compileCreateIndex(table.tableName, index)),
+    ]
+  }
+
+  compileTableCreation(table: TableDefinition): DDLStatement {
     assertValidIdentifierPath(table.tableName, 'Table name')
     const { table: definedTable, primaryKeyConstraint } = this.resolveTablePrimaryKeyConstraint(table)
-    const columnUniqueIndexes = this.resolveColumnUniqueIndexes(table.tableName, Object.values(definedTable.columns))
-    const declaredIndexes = table.indexes.filter(index => !columnUniqueIndexes.some(columnUnique => this.isSameIndex(table.tableName, columnUnique, index)))
-    assertUniqueResolvedIndexNames(table.tableName, [...declaredIndexes, ...columnUniqueIndexes])
     const columnSql = [
       ...this.compileTableDefinitions(definedTable),
       ...(primaryKeyConstraint ? [primaryKeyConstraint] : []),
-      ...this.compileUniqueConstraints(table.tableName, columnUniqueIndexes),
+      ...this.compileUniqueConstraints(table.tableName, this.resolveColumnUniqueIndexes(table.tableName, Object.values(definedTable.columns))),
     ]
-    const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
-    const statements: DDLStatement[] = [{
-      sql,
+    return {
+      sql: `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`,
       source: `schema:createTable:${table.tableName}`,
-    }]
-
-    for (const index of declaredIndexes) {
-      statements.push(this.compileCreateIndex(table.tableName, index))
     }
+  }
 
-    statements.push(...this.compileStandaloneUniqueIndexes(table.tableName, columnUniqueIndexes))
-    return statements
+  resolveCreateTableIndexes(table: TableDefinition): TableIndexDefinition[] {
+    const definedColumns = Object.values(this.resolveTablePrimaryKeyConstraint(table).table.columns)
+    const columnUniqueIndexes = this.resolveColumnUniqueIndexes(table.tableName, definedColumns)
+    const declaredIndexes = table.indexes.filter(index => !columnUniqueIndexes.some(columnUnique => this.isSameIndex(table.tableName, columnUnique, index)))
+    assertUniqueResolvedIndexNames(table.tableName, [...declaredIndexes, ...columnUniqueIndexes])
+    return [...declaredIndexes, ...this.resolveStandaloneUniqueIndexes(columnUniqueIndexes)]
+      .map(index => ({ ...index, name: this.resolveIndexName(table.tableName, index) }))
   }
 
   private resolveTablePrimaryKeyConstraint(table: TableDefinition): { table: TableDefinition, primaryKeyConstraint?: string } {
@@ -155,7 +161,7 @@ export abstract class SQLSchemaCompiler {
     return indexes.map(index => `CONSTRAINT ${this.quoteIdentifier(this.resolveIndexName(tableName, index))} UNIQUE (${index.columns.map(column => this.quoteIdentifier(column)).join(', ')})`)
   }
 
-  compileStandaloneUniqueIndexes(_tableName: string, _indexes: readonly TableIndexDefinition[]): DDLStatement[] {
+  protected resolveStandaloneUniqueIndexes(_indexes: readonly TableIndexDefinition[]): TableIndexDefinition[] {
     return []
   }
 
@@ -285,10 +291,6 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileCreateIndex(tableName: string, index: TableIndexDefinition): DDLStatement {
-    return this.compileIndexCreation(tableName, index, 'IF NOT EXISTS ')
-  }
-
-  protected compileIndexCreation(tableName: string, index: TableIndexDefinition, existenceClause: string): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
     const indexName = this.resolveIndexName(tableName, index)
     const quotedColumns = index.columns.map((column) => {
@@ -297,7 +299,7 @@ export abstract class SQLSchemaCompiler {
     }).join(', ')
 
     return {
-      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${existenceClause}${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
+      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
       source: `schema:createIndex:${tableName}:${indexName}`,
     }
   }

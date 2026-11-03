@@ -254,6 +254,8 @@ await schema.createTable('tags', (table) => {
 })
 ```
 
+If the table already exists, `createTable()` leaves it as it is and creates only the declared indexes it lacks, so running the same `createTable()` again succeeds. A declared index whose name the table already uses for other columns, or with other uniqueness, throws `SchemaError`.
+
 ### table()
 
 Changes an existing table. The callback receives a builder for adding, changing, renaming, and dropping columns, indexes, and foreign keys.
@@ -971,6 +973,8 @@ table.unique(['post_id', 'created_at'], 'comments_post_created_unique')
 ```
 
 When you don't pass a name, Holo builds one from the table and columns: `comments_post_id_index`, `comments_post_id_status_index`, or `..._unique` for unique indexes.
+
+On PostgreSQL and SQLite, index names are shared by every table in a schema. If another table already has an index with the name, creating the index fails, as in Laravel, instead of skipping it. This happens after [renameTable()](#renametable), because the renamed table's indexes keep their names: pass a different name to the new table's index. Inside `createTable()`, the failure rolls back and creates no table. On MySQL, index names belong to their table, so this can't happen.
 
 ### dropIndex()
 

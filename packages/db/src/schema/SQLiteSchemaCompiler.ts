@@ -28,12 +28,12 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return []
   }
 
-  override compileStandaloneUniqueIndexes(tableName: string, indexes: readonly TableIndexDefinition[]): DDLStatement[] {
-    return indexes.map(index => this.compileCreateIndex(tableName, index))
+  protected override resolveStandaloneUniqueIndexes(indexes: readonly TableIndexDefinition[]): TableIndexDefinition[] {
+    return [...indexes]
   }
 
   compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
-    return [this.compileDropIndex(tableName, fromIndexName), this.compileIndexCreation(tableName, index, '')]
+    return [this.compileDropIndex(tableName, fromIndexName), this.compileCreateIndex(tableName, index)]
   }
 
   compileRebuildTable(
