@@ -65,6 +65,29 @@ async function openLegacyDatabase(): Promise<DatabaseContext> {
   return connection
 }
 
+it('redeems unexpired 0.5.x password-reset and email-verification links on SQLite without rewriting their dates, and rejects expired ones', async () => {
+  await openLegacyDatabase()
+  const now = new Date()
+  const createdAt = new Date(now.getTime() - 3_600_000)
+  const live = new Date(now.getTime() + 3_600_000)
+  const expired = new Date(now.getTime() - 60_000)
+  const reset = (id: string, expiresAt: Date) => ({ id, provider: 'users', email: `${id}@example.test`, tokenHash: `hash-${id}`, createdAt, expiresAt })
+  const verification = (id: string, expiresAt: Date) => ({ ...reset(id, expiresAt), userId: '1' })
+  for (const [id, expiresAt] of [['live', live], ['expired', expired]] as const) {
+    const row = { id, email: `${id}@example.test`, token_hash: `hash-${id}`, expires_at: expiresAt.toISOString(), created_at: createdAt.toISOString(), updated_at: createdAt.toISOString() }
+    await DB.table('password_reset_tokens').insert(row)
+    await DB.table('email_verification_tokens').insert({ ...row, user_id: '1' })
+  }
+  const persistence = await createCoreAuthPersistence('/unused-project', {
+    auth: { providers: {}, passwords: { users: { provider: 'users', table: 'password_reset_tokens', expire: 60, throttle: 0 } } },
+  } as never)
+
+  await expect(persistence.passwordResetTokens.redeem(reset('live', live), async () => 'reset')).resolves.toBe('reset')
+  await expect(persistence.emailVerificationTokens.redeem(verification('live', live), async () => 'verified')).resolves.toBe('verified')
+  await expect(persistence.passwordResetTokens.redeem(reset('expired', expired), async () => 'reset')).resolves.toBeNull()
+  await expect(persistence.emailVerificationTokens.redeem(verification('expired', expired), async () => 'verified')).resolves.toBeNull()
+})
+
 it('redeems 0.5.x password-reset and email-verification links on SQLite after the upgrade guide rewrites every framework date column', async () => {
   const connection = await openLegacyDatabase()
   const now = new Date(Math.floor(Date.now() / 1000) * 1000)
