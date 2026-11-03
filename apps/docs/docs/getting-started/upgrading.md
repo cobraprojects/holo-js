@@ -232,7 +232,7 @@ Holo reads the table from the database and drops the constraint that covers exac
 
 ### Composite primary keys
 
-[`primary(columns)`](/database/migrations#primary-columns) gives a table a primary key on several columns. Models don't support composite keys, as in Laravel: a model on such a table throws `SchemaError` unless you set its `primaryKey` option to one of the key columns. Query the table with `DB.table()` or use it as a `belongsToMany` pivot. See [Primary keys](/orm/#primary-keys).
+[`primary(columns)`](/database/migrations#primary-columns) gives a table a primary key on several columns. Models don't support composite keys, as in Laravel: a model on such a table throws `SchemaError` when an operation needs its key, such as `find()`, `create()` or `save()`, unless you set its `primaryKey` option to one of the key columns. Defining the model, and `holo prepare` and `holo migrate`, don't fail. Query the table with `DB.table()` or use it as a `belongsToMany` pivot. See [Primary keys](/orm/#primary-keys).
 
 ### The CLI reads database settings only from `config/database.ts`
 

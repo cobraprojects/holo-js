@@ -42,6 +42,8 @@ export function inferModelName(tableName: string): string {
     .join('')
 }
 
+export class CompositeModelKeyError extends SchemaError {}
+
 export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): Extract<keyof TTable['columns'], string> {
   const [primaryKey, ...otherPrimaryKeys] = Object.values(table.columns).filter(column => column.primaryKey)
   if (!primaryKey) {
@@ -49,7 +51,7 @@ export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): 
   }
 
   if (otherPrimaryKeys.length > 0) {
-    throw new SchemaError(
+    throw new CompositeModelKeyError(
       `Table "${table.tableName}" has a composite primary key, which models do not support. Set the model's primaryKey option to one column, or use the table as a belongsToMany pivot.`,
     )
   }

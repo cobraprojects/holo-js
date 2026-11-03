@@ -242,7 +242,7 @@ function defineModelFromGeneratedTableName<
   ): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
     return resolveUniqueIdConfig(
       options.traits,
-      resolvePrimaryKeyFromTable(table),
+      () => resolvePrimaryKeyFromTable(table),
       options.uniqueIds,
       options.newUniqueId,
     )
@@ -320,7 +320,7 @@ function defineModelFromResolvedTable<
 ): StaticModelApi<TTable, TScopes, TRelations> {
   const deletedAtColumn = resolveDeletedAtColumn(table, options)
   const inferredName = options.name ?? inferModelName(table.tableName)
-  const primaryKey = (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof TTable['columns'], string>
+  const resolvePrimaryKey = () => (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof TTable['columns'], string>
   const timestamps = options.timestamps ?? true
   const createdAtColumn = timestamps
     ? resolveTimestampColumn(table, options.createdAtColumn, 'created_at')
@@ -330,7 +330,7 @@ function defineModelFromResolvedTable<
     : undefined
   const uniqueIdConfig = resolveUniqueIdConfig(
     options.traits,
-    primaryKey,
+    resolvePrimaryKey,
     options.uniqueIds,
     options.newUniqueId,
   )
@@ -338,18 +338,18 @@ function defineModelFromResolvedTable<
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
-  const definition: ModelDefinition<TTable, TScopes, TRelations> = Object.freeze({
+  const definition = {
     ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
     table,
     untyped: false,
-    primaryKey,
     createdAtColumn,
     updatedAtColumn,
     uniqueIdConfig,
     deletedAtColumn,
-  })
+  } as Omit<ModelDefinition<TTable, TScopes, TRelations>, 'primaryKey'> & Pick<ModelDefinition<TTable, TScopes, TRelations>, 'primaryKey'>
+  Object.defineProperty(definition, 'primaryKey', { enumerable: true, get: resolvePrimaryKey })
 
-  return createStaticModelApi(definition)
+  return createStaticModelApi(Object.freeze(definition))
 }
 
 function createStaticModelApi<
