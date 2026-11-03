@@ -25,12 +25,38 @@ user.email
 
 ## How casts and types fit together
 
-Holo infers each attribute's TypeScript type from the column in your [migration](/database/migrations). A `table.boolean('is_featured')` column is a `boolean`, a `table.timestamp('published_at').nullable()` column is `Date | null`, and `table.enum('status', ['draft', 'published'])` is `'draft' | 'published'`.
+An attribute's TypeScript type starts from its column in your database. After `npx holo migrate`, Holo reads the database into the [generated schema](/orm/#where-the-types-come-from), so a `table.boolean('is_featured')` column is a `boolean`, a `table.timestamp('published_at').nullable()` column is `Date | null`, and `table.enum('status', ['draft', 'published'])` is `'draft' | 'published'`.
 
-Casts change the value at runtime. They do not change the inferred type.
+A built-in cast sets the attribute's type where the database can't state it, as Laravel's casts do at runtime. SQLite, for example, stores JSON in a `text` column, so the database only says the column holds a string. A `'json'` cast types it as JSON:
+
+```ts [server/models/Post.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('posts', {
+  casts: {
+    metadata: 'json',
+    is_featured: 'boolean',
+  },
+})
+```
+
+```ts
+const post = await Post.findOrFail(1)
+
+post.metadata
+//   ^? unknown
+post.is_featured
+//   ^? boolean
+
+await Post.create({ title: 'Hello', metadata: { theme: 'dark' }, is_featured: true })
+```
+
+The cast's type applies when you read the attribute and when you pass it to `create()`, `update()`, `make()`, `fill()`, and `pendingAttributes`. The column still decides whether the attribute can be `null` and whether `create()` requires it. Columns without a cast keep the type the database gives them.
+
+A cast for a name that isn't a column, such as a computed attribute, doesn't change any type.
 
 ::: warning
-Pick the column type that matches the value you want, and use casts for conversions the column type can't express. If a cast returns something different from the column type (for example a `Money` object from an integer column), TypeScript still sees the column type.
+Enum, encrypted, binary, and custom casts, including `castUsing()` objects, don't change the type. TypeScript keeps seeing the column type, so if a custom cast returns something else (for example a `Money` object from an integer column), pick the column type that matches the value or convert it yourself.
 :::
 
 ## Built-in casts
@@ -51,20 +77,32 @@ export default defineModel('posts', {
 })
 ```
 
-| Cast | Read from database | Write to database |
-| --- | --- | --- |
-| `'boolean'` | `Boolean(value)` | `Boolean(value)` |
-| `'number'` | `Number(value)` | `Number(value)` |
-| `'string'` | `String(value)` | `String(value)` |
-| `'json'` | Parses a JSON string | Serializes to a JSON string |
-| `'date'`, `'datetime'`, `'timestamp'` | A `Date` object | An ISO 8601 string |
-| `'vector'` | An array of numbers | A `[1,2,3]` string |
+| Cast | Attribute type | Read from database | Write to database |
+| --- | --- | --- | --- |
+| `'boolean'` | `boolean` | `Boolean(value)` | `Boolean(value)`, stored as `1` or `0` in integer columns |
+| `'number'` | `number` | `Number(value)` | `Number(value)` |
+| `'string'` | `string` | `String(value)` | `String(value)` |
+| `'json'` | The type of a `table.json()` column | Parses a JSON string | Serializes to a JSON string |
+| `'date'`, `'datetime'`, `'timestamp'` | `Date` | A `Date` object | An ISO 8601 string |
+| `'vector'` | `readonly number[]` | An array of numbers | A `[1,2,3]` string |
 
-`null` and `undefined` pass through every built-in cast unchanged.
+`null` and `undefined` pass through every built-in cast unchanged. A `'json'` cast on a column that is already typed as JSON keeps that column's type.
 
 ### JSON columns
 
-Columns created with `table.json()` are already encoded on write and decoded on read. You don't need a `'json'` cast for them. Use `'json'` when JSON is stored in a plain text column.
+On PostgreSQL and MySQL, `table.json()` creates a native JSON column. Holo encodes it on write, decodes it on read, and types it as JSON, so it needs no cast.
+
+On SQLite, JSON is stored in a `text` column, as in Laravel, and the database can't tell it apart from other text. Add a `'json'` cast to read and write it as JSON. Without the cast, the attribute is the stored JSON string.
+
+```ts [server/models/Post.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('posts', {
+  casts: {
+    settings: 'json',
+  },
+})
+```
 
 ```ts
 const post = await Post.create({ title: 'Hello', settings: { theme: 'dark' } })
@@ -103,6 +141,22 @@ event.toJSON()
 Format tokens are `Y` (year), `m` (month), `d` (day), `H` (hours), `i` (minutes), and `s` (seconds), all in UTC. `unix` outputs seconds since the epoch.
 
 To change how every date on a model is serialized, see [serialization](/orm/serialization#date-formatting).
+
+### SQLite tables created before 0.6
+
+Before 0.6, Holo created SQLite booleans as `INTEGER` and dates, datetimes, timestamps, and JSON as `TEXT`. The database reports those columns as integers and text, so their attributes are typed as `number` and `string`. Add casts to bring back the types:
+
+```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', {
+  casts: {
+    is_admin: 'boolean',
+    preferences: 'json',
+    email_verified_at: 'datetime',
+  },
+})
+```
 
 ### Vector dimensions
 
