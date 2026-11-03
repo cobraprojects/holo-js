@@ -94,8 +94,8 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
-import { assertSinglePrimaryKey, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
@@ -211,7 +211,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: getGeneratedTableDefinition(source.tableName) }
+    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
@@ -3188,7 +3188,8 @@ export class TableQueryBuilder<
     }
 
     const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
-    const value = primaryKeys.length === 1 ? rows[0]?.[primaryKeys[0]] : undefined
+    const [primaryKey, ...otherPrimaryKeys] = primaryKeys
+    const value = primaryKey !== undefined && otherPrimaryKeys.length === 0 ? rows[0]?.[primaryKey] : undefined
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
@@ -3476,20 +3477,17 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
-    if (!this.source.table) {
-      if (this.plan.orderBy.length === 0) {
-        throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
-      }
-
-      return this
+    const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
+    if (this.plan.orderBy.length === 0 && primaryKeys.length === 0) {
+      throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
     }
 
-    return this.withPrimaryKeyTieBreakers()
+    return this.withPrimaryKeyTieBreakers(primaryKeys)
   }
 
-  private withPrimaryKeyTieBreakers(): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+  private withPrimaryKeyTieBreakers(primaryKeys: readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const tableName = this.source.alias ?? this.source.tableName
-    const plan = resolveTablePrimaryKeyColumns(this.source.table).reduce((current, primaryKey) => {
+    const plan = primaryKeys.reduce((current, primaryKey) => {
       const qualifiedKey = `${tableName}.${primaryKey}`
       return current.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))
         ? current
@@ -3540,11 +3538,12 @@ export class TableQueryBuilder<
     return rows.flatMap((row) => {
       const value = row[column]
       if (value === null) return []
-      if (typeof value !== 'number' || Number.isNaN(value)) {
+      const numericValue = this.normalizeNumericResult(value)
+      if (numericValue === undefined) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return [value]
+      return [numericValue]
     })
   }
 

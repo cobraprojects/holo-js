@@ -15,7 +15,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
@@ -3606,12 +3606,12 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     connection: DatabaseContext,
   ): TableQueryBuilder<string | TableDefinition> {
-    return this.applyPivotQueryConfig(new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable), connection), relation)
+    return this.applyPivotQueryConfig(new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable, connection), connection), relation)
   }
 
-  private resolvePivotTable(pivotTable: string | TableDefinition): string | TableDefinition {
+  private resolvePivotTable(pivotTable: string | TableDefinition, connection: DatabaseContext): string | TableDefinition {
     if (typeof pivotTable !== 'string') return pivotTable
-    return getGeneratedTableDefinition(pivotTable) ?? pivotTable
+    return getConnectionGeneratedTableDefinition(pivotTable, connection.getConnectionName()) ?? pivotTable
   }
 
   private resolvePivotTableName(pivotTable: string | TableDefinition): string {
@@ -3622,7 +3622,7 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'morphToMany' }>,
     connection: DatabaseContext,
   ): TableQueryBuilder<string | TableDefinition> {
-    return this.applyPivotQueryConfig(new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable), connection), relation)
+    return this.applyPivotQueryConfig(new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable, connection), connection), relation)
   }
 
   private createMorphedByManyPivotQuery(
@@ -3631,7 +3631,7 @@ export class ModelRepository<
     connection: DatabaseContext,
   ): TableQueryBuilder<string | TableDefinition> {
     return this.applyPivotQueryConfig(
-      new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable), connection).where(relation.morphTypeColumn, morphClass),
+      new TableQueryBuilder(this.resolvePivotTable(relation.pivotTable, connection), connection).where(relation.morphTypeColumn, morphClass),
       relation,
     )
   }
@@ -3694,7 +3694,7 @@ export class ModelRepository<
     }
 
     const connection = this.getConnection()
-    const table = this.resolvePivotTable(relation.pivotTable)
+    const table = this.resolvePivotTable(relation.pivotTable, connection)
     const dialect = connection.getDriver() as SchemaDialectName
     return Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
@@ -3916,7 +3916,7 @@ export class ModelRepository<
         break
     }
     const connection = this.getConnection()
-    return new PivotMutation({ table: this.resolvePivotTable(relation.pivotTable), scope, relatedColumn, allowedColumns: relation.pivotColumns, timestamps: relation.pivotTimestamps === true, relationName }, connection)
+    return new PivotMutation({ table: this.resolvePivotTable(relation.pivotTable, connection), scope, relatedColumn, allowedColumns: relation.pivotColumns, timestamps: relation.pivotTimestamps === true, relationName }, connection)
   }
 
   private async dispatchCancelableEvent(

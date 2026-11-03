@@ -22,6 +22,19 @@ const generatedTables = (() => {
   return runtime.__holoGeneratedTables__
 })()
 
+const generatedSchemaSource = (() => {
+  const runtime = globalThis as typeof globalThis & {
+    __holoGeneratedSchemaSource__?: { connectionName?: string }
+  }
+
+  runtime.__holoGeneratedSchemaSource__ ??= {}
+  return runtime.__holoGeneratedSchemaSource__
+})()
+
+export function setGeneratedSchemaConnection(connectionName: string | undefined): void {
+  generatedSchemaSource.connectionName = connectionName
+}
+
 export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
   for (const table of Object.values(tables)) {
     generatedTables.set(table.tableName, table)
@@ -47,6 +60,11 @@ export function clearGeneratedTables(): void {
 
 export function getGeneratedTableDefinition<TName extends string>(tableName: TName): GeneratedSchemaTable<TName> | undefined {
   return generatedTables.get(tableName) as GeneratedSchemaTable<TName> | undefined
+}
+
+export function getConnectionGeneratedTableDefinition(tableName: string, connectionName: string): TableDefinition | undefined {
+  const schemaConnection = generatedSchemaSource.connectionName
+  return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
 }
 
 export function resolveGeneratedTableDefinition<
