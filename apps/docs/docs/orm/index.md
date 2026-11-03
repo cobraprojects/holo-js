@@ -110,6 +110,8 @@ export default defineModel('countries', {
 })
 ```
 
+Models don't support composite primary keys, as in Laravel. A model on a table whose primary key has several columns throws `SchemaError` unless you set `primaryKey` to one of them. Use such a table as a `belongsToMany` pivot instead. See [primary(columns)](/database/migrations#primary-columns).
+
 ### Timestamps
 
 If the table has `created_at` and `updated_at` columns, Holo fills them on create and refreshes `updated_at` on every save. Add both columns in a migration with `table.timestamps()`.

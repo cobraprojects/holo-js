@@ -23,6 +23,7 @@ type BoundColumns<TColumns extends ColumnShapeInput> = {
 
 export interface DefineTableOptions {
   indexes?: readonly TableIndexDefinition[]
+  primaryKeyName?: string
 }
 
 export type BoundTableDefinition<
@@ -64,6 +65,10 @@ export function defineTable<
     assertValidIdentifierSegment(columnName, 'Column name')
   }
 
+  if (options.primaryKeyName) {
+    assertValidIdentifierSegment(options.primaryKeyName, 'Primary key name')
+  }
+
   for (const index of options.indexes ?? []) {
     if (index.name) {
       assertValidIdentifierSegment(index.name, 'Index name')
@@ -86,6 +91,7 @@ export function defineTable<
     tableName: name,
     columns: boundColumns,
     indexes: Object.freeze([...(options.indexes ?? [])]),
+    ...(options.primaryKeyName ? { primaryKeyName: options.primaryKeyName } : {}),
     ...boundColumns,
   } satisfies TableDefinition<TName, BoundColumns<TColumns>> & BoundColumns<TColumns>
 

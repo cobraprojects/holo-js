@@ -78,8 +78,13 @@ export function splitTableDefinitions(createTableSql: string): string[] {
   return splitCreateTableSql(createTableSql)?.definitions ?? []
 }
 
+const PRIMARY_KEY_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?PRIMARY\s+KEY\b/i
 const TABLE_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?(?:PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY)\b/i
 const LEADING_IDENTIFIER_PATTERN = new RegExp(`^(${IDENTIFIER_PATTERN})`, 'i')
+
+export function isPrimaryKeyConstraintDefinition(definition: string): boolean {
+  return PRIMARY_KEY_CONSTRAINT_PATTERN.test(definition)
+}
 
 export function readColumnDefinitionName(definition: string): string | undefined {
   if (TABLE_CONSTRAINT_PATTERN.test(definition)) return undefined
@@ -140,4 +145,13 @@ export function readInlineColumnConstraints(definition: string): InlineColumnCon
     unique: /\bUNIQUE\b/i.test(keywords),
     references: /\bREFERENCES\b/i.test(keywords),
   }
+}
+
+const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
+  `(${QUOTED_TEXT_PATTERN.source})|\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
+  'gi',
+)
+
+export function withoutInlinePrimaryKey(definition: string): string {
+  return definition.replace(INLINE_PRIMARY_KEY_PATTERN, (match, quoted: string | undefined) => quoted ?? '')
 }
