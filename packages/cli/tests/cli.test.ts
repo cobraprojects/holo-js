@@ -1115,6 +1115,37 @@ const generatedUsersColumns = {
   ],
 } as const
 
+async function writeAnalyticsConnectionProject(
+  projectRoot: string,
+  analytics: Readonly<Record<string, string | number>>,
+): Promise<void> {
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './storage/database.sqlite' },
+    analytics: ${JSON.stringify(analytics)},
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_events.ts', `
+import { DB, createSchemaService, defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    await createSchemaService(DB.connection('analytics')).createTable('events', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down() {
+    await createSchemaService(DB.connection('analytics')).dropTable('events')
+  },
+})
+`)
+}
+
 async function writeSchemaSourceProject(
   projectRoot: string,
   connection: Readonly<Record<string, string | number>>,
@@ -6328,6 +6359,51 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }, 60000)
 
+  it('migrates, builds and queries the SQLite database a relative file: URL points at', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: 'file:./storage/database.sqlite' })
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['migrate', 'build', 'dev']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+    }
+
+    expect(await readdir(projectRoot)).not.toContain('file:')
+    const database = new DatabaseSync(join(projectRoot, 'storage/database.sqlite'))
+    try {
+      expect(database.prepare('SELECT name FROM sqlite_master WHERE name = ?').get('users')).toEqual({ name: 'users' })
+    } finally {
+      database.close()
+    }
+  }, 90000)
+
+  for (const database of schemaSourceDatabases) {
+    it.skipIf(!database.enabled).each(['migrate', 'migrate:fresh'])(`creates the missing ${database.driver} database of a second connection a migration uses on %s`, async (command) => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const databaseName = database.driver === 'sqlite'
+        ? 'storage/analytics/events'
+        : `holo_analytics_${randomUUID().replaceAll('-', '')}`
+      await writeAnalyticsConnectionProject(projectRoot, database.connection(databaseName))
+      try {
+        const migrated = runCliProcess(projectRoot, [command], { env: { APP_ENV: 'development' } })
+
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        expect(migrated.stdout).toContain('2026_01_01_000001_create_events')
+        const connection = database.open(databaseName, projectRoot)
+        try {
+          await expect(createSchemaService(connection).hasTable('events')).resolves.toBe(true)
+        } finally {
+          await connection.disconnect()
+        }
+      } finally {
+        await database.drop(databaseName)
+      }
+    }, 60000)
+  }
+
   it.each([
     { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
     { failure: 'an import of a missing module', source: 'import \'holo-missing-migration-package\'\nexport default {}\n', reported: 'holo-missing-migration-package' },
@@ -6613,6 +6689,24 @@ export default defineMigration({
     const schemaWriteFailure = migrated.stderr.indexOf('Unable to write the Generated schema after the failed run: ')
     expect(failure, migrated.stderr).toBeGreaterThanOrEqual(0)
     expect(schemaWriteFailure, migrated.stderr).toBeGreaterThan(failure)
+  }, 60000)
+
+  it('fails holo migrate naming the source file of a migration without a timestamp or a declared name', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './data.sqlite' })
+    await writeProjectFile(projectRoot, 'server/db/migrations/create_foo_table.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).toBe(1)
+    expect(migrated.stderr).toContain('Registered migration "server/db/migrations/create_foo_table.ts" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.')
   }, 60000)
 
   it('prepares, builds, starts, migrates and rolls back a 0.5.6 migration file without a timestamp under its declared name', async () => {
@@ -6910,6 +7004,26 @@ export default defineMigration({
     expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but the "cache" and "cache_locks" tables of cache store "shared" (driver "database") haven\'t been migrated. Run "holo migrate" to create them.')
     expect(isolated.stderr).not.toContain('cache:table')
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated with the connection error when the database cache store cannot reach its database', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeIsolatedMigrationProject(projectRoot, {
+      driver: 'postgres',
+      host: '127.0.0.1',
+      port: 1,
+      username: 'holo',
+      database: 'holo_unreachable',
+    }, 'database')
+    linkBuiltWorkspacePackagesSync(projectRoot)
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "shared" (driver "database") couldn\'t take the lock: ')
+    expect(isolated.stderr).toContain('ECONNREFUSED')
+    expect(isolated.stderr).not.toContain('can\'t provide a lock')
   }, 30000)
 
   it('executes plugin-published migrations through the existing migration lifecycle', async () => {

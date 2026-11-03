@@ -16,7 +16,7 @@ import { errorMessage } from './error-message'
 import { isSchemaChangingKind } from './runtime-kinds'
 import { RUNTIME_FAILURE_FD } from './runtime-failure'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
-import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
+import type { BundledRuntimeEntry, RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
 
 const runtimeImportMeta = import.meta as ImportMeta & {
@@ -67,14 +67,14 @@ export async function cacheProjectConfig(
 /* v8 ignore start */
 type RuntimeBundle = Awaited<ReturnType<typeof bundleProjectModule>>
 
-async function bundleRuntimeEntries(projectRoot: string, entries: readonly string[], bundled: RuntimeBundle[]): Promise<string[]> {
-  const paths: string[] = []
+async function bundleRuntimeEntries(projectRoot: string, entries: readonly string[], bundled: RuntimeBundle[]): Promise<BundledRuntimeEntry[]> {
+  const bundledEntries: BundledRuntimeEntry[] = []
   for (const entry of entries) {
     const bundle = await bundleProjectModule(projectRoot, resolve(projectRoot, entry), { external: ['@holo-js/db'] })
     bundled.push(bundle)
-    paths.push(bundle.path)
+    bundledEntries.push({ sourcePath: entry, path: bundle.path })
   }
-  return paths
+  return bundledEntries
 }
 
 export async function getRuntimeEnvironment(projectRoot: string, kind: RuntimeCommandKind): Promise<RuntimeEnvironment> {
@@ -248,6 +248,10 @@ async function refreshDiscoveryAfterFailedRun(
   }
 }
 
+function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string } {
+  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href }
+}
+
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
   kind: RuntimeCommandKind,
@@ -276,13 +280,13 @@ export async function withRuntimeEnvironment<T>(
       runtimeConfig: {
         db: environment.project.config.database,
       },
-      models: environment.bundledModels.map(entry => pathToFileURL(entry).href),
-      migrations: environment.bundledMigrations.map(entry => pathToFileURL(entry).href),
+      models: environment.bundledModels.map(toRuntimeModuleEntry),
+      migrations: environment.bundledMigrations.map(toRuntimeModuleEntry),
       migrationPublishers: migrationPublishers.map(entry => ({
         packageName: entry.packageName,
         url: pathToFileURL(entry.path).href,
       })),
-      seeders: environment.bundledSeeders.map(entry => pathToFileURL(entry).href),
+      seeders: environment.bundledSeeders.map(toRuntimeModuleEntry),
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),
       generatedSchemaRuntimeOutputPath: resolve(projectRoot, GENERATED_SCHEMA_RUNTIME_PATH),
       options,

@@ -62,11 +62,16 @@ export type InternalCommandContext = IoStreams & {
 
 export type RuntimeCommandKind = 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'generate-schema' | 'media:regenerate'
 
+export type BundledRuntimeEntry = {
+  readonly sourcePath: string
+  readonly path: string
+}
+
 export type RuntimeEnvironment = {
   readonly project: LoadedProjectConfig
-  readonly bundledModels: readonly string[]
-  readonly bundledMigrations: readonly string[]
-  readonly bundledSeeders: readonly string[]
+  readonly bundledModels: readonly BundledRuntimeEntry[]
+  readonly bundledMigrations: readonly BundledRuntimeEntry[]
+  readonly bundledSeeders: readonly BundledRuntimeEntry[]
   cleanup(): Promise<void>
 }
 

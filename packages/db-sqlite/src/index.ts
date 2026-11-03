@@ -23,6 +23,24 @@ function isInMemoryDatabase(filename: string): boolean {
   return filename === ':memory:' || filename === ''
 }
 
+function resolveSQLiteFilename(filename: string): string {
+  if (!filename.startsWith('file:')) return filename
+
+  const location = filename.slice('file:'.length).replace(/#.*$/s, '')
+  const queryStart = location.indexOf('?')
+  if (queryStart !== -1) {
+    throw new Error(`SQLite URL "${filename}" has query parameters, which Holo doesn't support. Remove "${location.slice(queryStart)}" from the URL.`)
+  }
+  if (!location.startsWith('//')) return decodeURIComponent(location)
+
+  const pathStart = location.indexOf('/', 2)
+  const authority = pathStart === -1 ? location.slice(2) : location.slice(2, pathStart)
+  if (authority !== '' && authority !== 'localhost') {
+    throw new Error(`SQLite URL "${filename}" names the host "${authority}". Use "file:" with a local path.`)
+  }
+  return decodeURIComponent(pathStart === -1 ? '' : location.slice(pathStart))
+}
+
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
 function normalizeBinding(value: unknown): unknown {
@@ -31,6 +49,16 @@ function normalizeBinding(value: unknown): unknown {
   }
 
   return value instanceof Date ? holoRuntimeInternals.formatSQLiteDateTime(value) : value
+}
+
+function exactInteger(value: bigint): number | string {
+  return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(value)
+    : value.toString()
+}
+
+function exactIntegerRow<TRow extends Record<string, unknown>>(row: Record<string, unknown>): TRow {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? exactInteger(value) : value])) as TRow
 }
 
 type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'
@@ -46,6 +74,7 @@ type SQLiteMigrationTransactionState = {
 export interface SQLiteStatementLike {
   all(...params: readonly unknown[]): Record<string, unknown>[]
   run(...params: readonly unknown[]): { changes?: number, lastInsertRowid?: unknown }
+  safeIntegers?(enabled: boolean): unknown
 }
 
 export interface SQLiteDatabaseLike {
@@ -71,7 +100,7 @@ export class SQLiteAdapter implements DriverAdapter {
   constructor(options: SQLiteAdapterOptions = {}) {
     this.database = options.database
     this.connected = !!options.database
-    this.filename = options.filename ?? ':memory:'
+    this.filename = resolveSQLiteFilename(options.filename ?? ':memory:')
     this.transactionKey = options.database || isInMemoryDatabase(this.filename) ? this : resolve(this.filename)
     this.createDatabaseInstance = options.createDatabase ?? ((filename) => {
       const database = new Database(filename, { fileMustExist: !isInMemoryDatabase(filename) })
@@ -168,8 +197,7 @@ export class SQLiteAdapter implements DriverAdapter {
     sql: string,
     bindings: readonly unknown[] = [],
   ): Promise<DriverQueryResult<TRow>> {
-    const statement = this.getDatabase().prepare(sql)
-    const rows = statement.all(...bindings.map(normalizeBinding)) as TRow[]
+    const rows = this.prepareExact(sql).all(...bindings.map(normalizeBinding)).map(row => exactIntegerRow<TRow>(row))
     return {
       rows,
       rowCount: rows.length,
@@ -188,12 +216,11 @@ export class SQLiteAdapter implements DriverAdapter {
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
     return this.runWithTransactionScope(async () => {
-      const statement = this.getDatabase().prepare(sql)
-      const result = statement.run(...bindings.map(normalizeBinding))
+      const result = this.prepareExact(sql).run(...bindings.map(normalizeBinding))
       return {
         affectedRows: result.changes,
         lastInsertId: typeof result.lastInsertRowid === 'bigint'
-          ? Number(result.lastInsertRowid)
+          ? exactInteger(result.lastInsertRowid)
           : result.lastInsertRowid as number | string | undefined,
       }
     })
@@ -221,6 +248,12 @@ export class SQLiteAdapter implements DriverAdapter {
 
   async releaseSavepoint(name: string): Promise<void> {
     this.getDatabase().exec(`RELEASE SAVEPOINT ${this.normalizeSavepointName(name)}`)
+  }
+
+  private prepareExact(sql: string): SQLiteStatementLike {
+    const statement = this.getDatabase().prepare(sql)
+    statement.safeIntegers?.(true)
+    return statement
   }
 
   private getDatabase(): SQLiteDatabaseLike {

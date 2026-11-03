@@ -175,7 +175,8 @@ As in Laravel, every server must use the same default cache store, and that stor
 | The default store can't be resolved, such as a missing driver package, driver plugin, or database connection | The store and its driver can't be resolved, followed by the reason. |
 | A `database` store whose cache table migration hasn't run | The store's cache tables haven't been migrated. Run `npx holo migrate`. |
 | A `database` store with no cache table migration | The store has no cache tables and no migration creates them. Run `npx holo cache:table`, then `npx holo migrate`. |
-| The default store can't give a lock for another reason | The store and its driver can't provide a lock, followed by the reason. |
+| The default store doesn't support locks | The store and its driver can't provide a lock, followed by the reason. |
+| Taking the lock fails, such as when the store's database or Redis server can't be reached | The store and its driver couldn't take the lock, followed by the error. |
 
 The errors for a store that can't be resolved or can't give a lock also tell you to use a default cache store that every server shares, such as `database` or `redis`.
 
