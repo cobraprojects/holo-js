@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { registerDatabaseDriverFactory, type DatabaseDriverFactory, type RuntimeDatabaseConfig } from '@holo-js/db'
+import { getDatabaseDriverFactory, registerDatabaseDriverFactory, type DatabaseDriverFactory, type RuntimeDatabaseConfig } from '@holo-js/db'
 import { createDatabasesOnFirstUse } from './database-creation'
 
 export async function loadProjectDatabaseDrivers(
@@ -31,6 +31,11 @@ export async function loadProjectDatabaseDrivers(
   const require = createRequire(join(projectRoot, 'package.json'))
   const factories: DatabaseDriverFactory[] = []
   for (const driver of drivers) {
+    const registered = getDatabaseDriverFactory(driver)
+    if (registered) {
+      factories.push(registered)
+      continue
+    }
     const { packageName, factoryExport } = packageByDriver[driver]
     const module = await import(pathToFileURL(require.resolve(packageName)).href) as Record<string, unknown>
     const driverFactory = module[factoryExport] as DatabaseDriverFactory | undefined
