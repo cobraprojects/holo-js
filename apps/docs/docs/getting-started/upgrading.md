@@ -177,6 +177,8 @@ import { diffSchema } from '@holo-js/db' // [!code ++]
 
 A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it.
 
+On PostgreSQL, `insertGetId()` on a table passed as a definition now returns an integer key as a number, as the table's reads and Laravel's `insertGetId()` do. Before, it returned the driver's text, such as `'5'`. Compare the ID with numbers, not strings.
+
 ### Schema operations that now fail instead of doing nothing
 
 These changes can make a migration that hasn't run yet fail, as it would in Laravel. Run your pending migrations against a copy of your database first.

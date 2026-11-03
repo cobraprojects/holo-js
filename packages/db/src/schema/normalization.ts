@@ -202,6 +202,10 @@ function stringifyVectorValue(value: unknown): unknown {
   return `[${parsed.join(',')}]`
 }
 
+export function storesJson(dialect: SchemaDialectName | undefined, column: AnyColumnDefinition): boolean {
+  return column.kind === 'json' || (dialect === 'sqlite' && column.kind === 'text')
+}
+
 export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
