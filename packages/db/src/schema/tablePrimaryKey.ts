@@ -21,9 +21,8 @@ export function resolvePrimaryKeyColumnOrder(
   return keyColumns.every((column, position) => column === declared[position]) ? undefined : Object.freeze([...keyColumns])
 }
 
-export function resolveTablePrimaryKeyColumns(table: TableDefinition | undefined): readonly [string, ...string[]] {
-  const [first, ...rest] = table ? listTablePrimaryKeyColumns(table) : []
-  return first === undefined ? ['id'] : [first, ...rest]
+export function resolveTablePrimaryKeyColumns(table: TableDefinition | undefined): readonly string[] {
+  return table ? listTablePrimaryKeyColumns(table) : ['id']
 }
 
 export function assertSinglePrimaryKey(table: TableDefinition | undefined): void {
@@ -38,8 +37,12 @@ export function resolveTablePrimaryKey(table: TableDefinition | undefined): stri
 
 function assertSingleColumnKey(
   table: TableDefinition | undefined,
-  primaryKeys: readonly [string, ...string[]],
+  primaryKeys: readonly string[],
 ): asserts primaryKeys is readonly [string] {
+  if (primaryKeys.length === 0) {
+    throw new SchemaError(`Table "${table?.tableName}" has no primary key; this operation needs a single primary-key column.`)
+  }
+
   if (primaryKeys.length > 1) {
     throw new SchemaError(
       `Table "${table?.tableName}" has a composite primary key (${primaryKeys.join(', ')}); this operation needs a single primary-key column.`,
