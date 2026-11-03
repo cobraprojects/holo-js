@@ -127,6 +127,27 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(renderGeneratedSchemaModule([definition])).toContain(`"${longColumn}": column.string().unique(),`)
     })
 
+    it('reads a table without a primary key whose non-null unique column the database could promote to a key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_keyless')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.string('email').unique()
+        table.string('token')
+      })
+
+      const reader = createSchemaReader(db)
+      const definition = (await reader.readTable(name))!
+      const structure = (await reader.readTableStructure(name))!
+
+      expect(structure.primaryKeyColumns).toEqual([])
+      expect(structure.columns.filter(column => column.primaryKey)).toEqual([])
+      expect(definition.primaryKeyColumns).toBeUndefined()
+      expect(definition.columns.email).toMatchObject({ primaryKey: false, unique: true })
+      expect(definition.columns.token).toMatchObject({ primaryKey: false, unique: false })
+      expect(renderGeneratedSchemaModule([definition])).toContain('"email": column.string().unique(),')
+    })
+
     it('reads referential actions, string lengths and primary-key structure', async () => {
       const { db, schema } = await openDatabase(driver)
       const parents = uniqueName('holo_read_parents')
