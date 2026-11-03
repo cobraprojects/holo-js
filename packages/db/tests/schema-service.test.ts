@@ -1580,7 +1580,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     })
 
     it('names a foreign key declared by createTable with the given constraint name', async () => {
-      const { db, schema, table, adapter } = await openDatabase(driver)
+      const { db, schema, table } = await openDatabase(driver)
       const parent = table.tableName.split('.').at(-1)!
       const child = `holo_fk_named_${randomUUID().replaceAll('-', '').slice(0, 20)}`
       const constraint = `${child}_parent_fk`
@@ -1591,10 +1591,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.foreign('parent_id', constraint).references('id').on(parent)
       })
       await expect(db.table(child).insert({ parent_id: 99 })).rejects.toThrow()
-      if (driver === 'sqlite') {
-        const result = await adapter.query<{ sql: string }>('SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?', [child])
-        expect(result.rows[0]!.sql).toContain(`CONSTRAINT "${constraint}" REFERENCES "${parent}"`)
-      }
+      expect((await createSchemaReader(db).readTableStructure(child))?.foreignKeys.map(foreignKey => foreignKey.name)).toEqual([constraint])
       await schema.table(child, table => { table.dropForeign(constraint) })
       await db.table(child).insert({ parent_id: 99 })
       expect(await db.table(child).pluck('parent_id')).toEqual([99])
