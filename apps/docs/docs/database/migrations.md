@@ -980,7 +980,7 @@ On SQLite, those columns are unique through an index that SQLite creates itself,
 
 ### renameIndex()
 
-Renames an index. Available inside `table()`. Not supported on SQLite.
+Renames an index. Available inside `table()`. SQLite can't rename an index, so Holo reads the index's columns and uniqueness from the database, then drops it and creates it under the new name in one transaction, as Laravel does. SQLite partial and expression indexes can't be recreated that way, so Holo refuses to rename them; drop the index and create it again with raw SQL.
 
 ```ts
 await schema.table('comments', (table) => {
@@ -1060,7 +1060,10 @@ await schema.table('posts', (table) => {
 
 ### dropColumn()
 
-Drops a column. Available inside `table()`. Not supported on SQLite.
+Drops a column. Available inside `table()`. On PostgreSQL, dropping a column also drops its indexes and constraints. SQLite and MySQL refuse to drop some columns and raise their own error, which leaves the table unchanged:
+
+- SQLite refuses a column that an index, a unique constraint, the primary key or a foreign key uses. Drop the index or unique first, or use [`dropConstrainedForeignId()`](#dropconstrainedforeignid) for a foreign key.
+- MySQL refuses a column that a foreign key uses.
 
 ```ts
 await schema.table('users', (table) => {
@@ -1070,7 +1073,7 @@ await schema.table('users', (table) => {
 
 ### renameColumn()
 
-Renames a column. Available inside `table()`. Not supported on SQLite.
+Renames a column. Available inside `table()`. Indexes, unique constraints and foreign keys on the column keep their names, and the database updates them to the new column name. On SQLite, an enum column's `<table>_<column>_check` constraint keeps its old name and keeps enforcing the allowed values.
 
 ```ts
 await schema.table('users', (table) => {
@@ -1079,7 +1082,7 @@ await schema.table('users', (table) => {
 ```
 
 ::: warning SQLite limits
-On SQLite, `schema.table()` can add columns, change columns with `.change()`, and add or drop indexes. It **can't** rename or drop columns, rename indexes, or add or drop foreign keys on an existing table. Holo throws a `CapabilityError` instead of guessing. Put foreign keys in `createTable()` so they work on every database.
+On SQLite, `schema.table()` can add, change, rename and drop columns, and add, drop and rename indexes. It **can't** add or drop foreign keys on an existing table, so `foreign()`, `dropForeign()` and `dropConstrainedForeignId()` throw a `CapabilityError` instead of guessing. Put foreign keys in `createTable()` so they work on every database.
 :::
 
 ## Command reference

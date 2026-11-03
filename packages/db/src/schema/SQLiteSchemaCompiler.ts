@@ -32,6 +32,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return indexes.map(index => this.compileCreateIndex(tableName, index))
   }
 
+  compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
+    return [this.compileDropIndex(tableName, fromIndexName), this.compileIndexCreation(tableName, index, '')]
+  }
+
   compileRebuildTable(
     tableName: string,
     temporaryTableName: string,
