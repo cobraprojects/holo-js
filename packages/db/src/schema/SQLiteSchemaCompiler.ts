@@ -1,6 +1,7 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
+import { withIndexName } from './introspection/sqlDefinitions'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
 import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
@@ -14,6 +15,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     if (column.idStrategy === 'autoIncrement') {
       parts.push('AUTOINCREMENT')
     }
+  }
+
+  protected override keepsPrimaryKeyInline(column: AnyColumnDefinition): boolean {
+    return column.idStrategy === 'autoIncrement'
   }
 
   protected override compileColumnType(column: ColumnDefinition): string {
@@ -56,8 +61,13 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     ]
   }
 
-  compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
-    return [this.compileDropIndex(tableName, fromIndexName), this.compileCreateIndex(tableName, index)]
+  compileRecreateIndex(tableName: string, fromIndexName: string, toIndexName: string, createIndexSql: string): DDLStatement[] | undefined {
+    const renamedSql = withIndexName(createIndexSql, this.quoteIdentifier(toIndexName))
+    if (renamedSql === undefined) return undefined
+    return [
+      this.compileDropIndex(tableName, fromIndexName),
+      { sql: renamedSql, source: `schema:renameIndex:${tableName}:${toIndexName}` },
+    ]
   }
 
   compileTableForeignKey(

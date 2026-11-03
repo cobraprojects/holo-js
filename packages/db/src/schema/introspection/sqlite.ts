@@ -1,3 +1,4 @@
+import { SchemaError } from '../../core/errors'
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
@@ -10,7 +11,8 @@ type TableSqlRow = { sql: string | null }
 type ColumnRow = { name: string, type: string, notnull: number, dflt_value: string | null, pk: number, hidden: number }
 type IndexRow = { name: string, unique: number, origin: string, partial: number }
 type IndexColumnRow = { cid: number, name: string | null }
-type ForeignKeyRow = { id: number, table: string, from: string, to: string | null, on_update: string, on_delete: string }
+type ForeignKeyRow = { id: number, seq: number, table: string, from: string, to: string | null, on_update: string, on_delete: string }
+type PrimaryKeyColumnRow = { name: string }
 
 export const SQLITE_AUTOINDEX_PREFIX = 'sqlite_autoindex_'
 
@@ -86,19 +88,36 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     return structures
   }
 
+  async function readPrimaryKeyColumns(schema: string, table: string): Promise<string[]> {
+    const result = await introspect<PrimaryKeyColumnRow>('SELECT name FROM pragma_table_info(?, ?) WHERE pk > 0 ORDER BY pk', [table, schema], `schema:introspect:primaryKey:${table}`)
+    return result.rows.map(row => row.name)
+  }
+
   async function readForeignKeys(schema: string, table: string, names: ReadonlyMap<string, string>): Promise<DatabaseForeignKeyStructure[]> {
-    const result = await introspect<ForeignKeyRow>('SELECT id, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq', [table, schema], `schema:introspect:foreignKeys:${table}`)
-    return result.rows.map((row) => {
+    const result = await introspect<ForeignKeyRow>('SELECT id, seq, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq', [table, schema], `schema:introspect:foreignKeys:${table}`)
+    const parentPrimaryKeys = new Map<string, string[]>()
+    const readParentPrimaryKey = async (parent: string): Promise<string[]> => {
+      const primaryKey = parentPrimaryKeys.get(parent) ?? await readPrimaryKeyColumns(schema, parent)
+      parentPrimaryKeys.set(parent, primaryKey)
+      return primaryKey
+    }
+    const foreignKeys: DatabaseForeignKeyStructure[] = []
+    for (const row of result.rows) {
+      const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
+      if (to === undefined) {
+        throw new SchemaError(`SQLite cannot read the foreign key on column "${row.from}" of table "${table}" because table "${row.table}" has no primary key for it to reference.`)
+      }
       const name = names.get(row.from)
-      return {
+      foreignKeys.push({
         ...(name ? { name } : {}),
         table: row.table,
         from: row.from,
-        to: row.to ?? 'id',
+        to,
         onUpdate: row.on_update,
         onDelete: row.on_delete,
-      }
-    })
+      })
+    }
+    return foreignKeys
   }
 
   return {

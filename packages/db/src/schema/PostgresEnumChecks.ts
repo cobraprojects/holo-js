@@ -22,6 +22,16 @@ function namedChecks(checks: readonly DatabaseEnumCheckStructure[]): string[] {
   return checks.flatMap(check => check.name ? [check.name] : [])
 }
 
+function conventionalCheckRenames(
+  checks: readonly DatabaseEnumCheckStructure[],
+  tableName: string,
+  resolveTargetName: (column: string) => string,
+): CheckConstraintRename[] {
+  return checks.flatMap(check => check.name === resolveGeneratedCheckName(tableName, check.column)
+    ? [{ from: check.name, to: resolveTargetName(check.column) }]
+    : [])
+}
+
 function resolveRenamedTablePath(fromTableName: string, toTableName: string): string {
   const { schema } = splitTablePath(fromTableName)
   return toTableName.includes('.') || schema === undefined ? toTableName : `${schema}.${toTableName}`
@@ -37,18 +47,12 @@ export class PostgresEnumChecks {
   async renameTable(fromTableName: string, toTableName: string, statements: readonly DDLStatement[]): Promise<void> {
     const destinationTableName = resolveRenamedTablePath(fromTableName, toTableName)
     const checks = await readEnumChecks(this.connection, fromTableName)
-    await this.renameWithChecks(statements, destinationTableName, checks.map(check => ({
-      from: resolveGeneratedCheckName(fromTableName, check.column),
-      to: resolveGeneratedCheckName(destinationTableName, check.column),
-    })))
+    await this.renameWithChecks(statements, destinationTableName, conventionalCheckRenames(checks, fromTableName, column => resolveGeneratedCheckName(destinationTableName, column)))
   }
 
   async renameColumn(tableName: string, fromColumnName: string, toColumnName: string, statements: readonly DDLStatement[]): Promise<void> {
     const checks = (await readEnumChecks(this.connection, tableName)).filter(check => check.column === fromColumnName)
-    await this.renameWithChecks(statements, tableName, checks.map(() => ({
-      from: resolveGeneratedCheckName(tableName, fromColumnName),
-      to: resolveGeneratedCheckName(tableName, toColumnName),
-    })))
+    await this.renameWithChecks(statements, tableName, conventionalCheckRenames(checks, tableName, () => resolveGeneratedCheckName(tableName, toColumnName)))
   }
 
   async alterColumn(tableName: string, columnName: string, statements: readonly DDLStatement[]): Promise<void> {
@@ -80,9 +84,8 @@ export class PostgresEnumChecks {
     tableName: string,
     checkRenames: readonly CheckConstraintRename[],
   ): Promise<void> {
-    const existingCheckNames = new Set(namedChecks(await readEnumChecks(connection, tableName)))
     const pendingRenames = checkRenames
-      .filter(({ from, to }) => from !== to && existingCheckNames.has(from))
+      .filter(({ from, to }) => from !== to)
       .map(rename => ({ ...rename, temporary: `__holo_check_rename_${randomUUID().replaceAll('-', '')}` }))
 
     await executeStatements(connection, [

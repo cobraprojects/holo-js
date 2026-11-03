@@ -57,7 +57,44 @@ export interface CreateTableSqlParts {
   readonly options: string
 }
 
-export function splitCreateTableSql(createTableSql: string): CreateTableSqlParts | undefined {
+function commentEnd(sql: string, index: number): number | undefined {
+  const opener = sql.slice(index, index + 2)
+  if (opener === '--') {
+    const lineEnd = sql.indexOf('\n', index)
+    return lineEnd === -1 ? sql.length : lineEnd
+  }
+  if (opener === '/*') {
+    const blockEnd = sql.indexOf('*/', index + 2)
+    return blockEnd === -1 ? sql.length : blockEnd + 2
+  }
+  return undefined
+}
+
+function withoutSqlComments(sql: string): string {
+  let result = ''
+  for (let index = 0; index < sql.length;) {
+    const closingQuote = QUOTE_PAIRS[sql.charAt(index)]
+    if (closingQuote) {
+      const quoteEnd = sql.indexOf(closingQuote, index + 1)
+      const end = quoteEnd === -1 ? sql.length : quoteEnd + 1
+      result += sql.slice(index, end)
+      index = end
+      continue
+    }
+    const end = commentEnd(sql, index)
+    if (end !== undefined) {
+      result += ' '
+      index = end
+      continue
+    }
+    result += sql.charAt(index)
+    index += 1
+  }
+  return result
+}
+
+export function splitCreateTableSql(storedCreateTableSql: string): CreateTableSqlParts | undefined {
+  const createTableSql = withoutSqlComments(storedCreateTableSql)
   const openIndex = createTableSql.indexOf('(')
   const closeIndex = openIndex === -1 ? -1 : findClosingParenthesis(createTableSql, openIndex)
   if (closeIndex === -1) return undefined
@@ -71,6 +108,13 @@ export function splitCreateTableSql(createTableSql: string): CreateTableSqlParts
 
 export function splitTableDefinitions(createTableSql: string): string[] {
   return splitCreateTableSql(createTableSql)?.definitions ?? []
+}
+
+const CREATE_INDEX_NAME_PATTERN = new RegExp(`^(CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+)(?:${IDENTIFIER_PATTERN})`, 'i')
+
+export function withIndexName(createIndexSql: string, quotedIndexName: string): string | undefined {
+  if (!CREATE_INDEX_NAME_PATTERN.test(createIndexSql)) return undefined
+  return createIndexSql.replace(CREATE_INDEX_NAME_PATTERN, (_match, prefix: string) => `${prefix}${quotedIndexName}`)
 }
 
 const PRIMARY_KEY_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?PRIMARY\s+KEY\b/i
@@ -152,7 +196,7 @@ export function readInlineColumnConstraints(definition: string): InlineColumnCon
 }
 
 const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
-  `(${QUOTED_TEXT_PATTERN.source})|\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
+  `(${QUOTED_TEXT_PATTERN.source})|(?:\\s+CONSTRAINT\\s+(?:${IDENTIFIER_PATTERN}))?\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
   'gi',
 )
 

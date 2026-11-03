@@ -82,7 +82,12 @@ export class SQLiteSchemaOperations {
       throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it is a partial or expression index.`)
     }
 
-    const statements = this.compiler.compileRecreateIndex(tableName, fromIndexName, { name: toIndexName, columns: index.columns, unique: index.unique })
+    const createIndexSql = (await readSQLiteTableObjects(this.connection, tableName))
+      .find(object => object.type === 'index' && object.name === fromIndexName)?.sql
+    const statements = createIndexSql === undefined ? undefined : this.compiler.compileRecreateIndex(tableName, fromIndexName, toIndexName, createIndexSql)
+    if (!statements) {
+      throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it backs a constraint declared in the table definition.`)
+    }
     await this.connection.transaction(transaction => executeStatements(transaction, statements))
   }
 
@@ -148,7 +153,13 @@ export class SQLiteSchemaOperations {
     return index.columns
   }
 
-  private async rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+    const adapter = this.connection.getAdapter()
+    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite)
+    return adapter.runWithTransactionScope ? adapter.runWithTransactionScope(rebuild) : rebuild()
+  }
+
+  private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
     if (!(await this.foreignKeysEnabled())) {
       await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite))
       return

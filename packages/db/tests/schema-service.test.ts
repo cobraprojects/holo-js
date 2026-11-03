@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { column, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
+import { column, createDatabase, createDialect, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -151,6 +151,31 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(members).pluck('email')).toEqual(['c@example.com'])
     })
 
+    it.runIf(driver === 'sqlite')('changes a column of a table whose stored definition contains SQL comments', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_commented_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" (
+        "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, -- the key, (unbalanced
+        "value" TEXT /* ) , "status" */ NOT NULL,
+        /* a comment, before a column */ "status" TEXT NOT NULL CHECK ("status" IN ('open', 'closed')),
+        "note" TEXT -- trailing, comment
+      )`)
+      await db.table(name).insert({ value: 'kept', status: 'open', note: 'old' })
+
+      await schema.table(name, table => { table.string('note').nullable().default('none').change() })
+
+      const columns = await schema.getColumns(name)
+      expect(columns.map(column => [column.name, column.notNull])).toEqual([['id', true], ['value', true], ['status', true], ['note', false]])
+      await db.table(name).insert({ value: 'new', status: 'closed' })
+      expect(await db.table(name).orderBy('id').get()).toEqual([
+        { id: 1, value: 'kept', status: 'open', note: 'old' },
+        { id: 2, value: 'new', status: 'closed', note: 'none' },
+      ])
+      await expect(db.table(name).insert({ status: 'open' })).rejects.toThrow()
+      await expect(db.table(name).insert({ value: 'x', status: 'gone' })).rejects.toThrow()
+    })
+
     it.runIf(driver === 'sqlite')('keeps every child row when change() rebuilds a parent referenced with ON DELETE CASCADE', async () => {
       const { db, schema } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
@@ -176,6 +201,81 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 2, 2])
       await db.table(parents).where('id', 2).delete()
       expect(await db.table(children).pluck('parent_id')).toEqual([1])
+    })
+
+    for (const sharing of ['another context on the same adapter', 'the same context'] as const) {
+      it.runIf(driver === 'sqlite')(`keeps every child row when change() rebuilds a parent while ${sharing} has foreign-key checks off`, async () => {
+        let readEnforcement!: () => void
+        const enforcementRead = new Promise<void>(resolve => { readEnforcement = resolve })
+        const { db, schema, adapter } = await openDatabase(driver, {
+          wrapAdapter: adapter => new Proxy(adapter, {
+            get(target, property) {
+              const introspect = target.introspect?.bind(target)
+              if (property !== 'introspect' || !introspect) return Reflect.get(target, property, target)
+              return async (...args: Parameters<typeof introspect>) => {
+                const result = await introspect(...args)
+                if (args[0] === 'PRAGMA foreign_keys') readEnforcement()
+                return result
+              }
+            },
+          }),
+        })
+        const suspending = sharing === 'the same context'
+          ? schema
+          : createSchemaService(createDatabase({ connectionName: 'default', adapter, dialect: createDialect(driver) }))
+        const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+        const parents = `holo_parents_${suffix}`
+        const children = `holo_children_${suffix}`
+        onTestFinished(async () => {
+          await schema.dropTable(children)
+          await schema.dropTable(parents)
+        })
+        await schema.createTable(parents, (table) => {
+          table.id()
+          table.string('name').nullable()
+        })
+        await schema.createTable(children, (table) => {
+          table.id()
+          table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+        })
+        await db.table(parents).insert([{ name: 'first' }, { name: 'second' }])
+        await db.table(children).insert([{ parent_id: 1 }, { parent_id: 2 }])
+
+        let suspended!: () => void
+        const change = new Promise<void>(resolve => { suspended = resolve })
+          .then(() => schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() }))
+        await suspending.withoutForeignKeyConstraints(async () => {
+          suspended()
+          await Promise.race([enforcementRead, new Promise(resolve => setTimeout(resolve, 50))])
+        })
+        await change
+
+        expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 2])
+        await db.table(parents).where('id', 2).delete()
+        expect(await db.table(children).pluck('parent_id')).toEqual([1])
+      }, 5_000)
+    }
+
+    it.runIf(driver === 'sqlite')('changes a column referencing the primary key of its parent implicitly and keeps the key enforcing', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("code" TEXT PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_code" TEXT REFERENCES "${parents}")`)
+      await db.table(parents).insert({ code: 'a' })
+      await db.table(children).insert({ id: 1, parent_code: 'a' })
+
+      await schema.table(children, (table) => { table.string('parent_code').nullable().change() })
+
+      expect(await schema.getForeignKeys(children)).toEqual([expect.objectContaining({ table: parents, from: 'parent_code', to: 'code' })])
+      await db.table(children).insert({ id: 2, parent_code: 'a' })
+      await expect(db.table(children).insert({ id: 3, parent_code: 'missing' })).rejects.toThrow()
+      expect(await db.table(children).orderBy('id').pluck('parent_code')).toEqual(['a', 'a'])
     })
 
     it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
@@ -331,6 +431,32 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.table(moved, table => { table.string('state').change() })
       expect(await checkNames(moved)).toEqual([`${name}_total_check`])
       await db.table(moved).insert({ id: 1, state: 'lost' })
+    })
+
+    it.runIf(driver === 'postgres')('renames only the conventional enum check when a column has several, and keeps custom-named checks', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_many_checks_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const moved = `${name}_moved`
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await schema.dropTable(moved)
+      })
+      const checkNames = async (tableName: string): Promise<string[]> => (await adapter.query<{ conname: string }>(
+        'SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = \'c\' ORDER BY conname',
+        [tableName],
+      )).rows.map(row => row.conname)
+      await adapter.execute(`CREATE TABLE "${name}" (
+        id integer PRIMARY KEY,
+        status varchar(20) NOT NULL CHECK (status IN ('open', 'closed', 'archived')) CHECK (status IN ('open', 'closed')) CONSTRAINT status_allowed CHECK (status IN ('open', 'closed'))
+      )`)
+
+      await schema.table(name, table => { table.renameColumn('status', 'state') })
+      expect(await checkNames(name)).toEqual([`${name}_state_check`, `${name}_status_check1`, 'status_allowed'])
+
+      await schema.renameTable(name, moved)
+      expect(await checkNames(moved)).toEqual([`${moved}_state_check`, `${name}_status_check1`, 'status_allowed'])
+      await db.table(moved).insert({ id: 1, state: 'open' })
+      await expect(db.table(moved).insert({ id: 2, state: 'archived' })).rejects.toThrow()
     })
 
     it.runIf(driver === 'sqlite')('keeps enum check names when renaming a table and when a later change() rebuilds it', async () => {
@@ -806,6 +932,21 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       await db.table(name).insert({ email: 'same@example.com' })
       await expect(db.table(name).insert({ email: 'same@example.com' })).rejects.toThrow()
+    })
+
+    it.runIf(driver === 'sqlite')('keeps the collation and sort order of a unique index when renaming it', async () => {
+      const { db, schema, table, adapter } = await openDatabase(driver)
+      const name = table.tableName
+      const original = `${name}_name_nocase`
+      const renamed = `${name}_name_renamed`
+      await adapter.execute(`CREATE UNIQUE INDEX "${original}" ON "${name}" ("name" COLLATE NOCASE DESC)`)
+      await db.table(table).insert({ id: 1, name: 'Hello' })
+
+      await schema.table(name, table => { table.renameIndex(original, renamed) })
+
+      expect((await schema.getIndexes(name)).map(index => index.name)).toEqual([renamed])
+      await expect(db.table(table).insert({ id: 2, name: 'hello' })).rejects.toThrow()
+      expect(await db.table(table).count()).toBe(1)
     })
 
     it.runIf(driver === 'sqlite')('refuses to rename a partial index instead of recreating it without its condition', async () => {

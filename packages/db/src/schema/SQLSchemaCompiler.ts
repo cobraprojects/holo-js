@@ -124,7 +124,11 @@ export abstract class SQLSchemaCompiler {
   }
 
   private resolveTablePrimaryKeyConstraint(table: TableDefinition): { table: TableDefinition, primaryKeyConstraint?: string } {
-    const primaryKeyColumns = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
+    const primaryKeyColumns = Object.values(table.columns).filter(column => column.primaryKey)
+    const [onlyPrimaryKeyColumn, ...otherPrimaryKeyColumns] = primaryKeyColumns
+    if (onlyPrimaryKeyColumn && otherPrimaryKeyColumns.length === 0 && this.keepsPrimaryKeyInline(onlyPrimaryKeyColumn)) {
+      return { table }
+    }
     if (primaryKeyColumns.length < 2 && !table.primaryKeyName) {
       return { table }
     }
@@ -132,7 +136,7 @@ export abstract class SQLSchemaCompiler {
     const columns = Object.fromEntries(Object.entries(table.columns).map(([name, column]) => [name, { ...column, primaryKey: false }]))
     return {
       table: { ...table, columns },
-      primaryKeyConstraint: this.compilePrimaryKeyConstraint(primaryKeyColumns, table.primaryKeyName),
+      primaryKeyConstraint: this.compilePrimaryKeyConstraint(primaryKeyColumns.map(column => column.name), table.primaryKeyName),
     }
   }
 
@@ -353,16 +357,20 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileTableDefinitions(table: TableDefinition): string[] {
-    return Object.values(table.columns).map(column => this.compileColumn(table.tableName, column))
+    return Object.values(table.columns).map(column => this.compileColumn(table.tableName, column, table.primaryKeyName))
   }
 
-  protected compileColumn(tableName: string, column: AnyColumnDefinition): string {
-    const definition = this.compileColumnDefinition(tableName, column)
+  protected keepsPrimaryKeyInline(_column: AnyColumnDefinition): boolean {
+    return false
+  }
+
+  protected compileColumn(tableName: string, column: AnyColumnDefinition, primaryKeyName?: string): string {
+    const definition = this.compileColumnDefinition(tableName, column, primaryKeyName)
     const enumCheck = this.compileEnumCheckConstraint(tableName, column)
     return enumCheck ? `${definition} ${enumCheck}` : definition
   }
 
-  protected compileColumnDefinition(tableName: string, column: AnyColumnDefinition): string {
+  protected compileColumnDefinition(tableName: string, column: AnyColumnDefinition, primaryKeyName?: string): string {
     assertValidIdentifierSegment(column.name, 'Column name')
     const parts = [
       this.quoteIdentifier(column.name),
@@ -370,6 +378,7 @@ export abstract class SQLSchemaCompiler {
     ]
 
     if (column.primaryKey) {
+      if (primaryKeyName) parts.push(this.compileNamedConstraint(primaryKeyName, 'Primary key name'))
       parts.push('PRIMARY KEY')
       this.appendPrimaryKeyExtras(parts, column)
     }

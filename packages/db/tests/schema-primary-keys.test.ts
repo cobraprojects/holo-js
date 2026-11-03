@@ -134,6 +134,26 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect([columns.post_id?.primaryKey, columns.tag_id?.primaryKey]).toEqual([true, true])
     })
 
+    it.runIf(driver === 'sqlite')('never reuses the id of a deleted row when the id() primary key is named, and drops that key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueTableName('holo_named_id')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('title')
+        table.primary(['id'], `${name}_pk`)
+      })
+      await db.table(name).insert([{ title: 'first' }, { title: 'second' }])
+      await db.table(name).where('id', 2).delete()
+
+      expect(Number(await db.table(name).insertGetId({ title: 'third' }))).toBe(3)
+
+      await schema.table(name, table => { table.dropPrimary(`${name}_pk`) })
+      await db.table(name).insert({ id: 1, title: 'duplicate' })
+      expect(await db.table(name).where('id', 1).count()).toBe(2)
+      expect((await createSchemaReader(db).readTableStructure(name))!.columns.some(column => column.primaryKey)).toBe(false)
+    })
+
     it('raises when the table has no primary key to drop', async () => {
       const { schema } = await openDatabase(driver)
       const name = uniqueTableName('holo_keyless')
