@@ -19,9 +19,11 @@ export function readStringLiterals(text: string): string[] {
   return [...text.matchAll(new RegExp(STRING_LITERAL_PATTERN, 'g'))].map(match => unquoteStringLiteral(match[0]))
 }
 
-function findClosingParenthesis(sql: string, openIndex: number): number {
+type UnquotedCharacterVisitor = (character: string, index: number, depth: number) => boolean
+
+function findUnquotedCharacter(sql: string, startIndex: number, matches: UnquotedCharacterVisitor): number {
   let depth = 0
-  for (let index = openIndex; index < sql.length; index += 1) {
+  for (let index = startIndex; index < sql.length; index += 1) {
     const character = sql.charAt(index)
     const closingQuote = QUOTE_PAIRS[character]
     if (closingQuote) {
@@ -30,12 +32,24 @@ function findClosingParenthesis(sql: string, openIndex: number): number {
       continue
     }
     if (character === '(') depth += 1
-    if (character === ')') {
-      depth -= 1
-      if (depth === 0) return index
-    }
+    if (character === ')') depth -= 1
+    if (matches(character, index, depth)) return index
   }
   return -1
+}
+
+export function findClosingParenthesis(sql: string, openIndex: number): number {
+  return findUnquotedCharacter(sql, openIndex, (character, _index, depth) => character === ')' && depth === 0)
+}
+
+function splitTopLevelCommas(sql: string): string[] {
+  const separators: number[] = []
+  findUnquotedCharacter(sql, 0, (character, index, depth) => {
+    if (character === ',' && depth === 0) separators.push(index)
+    return false
+  })
+  const starts = [0, ...separators.map(separator => separator + 1)]
+  return starts.map((start, position) => sql.slice(start, separators[position] ?? sql.length).trim())
 }
 
 export interface CreateTableSqlParts {
@@ -48,26 +62,7 @@ export function splitCreateTableSql(createTableSql: string): CreateTableSqlParts
   const closeIndex = openIndex === -1 ? -1 : findClosingParenthesis(createTableSql, openIndex)
   if (closeIndex === -1) return undefined
 
-  const body = createTableSql.slice(openIndex + 1, closeIndex)
-  const definitions: string[] = []
-  let depth = 0
-  let start = 0
-  for (let index = 0; index < body.length; index += 1) {
-    const character = body.charAt(index)
-    const closingQuote = QUOTE_PAIRS[character]
-    if (closingQuote) {
-      index = body.indexOf(closingQuote, index + 1)
-      if (index === -1) break
-      continue
-    }
-    if (character === '(') depth += 1
-    if (character === ')') depth -= 1
-    if (character === ',' && depth === 0) {
-      definitions.push(body.slice(start, index).trim())
-      start = index + 1
-    }
-  }
-  definitions.push(body.slice(start).trim())
+  const definitions = splitTopLevelCommas(createTableSql.slice(openIndex + 1, closeIndex))
   return {
     definitions: definitions.filter(definition => definition.length > 0),
     options: createTableSql.slice(closeIndex + 1).trim(),

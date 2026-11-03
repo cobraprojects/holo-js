@@ -1,4 +1,6 @@
+import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
+import { createIntrospect } from './introspect'
 import { readColumnDefinitionName, readEnumChecks, readForeignKey, readStringLength, splitTableDefinitions } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
@@ -12,11 +14,11 @@ type ForeignKeyRow = { id: number, table: string, from: string, to: string | nul
 
 export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
 
+const MAIN_SCHEMA = 'main'
+
 function splitTableName(tableName: string): { schema: string, table: string } {
-  const separator = tableName.lastIndexOf('.')
-  return separator === -1
-    ? { schema: 'main', table: tableName }
-    : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
+  const { schema = MAIN_SCHEMA, table } = splitTablePath(tableName)
+  return { schema, table }
 }
 
 export async function readSQLiteCreateTableSql(connection: DatabaseContext, tableName: string): Promise<string | null | undefined> {
@@ -63,8 +65,7 @@ function readDefinitionDetails(createTableSql: string) {
 }
 
 export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSchemaReader {
-  const introspect = <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[], source: string) =>
-    connection.introspectCompiled<TRow>({ sql, bindings, source })
+  const introspect = createIntrospect(connection)
 
   async function readIndexes(schema: string, table: string): Promise<DatabaseIndexStructure[]> {
     const indexes = await introspect<IndexRow>('SELECT name, "unique", origin, partial FROM pragma_index_list(?, ?) ORDER BY name', [table, schema], `schema:introspect:indexes:${table}`)

@@ -1,4 +1,6 @@
 import { parseSqlDefault } from './defaults'
+import { splitTablePath } from '../identifiers'
+import { createIntrospect } from './introspect'
 import { readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
@@ -12,10 +14,12 @@ type CheckRow = { name: string, column_name: string, definition: string }
 
 const SCHEMA_BINDING = 'COALESCE($1::text, current_schema())'
 
-const TABLE_RELATION = `
-  FROM pg_catalog.pg_class t
-  JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-  WHERE n.nspname = ${SCHEMA_BINDING} AND t.relname = $2 AND t.relkind IN ('r', 'p')`
+const TABLE_FILTER = `n.nspname = ${SCHEMA_BINDING} AND t.relname = $2`
+
+const TABLE_RELATION = `FROM pg_catalog.pg_class t
+  JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace`
+
+const TABLE_RELATION_FILTER = `${TABLE_FILTER} AND t.relkind IN ('r', 'p')`
 
 const COLUMNS_SQL = `SELECT a.attname AS name,
   COALESCE(ic.data_type, pg_catalog.format_type(a.atttypid, a.atttypmod)) AS data_type,
@@ -25,12 +29,11 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   a.attidentity <> '' AS is_identity,
   a.attgenerated <> '' AS is_computed,
   EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = t.oid AND i.indisprimary AND a.attnum = ANY (i.indkey)) AS primary_key
-  FROM pg_catalog.pg_class t
-  JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+  ${TABLE_RELATION}
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
   LEFT JOIN information_schema.columns ic ON ic.table_schema = n.nspname AND ic.table_name = t.relname AND ic.column_name = a.attname
-  WHERE n.nspname = ${SCHEMA_BINDING} AND t.relname = $2 AND t.relkind IN ('r', 'p')
+  WHERE ${TABLE_RELATION_FILTER}
   ORDER BY a.attnum`
 
 const INDEXES_SQL = `SELECT ic.relname AS name,
@@ -43,7 +46,7 @@ const INDEXES_SQL = `SELECT ic.relname AS name,
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-  WHERE n.nspname = ${SCHEMA_BINDING} AND t.relname = $2
+  WHERE ${TABLE_FILTER}
   ORDER BY ic.relname`
 
 const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
@@ -62,7 +65,7 @@ const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
   CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(from_attnum, to_attnum, position)
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.from_attnum
   JOIN pg_catalog.pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = k.to_attnum
-  WHERE con.contype = 'f' AND n.nspname = ${SCHEMA_BINDING} AND t.relname = $2
+  WHERE con.contype = 'f' AND ${TABLE_FILTER}
   ORDER BY con.conname, k.position`
 
 const CHECKS_SQL = `SELECT con.conname AS name,
@@ -72,7 +75,7 @@ const CHECKS_SQL = `SELECT con.conname AS name,
   JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND n.nspname = ${SCHEMA_BINDING} AND t.relname = $2
+  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${TABLE_FILTER}
   ORDER BY con.conname`
 
 const REFERENTIAL_ACTIONS: Readonly<Record<string, string>> = {
@@ -97,17 +100,9 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
   return literals === undefined ? undefined : { name: row.name, column: row.column_name, values: readStringLiterals(literals) }
 }
 
-function splitTableName(tableName: string): { schema: string | null, table: string } {
-  const separator = tableName.lastIndexOf('.')
-  return separator === -1
-    ? { schema: null, table: tableName }
-    : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
-}
-
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const configuredSchema = connection.getSchemaName() ?? null
-  const introspect = <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[], source: string) =>
-    connection.introspectCompiled<TRow>({ sql, bindings, source })
+  const introspect = createIntrospect(connection)
 
   return {
     async listTables() {
@@ -116,9 +111,9 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
     },
 
     async readTableStructure(tableName) {
-      const { schema, table } = splitTableName(tableName)
+      const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
-      const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION}`, bindings, `schema:introspect:table:${tableName}`)
+      const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
       const resolvedSchema = exists.rows[0]?.schema
       if (resolvedSchema === undefined) return undefined
 

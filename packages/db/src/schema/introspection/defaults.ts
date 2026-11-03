@@ -1,4 +1,4 @@
-import { unquoteStringLiteral } from './sqlDefinitions'
+import { findClosingParenthesis, unquoteStringLiteral } from './sqlDefinitions'
 import type { DatabaseColumnDefault } from './types'
 
 const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME|LOCALTIMESTAMP|LOCALTIME|now)(?:\s*\(\s*\d*\s*\))?$/i
@@ -7,14 +7,7 @@ const STRING_LITERAL_PATTERN = /^'(?:[^']|'')*'$/
 const TRAILING_CAST_PATTERN = /::[\w\s]+(?:\(\d+(?:,\s*\d+)?\))?(?:\[\])?$/
 
 function isWrappedInParentheses(expression: string): boolean {
-  if (!expression.startsWith('(') || !expression.endsWith(')')) return false
-  let depth = 0
-  for (let index = 0; index < expression.length - 1; index += 1) {
-    if (expression[index] === '(') depth += 1
-    if (expression[index] === ')') depth -= 1
-    if (depth === 0) return false
-  }
-  return true
+  return expression.startsWith('(') && findClosingParenthesis(expression, 0) === expression.length - 1
 }
 
 function stripOuterParentheses(expression: string): string {
