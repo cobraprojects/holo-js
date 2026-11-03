@@ -46,7 +46,7 @@ export default defineModel('posts', {
 })
 ```
 
-With the migration above, `post.status` is typed as `'draft' | 'published'`, `post.published_at` as `Date | null`, and `Post.where('...')` autocompletes every column name. Columns with a default (or generated columns like `id`) are optional when you create a record.
+With the migration above, `post.status` is typed as `'draft' | 'published'`, `post.published_at` as `Date | null`, and `Post.where('...')` autocompletes every column name. Columns with a default (or auto-incrementing keys like `id`) are optional when you create a record.
 
 ## Generating migrations
 
@@ -267,7 +267,7 @@ await schema.table('users', (table) => {
 
 ### dropTable()
 
-Drops a table and removes it from the schema registry.
+Drops a table.
 
 ```ts
 await schema.dropTable('articles')
@@ -275,7 +275,7 @@ await schema.dropTable('articles')
 
 ### renameTable()
 
-Renames a table from one name to another.
+Renames a table from one name to another. Indexes, unique constraints and foreign keys keep their names, as in Laravel, so drop them by their existing names after a rename. On PostgreSQL, Holo also renames each enum column's `<table>_<column>_check` constraint to the new table name. SQLite can't rename a constraint, so on SQLite the check constraints keep their names; nothing in Holo drops them by name.
 
 ```ts
 await schema.renameTable('posts', 'articles')
@@ -359,23 +359,6 @@ await schema.withoutForeignKeyConstraints(async () => {
   await schema.dropTable('users')
   await schema.dropTable('teams')
 })
-```
-
-### previewSync()
-
-Returns what `sync()` would do: the tables it would create, the tables that already exist, and `destructiveChanges: false`. It never changes the database.
-
-```ts
-const plan = await schema.previewSync()
-// plan.tablesToCreate: ['comments']
-```
-
-### sync()
-
-Creates every registered table that doesn't exist yet. It never alters or drops existing tables.
-
-```ts
-await schema.sync()
 ```
 
 ### getDialectName()
@@ -514,7 +497,7 @@ await schema.table('posts', (table) => {
 })
 ```
 
-On PostgreSQL, `change()` drops `<table>_<column>_check` and adds it again with the new list. Changing an enum column to another type, such as `string()`, drops the constraint, and renaming the table or the column renames it. Both rely on the schema registry, which `holo migrate` fills from your migrations. `change()` on a column that isn't an enum leaves check constraints alone. On SQLite, `change()` rebuilds the table with the new constraint. The migration fails, and changes nothing, if existing rows hold a value that isn't in the new list; update those rows first.
+On PostgreSQL, `change()` drops `<table>_<column>_check` and adds it again with the new list. Changing an enum column to another type, such as `string()`, drops the constraint, and renaming the table or the column renames it. Holo finds these constraints by reading the database, so this also works for tables created by raw SQL. `change()` on a column that isn't an enum leaves check constraints alone. On SQLite, `change()` rebuilds the table with the new constraint. The migration fails, and changes nothing, if existing rows hold a value that isn't in the new list; update those rows first.
 
 ### boolean()
 
@@ -638,7 +621,7 @@ table.foreignSnowflake('device_snowflake').constrained('devices', 'snowflake')
 
 Chain these after a column type, for example `table.string('email').unique()`.
 
-- Nullability and defaults: [`notNull()`](#notnull), [`nullable()`](#nullable), [`default()`](#default), [`defaultNow()`](#defaultnow), [`generated()`](#generated), [`primaryKey()`](#primarykey)
+- Nullability and defaults: [`notNull()`](#notnull), [`nullable()`](#nullable), [`default()`](#default), [`defaultNow()`](#defaultnow), [`primaryKey()`](#primarykey)
 - Indexes: [`unique()`](#unique), [`index()`](#index)
 - Foreign keys: [`references()`](#references), [`on()`](#on), [`constrained()`](#constrained), [`onDelete()`](#ondelete), [`onUpdate()`](#onupdate)
 - Foreign key shortcuts: [`cascadeOnDelete()`](#cascadeondelete), [`restrictOnDelete()`](#restrictondelete), [`nullOnDelete()`](#nullondelete), [`noActionOnDelete()`](#noactionondelete), [`cascadeOnUpdate()`](#cascadeonupdate), [`restrictOnUpdate()`](#restrictonupdate), [`nullOnUpdate()`](#nullonupdate), [`noActionOnUpdate()`](#noactiononupdate)
@@ -675,14 +658,6 @@ Sets the default to the current time. Use it for timestamp columns that record w
 
 ```ts
 table.timestamp('joined_at').defaultNow()
-```
-
-### generated()
-
-Marks the column as filled in by the database. The column becomes optional when you create a record.
-
-```ts
-table.uuid('reference').generated()
 ```
 
 ### primaryKey()
@@ -817,13 +792,17 @@ table.foreignId('user_id').constrained().noActionOnUpdate()
 
 ### change()
 
-Changes an existing column instead of adding one. Call it inside `table()` after redeclaring the column. On SQLite, Holo rebuilds the table, and the table must already be in the schema registry; otherwise it throws a `SchemaError`. Redeclaring an [`enum()`](#enum) column replaces its list of allowed values.
+Changes an existing column instead of adding one. Call it inside `table()` after redeclaring the column. As in Laravel, the new definition replaces the old one with exactly the modifiers you give: a column that was `nullable()` or had a `default()` loses them unless you state them again. Redeclaring an [`enum()`](#enum) column replaces its list of allowed values.
 
 ```ts
 await schema.table('users', (table) => {
   table.text('bio').nullable().change()
 })
 ```
+
+The column keeps its primary key, unique constraint and foreign key; change those with their own operations.
+
+On SQLite, Holo rebuilds the table from the database: it reads the table's definition, replaces only the changed column, copies the rows, and restores the table's indexes and triggers. Every other column keeps its stored type, constraints and collation, including columns your migrations never declared, so tables created by raw SQL can be changed too.
 
 ## Shortcut columns
 

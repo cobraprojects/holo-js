@@ -94,6 +94,8 @@ const drafts = await posts.where('status', 'draft').get()
 const published = await posts.where('status', 'published').get()
 ```
 
+A table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, JSON, boolean and date columns are read and written the way the definition says. A table that isn't in the Generated schema, such as one created earlier in the same script, is queried with the driver's raw values until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
+
 You can alias the table with `as`:
 
 ```ts
