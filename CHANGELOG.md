@@ -5,6 +5,7 @@
 ### Added
 
 - Database: `table.dropForeign()` inside `schema.table()` also takes an array of columns and drops the key with the conventional name `{table}_{columns}_foreign`, as in Laravel. The new `table.dropConstrainedForeignId(column)` drops the column's `{table}_{column}_foreign` key, then the column, which is how you drop a constrained column on MySQL. Neither is supported on SQLite yet. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign) and [dropConstrainedForeignId()](apps/docs/docs/database/migrations.md#dropconstrainedforeignid).
+- Database: `table.dropUnique(name)` and `table.dropUnique(columns)` inside `schema.table()` drop a unique constraint or unique index, as in Laravel. Columns resolve to the conventional name `{table}_{columns}_unique`. A name that doesn't exist raises an error. See [dropUnique()](apps/docs/docs/database/migrations.md#dropunique).
 
 ### Changed
 
@@ -30,6 +31,7 @@
 
 ### Fixed
 
+- Database: `unique()` columns are named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. PostgreSQL and MySQL declare a named unique constraint in the same `CREATE TABLE` or `ALTER TABLE … ADD COLUMN`, and SQLite creates a named unique index. Before, Holo declared an inline `UNIQUE`, so PostgreSQL named it `{table}_{column}_key`, MySQL named it after the column, and SQLite created an index that couldn't be dropped. Adding a `unique()` column on SQLite now works, and fails without changing the table when existing rows have duplicates. A generated name already used by another table's index fails the migration instead of skipping the unique. Existing PostgreSQL and MySQL constraints keep their names; drop them by that name with `dropUnique()`. See [unique()](apps/docs/docs/database/migrations.md#unique).
 - Database: foreign keys declared inside `createTable()` or added with a new column on PostgreSQL and SQLite are now named `{table}_{column}_foreign`, or the name given to `constraintName()`, like foreign keys added with `table.foreign()` and every MySQL foreign key. Before, Holo created them without a name, so PostgreSQL named them `{table}_{column}_fkey` and `dropForeign('{table}_{column}_foreign')` failed. Existing PostgreSQL constraints keep their `_fkey` names; drop them by that name. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign).
 
 ## 0.5.6 - 2026-11-01

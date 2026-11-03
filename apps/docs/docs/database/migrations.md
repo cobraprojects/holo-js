@@ -670,11 +670,13 @@ table.uuid('id').primaryKey()
 
 ### unique()
 
-Adds a unique constraint on this column. Inside `createTable()`, you can also pass a list of columns and a name to create a composite unique index. See [unique(columns)](#unique-columns).
+Adds a unique constraint on this column, named `{table}_{column}_unique`. On SQLite, Holo creates a unique index with that name. Holo shortens names longer than 63 bytes with a hash, and `dropUnique(['column'])` finds them the same way. Inside `createTable()`, you can also pass a list of columns and a name to create a composite unique index. See [unique(columns)](#unique-columns).
 
 ```ts
 table.string('email').unique()
 ```
+
+If another table already has an index with that name, the migration fails and creates nothing. Drop the constraint with [dropUnique()](#dropunique).
 
 ### index()
 
@@ -943,6 +945,36 @@ await schema.table('comments', (table) => {
   table.dropIndex('comments_post_id_status_index')
 })
 ```
+
+### dropUnique()
+
+Drops a unique constraint or unique index by name, or by its columns. Available inside `table()`. A name that doesn't exist raises an error.
+
+```ts
+await schema.table('users', (table) => {
+  table.dropUnique('users_email_unique')
+})
+```
+
+When you pass an array of columns, Holo drops the unique with the conventional name `{table}_{columns}_unique`, shortened like a `unique()` column's name. This call drops `users_team_id_slug_unique`:
+
+```ts
+await schema.table('users', (table) => {
+  table.dropUnique(['team_id', 'slug'])
+})
+```
+
+Unique names keep the old table name after `renameTable()`, so drop them by their existing name.
+
+Holo versions before 0.6.0 created `unique()` columns with an inline `UNIQUE`, so the database chose the name: `{table}_{column}_key` on PostgreSQL and `{column}` on MySQL. Drop those constraints by that name:
+
+```ts
+await schema.table('tenants', (table) => {
+  table.dropUnique('tenants_owner_email_key')
+})
+```
+
+On SQLite, those columns are unique through an index that SQLite creates itself, and `dropUnique()` can't drop it.
 
 ### renameIndex()
 
