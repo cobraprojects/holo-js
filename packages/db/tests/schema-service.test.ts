@@ -151,6 +151,31 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(members).pluck('email')).toEqual(['c@example.com'])
     })
 
+    it.runIf(driver === 'sqlite')('changes a column of a table whose stored definition contains SQL comments', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_commented_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" (
+        "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, -- the key, (unbalanced
+        "value" TEXT /* ) , "status" */ NOT NULL,
+        /* a comment, before a column */ "status" TEXT NOT NULL CHECK ("status" IN ('open', 'closed')),
+        "note" TEXT -- trailing, comment
+      )`)
+      await db.table(name).insert({ value: 'kept', status: 'open', note: 'old' })
+
+      await schema.table(name, table => { table.string('note').nullable().default('none').change() })
+
+      const columns = await schema.getColumns(name)
+      expect(columns.map(column => [column.name, column.notNull])).toEqual([['id', true], ['value', true], ['status', true], ['note', false]])
+      await db.table(name).insert({ value: 'new', status: 'closed' })
+      expect(await db.table(name).orderBy('id').get()).toEqual([
+        { id: 1, value: 'kept', status: 'open', note: 'old' },
+        { id: 2, value: 'new', status: 'closed', note: 'none' },
+      ])
+      await expect(db.table(name).insert({ status: 'open' })).rejects.toThrow()
+      await expect(db.table(name).insert({ value: 'x', status: 'gone' })).rejects.toThrow()
+    })
+
     it.runIf(driver === 'sqlite')('keeps every child row when change() rebuilds a parent referenced with ON DELETE CASCADE', async () => {
       const { db, schema } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
