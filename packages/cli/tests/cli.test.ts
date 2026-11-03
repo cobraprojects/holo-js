@@ -79,9 +79,7 @@ import {
   createRuntimeInvocation,
   getRuntimeEnvironment,
   getRuntimeFailureMessage,
-  inferRuntimeMigrationName,
   mergeRuntimeDatabaseConfig,
-  normalizeRuntimeMigration,
   parseBooleanEnv,
   resolveConfigModuleUrl,
   runRuntimeInvocation,
@@ -2513,7 +2511,7 @@ module.exports = {
   },
 }
 `)
-    await writeProjectFile(projectRoot, 'server/models/User.ts', projectInternals.renderAuthUserModel('../../.holo-js/generated/schema.generated'))
+    await writeProjectFile(projectRoot, 'server/models/User.ts', projectInternals.renderAuthUserModel())
     await rm(join(projectRoot, 'server/db/migrations'), { recursive: true, force: true })
     await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
 
@@ -5790,6 +5788,8 @@ export default defineModel('people', {})
     await linkWorkspaceDb(commentOnlyRoot)
     await ensureGeneratedSchemaPlaceholder(commentOnlyRoot, defaultProjectConfig())
     await writeProjectFile(commentOnlyRoot, 'server/models/Notes.ts', `
+import { defineModel } from '@holo-js/db'
+
 // defineModel("children", {}) appears in a comment only.
 /* defineModel("children", {}) also appears in a block comment only. */
 if (false) {
@@ -5799,8 +5799,7 @@ if (false) {
   defineModel("parents", {})
   defineModel("child\\\\ren", {})
 }
-export const holoModelPendingSchema = true
-export default undefined
+export default defineModel('notes', {})
 `)
 
     const commentOnlyIo = createIo(commentOnlyRoot)
@@ -8049,18 +8048,6 @@ export default {
     })
     expect(oversizedRuntimePayload.stderr).not.toContain('Runtime payload is missing database configuration.')
     expect(oversizedRuntimePayload.stderr).toContain('Driver "sqlite" is not registered')
-    expect(inferRuntimeMigrationName('file:///tmp/2026_01_01_000001_create_sessions_table.js')).toBe('2026_01_01_000001_create_sessions_table')
-    expect(() => inferRuntimeMigrationName('file:///tmp/create_sessions_table.js')).toThrow(
-      'Registered migration "file:///tmp/create_sessions_table.js" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.',
-    )
-    expect(normalizeRuntimeMigration(
-      'file:///tmp/2026_01_01_000001_create_sessions_table.js',
-      { up() {} },
-    )).toMatchObject({ name: '2026_01_01_000001_create_sessions_table' })
-    expect(normalizeRuntimeMigration(
-      'file:///tmp/ignored.js',
-      { name: 'custom_name', up() {} },
-    )).toMatchObject({ name: 'custom_name' })
     expect(getRuntimeFailureMessage('prune', {
       status: null,
       error: { code: 'ENOENT' },
@@ -9227,34 +9214,13 @@ export default defineEvent({ name: 'audit.activity' })
     expect(pluralize('child')).toBe('children')
     expect(ensureSuffix('Course', 'Seeder')).toBe('CourseSeeder')
     expect(relativeImportPath('/tmp/app/server/models/Course.ts', '/tmp/app/server/models/Session.ts')).toBe('./Session')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).not.toContain('observers:')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).toContain('import { defineModel } from \'@holo-js/db\'')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).toContain('export default defineModel("courses", {')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).toContain('fillable: []')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).not.toContain('holoModelPendingSchema')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).not.toContain('holoGeneratedTables')
-    expect(renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
-    })).not.toContain('table => table')
+    const courseModel = renderModelTemplate({ tableName: 'courses' })
+    expect(courseModel).not.toContain('observers:')
+    expect(courseModel).toContain('import { defineModel } from \'@holo-js/db\'')
+    expect(courseModel).toContain('export default defineModel("courses", {')
+    expect(courseModel).toContain('fillable: []')
+    expect(courseModel).not.toContain('holoGeneratedTables')
+    expect(courseModel).not.toContain('table => table')
     expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('view: \'mail.welcome\'')
     expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('props: input')
     expect(renderNextMailViewTemplate('WelcomeMail', 'WelcomeMailInput', './welcome')).toContain('import type { WelcomeMailInput } from \'./welcome\'')
@@ -10040,29 +10006,13 @@ throw new Error('Model "users" is not present in the generated schema registry. 
     expect(registry.models).toEqual([])
   })
 
-  it('skips scaffolded model modules that explicitly mark themselves pending generated schema', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'server/models/Course.mjs', `
-export const holoModelPendingSchema = true
-export default undefined
-`)
-
-    const registry = await (async () => prepareProjectDiscovery(projectRoot))()
-
-    expect(registry.models).toEqual([])
-  })
-
   it('registers an inactive generated model after prepare sees the materialized schema', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
 
-    const generatedSchemaPath = await ensureGeneratedSchemaPlaceholder(projectRoot, defaultProjectConfig())
-    await writeProjectFile(projectRoot, 'server/models/Course.ts', renderModelTemplate({
-      tableName: 'courses',
-      generatedSchemaImportPath: relativeImportPath(join(projectRoot, 'server/models/Course.ts'), generatedSchemaPath),
-    }))
+    await ensureGeneratedSchemaPlaceholder(projectRoot, defaultProjectConfig())
+    await writeProjectFile(projectRoot, 'server/models/Course.ts', renderModelTemplate({ tableName: 'courses' }))
 
     await (async () => {
       await runProjectPrepare(projectRoot)

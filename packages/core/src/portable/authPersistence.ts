@@ -475,7 +475,6 @@ async function resolveAuthProviderRuntime<TCustom extends HoloConfigMap>(
     try {
       const moduleValue = await importBundledRuntimeModule(projectRoot, candidate) as {
         default?: unknown
-        holoModelPendingSchema?: boolean
       }
       if ('default' in moduleValue) {
         return moduleValue
@@ -533,7 +532,6 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
 
     const resolvedModule = await resolveAuthProviderRuntime(projectRoot, loadedConfig, providerConfig.model) as {
       default?: unknown
-      holoModelPendingSchema?: boolean
       prepareAuthCreateInput?: (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>
       prepareAuthUpdateInput?: (
         user: unknown,
@@ -560,53 +558,6 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       update(id: unknown, values: Record<string, unknown>): Promise<Record<string, unknown>>
       delete?(id: unknown): Promise<void>
     }
-    const throwPendingSchema = (): never => {
-      throw new Error(
-        `[@holo-js/core] Auth provider model "${providerConfig.model}" is pending generated schema output. `
-        + 'Run the schema generator before using auth.',
-      )
-    }
-
-    if (typeof model === 'undefined' && resolvedModule.holoModelPendingSchema === true) {
-      const pendingAdapter: CoreAuthProviderBinding = {
-        async findById() {
-          return throwPendingSchema()
-        },
-        async findByCredentials() {
-          return throwPendingSchema()
-        },
-        async create() {
-          return throwPendingSchema()
-        },
-        async update() {
-          return throwPendingSchema()
-        },
-        matchesUser() {
-          return false
-        },
-        getId() {
-          return throwPendingSchema()
-        },
-        getPasswordHash() {
-          return throwPendingSchema()
-        },
-        getRememberToken() {
-          return throwPendingSchema()
-        },
-        async updateRememberToken() {
-          return throwPendingSchema()
-        },
-        getEmailVerifiedAt() {
-          return throwPendingSchema()
-        },
-        serialize() {
-          return throwPendingSchema()
-        },
-      }
-
-      return [providerName, pendingAdapter] as const
-    }
-
     const sanitizeAuthWriteInput = (
       input: Readonly<Record<string, unknown>>,
     ): Record<string, unknown> => {

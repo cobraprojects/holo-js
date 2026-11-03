@@ -473,7 +473,6 @@
     "unused-class-member:packages/db/src/factories/FactoryService.ts:FactoryService:has",
     "unused-class-member:packages/db/src/factories/FactoryService.ts:FactoryService:list",
     "unused-class-member:packages/db/src/factories/FactoryService.ts:FactoryService:register",
-    "unused-class-member:packages/db/src/migrations/MigrationService.ts:MigrationService:getExecutionPolicy",
     "unused-class-member:packages/db/src/migrations/MigrationService.ts:MigrationService:getMigration",
     "unused-class-member:packages/db/src/model/ModelEventService.ts:ModelEventService:areEventsMuted",
     "unused-class-member:packages/db/src/model/ModelEventService.ts:ModelEventService:areGuardsDisabled",

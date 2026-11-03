@@ -144,11 +144,6 @@ export type QueueCliModule = {
   shutdownQueueRuntime(): Promise<void>
 }
 
-export type RuntimeMigrationCandidate = {
-  readonly name?: unknown
-  up(...args: unknown[]): unknown
-}
-
 export type PackageManagerCommand = {
   readonly command: string
   readonly args: readonly string[]
