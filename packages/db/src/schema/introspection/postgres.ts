@@ -6,7 +6,7 @@ import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, is_computed: boolean, primary_key: boolean }
-type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, representable: boolean, columns: string[] }
+type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 type CheckRow = { name: string, column_name: string, definition: string }
 
@@ -36,6 +36,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
 const INDEXES_SQL = `SELECT ic.relname AS name,
   i.indisunique AS is_unique,
   i.indisprimary AS is_primary,
+  EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u', 'x')) AS is_constraint,
   (i.indexprs IS NULL AND i.indpred IS NULL) AS representable,
   ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.position) AS columns
   FROM pg_catalog.pg_index i
@@ -149,6 +150,7 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
           name: row.name,
           unique: row.is_unique,
           primary: row.is_primary,
+          constraint: row.is_constraint,
           columns: row.columns,
           representable: row.representable,
         })),
