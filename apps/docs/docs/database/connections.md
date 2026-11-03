@@ -109,11 +109,11 @@ The generated schema covers only the default connection, so a model on another c
 
 - The primary key is `id`, or the column you set with `primaryKey`. A record you create without a key gets the database's auto-increment ID.
 - `created_at` and `updated_at` are filled unless you set `timestamps: false`, and they read as `Date`. `softDeletes` uses `deleted_at` unless you set `deletedAtColumn`.
-- `fillable` and `guarded` alone decide which attributes you can write.
+- `fillable` decides which attributes you can write. A model that sets only `guarded` can also write the table's other real columns, as in Laravel: Holo reads the table's columns from that connection once, caches them, and rereads them after a schema change in the same process. Any other attribute, including a JSON path such as `meta->role`, throws `SecurityError`.
 - Your `casts` apply. Other attributes are the values the driver returns, such as JSON as text on SQLite.
 - Relations to models on the same connection work as usual.
 
-A table with the same name on the default connection doesn't change how the model reads or writes.
+A table with the same name on the default connection doesn't change how the model reads or writes. TypeScript can't tell connections apart, though, so such a model is typed from the default connection's table. To fix this, rename the table or the connection.
 
 ## Transactions on a named connection
 

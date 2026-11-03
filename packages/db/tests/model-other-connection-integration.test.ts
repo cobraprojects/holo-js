@@ -101,14 +101,38 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('a model on a con
     expect(found.get('hits')).toBe(0)
   })
 
-  it('decides writability by fillable and guarded alone', async () => {
+  it('allows only fillable attributes on a fillable model', async () => {
     const { names } = await openAnalyticsConnection()
     const PageView = defineModel(names.pageViews, { connectionName: 'analytics', name: 'PageView', fillable: ['path'] })
-    const Guarded = defineModel(names.pageViews, { connectionName: 'analytics', name: 'GuardedPageView', guarded: ['hits'] })
 
     await expect(PageView.create({ path: '/a', hits: 9 })).rejects.toThrow('Column "hits" is not writable on model "PageView".')
+    expect((await PageView.create({ path: '/b' })).get('path')).toBe('/b')
+  })
+
+  it('checks a guarded model\'s attributes against the table\'s real columns', async () => {
+    const { names } = await openAnalyticsConnection()
+    const Guarded = defineModel(names.pageViews, { connectionName: 'analytics', name: 'GuardedPageView', guarded: ['hits'] })
+
+    await expect(Guarded.make({ path: '/a', referrer: 'ad' }).save()).rejects.toThrow('Column "referrer" is not writable on model "GuardedPageView".')
     await expect(Guarded.create({ path: '/a', hits: 9 })).rejects.toThrow('Column "hits" is not writable on model "GuardedPageView".')
-    expect((await Guarded.create({ path: '/b', site_id: 4 })).get('site_id')).toBe(4)
+    await expect(Guarded.create({ path: '/a', referrer: 'ad' })).rejects.toThrow('Column "referrer" is not writable on model "GuardedPageView".')
+    await expect(Guarded.create({ path: '/a', 'meta->role': 'admin' })).rejects.toThrow('Column "meta->role" is not writable on model "GuardedPageView".')
+    const view = await Guarded.create({ path: '/b', site_id: 4 })
+    expect(() => view.fill({ 'meta->role': 'admin' })).toThrow('Column "meta->role" is not writable on model "GuardedPageView".')
+    expect(view.get('site_id')).toBe(4)
+    expect(await DB.table(names.pageViews, 'analytics').count()).toBe(1)
+  })
+
+  it('sees a column a migration adds to a guarded model\'s table in the same process', async () => {
+    const { names } = await openAnalyticsConnection()
+    const Guarded = defineModel(names.pageViews, { connectionName: 'analytics', name: 'GuardedPageView', guarded: ['hits'] })
+    await expect(Guarded.create({ path: '/a', referrer: 'ad' })).rejects.toThrow('Column "referrer" is not writable on model "GuardedPageView".')
+
+    await createSchemaService(DB.connection('analytics')).table(names.pageViews, (table) => {
+      table.string('referrer').nullable()
+    })
+
+    expect((await Guarded.create({ path: '/a', referrer: 'ad' })).get('referrer')).toBe('ad')
   })
 
   it('reads the key the model names as its primary key', async () => {

@@ -15,6 +15,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
+import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
@@ -117,6 +118,10 @@ function findWriteColumn(definition: AnyModelDefinition, key: string) {
   }
 
   return { columnName, column }
+}
+
+function isClassCast(cast: ModelCastDefinition | undefined): boolean {
+  return typeof cast === 'object' && !('kind' in cast && cast.kind === 'enum')
 }
 
 function hasDefinition<TTable extends TableDefinition>(
@@ -1373,6 +1378,7 @@ export class ModelRepository<
   }
 
   async create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+    await this.loadGuardableColumns()
     this.assertMassAssignable(applyPendingModelAttributes(this.definition, values))
     return this.createRecord(values)
   }
@@ -1721,6 +1727,7 @@ export class ModelRepository<
       const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
+      await this.assertGuardableAttributes(entity.toAttributes())
       const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
@@ -1827,7 +1834,7 @@ export class ModelRepository<
       }
 
       if (enforceGuards) {
-        this.assertWritableColumn(columnName)
+        this.assertWritableColumn(columnName, key)
       }
 
       if (key.includes('->')) {
@@ -1867,6 +1874,7 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const written = entity.getDirty()
+      await this.assertGuardableAttributes(written)
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
       if (Object.keys(dirty).length === 0) {
         return this.finishUnchangedSave(entity)
@@ -3757,15 +3765,50 @@ export class ModelRepository<
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
-      this.assertWritableColumn(columnName)
+      this.assertWritableColumn(columnName, key)
     }
 
     return values
   }
 
-  private assertWritableColumn(column: string): void {
+  async loadGuardableColumns(): Promise<void> {
+    if (this.guardsByColumnListing()) {
+      await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    }
+  }
+
+  private async assertGuardableAttributes(values: Record<string, unknown>): Promise<void> {
+    if (!this.guardsByColumnListing() || areModelGuardsDisabled()) {
+      return
+    }
+
+    const columns = await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    const unknownKey = Object.keys(values).find(key => !key.includes('->') && !this.isGuardableColumn(key, columns))
+    if (unknownKey !== undefined) {
+      throw new SecurityError(`Column "${unknownKey}" is not writable on model "${this.definition.name}".`)
+    }
+  }
+
+  private guardsByColumnListing(): boolean {
+    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
+  }
+
+  private isGuardableColumn(
+    key: string,
+    columns = getLoadedColumnListing(this.getConnectionName(), this.definition.table.tableName),
+  ): boolean {
+    if (ownEntry(this.definition.mutators, key) || isClassCast(ownEntry(this.definition.casts, key))) return true
+    if (key.includes('->')) return false
+    return columns === undefined || columns.size === 0 || columns.has(key)
+  }
+
+  private assertWritableColumn(column: string, key: string): void {
     if (!this.isWritableColumn(column)) {
       throw new SecurityError(`Column "${column}" is not writable on model "${this.definition.name}".`)
+    }
+
+    if (this.guardsByColumnListing() && !areModelGuardsDisabled() && !this.isGuardableColumn(key)) {
+      throw new SecurityError(`Column "${key}" is not writable on model "${this.definition.name}".`)
     }
   }
 
