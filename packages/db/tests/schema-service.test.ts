@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { CapabilityError, column, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
+import { column, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -1080,16 +1080,12 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const constraint = `${child}_parent`
       onTestFinished(() => schema.dropTable(child))
       await schema.createTable(child, table => { table.id(); table.integer('parent_id') })
-      if (driver === 'sqlite') {
-        await expect(schema.table(child, table => { table.foreign('parent_id', constraint).references('id').on(parent) })).rejects.toThrow(CapabilityError)
-        await db.table(child).insert({ parent_id: 99 })
-        expect(await db.table(child).count()).toBe(1)
-        return
-      }
       await schema.table(child, table => { table.foreign('parent_id', constraint).references('id').on(parent) })
       await expect(db.table(child).insert({ parent_id: 99 })).rejects.toThrow()
       await db.table(table).insert({ id: 1, name: 'Parent' })
       await db.table(child).insert({ parent_id: 1 })
+      await expect(schema.table(child, table => { table.dropForeign(`${child}_missing`) })).rejects.toThrow()
+      await expect(db.table(child).insert({ parent_id: 99 })).rejects.toThrow()
       await schema.table(child, table => { table.dropForeign(constraint) })
       await db.table(child).insert({ parent_id: 99 })
       expect(await db.table(child).orderBy('id').pluck('parent_id')).toEqual([1, 99])
@@ -1110,10 +1106,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.id()
         table.foreignId('created_by_id').nullable().constrained(parent).restrictOnDelete()
       })
-      if (driver === 'sqlite') {
-        await expect(schema.table(child, table => { table.dropForeign(`${child}_created_by_id_foreign`) })).rejects.toThrow(CapabilityError)
-        return
-      }
       await schema.table(child, table => {
         table.foreignId('updated_by_id').nullable().constrained(parent)
       })
@@ -1143,10 +1135,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.id()
         table.foreignId('created_by_id').nullable().constrained(parent)
       })
-      if (driver === 'sqlite') {
-        await expect(schema.table(child, table => { table.dropForeign(['created_by_id']) })).rejects.toThrow(CapabilityError)
-        return
-      }
       await schema.table(child, table => {
         table.foreignId('updated_by_id').nullable().constrained(parent)
       })
@@ -1198,10 +1186,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.string('name').nullable()
         table.foreignId('created_by_id').nullable().constrained(parent)
       })
-      if (driver === 'sqlite') {
-        await expect(schema.table(child, table => { table.dropConstrainedForeignId('created_by_id') })).rejects.toThrow(CapabilityError)
-        return
-      }
       if (driver === 'mysql') {
         await expect(schema.table(child, table => { table.dropColumn('created_by_id') })).rejects.toThrow()
       }
@@ -1212,6 +1196,151 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getForeignKeys(child)).toEqual([])
       await db.table(child).insert({ name: 'Unconstrained' })
       expect(await db.table(child).pluck('name')).toEqual(['Unconstrained'])
+    })
+
+    it.runIf(driver === 'sqlite')('adds and drops a foreign key by rebuilding the table, keeping its columns, indexes, triggers, other keys and the rows of its children', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const members = `holo_members_${suffix}`
+      const notes = `holo_notes_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(notes)
+        await schema.dropTable(members)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${members}" (
+        "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+        "parent_id" INTEGER,
+        "owner_id" INTEGER CONSTRAINT "members_owner" REFERENCES "${parents}" ("id") ON DELETE CASCADE ON UPDATE RESTRICT,
+        "email" TEXT NOT NULL UNIQUE,
+        "status" TEXT NOT NULL DEFAULT 'active' CONSTRAINT "members_status_check" CHECK ("status" IN ('active', 'banned')),
+        "visits" INTEGER NOT NULL DEFAULT 0
+      )`)
+      await adapter.execute(`CREATE INDEX "members_visits_index" ON "${members}" ("visits")`)
+      await adapter.execute(`CREATE TRIGGER "members_count_visit" AFTER INSERT ON "${members}" BEGIN UPDATE "${members}" SET "visits" = "visits" + 1 WHERE "id" = NEW."id"; END`)
+      await adapter.execute(`CREATE TABLE "${notes}" ("id" INTEGER PRIMARY KEY, "member_id" INTEGER NOT NULL REFERENCES "${members}" ("id") ON DELETE CASCADE)`)
+      await db.table(parents).insert([{ id: 1 }, { id: 2 }])
+      await db.table(members).insert({ parent_id: 1, owner_id: 2, email: 'a@example.com' })
+      await db.table(notes).insert([{ id: 1, member_id: 1 }, { id: 2, member_id: 1 }])
+      const reader = createSchemaReader(db)
+      const before = (await reader.readTableStructure(members))!
+
+      await schema.table(members, table => { table.foreign('parent_id').references('id').on(parents).cascadeOnDelete() })
+
+      const added = (await reader.readTableStructure(members))!
+      expect(added.columns).toEqual(before.columns)
+      expect(added.enumChecks).toEqual(before.enumChecks)
+      expect(added.indexes.map(index => [index.columns, index.unique])).toEqual(before.indexes.map(index => [index.columns, index.unique]))
+      expect(added.foreignKeys).toEqual(expect.arrayContaining([
+        ...before.foreignKeys,
+        { name: `${members}_parent_id_foreign`, table: parents, from: 'parent_id', to: 'id', onUpdate: 'NO ACTION', onDelete: 'CASCADE' },
+      ]))
+      expect(added.foreignKeys).toHaveLength(2)
+      await expect(db.table(members).insert({ parent_id: 99, owner_id: 1, email: 'b@example.com' })).rejects.toThrow()
+      await expect(db.table(members).insert({ status: 'unknown', owner_id: 1, email: 'b@example.com' })).rejects.toThrow()
+      await db.table(members).insert({ parent_id: 2, owner_id: 1, email: 'b@example.com' })
+      expect(await db.table(members).orderBy('id').select('id', 'parent_id', 'owner_id', 'email', 'visits').get()).toEqual([
+        { id: 1, parent_id: 1, owner_id: 2, email: 'a@example.com', visits: 1 },
+        { id: 2, parent_id: 2, owner_id: 1, email: 'b@example.com', visits: 1 },
+      ])
+      expect(await db.table(notes).orderBy('id').pluck('member_id')).toEqual([1, 1])
+
+      await expect(schema.table(members, table => { table.dropForeign(`${members}_missing_foreign`) })).rejects.toThrow(SchemaError)
+      await schema.table(members, table => { table.dropForeign(['parent_id']) })
+      await schema.table(members, table => { table.dropForeign('members_owner') })
+
+      const dropped = (await reader.readTableStructure(members))!
+      expect(dropped.columns).toEqual(before.columns)
+      expect(dropped.foreignKeys).toEqual([])
+      expect(dropped.indexes.map(index => [index.columns, index.unique])).toEqual(before.indexes.map(index => [index.columns, index.unique]))
+      await db.table(members).insert({ parent_id: 99, owner_id: 99, email: 'c@example.com' })
+      expect(await db.table(members).where('email', 'c@example.com').pluck('visits')).toEqual([1])
+      expect(await db.table(notes).orderBy('id').pluck('member_id')).toEqual([1, 1])
+      await db.table(members).where('id', 1).delete()
+      expect(await db.table(notes).count()).toBe(0)
+    })
+
+    it.runIf(driver === 'sqlite')('drops an unnamed foreign key from an earlier release by its column', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const members = `holo_members_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(members)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${members}" ("id" INTEGER PRIMARY KEY, "name" TEXT, "parent_id" INTEGER REFERENCES "${parents}" ("id") ON DELETE CASCADE)`)
+      await db.table(parents).insert({ id: 1 })
+      await db.table(members).insert({ id: 1, name: 'Kept', parent_id: 1 })
+
+      await expect(schema.table(members, table => { table.dropForeign(`${members}_parent_id_fkey`) })).rejects.toThrow(SchemaError)
+      await schema.table(members, table => { table.dropConstrainedForeignId('parent_id') })
+
+      expect((await schema.getColumns(members)).map(column => column.name)).toEqual(['id', 'name'])
+      expect(await schema.getForeignKeys(members)).toEqual([])
+      await db.table(parents).where('id', 1).delete()
+      expect(await db.table(members).pluck('name')).toEqual(['Kept'])
+    })
+
+    it.runIf(driver === 'sqlite')('adds a nullable constrained foreign id to an existing table', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_posts_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await schema.dropTable('owners')
+      })
+      await schema.createTable('owners', table => { table.id() })
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('title')
+      })
+      await db.table(name).insert({ title: 'Kept' })
+
+      await schema.table(name, table => { table.foreignId('owner_id').nullable().constrained() })
+
+      expect(await db.table(name).select('title', 'owner_id').get()).toEqual([{ title: 'Kept', owner_id: null }])
+      expect(await schema.getForeignKeys(name)).toEqual([{ table: 'owners', from: 'owner_id', to: 'id', onUpdate: 'NO ACTION', onDelete: 'NO ACTION' }])
+      await expect(db.table(name).insert({ title: 'Orphan', owner_id: 99 })).rejects.toThrow()
+    })
+
+    it.runIf(driver === 'sqlite')('drops uniques that an earlier release declared inline by their columns or their autoindex name', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_unique_inline_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" (
+        "id" INTEGER PRIMARY KEY,
+        "email" VARCHAR(255) UNIQUE,
+        "code" TEXT CONSTRAINT "code_unique" UNIQUE ON CONFLICT ABORT,
+        "first" TEXT,
+        "last" TEXT,
+        UNIQUE ("first", "last")
+      )`)
+      await adapter.execute(`CREATE INDEX "${name}_last_index" ON "${name}" ("last")`)
+      await db.table(name).insert({ id: 1, email: 'a@example.com', code: 'A', first: 'Ada', last: 'Byron' })
+      const uniqueColumns = async () => (await schema.getIndexes(name)).filter(index => index.unique).map(index => index.columns)
+
+      await schema.table(name, table => { table.dropUnique(['email']) })
+
+      await db.table(name).insert({ id: 2, email: 'a@example.com', code: 'B', first: 'Ada', last: 'King' })
+      expect(await uniqueColumns()).toEqual(expect.arrayContaining([['code'], ['first', 'last']]))
+      expect(await uniqueColumns()).toHaveLength(2)
+      await expect(db.table(name).insert({ id: 3, code: 'A' })).rejects.toThrow()
+      const codeIndex = (await schema.getIndexes(name)).find(index => index.columns.join() === 'code')!.name
+      expect(codeIndex).toMatch(/^sqlite_autoindex_/)
+
+      await schema.table(name, table => {
+        table.dropUnique(codeIndex)
+        table.dropUnique(['first', 'last'])
+      })
+
+      await db.table(name).insert({ id: 3, email: 'a@example.com', code: 'A', first: 'Ada', last: 'Byron' })
+      expect(await uniqueColumns()).toEqual([])
+      expect((await schema.getIndexes(name)).map(index => [index.name, index.columns])).toEqual([[`${name}_last_index`, ['last']]])
+      expect(await db.table(name).orderBy('id').pluck('code')).toEqual(['A', 'B', 'A'])
+      await expect(schema.table(name, table => { table.dropUnique(['email']) })).rejects.toThrow()
     })
 
     it('names a foreign key declared by createTable with the given constraint name', async () => {
@@ -1229,7 +1358,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       if (driver === 'sqlite') {
         const result = await adapter.query<{ sql: string }>('SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?', [child])
         expect(result.rows[0]!.sql).toContain(`CONSTRAINT "${constraint}" REFERENCES "${parent}"`)
-        return
       }
       await schema.table(child, table => { table.dropForeign(constraint) })
       await db.table(child).insert({ parent_id: 99 })
