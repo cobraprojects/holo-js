@@ -550,6 +550,199 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(table).count()).toBe(1)
     })
 
+    it('names unique columns {table}_{column}_unique and drops them by name or by columns', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_unique_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('owner_email').nullable().unique()
+        table.string('label').nullable()
+      })
+      await schema.table(name, table => { table.string('slug').nullable().unique() })
+      await schema.table(name, table => { table.text('label').nullable().change() })
+      await db.table(name).insert({ owner_email: 'owner@example.com', slug: 'one' })
+      await expect(db.table(name).insert({ owner_email: 'owner@example.com' })).rejects.toThrow()
+      await expect(db.table(name).insert({ slug: 'one' })).rejects.toThrow()
+      expect((await schema.getIndexes(name)).filter(index => index.unique).map(index => [index.name, index.columns])).toEqual(expect.arrayContaining([
+        [`${name}_owner_email_unique`, ['owner_email']],
+        [`${name}_slug_unique`, ['slug']],
+      ]))
+
+      await schema.table(name, table => {
+        table.dropUnique(`${name}_owner_email_unique`)
+        table.dropUnique(['slug'])
+      })
+
+      await db.table(name).insert({ owner_email: 'owner@example.com', slug: 'one' })
+      expect(await db.table(name).count()).toBe(2)
+      expect((await schema.getIndexes(name)).filter(index => index.unique && !index.columns.includes('id'))).toEqual([])
+    })
+
+    it('raises when dropUnique() names a unique that does not exist', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_unique_missing_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('email')
+      })
+
+      await expect(schema.table(name, table => { table.dropUnique(`${name}_missing_unique`) })).rejects.toThrow()
+      await expect(schema.table(name, table => { table.dropUnique(['email']) })).rejects.toThrow()
+    })
+
+    it.skipIf(driver === 'sqlite')('drops unique constraints created inline by earlier releases by their database name', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_unique_legacy_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const legacyName = driver === 'postgres' ? `${name}_owner_email_key` : 'owner_email'
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE ${db.getDialect().quoteIdentifier(name)} (id INTEGER PRIMARY KEY, owner_email VARCHAR(255) UNIQUE)`)
+      await db.table(name).insert({ id: 1, owner_email: 'owner@example.com' })
+      await expect(db.table(name).insert({ id: 2, owner_email: 'owner@example.com' })).rejects.toThrow()
+
+      await schema.table(name, table => { table.dropUnique(legacyName) })
+
+      await db.table(name).insert({ id: 2, owner_email: 'owner@example.com' })
+      expect(await db.table(name).count()).toBe(2)
+    })
+
+    it('creates unique columns that a self-referencing foreign key depends on', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_unique_self_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('code').unique()
+        table.unique(['code'])
+        table.string('parent_code').nullable()
+        table.foreign('parent_code').references('code').on(name)
+      })
+      await db.table(name).insert({ code: 'root' })
+      await expect(db.table(name).insert({ code: 'root' })).rejects.toThrow()
+      await db.table(name).insert({ code: 'child', parent_code: 'root' })
+      await expect(db.table(name).insert({ code: 'orphan', parent_code: 'missing' })).rejects.toThrow()
+      expect(await db.table(name).count()).toBe(2)
+    })
+
+    it('leaves the table unchanged when a new unique column cannot be indexed', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_unique_add_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('name')
+      })
+      await db.table(name).insert({ name: 'first' })
+      await db.table(name).insert({ name: 'second' })
+
+      await expect(schema.table(name, table => { table.string('slug').default('same').unique() })).rejects.toThrow()
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'name'])
+      expect(await db.table(name).orderBy('id').pluck('name')).toEqual(['first', 'second'])
+    })
+
+    it('rejects a declared index that reuses a unique column index name for other columns', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_unique_clash_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await expect(schema.createTable(name, table => {
+        table.id()
+        table.string('email').unique()
+        table.string('other')
+        table.index(['other'], `${name}_email_unique`)
+      })).rejects.toThrow(SchemaError)
+      expect(await schema.hasTable(name)).toBe(false)
+    })
+
+    it.skipIf(driver === 'mysql')('fails a unique column whose generated name belongs to another table, creating nothing', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const prefix = `holo_uq_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      onTestFinished(async () => {
+        await schema.dropTable(prefix)
+        await schema.dropTable(`${prefix}_b`)
+      })
+      await schema.createTable(`${prefix}_b`, table => { table.string('c').unique() })
+
+      await expect(schema.createTable(prefix, table => {
+        table.string('b_c').unique()
+      })).rejects.toThrow()
+
+      expect(await schema.hasTable(prefix)).toBe(false)
+      await db.table(`${prefix}_b`).insert({ c: 'same' })
+      await expect(db.table(`${prefix}_b`).insert({ c: 'same' })).rejects.toThrow()
+    })
+
+    it('creates the same table with unique columns again without failing', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_unique_again_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      const create = () => schema.createTable(name, table => {
+        table.id()
+        table.string('email').unique()
+      })
+      await create()
+
+      await create()
+
+      await db.table(name).insert({ email: 'same@example.com' })
+      await expect(db.table(name).insert({ email: 'same@example.com' })).rejects.toThrow()
+    })
+
+    it('shortens long unique column names and still drops them by columns', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_unique_long_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const longColumn = 'organizer_primary_contact_email_address'
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string(longColumn).nullable().unique()
+      })
+      await db.table(name).insert({ [longColumn]: 'owner@example.com' })
+      await expect(db.table(name).insert({ [longColumn]: 'owner@example.com' })).rejects.toThrow()
+      const [index] = (await schema.getIndexes(name)).filter(index => index.columns.includes(longColumn))
+      expect(index?.name).toMatch(/^holo_unique_long_\w+_[0-9a-f]{8}_unique$/)
+      expect(index?.name).toHaveLength(63)
+
+      await schema.table(name, table => { table.dropUnique([longColumn]) })
+
+      await db.table(name).insert({ [longColumn]: 'owner@example.com' })
+      expect(await db.table(name).count()).toBe(2)
+    })
+
+    it('drops a unique by its existing name after the table is renamed, and a later change() keeps it dropped', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const original = `holo_unique_ren_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      const renamed = `${original}_new`
+      onTestFinished(() => schema.dropTable(renamed))
+      await schema.createTable(original, table => {
+        table.id()
+        table.string('email').unique()
+        table.string('label').nullable()
+      })
+      await schema.renameTable(original, renamed)
+
+      await schema.table(renamed, table => { table.dropUnique(`${original}_email_unique`) })
+      await schema.table(renamed, table => { table.text('label').nullable().change() })
+
+      await db.table(renamed).insert({ email: 'same@example.com' })
+      await db.table(renamed).insert({ email: 'same@example.com' })
+      expect(await db.table(renamed).count()).toBe(2)
+    })
+
+    it.runIf(driver === 'sqlite')('keeps an inline unique column from an earlier release unique when that column changes', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_unique_inline_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" (id INTEGER PRIMARY KEY, owner_email VARCHAR(255) UNIQUE)`)
+
+      await schema.table(name, table => { table.text('owner_email').nullable().change() })
+
+      await db.table(name).insert({ id: 1, owner_email: 'owner@example.com' })
+      await expect(db.table(name).insert({ id: 2, owner_email: 'owner@example.com' })).rejects.toThrow()
+      expect((await schema.getColumns(name)).find(column => column.name === 'owner_email')?.type).toBe('TEXT')
+    })
+
     it('adds and removes foreign-key enforcement on an existing table', async () => {
       const { db, schema, table } = await openDatabase(driver)
       const parent = table.tableName.split('.').at(-1)!

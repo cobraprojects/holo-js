@@ -88,14 +88,23 @@ export function resolveGeneratedForeignKeyName(
   return resolvedName
 }
 
+export function resolveGeneratedUniqueIndexName(tableName: string, columns: readonly string[]): string {
+  const indexName = shortenGeneratedName(createConventionalIndexName(tableName, columns, 'unique'), 'unique')
+  assertValidIndexName(indexName)
+  return indexName
+}
+
 export function resolveGeneratedCheckName(tableName: string, columnName: string): string {
   const unqualifiedTableName = tableName.split('.').at(-1)!
-  const checkName = `${unqualifiedTableName}_${columnName}_check`
-  if (checkName.length <= DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes) {
-    return checkName
+  return shortenGeneratedName(`${unqualifiedTableName}_${columnName}_check`, 'check')
+}
+
+function shortenGeneratedName(name: string, suffix: string): string {
+  if (name.length <= DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes) {
+    return name
   }
 
-  const hash = createHash('sha256').update(checkName).digest('hex').slice(0, 8)
-  const prefixLength = DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes - `_${hash}_check`.length
-  return `${checkName.slice(0, prefixLength)}_${hash}_check`
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8)
+  const prefixLength = DEFAULT_INDEX_NAME_LENGTH_POLICY.maxBytes - `_${hash}_${suffix}`.length
+  return `${name.slice(0, prefixLength)}_${hash}_${suffix}`
 }

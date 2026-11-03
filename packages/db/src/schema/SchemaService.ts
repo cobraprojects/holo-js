@@ -1,7 +1,7 @@
 import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
-import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
+import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
@@ -15,7 +15,7 @@ import { readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, 
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import type { DDLStatement } from './ddl'
+import type { DDLStatement, UniqueBacking } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
@@ -543,7 +543,53 @@ export class SchemaService {
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
-    await this.execute(this.createCompiler().compile(createTableOperation(table)))
+    await this.executeWithColumnUniques(table.tableName, Object.values(table.columns), this.createCompiler().compile(createTableOperation(table)))
+  }
+
+  private async executeWithColumnUniques(
+    tableName: string,
+    columns: readonly AnyColumnDefinition[],
+    statements: DDLStatement[],
+  ): Promise<void> {
+    const expectedIndexes = this.isSqlite() ? this.createCompiler().resolveColumnUniqueIndexes(tableName, columns) : []
+    if (expectedIndexes.length === 0) {
+      await this.execute(statements)
+      return
+    }
+
+    await this.connection.transaction(async (tx) => {
+      const service = new SchemaService(tx)
+      await service.execute(statements)
+      await service.assertUniqueIndexesExist(tableName, expectedIndexes)
+    })
+  }
+
+  private async assertUniqueIndexesExist(tableName: string, expectedIndexes: readonly TableIndexDefinition[]): Promise<void> {
+    const actualIndexes = await this.getIndexes(tableName)
+    for (const expected of expectedIndexes) {
+      const exists = actualIndexes.some(actual => actual.name === expected.name
+        && actual.unique
+        && actual.columns.join('|') === expected.columns.join('|'))
+      if (!exists) {
+        throw new SchemaError(
+          `Unique index "${expected.name}" for column "${expected.columns.join('", "')}" could not be created on table "${tableName}" because another index already uses that name.`,
+        )
+      }
+    }
+  }
+
+  private async resolveUniqueBacking(tableName: string, indexName: string): Promise<UniqueBacking> {
+    if (!this.isPostgres()) {
+      return 'index'
+    }
+
+    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
+    const result = await this.connection.introspectCompiled<{ name: string }>({
+      sql: 'SELECT conname AS name FROM pg_constraint WHERE conrelid = to_regclass($1) AND conname = $2 AND contype = \'u\'',
+      bindings: [tableName.split('.').map(quote).join('.'), indexName],
+      source: `schema:introspect:uniqueConstraint:${tableName}:${indexName}`,
+    })
+    return result.rows.length > 0 ? 'constraint' : 'index'
   }
 
   private assertTableMutationIndexNames(
@@ -558,6 +604,7 @@ export class SchemaService {
           this.resolveIndexName(tableName, operation.index)
           break
         case 'dropIndex':
+        case 'dropUnique':
           assertValidIndexName(operation.indexName)
           break
         case 'renameIndex':
@@ -580,6 +627,7 @@ export class SchemaService {
       | { kind: 'renameColumn', fromColumnName: string, toColumnName: string }
       | { kind: 'createIndex', index: TableIndexDefinition }
       | { kind: 'dropIndex', indexName: string }
+      | { kind: 'dropUnique', indexName: string }
       | { kind: 'renameIndex', fromIndexName: string, toIndexName: string }
       | { kind: 'createForeignKey', columnName: string, reference: ForeignKeyReference, constraintName?: string }
       | { kind: 'dropForeignKey', constraintName: string },
@@ -588,7 +636,7 @@ export class SchemaService {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        await this.execute(this.createCompiler().compile(addColumnOperation(tableName, definition)))
+        await this.executeWithColumnUniques(tableName, [definition], this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }
       case 'alterColumn': {
@@ -633,6 +681,11 @@ export class SchemaService {
         return
       case 'dropIndex':
         await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, operation.indexName)))
+        return
+      case 'dropUnique':
+        await this.execute(this.createCompiler().compile(
+          dropUniqueOperation(tableName, operation.indexName, await this.resolveUniqueBacking(tableName, operation.indexName)),
+        ))
         return
       case 'renameIndex':
         if (this.isSqlite()) {

@@ -1,6 +1,6 @@
 import { column, type AnyColumnBuilder } from './columns'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
-import { resolveConventionalIndexName } from './generatedNames'
+import { resolveConventionalIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
 
 interface AddColumnMutationOperation {
@@ -36,6 +36,11 @@ interface DropIndexMutationOperation {
   indexName: string
 }
 
+interface DropUniqueMutationOperation {
+  kind: 'dropUnique'
+  indexName: string
+}
+
 interface RenameIndexMutationOperation {
   kind: 'renameIndex'
   fromIndexName: string
@@ -67,6 +72,7 @@ type TableMutationOperation
     | RenameColumnMutationOperation
     | CreateIndexMutationOperation
     | DropIndexMutationOperation
+    | DropUniqueMutationOperation
     | RenameIndexMutationOperation
     | CreateForeignKeyMutationOperation
     | DropForeignKeyMutationOperation
@@ -472,6 +478,11 @@ export class TableMutationBuilder {
 
   dropIndex(indexName: string): void {
     this.operations.push({ kind: 'dropIndex', indexName })
+  }
+
+  dropUnique(index: string | readonly string[]): void {
+    const indexName = typeof index === 'string' ? index : resolveGeneratedUniqueIndexName(this.table, index)
+    this.operations.push({ kind: 'dropUnique', indexName })
   }
 
   renameIndex(fromIndexName: string, toIndexName: string): void {
