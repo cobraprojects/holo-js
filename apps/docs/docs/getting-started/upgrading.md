@@ -19,7 +19,7 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 
 `holo build` no longer loads or runs your migrations. It reads the tables and columns of the default connection's database and writes `.holo-js/generated/schema.generated.ts` from them. The build environment needs the same database settings as production and a reachable database. If it can't read the database, `holo build` fails with an error that names the connection. Run your migrations before you build. See [Build](/deployment/#build).
 
-A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes, and then fails to typecheck. Run `npx holo migrate` or `npx holo build` once to write it again.
+A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes. Such a file fails to typecheck, and commands such as `holo dev` and `holo prepare` stop with an error that tells you to write it again. Run `npx holo migrate` or `npx holo build` once to write it from your database.
 
 ### Model types come from the database and casts
 
