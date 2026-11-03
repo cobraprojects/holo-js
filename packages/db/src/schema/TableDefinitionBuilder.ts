@@ -568,12 +568,14 @@ export class TableDefinitionBuilder<
   private readonly columns: Record<string, ColumnInput> = {}
   private readonly columnRefs = new Map<string, ColumnReference>()
   private readonly indexes: TableIndexDefinition[] = []
+  private primaryKeyName?: string
 
   constructor(readonly tableName: TName) {}
 
   build(): BoundTableDefinition<TName, TColumns> {
     const options: DefineTableOptions = {
       indexes: Object.freeze([...this.indexes]),
+      primaryKeyName: this.primaryKeyName,
     }
 
     return defineTable(this.tableName, this.columns as TColumns, options) as BoundTableDefinition<TName, TColumns>
@@ -795,6 +797,20 @@ export class TableDefinitionBuilder<
 
   unique(columns: readonly string[], name?: string): this {
     this.indexes.push({ columns, name, unique: true })
+    return this
+  }
+
+  primary(columns: readonly string[], name?: string): this {
+    for (const columnName of columns) {
+      const builderRef = this.columnRefs.get(columnName)
+      if (!builderRef) {
+        throw new SchemaError(`Cannot add unknown column "${columnName}" to the primary key. Declare the column first.`)
+      }
+
+      builderRef.builder = builderRef.builder.primaryKey()
+    }
+
+    this.primaryKeyName = name
     return this
   }
 

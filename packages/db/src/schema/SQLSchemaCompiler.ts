@@ -80,7 +80,7 @@ export abstract class SQLSchemaCompiler {
   compileCreateTable(table: TableDefinition): DDLStatement[] {
     assertValidIdentifierPath(table.tableName, 'Table name')
     assertUniqueResolvedIndexNames(table.tableName, table.indexes)
-    const columnSql = this.compileTableDefinitions(table)
+    const columnSql = this.compileTableDefinitionsWithPrimaryKey(table)
     const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
     const statements: DDLStatement[] = [{
       sql,
@@ -92,6 +92,28 @@ export abstract class SQLSchemaCompiler {
     }
 
     return statements
+  }
+
+  private compileTableDefinitionsWithPrimaryKey(table: TableDefinition): string[] {
+    const primaryKeyColumns = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
+    if (primaryKeyColumns.length < 2 && !table.primaryKeyName) {
+      return this.compileTableDefinitions(table)
+    }
+
+    const columns = Object.fromEntries(Object.entries(table.columns).map(([name, column]) => [name, { ...column, primaryKey: false }]))
+    return [
+      ...this.compileTableDefinitions({ ...table, columns }),
+      this.compilePrimaryKeyConstraint(primaryKeyColumns, table.primaryKeyName),
+    ]
+  }
+
+  compilePrimaryKeyConstraint(columns: readonly string[], name?: string): string {
+    const quotedColumns = columns.map((column) => {
+      assertValidIdentifierSegment(column, 'Primary key column')
+      return this.quoteIdentifier(column)
+    }).join(', ')
+    const constraint = name ? `${this.compileNamedConstraint(name, 'Primary key name')} ` : ''
+    return `${constraint}PRIMARY KEY (${quotedColumns})`
   }
 
   compileAddColumn(tableName: string, column: AnyColumnDefinition): DDLStatement {
@@ -162,8 +184,8 @@ export abstract class SQLSchemaCompiler {
     return `${this.compileNamedConstraint(constraintName)} ${this.compileReferencesClause(column.name, column.references)}`
   }
 
-  private compileNamedConstraint(constraintName: string): string {
-    assertValidIdentifierSegment(constraintName, 'Foreign key name')
+  private compileNamedConstraint(constraintName: string, label = 'Foreign key name'): string {
+    assertValidIdentifierSegment(constraintName, label)
     return `CONSTRAINT ${this.quoteIdentifier(constraintName)}`
   }
 
