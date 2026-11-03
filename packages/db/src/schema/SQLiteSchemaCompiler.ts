@@ -97,8 +97,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
-  private compileRebuiltColumn(tableName: string, column: AnyColumnDefinition): string {
+  compileRebuiltColumn(tableName: string, column: AnyColumnDefinition, storedReferencesClause?: string): string {
     const definition = this.compileColumn(tableName, column)
-    return column.unique && !column.primaryKey ? `${definition} UNIQUE` : definition
+    const unique = column.unique && !column.primaryKey ? ' UNIQUE' : ''
+    const references = storedReferencesClause ? ` ${storedReferencesClause}` : ''
+    return `${definition}${unique}${references}`
   }
 }

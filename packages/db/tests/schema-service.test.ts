@@ -278,6 +278,37 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(children).orderBy('id').pluck('parent_code')).toEqual(['a', 'a'])
     })
 
+    it.runIf(driver === 'sqlite')('keeps a deferred foreign key deferred when change() rebuilds the referencing column', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parents = `holo_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(parents)
+      })
+      await adapter.execute(`CREATE TABLE "${parents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER NOT NULL CONSTRAINT "children_parent" REFERENCES "${parents}" ("id") ON DELETE CASCADE MATCH SIMPLE DEFERRABLE INITIALLY DEFERRED)`)
+
+      await schema.table(children, (table) => { table.integer('parent_id').nullable().change() })
+
+      await db.transaction(async (transaction) => {
+        await transaction.table(children).insert({ id: 1, parent_id: 7 })
+        await transaction.table(parents).insert({ id: 7 })
+      })
+      await expect(db.transaction(async (transaction) => {
+        await transaction.table(children).insert({ id: 2, parent_id: 8 })
+      })).rejects.toThrow()
+      expect(await schema.getForeignKeys(children)).toEqual([expect.objectContaining({ table: parents, from: 'parent_id', to: 'id', onDelete: 'CASCADE' })])
+      expect((await schema.getColumns(children)).find(column => column.name === 'parent_id')).toMatchObject({ notNull: false })
+      await db.table(parents).where('id', 7).delete()
+      expect(await db.table(children).count()).toBe(0)
+
+      await schema.table(children, (table) => { table.dropForeign('children_parent') })
+      await db.table(children).insert({ id: 3, parent_id: 99 })
+      expect(await schema.getForeignKeys(children)).toEqual([])
+    })
+
     it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
       const { db, schema } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
