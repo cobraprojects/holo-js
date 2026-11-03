@@ -523,9 +523,13 @@ export class SchemaService {
 
   private assertAddColumnCapability(): void {
     const capabilities = this.connection.getCapabilities()
-    if (!(capabilities.ddlAddColumnSupport ?? capabilities.ddlAlterSupport)) {
+    this.assertColumnCapability(capabilities.ddlAddColumnSupport ?? capabilities.ddlAlterSupport, 'adding columns')
+  }
+
+  private assertColumnCapability(supported: boolean, action: string): void {
+    if (!supported) {
       throw new CapabilityError(
-        `SchemaService does not support adding columns for dialect "${this.connection.getDialect().name}".`,
+        `SchemaService does not support ${action} for dialect "${this.connection.getDialect().name}".`,
       )
     }
   }
@@ -612,11 +616,11 @@ export class SchemaService {
         return
       }
       case 'dropColumn':
-        this.assertAlterCapability('dropping columns')
+        this.assertColumnCapability(this.connection.getCapabilities().ddlDropColumnSupport, 'dropping columns')
         await this.execute(this.createCompiler().compile(dropColumnOperation(tableName, operation.columnName)))
         return
       case 'renameColumn':
-        this.assertAlterCapability('renaming columns')
+        this.assertColumnCapability(this.connection.getCapabilities().ddlRenameColumnSupport, 'renaming columns')
         await this.executeRename(
           this.createCompiler().compile(renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName)),
           tableName,
@@ -636,7 +640,8 @@ export class SchemaService {
         return
       case 'renameIndex':
         if (this.isSqlite()) {
-          throw new CapabilityError('SchemaService does not support renaming indexes for dialect "sqlite".')
+          await this.renameSqliteIndex(tableName, operation.fromIndexName, operation.toIndexName)
+          return
         }
         await this.execute(this.createCompiler().compile(
           renameIndexOperation(tableName, operation.fromIndexName, operation.toIndexName),
@@ -745,6 +750,23 @@ export class SchemaService {
     }
   }
 
+
+  private async renameSqliteIndex(tableName: string, fromIndexName: string, toIndexName: string): Promise<void> {
+    const index = (await createSchemaReader(this.connection).readTableStructure(tableName))?.indexes
+      .find(candidate => candidate.name === fromIndexName)
+    if (!index) {
+      throw new SchemaError(`SQLite cannot rename missing index "${fromIndexName}" on table "${tableName}".`)
+    }
+    if (!index.representable) {
+      throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it is a partial or expression index.`)
+    }
+
+    const statements = new SQLiteSchemaCompiler(identifier => this.connection.getDialect().quoteIdentifier(identifier))
+      .compileRecreateIndex(tableName, fromIndexName, { name: toIndexName, columns: index.columns, unique: index.unique })
+    await this.connection.transaction(async (tx) => {
+      await new SchemaService(tx).execute(statements)
+    })
+  }
 
   private async rebuildSqliteTableForAlteredColumn(
     tableName: string,

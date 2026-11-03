@@ -55,11 +55,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.renameTable(original, renamed)
       expect(await schema.hasTable(original)).toBe(false)
       expect(await schema.hasTable(renamed)).toBe(true)
-      if (driver === 'sqlite') {
-        await expect(schema.table(renamed, table => { table.renameColumn('name', 'title') })).rejects.toThrow(CapabilityError)
-        expect(await db.table(renamed).pluck('name')).toEqual(['Preserved'])
-        return
-      }
       await schema.table(renamed, table => { table.renameColumn('name', 'title') })
       expect(await db.table(renamed).pluck('title')).toEqual(['Preserved'])
       expect((await schema.getColumns(renamed)).map(column => column.name)).toContain('title')
@@ -77,11 +72,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await db.table(name).insert({ id: 2, name: 'Second', active: false })
       expect(await db.table(name).where('id', 2).pluck('nickname')).toEqual(['changed'])
       expect((await schema.getColumns(name)).find(column => column.name === 'id')?.primaryKey).toBe(true)
-      if (driver === 'sqlite') {
-        await expect(schema.table(name, table => { table.dropColumn('nickname') })).rejects.toThrow(CapabilityError)
-        expect(await db.table(name).orderBy('id').pluck('name')).toEqual(['Original', 'Second'])
-        return
-      }
       await schema.table(name, table => { table.dropColumn('nickname') })
       expect((await schema.getColumns(name)).map(column => column.name)).not.toContain('nickname')
       expect(await db.table(name).orderBy('id').pluck('name')).toEqual(['Original', 'Second'])
@@ -253,9 +243,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await expect(schema.table(name, table => { table.enum('status', ['active'] as const).default('active').change() })).rejects.toThrow()
       await expect(db.table(name).insert({ status: 'suspended' })).rejects.toThrow()
       expect(await db.table(name).orderBy('id').pluck('status')).toEqual(['active', 'banned'])
-      if (driver === 'sqlite') {
-        return
-      }
 
       await schema.table(name, table => { table.renameColumn('status', 'state') })
       await schema.table(name, table => { table.enum('state', ['active', 'disabled', 'banned', 'archived'] as const).default('active').change() })
@@ -518,13 +505,6 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await schema.table(name, table => { table.unique(['name'], index) })
       await db.table(table).insert({ id: 1, name: 'Unique' })
       await expect(db.table(table).insert({ id: 2, name: 'Unique' })).rejects.toThrow()
-      if (driver === 'sqlite') {
-        await expect(schema.table(name, table => { table.renameColumn('name', 'title') })).rejects.toThrow(CapabilityError)
-        await schema.table(name, table => { table.dropIndex(index) })
-        await db.table(table).insert({ id: 2, name: 'Unique' })
-        expect(await db.table(table).count()).toBe(2)
-        return
-      }
       await schema.table(name, table => { table.renameColumn('name', 'title') })
       expect(await schema.getIndexes(name)).toEqual(expect.arrayContaining([expect.objectContaining({ name: index, columns: ['title'], unique: true })]))
       await schema.table(name, table => { table.dropIndex(index) })
@@ -539,15 +519,100 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const renamed = `${name}_renamed`
       await schema.table(name, table => { table.unique(['name'], original) })
       await db.table(table).insert({ id: 1, name: 'Unique' })
-      if (driver === 'sqlite') {
-        await expect(schema.table(name, table => { table.renameIndex(original, renamed) })).rejects.toThrow(CapabilityError)
-      } else {
-        await schema.table(name, table => { table.renameIndex(original, renamed) })
-        expect((await schema.getIndexes(name)).map(index => index.name)).toContain(renamed)
-        expect((await schema.getIndexes(name)).map(index => index.name)).not.toContain(original)
-      }
+      await schema.table(name, table => { table.renameIndex(original, renamed) })
+      const indexes = await schema.getIndexes(name)
+      expect(indexes).toEqual(expect.arrayContaining([expect.objectContaining({ name: renamed, columns: ['name'], unique: true })]))
+      expect(indexes.map(index => index.name)).not.toContain(original)
       await expect(db.table(table).insert({ id: 2, name: 'Unique' })).rejects.toThrow()
       expect(await db.table(table).count()).toBe(1)
+    })
+
+    it('raises when renaming an index to a taken name and keeps both indexes', async () => {
+      const { schema, table } = await openDatabase(driver)
+      const name = table.tableName.split('.').at(-1)!
+      const original = `${name}_original`
+      const taken = `${name}_taken`
+      await schema.table(name, table => {
+        table.unique(['name'], original)
+        table.index(['active', 'name'], taken)
+      })
+      const before = await schema.getIndexes(name)
+
+      await expect(schema.table(name, table => { table.renameIndex(original, taken) })).rejects.toThrow()
+
+      expect(await schema.getIndexes(name)).toEqual(before)
+    })
+
+    it.runIf(driver === 'sqlite')('refuses to rename a partial index instead of recreating it without its condition', async () => {
+      const { db, schema, table, adapter } = await openDatabase(driver)
+      const name = table.tableName
+      const partial = `${name}_active_names`
+      await adapter.execute(`CREATE UNIQUE INDEX "${partial}" ON "${name}" ("name") WHERE "active" = 1`)
+
+      await expect(schema.table(name, table => { table.renameIndex(partial, `${name}_renamed`) })).rejects.toThrow(SchemaError)
+
+      expect((await schema.getIndexes(name)).map(index => index.name)).toEqual([partial])
+      await db.table(table).insert([{ id: 1, name: 'Same', active: false }, { id: 2, name: 'Same', active: false }])
+      await expect(db.table(table).insert({ id: 3, name: 'Same', active: true })).resolves.toBeDefined()
+      await expect(db.table(table).insert({ id: 4, name: 'Same', active: true })).rejects.toThrow()
+    })
+
+    it('renames a foreign key column and keeps the key enforcing', async () => {
+      const { db, schema, table } = await openDatabase(driver)
+      const parent = table.tableName.split('.').at(-1)!
+      const child = `holo_fk_rename_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(child))
+      await db.table(table).insert({ id: 1, name: 'Parent' })
+      await schema.createTable(child, table => {
+        table.id()
+        table.integer('parent_id')
+        table.foreign('parent_id').references('id').on(parent)
+      })
+      await db.table(child).insert({ parent_id: 1 })
+
+      await schema.table(child, table => { table.renameColumn('parent_id', 'owner_id') })
+
+      expect(await db.table(child).pluck('owner_id')).toEqual([1])
+      expect(await schema.getForeignKeys(child)).toEqual([expect.objectContaining({ from: 'owner_id', to: 'id' })])
+      await expect(db.table(child).insert({ owner_id: 99 })).rejects.toThrow()
+    })
+
+    it('drops plain and enum columns and keeps the remaining records', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_drop_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('name')
+        table.string('nickname').nullable()
+        table.enum('status', ['open', 'closed'] as const).default('open')
+      })
+      await db.table(name).insert({ name: 'Kept', nickname: 'k', status: 'closed' })
+
+      await schema.table(name, table => {
+        table.dropColumn('nickname')
+        table.dropColumn('status')
+      })
+
+      expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'name'])
+      expect(await db.table(name).pluck('name')).toEqual(['Kept'])
+      await db.table(name).insert({ name: 'Added' })
+      expect(await db.table(name).count()).toBe(2)
+    })
+
+    it.runIf(driver === 'sqlite')('raises SQLite\'s error when dropping an indexed column and leaves the table unchanged', async () => {
+      const { db, schema, table } = await openDatabase(driver)
+      const name = table.tableName
+      const index = `${name}_name_index`
+      await schema.table(name, table => { table.index(['name'], index) })
+      await db.table(table).insert({ id: 1, name: 'Indexed' })
+      const reader = createSchemaReader(db)
+      const before = await reader.readTableStructure(name)
+
+      await expect(schema.table(name, table => { table.dropColumn('name') })).rejects.toThrow(`error in index ${index} after drop column: no such column`)
+
+      expect(await reader.readTableStructure(name)).toEqual(before)
+      expect(await db.table(table).pluck('name')).toEqual(['Indexed'])
     })
 
     it('adds and removes foreign-key enforcement on an existing table', async () => {
