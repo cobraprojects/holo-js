@@ -1,7 +1,7 @@
 /* v8 ignore file -- type declarations only */
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { GeneratedSchemaTable } from '../schema/generated'
-import type { InferInsert, InferSelect, InferUpdate, TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, ColumnDefinition, InferInsert, InferSelect, InferUpdate, TableColumnsShape, TableDefinition, VectorValue } from '../schema/types'
 import type { Entity, ModelBase, ModelRelationMethods } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 import type { ModelCollection } from './collection'
@@ -778,6 +778,44 @@ export type ModelCastDefinition = BuiltInCastString | EnumCastDefinition | Casta
   get?: (value: unknown) => unknown
   set?: (value: unknown) => unknown
 }
+export type ModelCastMap = Readonly<Record<string, ModelCastDefinition>>
+export type EmptyModelCastMap = Record<never, never>
+
+type BuiltInCastValues = {
+  readonly boolean: boolean
+  readonly number: number
+  readonly string: string
+  readonly date: Date
+  readonly datetime: Date
+  readonly timestamp: Date
+  readonly vector: VectorValue
+}
+
+type BuiltInCastNameOf<TCast> = TCast extends `${infer TName extends BuiltInCastName}:${string}`
+  ? TName
+  : TCast extends BuiltInCastName ? TCast : never
+
+type JsonCastValue<TColumnValue> = [TColumnValue] extends [string] ? unknown : TColumnValue
+
+type CastValue<TCastName, TColumnValue>
+  = [TCastName] extends [never] ? TColumnValue
+    : TCastName extends 'json' ? JsonCastValue<TColumnValue>
+      : TCastName extends keyof BuiltInCastValues ? BuiltInCastValues[TCastName] : TColumnValue
+
+type CastedColumn<TColumn extends AnyColumnDefinition, TCast>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, infer THasDefault, infer TGenerated, infer TPrimaryKey>
+    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey>
+    : never
+
+type CastedColumns<TColumns extends TableColumnsShape, TCasts extends ModelCastMap> = {
+  [K in keyof TColumns]: CastedColumn<TColumns[K], K extends keyof TCasts ? TCasts[K] : never>
+}
+
+export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap>
+  = string extends keyof TCasts ? TTable
+    : [Extract<keyof TCasts, keyof TTable['columns']>] extends [never] ? TTable
+      : Omit<TTable, 'columns'> & { readonly columns: CastedColumns<TTable['columns'], TCasts> }
+
 export type ModelAccessor = (value: unknown, entity: AnyEntity) => unknown
 export type ModelMutator = (value: unknown, entity?: AnyEntity) => unknown
 export type ModelDateSerializer = (value: Date) => unknown

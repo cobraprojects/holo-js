@@ -241,6 +241,9 @@ export function normalizeDialectWriteValue(
   value: unknown,
 ): unknown {
   switch (column.kind) {
+    case 'integer':
+    case 'bigInteger':
+      return typeof value === 'boolean' ? Number(value) : value
     case 'boolean':
       if (value == null) {
         return value

@@ -18,6 +18,7 @@ export default defineConfig(
       '**/.holo-js/**',
       '**/.holo-js/runtime/**',
       '**/.holo-js/generated/**',
+      'packages/db/tests/fixtures/cast-types/*.generated.ts',
       '**/.nuxt/**',
       '**/.output/**',
       '**/.vitepress/**',

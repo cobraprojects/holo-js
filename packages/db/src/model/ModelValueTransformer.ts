@@ -259,7 +259,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'string':
           return value == null ? value : String(value)
         case 'json':
-          return typeof value === 'string' ? value : JSON.stringify(value)
+          return value == null ? value : JSON.stringify(value)
         case 'date':
         case 'datetime':
         case 'timestamp':
