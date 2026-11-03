@@ -6026,6 +6026,7 @@ await adapter.execute("INSERT INTO \\"users\\" (\\"id\\", \\"name\\") VALUES (1,
 await manager.disconnectAll()
 `)
 
+    await writeProjectFile(projectRoot, 'data.sqlite', '')
     const setup = runNode(projectRoot, join(projectRoot, 'setup.mjs'))
     if (setup.status !== 0) {
       throw new Error(setup.stderr || setup.stdout)
@@ -7392,6 +7393,7 @@ export default {
   },
 }
 `)
+    await writeProjectFile(projectRoot, 'data.sqlite', '')
     await writeProjectFile(projectRoot, 'server/db/seeders/fixture.txt', 'seeder fixture')
     await writeProjectFile(projectRoot, 'server/fixtures/fixture.txt', 'helper fixture')
     await writeProjectFile(projectRoot, 'server/fixtures/readFixture.ts', `
@@ -11598,6 +11600,7 @@ export default defineQueueConfig({
     tempDirs.push(actualFlushProjectRoot)
     await linkWorkspaceDb(actualFlushProjectRoot)
     const sqlitePath = join(actualFlushProjectRoot, 'queue.sqlite')
+    await writeProjectFile(actualFlushProjectRoot, 'queue.sqlite', '')
     await writeProjectFile(actualFlushProjectRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 
