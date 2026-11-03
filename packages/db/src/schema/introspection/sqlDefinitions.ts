@@ -1,8 +1,9 @@
 import { findCreatedObjectName, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
-import { sameIdentifier, sameIdentifiers, splitTokensOnCommas, type SqlToken } from './sqliteTokens'
+import { sameIdentifier, sameIdentifiers, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
 
 const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
 const DEFAULT_COLLATION = 'BINARY'
+const ROWID_NAMES = ['rowid', '_rowid_', 'oid'] as const
 
 export function unquoteStringLiteral(literal: string): string {
   return literal.slice(1, -1).replaceAll('\'\'', '\'')
@@ -84,6 +85,34 @@ export function readForeignKeys(table: StoredTable): ForeignKeyConstraint[] {
 
 export function hasAutoIncrement(table: StoredTable): boolean {
   return allConstraints(table).some(constraint => constraint.kind === 'PRIMARY KEY' && constraint.autoIncrement)
+}
+
+type PrimaryKeyConstraint = Extract<StoredConstraint, { kind: 'PRIMARY KEY' }>
+
+function isPrimaryKey(constraint: StoredConstraint): constraint is PrimaryKeyConstraint {
+  return constraint.kind === 'PRIMARY KEY'
+}
+
+function isWithoutRowId(table: StoredTable): boolean {
+  const keywords = tokenizeSql(table.options).map(token => token.keyword)
+  return keywords.some((keyword, index) => keyword === 'WITHOUT' && keywords[index + 1] === 'ROWID')
+}
+
+function declaresRowIdAlias(table: StoredTable): boolean {
+  const [primaryKey, ...otherPrimaryKeys] = allConstraints(table).filter(isPrimaryKey)
+  const [keyColumn, ...otherKeyColumns] = primaryKey?.columns ?? []
+  if (!primaryKey || !keyColumn || otherPrimaryKeys.length > 0 || otherKeyColumns.length > 0) return false
+  const column = findStoredColumn(table, keyColumn.name)
+  const declaredOnColumn = column?.constraints.includes(primaryKey) === true
+  return column?.type.toUpperCase() === 'INTEGER' && !(declaredOnColumn && keyColumn.descending)
+}
+
+export function keepsRowIdOnlyAsHiddenColumn(table: StoredTable): boolean {
+  return !isWithoutRowId(table) && !declaresRowIdAlias(table)
+}
+
+export function findUnshadowedRowIdName(table: StoredTable): string | undefined {
+  return ROWID_NAMES.find(rowIdName => !findStoredColumn(table, rowIdName))
 }
 
 export function isGeneratedColumn(column: StoredColumn): boolean {
