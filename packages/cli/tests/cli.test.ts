@@ -120,7 +120,6 @@ import {
   DEFAULT_CACHE_DATABASE_LOCK_TABLE,
   DEFAULT_CACHE_DATABASE_TABLE,
   loadCacheConfig,
-  normalizeCacheMigrationName,
   renderCacheTableMigration,
   resolveDatabaseCacheTables,
   runCacheTableCommand,
@@ -160,6 +159,7 @@ import {
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
+  normalizeCacheMigrationName,
 } from '../src/migrations'
 import { installRealtimeIntoProject } from '../src/project/scaffold'
 import {
@@ -952,11 +952,6 @@ const isolatedMigrationCacheNotInstalledError = '[Holo CLI] migrate --isolated t
 function isolatedMigrationStoreUnavailableError(store: string, driver: string): string {
   return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't be resolved. `
     + 'Configure the store, install its driver package, and use a default cache store that every server shares, such as database or redis.'
-}
-
-function isolatedMigrationLockUnsupportedError(store: string, driver: string): string {
-  return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't provide a lock. `
-    + 'Use a default cache store that supports locks and that every server shares, such as database or redis.'
 }
 
 async function writeSqliteUsersMigrationProject(
@@ -6875,15 +6870,29 @@ export default defineMigration({
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 
-  it('fails migrate --isolated when the default cache store cannot provide a lock', async () => {
+  it('fails migrate --isolated with the cache:table step when the database cache store has no table migration', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeSqliteUsersMigrationProject(projectRoot, 'database')
 
     const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
     expect(isolated.status).toBe(1)
-    expect(isolated.stderr).toContain(isolatedMigrationLockUnsupportedError('shared', 'database'))
-    expect(isolated.stderr).toContain('Run "holo cache:table"')
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "shared" (driver "database") has no "cache" and "cache_locks" tables and no migration creates them. Run "holo cache:table", then "holo migrate".')
+    expect(isolated.stderr).not.toContain('can\'t provide a lock')
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated with the migrate step when the database cache store table migration has not run', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSqliteUsersMigrationProject(projectRoot, 'database')
+    const cacheTable = runCliProcess(projectRoot, ['cache:table'])
+    expect(cacheTable.status, cacheTable.stderr || cacheTable.stdout).toBe(0)
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but the "cache" and "cache_locks" tables of cache store "shared" (driver "database") haven\'t been migrated. Run "holo migrate" to create them.')
+    expect(isolated.stderr).not.toContain('cache:table')
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 

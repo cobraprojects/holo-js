@@ -52,6 +52,44 @@ async function createdTableNames(path: string): Promise<string[]> {
   return names
 }
 
+type ExistingMigrations = {
+  readonly registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>>
+  readonly slugs: Set<string>
+  readonly tables: Set<string>
+}
+
+async function collectExistingMigrations(
+  root: string,
+  project: Awaited<ReturnType<typeof ensureProjectConfig>>,
+): Promise<ExistingMigrations> {
+  const registry = await loadGeneratedProjectRegistry(root) ?? await prepareProjectDiscovery(root, project.config)
+  const migrationsDir = resolve(root, project.config.paths.migrations)
+  const files = (await collectFiles(migrationsDir)).filter(path => MIGRATION_NAME_PREFIX_PATTERN.test(basename(path)))
+  const slugs = new Set(registry?.migrations.map(entry => getRegistryMigrationSlug(entry.name)))
+  const tables = new Set<string>()
+  const physicalTables = await Promise.all(files.map(createdTableNames))
+  for (const [position, file] of files.entries()) {
+    slugs.add(getRegistryMigrationSlug(basename(file).replace(/\.[^.]+$/, '')))
+    for (const table of physicalTables[position] ?? []) tables.add(normalizeMigrationSlug(table))
+  }
+  return { registry, slugs, tables }
+}
+
+function hasMigrationFor(existing: ExistingMigrations, slug: string, tableNames: readonly string[]): boolean {
+  return existing.slugs.has(slug)
+    || tableNames.some(name => existing.tables.has(normalizeMigrationSlug(name)))
+    || tableNames.some(name => hasRegisteredCreateTableMigration(existing.registry, name))
+}
+
+export async function migrationExists(
+  projectRoot: string,
+  migration: { readonly name: string, readonly tableNames: readonly string[] },
+): Promise<boolean> {
+  const root = await realpath(projectRoot)
+  const existing = await collectExistingMigrations(root, await ensureProjectConfig(root))
+  return hasMigrationFor(existing, normalizeMigrationSlug(migration.name), migration.tableNames)
+}
+
 export async function createMigrationFiles(
   projectRoot: string,
   plan: (project: Awaited<ReturnType<typeof ensureProjectConfig>>) => readonly MigrationCreation[] | Promise<readonly MigrationCreation[]>,
@@ -60,16 +98,8 @@ export async function createMigrationFiles(
   const root = await realpath(projectRoot)
   const created = await withMigrationCreationLock(root, options.now ?? Date.now, async () => {
     const project = await ensureProjectConfig(root)
-    const registry = await loadGeneratedProjectRegistry(root) ?? await prepareProjectDiscovery(root, project.config)
+    const existing = await collectExistingMigrations(root, project)
     const migrationsDir = resolve(root, project.config.paths.migrations)
-    const files = (await collectFiles(migrationsDir)).filter(path => MIGRATION_NAME_PREFIX_PATTERN.test(basename(path)))
-    const slugs = new Set(registry?.migrations.map(entry => getRegistryMigrationSlug(entry.name)))
-    const tables = new Set<string>()
-    const physicalTables = await Promise.all(files.map(createdTableNames))
-    for (const [position, file] of files.entries()) {
-      slugs.add(getRegistryMigrationSlug(basename(file).replace(/\.[^.]+$/, '')))
-      for (const table of physicalTables[position] ?? []) tables.add(normalizeMigrationSlug(table))
-    }
     const planned: Array<{ path: string, contents: string }> = []
     for (const entry of await plan(project)) {
       const slug = normalizeMigrationSlug(entry.name)
@@ -77,18 +107,16 @@ export async function createMigrationFiles(
       const inferred = entry.templateOptions?.tableName ?? inferMigrationTableName(slug, kind)
       const tableNames = entry.tableNames ?? (kind === 'create_table' && inferred ? [inferred] : [])
       const normalizedTables = tableNames.map(normalizeMigrationSlug)
-      const duplicate = slugs.has(slug)
-        || new Set(normalizedTables).size !== normalizedTables.length
-        || normalizedTables.some(name => tables.has(name))
-        || tableNames.some(name => hasRegisteredCreateTableMigration(registry, name))
+      const duplicate = new Set(normalizedTables).size !== normalizedTables.length
+        || hasMigrationFor(existing, slug, tableNames)
       if (duplicate) {
         if (entry.skipIfExists) continue
         throw new Error(entry.conflictMessage ?? (tableNames.length > 0
           ? `A migration for table "${tableNames[0]}" already exists.`
           : `A migration named "${slug}" already exists.`))
       }
-      slugs.add(slug)
-      for (const name of normalizedTables) tables.add(name)
+      existing.slugs.add(slug)
+      for (const name of normalizedTables) existing.tables.add(name)
       const template = await nextMigrationTemplate(slug, migrationsDir, entry.templateOptions)
       planned.push({ path: join(migrationsDir, template.fileName), contents: entry.contents ?? template.contents })
     }

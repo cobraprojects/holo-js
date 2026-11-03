@@ -289,16 +289,27 @@ function isDatabaseCacheTableMissingError(
   ) && mentionsCacheTable
 }
 
+export class DatabaseCacheTablesMissingError extends CacheConfigError {
+  constructor(
+    readonly tableName: string,
+    readonly lockTableName: string,
+    options: { cause?: unknown } = {},
+  ) {
+    super(
+      `[@holo-js/cache] Database cache tables "${tableName}" and "${lockTableName}" are missing. Run "holo cache:table" and then "holo migrate".`,
+      options,
+    )
+    this.name = 'DatabaseCacheTablesMissingError'
+  }
+}
+
 function normalizeDatabaseCacheTableError(
   error: unknown,
   tableName: string,
   lockTableName: string,
 ): never {
   if (isDatabaseCacheTableMissingError(error, tableName, lockTableName)) {
-    throw new CacheConfigError(
-      `[@holo-js/cache] Database cache tables "${tableName}" and "${lockTableName}" are missing. Run "holo cache:table" and then "holo migrate".`,
-      { cause: error },
-    )
+    throw new DatabaseCacheTablesMissingError(tableName, lockTableName, { cause: error })
   }
 
   throw error
