@@ -946,7 +946,72 @@ async function waitForPath(path: string, timeoutMs = 30_000): Promise<void> {
   }
 }
 
-const isolatedMigrationCacheError = 'migrate --isolated takes its lock from the default cache store. Install @holo-js/cache and set a default cache store that supports locks and is shared by every server, such as database or redis.'
+const isolatedMigrationCacheNotInstalledError = '[Holo CLI] migrate --isolated takes its lock from the default cache store, but @holo-js/cache isn\'t installed. '
+  + 'Install @holo-js/cache and use a default cache store that every server shares, such as database or redis.'
+
+function isolatedMigrationStoreUnavailableError(store: string, driver: string): string {
+  return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't be resolved. `
+    + 'Configure the store, install its driver package, and use a default cache store that every server shares, such as database or redis.'
+}
+
+function isolatedMigrationLockUnsupportedError(store: string, driver: string): string {
+  return `[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "${store}" (driver "${driver}") can't provide a lock. `
+    + 'Use a default cache store that supports locks and that every server shares, such as database or redis.'
+}
+
+async function writeSqliteUsersMigrationProject(
+  projectRoot: string,
+  cacheStoreDriver?: string,
+  cacheStoreConnection = 'default',
+): Promise<void> {
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+  if (cacheStoreDriver) {
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'shared',
+  drivers: {
+    shared: {
+      driver: ${JSON.stringify(cacheStoreDriver)},
+      connection: ${JSON.stringify(cacheStoreConnection)},
+    },
+  },
+})
+`)
+  }
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+    })
+  },
+})
+`)
+}
+
+function sqliteTableNames(projectRoot: string): readonly string[] {
+  const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+  try {
+    return database.prepare('SELECT name FROM sqlite_master WHERE type = ?').all('table').map(row => String(row.name))
+  } finally {
+    database.close()
+  }
+}
 
 const livePostgresServer = {
   host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
@@ -6642,39 +6707,17 @@ process.stdout.write('framework build ran\\n')
     }, 90000)
   }
 
-  it('runs plain migrate without @holo-js/cache and fails migrate --isolated with the documented error', async () => {
+  it('runs plain migrate without @holo-js/cache and fails migrate --isolated saying @holo-js/cache is not installed', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'config/database.ts', `
-import { defineDatabaseConfig } from '@holo-js/db'
-
-export default defineDatabaseConfig({
-  connections: {
-    default: {
-      driver: 'sqlite',
-      url: './data.sqlite',
-    },
-  },
-})
-`)
-    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
-import { defineMigration } from '@holo-js/db'
-
-export default defineMigration({
-  async up({ schema }) {
-    await schema.createTable('users', (table) => {
-      table.id()
-    })
-  },
-})
-`)
+    await writeSqliteUsersMigrationProject(projectRoot)
     linkBuiltWorkspacePackagesSync(projectRoot)
     const cacheDist = join(ensureBuiltWorkspacePackagesSync().cachePackageRoot, 'dist')
     await rename(cacheDist, `${cacheDist}.hidden`)
     try {
       const isolated = await startCliProcess(projectRoot, ['migrate', '--isolated'])
       expect(isolated.status).toBe(1)
-      expect(isolated.stderr).toContain(isolatedMigrationCacheError)
+      expect(isolated.stderr).toContain(isolatedMigrationCacheNotInstalledError)
 
       const migrated = await startCliProcess(projectRoot, ['migrate'])
       expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
@@ -6684,54 +6727,57 @@ export default defineMigration({
     }
   }, 30000)
 
-  it('fails migrate --isolated with the documented error when the default cache store cannot be resolved', async () => {
+  it('fails migrate --isolated naming the default cache store and driver when the store cannot be resolved', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
-    await writeProjectFile(projectRoot, 'config/database.ts', `
-import { defineDatabaseConfig } from '@holo-js/db'
-
-export default defineDatabaseConfig({
-  connections: {
-    default: {
-      driver: 'sqlite',
-      url: './data.sqlite',
-    },
-  },
-})
-`)
-    await writeProjectFile(projectRoot, 'config/cache.ts', `
-import { defineCacheConfig } from '@holo-js/cache'
-
-export default defineCacheConfig({
-  default: 'shared',
-  drivers: {
-    shared: {
-      driver: 'unregistered-driver',
-    },
-  },
-})
-`)
-    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
-import { defineMigration } from '@holo-js/db'
-
-export default defineMigration({
-  async up({ schema }) {
-    await schema.createTable('users', (table) => {
-      table.id()
-    })
-  },
-})
-`)
+    await writeSqliteUsersMigrationProject(projectRoot, 'unregistered-driver')
 
     const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
     expect(isolated.status).toBe(1)
-    expect(isolated.stderr).toContain(isolatedMigrationCacheError)
-    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    expect(isolated.stderr).toContain(isolatedMigrationStoreUnavailableError('shared', 'unregistered-driver'))
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated naming the default cache store and driver when the store connection is not configured', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSqliteUsersMigrationProject(projectRoot, 'database', 'reporting')
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain(isolatedMigrationStoreUnavailableError('shared', 'database'))
+    expect(isolated.stderr).toContain('"reporting" was not found in config/database.ts')
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated naming the default cache store and driver when the driver package is missing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSqliteUsersMigrationProject(projectRoot, 'database')
+    linkBuiltWorkspacePackagesSync(projectRoot)
+    const cacheDbDist = join(ensureBuiltWorkspacePackagesSync().cacheDbPackageRoot, 'dist')
+    await rename(cacheDbDist, `${cacheDbDist}.hidden`)
     try {
-      expect(database.prepare('SELECT name FROM sqlite_master WHERE name = ?').all('users')).toEqual([])
+      const isolated = await startCliProcess(projectRoot, ['migrate', '--isolated'])
+      expect(isolated.status).toBe(1)
+      expect(isolated.stderr).toContain(isolatedMigrationStoreUnavailableError('shared', 'database'))
+      expect(isolated.stderr).toContain('@holo-js/cache-db')
     } finally {
-      database.close()
+      await rename(`${cacheDbDist}.hidden`, cacheDbDist)
     }
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
+  }, 30000)
+
+  it('fails migrate --isolated when the default cache store cannot provide a lock', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSqliteUsersMigrationProject(projectRoot, 'database')
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain(isolatedMigrationLockUnsupportedError('shared', 'database'))
+    expect(isolated.stderr).toContain('Run "holo cache:table"')
+    expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 
   it('executes plugin-published migrations through the existing migration lifecycle', async () => {
