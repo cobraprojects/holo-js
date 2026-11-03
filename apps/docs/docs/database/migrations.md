@@ -1128,9 +1128,9 @@ await schema.table('posts', (table) => {
 
 Dropping a foreign key that doesn't exist fails.
 
-On SQLite, Holo versions before 0.5.7 created foreign keys without a constraint name. `dropForeign(['user_id'])` and `dropConstrainedForeignId('user_id')` also drop such an unnamed key on that column.
+On SQLite, Holo versions before 0.6.0 created foreign keys without a constraint name. `dropForeign(['user_id'])` and `dropConstrainedForeignId('user_id')` also drop such an unnamed key on that column.
 
-On PostgreSQL, Holo versions before 0.5.7 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
+On PostgreSQL, Holo versions before 0.6.0 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
 
 ```ts
 await schema.table('posts', (table) => {
