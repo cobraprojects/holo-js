@@ -1,4 +1,4 @@
-import { findCreateIndexNameToken, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
+import { findCreatedObjectName, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers, splitTokensOnCommas, type SqlToken } from './sqliteTokens'
 
 const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
@@ -13,9 +13,15 @@ export function readStringLiterals(text: string): string[] {
 }
 
 export function withIndexName(createIndexSql: string, quotedIndexName: string): string | undefined {
-  const name = findCreateIndexNameToken(createIndexSql)
+  const name = findCreatedObjectName(createIndexSql)?.name
   if (!name) return undefined
   return `${createIndexSql.slice(0, name.start)}${quotedIndexName}${createIndexSql.slice(name.end)}`
+}
+
+export function withSchemaQualifiedName(createSql: string, quotedSchema: string): string | undefined {
+  const created = findCreatedObjectName(createSql)
+  if (!created) return undefined
+  return `${createSql.slice(0, created.qualifiedStart)}${quotedSchema}.${createSql.slice(created.name.start)}`
 }
 
 const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i

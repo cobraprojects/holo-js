@@ -8,6 +8,11 @@ import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
+async function readTempViewsAndTriggers(adapter: DriverAdapter): Promise<string[]> {
+  const result = await adapter.query<{ name: string }>('SELECT name FROM temp.sqlite_master WHERE type IN (\'view\', \'trigger\') ORDER BY name')
+  return result.rows.map(row => row.name)
+}
+
 for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   describe(`native ${driver} schema service`, () => {
     it('creates typed columns, defaults, indexes, and constraints that accept valid records', async () => {
@@ -586,6 +591,81 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await db.table(recordsView).orderBy('id').pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
       expect(await db.table(namesView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
       expect(await db.table(sessionView).pluck('name')).toEqual(['first', 'filed', 'through view', 'unnamed'])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps a temp view in the temp schema beside a same-named main view after change() rebuilds their table', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const records = `holo_records_${suffix}`
+      const recordsView = `holo_records_view_${suffix}`
+      onTestFinished(async () => {
+        await adapter.execute(`DROP VIEW IF EXISTS temp."${recordsView}"`)
+        await adapter.execute(`DROP VIEW IF EXISTS main."${recordsView}"`)
+        await schema.dropTable(records)
+      })
+      await schema.createTable(records, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await adapter.execute(`CREATE VIEW main."${recordsView}" AS SELECT "id" FROM "${records}"`)
+      await adapter.execute(`CREATE TEMP VIEW "${recordsView}" AS SELECT "name" FROM main."${records}"`)
+      await db.table(records).insert({ name: 'first' })
+
+      await schema.table(records, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(records).insert({ id: 2 })
+      expect(await readTempViewsAndTriggers(adapter)).toEqual([recordsView])
+      expect(await db.table(`main.${recordsView}`).orderBy('id').pluck('id')).toEqual([1, 2])
+      expect(await db.table(recordsView).pluck('name')).toEqual(['first', 'unnamed'])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps a temp trigger on another table that writes into a rebuilt table in the temp schema after change()', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const records = `holo_records_${suffix}`
+      const inbox = `holo_inbox_${suffix}`
+      const inboxTrigger = `holo_inbox_files_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(inbox)
+        await schema.dropTable(records)
+      })
+      await schema.createTable(records, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(inbox, table => { table.string('message') })
+      await adapter.execute(`CREATE TEMP TRIGGER "${inboxTrigger}" AFTER INSERT ON main."${inbox}" BEGIN INSERT INTO "${records}" ("name") VALUES (NEW."message"); END`)
+
+      await schema.table(records, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(inbox).insert({ message: 'filed' })
+      expect(await readTempViewsAndTriggers(adapter)).toEqual([inboxTrigger])
+      expect(await db.table(records).pluck('name')).toEqual(['filed'])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps a temp trigger defined on a rebuilt main table firing in the temp schema after change()', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const records = `holo_records_${suffix}`
+      const audits = `holo_audits_${suffix}`
+      const auditTrigger = `holo_records_audit_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(audits)
+        await schema.dropTable(records)
+      })
+      await schema.createTable(records, (table) => {
+        table.id()
+        table.string('name').nullable()
+      })
+      await schema.createTable(audits, table => { table.string('name').nullable() })
+      await adapter.execute(`CREATE TEMP TRIGGER "${auditTrigger}" AFTER INSERT ON main."${records}" BEGIN INSERT INTO "${audits}" ("name") VALUES (NEW."name"); END`)
+      await db.table(records).insert({ name: 'first' })
+
+      await schema.table(records, (table) => { table.string('name').nullable().default('unnamed').change() })
+
+      await db.table(records).insert({ id: 2 })
+      expect(await readTempViewsAndTriggers(adapter)).toEqual([auditTrigger])
+      expect(await db.table(audits).pluck('name')).toEqual(['first', 'unnamed'])
     })
 
     it.runIf(driver === 'sqlite')('rebuilds a mixed-case parent named in another letter case and keeps its rows, children, and triggers', async () => {
