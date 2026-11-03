@@ -32,6 +32,15 @@ export interface DropIndexOperation {
   readonly indexName: string
 }
 
+export interface DropUniqueOperation {
+  readonly kind: 'dropUnique'
+  readonly tableName: string
+  readonly indexName: string
+  readonly backedBy: UniqueBacking
+}
+
+export type UniqueBacking = 'constraint' | 'index'
+
 export interface RenameIndexOperation {
   readonly kind: 'renameIndex'
   readonly tableName: string
@@ -91,7 +100,7 @@ export interface DropPrimaryKeyOperation {
   readonly constraintName: string
 }
 
-export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation | CreatePrimaryKeyOperation | DropPrimaryKeyOperation
+export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | DropUniqueOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation | CreatePrimaryKeyOperation | DropPrimaryKeyOperation
 
 export interface DDLStatement {
   readonly sql: string
@@ -143,6 +152,19 @@ export function dropIndexOperation(
     kind: 'dropIndex',
     tableName,
     indexName,
+  }
+}
+
+export function dropUniqueOperation(
+  tableName: string,
+  indexName: string,
+  backedBy: UniqueBacking,
+): DropUniqueOperation {
+  return {
+    kind: 'dropUnique',
+    tableName,
+    indexName,
+    backedBy,
   }
 }
 

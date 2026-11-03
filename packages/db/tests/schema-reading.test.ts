@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { holoRuntimeInternals } from '../src'
+import { holoRuntimeInternals, renderGeneratedSchemaModule } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -108,6 +108,23 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       ]))
       expect(definition.indexes.flatMap(index => index.columns)).not.toContain('email')
       expect(definition.indexes.flatMap(index => index.columns)).not.toContain('inline_code')
+    })
+
+    it('round-trips a unique column with a shortened name through the generated schema as unique()', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_long_unique')
+      const longColumn = 'organizer_primary_contact_email_address'
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string(longColumn).unique()
+      })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns[longColumn]?.unique).toBe(true)
+      expect(definition.indexes).toEqual([])
+      expect(renderGeneratedSchemaModule([definition])).toContain(`"${longColumn}": column.string().unique(),`)
     })
 
     it('reads referential actions, string lengths and primary-key structure', async () => {
@@ -227,6 +244,28 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(definition.columns.email?.unique).toBe(true)
       expect(definition.columns.customer_id?.references).toEqual({ table: customers, column: 'id', constraintName: `${tenant}_${orders}_customer_id_foreign` })
       expect((await reader.readGeneratedSchema()).map(table => table.tableName).sort()).toEqual([customers, orders].sort())
+    })
+
+    it.runIf(driver === 'postgres')('round-trips unique columns of a schema-qualified table through the generated schema as unique()', async () => {
+      const tenant = uniqueName('tenant', 8)
+      const { db, schema } = await openDatabase(driver, { schemaName: tenant })
+      const accounts = uniqueName('accounts', 8)
+      const longColumn = 'organizer_primary_contact_email_address'
+      onTestFinished(async () => {
+        await db.executeCompiled({ sql: `DROP SCHEMA IF EXISTS "${tenant}" CASCADE`, source: 'schema' })
+      })
+      await db.executeCompiled({ sql: `CREATE SCHEMA "${tenant}"`, source: 'schema' })
+      await schema.createTable(`${tenant}.${accounts}`, table => {
+        table.id()
+        table.string('code').unique()
+        table.string(longColumn).unique()
+      })
+
+      const [definition] = await createSchemaReader(db).readGeneratedSchema()
+
+      expect(definition?.columns.code?.unique).toBe(true)
+      expect(definition?.columns[longColumn]?.unique).toBe(true)
+      expect(definition?.indexes).toEqual([])
     })
   })
 }
