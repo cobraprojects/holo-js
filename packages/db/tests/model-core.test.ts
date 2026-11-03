@@ -2307,13 +2307,15 @@ describe('model core slice', () => {
     ])
   })
 
-  it('rejects model definitions that do not have an inferred primary key', () => {
+  it('rejects the key of a model whose table has no primary key only when it is needed', () => {
     const keyless = defineTable('keyless', {
       name: column.string() })
     const profile = defineTable('profile', {
       id: column.id() })
 
-    expect(() => defineModelFromTable(keyless)).toThrow(SchemaError)
+    const Keyless = defineModelFromTable(keyless)
+    expect(Keyless.definition.name).toBe('Keyless')
+    expect(() => Keyless.definition.primaryKey).toThrow(SchemaError)
     expect(defineModelFromTable(profile).definition.name).toBe('Profile')
     expect(() => defineModelFromTable(profile, { softDeletes: true })).toThrow(
       'Soft-deleting model "Profile" requires a "deleted_at" column.',

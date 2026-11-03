@@ -1,4 +1,5 @@
 import { DatabaseError } from '../core/errors'
+import { CompositeModelKeyError } from './defineModelHelpers'
 import type { AnyModelDefinition, ModelDefinitionLike } from './types'
 
 function resolveDefinition(reference: ModelDefinitionLike): AnyModelDefinition {
@@ -26,7 +27,7 @@ function tryGetDefinitionPrimaryKey(definition: AnyModelDefinition): string | un
   try {
     return definition.primaryKey
   } catch (error) {
-    if (isMissingGeneratedSchemaModelError(error)) {
+    if (isMissingGeneratedSchemaModelError(error) || error instanceof CompositeModelKeyError) {
       return undefined
     }
 
@@ -51,7 +52,7 @@ function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDe
   }
 
   return leftTableName === rightTableName
-    && left.primaryKey === right.primaryKey
+    && tryGetDefinitionPrimaryKey(left) === tryGetDefinitionPrimaryKey(right)
     && left.morphClass === right.morphClass
 }
 

@@ -278,12 +278,17 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect((await db.table(pivotTable).orderBy('post_id').orderBy('tag_id').get()).map(row => Number(row.weight))).toEqual([2, 2, 0, 0])
     })
 
-    it('rejects insertGetId and models on a composite-key table', async () => {
-      const { db } = await openPivotDatabase()
+    it('rejects insertGetId and the model operations that need one key on a composite-key table', async () => {
+      const { db, table } = await openPivotDatabase()
 
       await expect(db.table(pivotTable).insertGetId({ post_id: 3, tag_id: 3, weight: 0 })).rejects.toThrow(SchemaError)
-      const PostTag = defineModel(pivotTable)
-      expect(() => PostTag.query()).toThrow(SchemaError)
+      const PostTag = defineModel(pivotTable, { timestamps: false })
+      const DefinedPostTag = defineModel(table, { timestamps: false })
+      expect(PostTag.definition.table).toBe(table)
+      expect(DefinedPostTag.definition.table).toBe(table)
+      expect(await PostTag.where('post_id', 1).count()).toBe(2)
+      await expect(PostTag.find(1)).rejects.toThrow(SchemaError)
+      await expect(DefinedPostTag.find(1)).rejects.toThrow(SchemaError)
       expect(await db.table(pivotTable).count()).toBe(4)
     })
   })

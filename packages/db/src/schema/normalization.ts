@@ -44,7 +44,15 @@ function coerceBoolean(value: unknown): boolean | null | undefined {
   return Boolean(value)
 }
 
-export function parseInteger(value: unknown): unknown {
+export function booleanStorageValue(value: unknown): number | null | undefined {
+  if (value == null) {
+    return value as null | undefined
+  }
+
+  return coerceBoolean(value) ? 1 : 0
+}
+
+function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
@@ -55,6 +63,30 @@ export function parseInteger(value: unknown): unknown {
   }
 
   return integer
+}
+
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+export function isCanonicalIntegerText(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value)
+}
+
+export function readIntegerKey(value: unknown): unknown {
+  if (!isCanonicalIntegerText(value)) {
+    return value
+  }
+
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : value
+}
+
+function parseIncrementingKey(value: unknown): unknown {
+  if (typeof value !== 'bigint' && !(typeof value === 'string' && /^-?\d+$/.test(value))) {
+    return parseInteger(value)
+  }
+
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : String(value)
 }
 
 function parseJson(value: unknown): unknown {
@@ -139,7 +171,7 @@ export function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
-function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
   if (dialect === 'sqlite') {
     return normalizeSQLiteDateValue(value)
   }
@@ -225,6 +257,10 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
 
+export function readIntegerColumnValue(column: AnyColumnDefinition, value: unknown): unknown {
+  return column.kind === 'id' ? parseIncrementingKey(value) : parseInteger(value)
+}
+
 export function normalizeDialectReadValue(
   dialect: SchemaDialectName,
   column: AnyColumnDefinition,
@@ -232,7 +268,7 @@ export function normalizeDialectReadValue(
 ): unknown {
   switch (column.kind) {
     case 'id':
-      return column.idStrategy === 'autoIncrement' ? parseInteger(value) : value
+      return column.idStrategy === 'autoIncrement' ? parseIncrementingKey(value) : value
     case 'integer':
     case 'bigInteger':
       return parseInteger(value)
@@ -264,17 +300,7 @@ export function normalizeDialectWriteValue(
     case 'bigInteger':
       return typeof value === 'boolean' ? Number(value) : value
     case 'boolean':
-      if (value == null) {
-        return value
-      }
-      {
-        const normalized = coerceBoolean(value)
-        if (dialect === 'postgres') {
-          return normalized
-        }
-
-        return normalized ? 1 : 0
-      }
+      return dialect === 'postgres' ? coerceBoolean(value) : booleanStorageValue(value)
     case 'json':
       return value == null ? value : stringifyJson(value)
     case 'date':

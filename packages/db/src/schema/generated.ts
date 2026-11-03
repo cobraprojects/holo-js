@@ -35,6 +35,14 @@ export function setGeneratedSchemaConnection(connectionName: string | undefined)
   generatedSchemaSource.connectionName = connectionName
 }
 
+export function useGeneratedSchemaConnection(connectionName: string): () => void {
+  const previous = generatedSchemaSource.connectionName
+  generatedSchemaSource.connectionName = connectionName
+  return () => {
+    generatedSchemaSource.connectionName = previous
+  }
+}
+
 export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
   for (const table of Object.values(tables)) {
     generatedTables.set(table.tableName, table)
