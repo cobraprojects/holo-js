@@ -101,18 +101,17 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
 }
 
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
-  const configuredSchema = connection.getSchemaName() ?? null
   const introspect = createIntrospect(connection)
 
   return {
     async listTables() {
-      const result = await introspect<TableNameRow>(`SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = ${SCHEMA_BINDING} ORDER BY tablename`, [configuredSchema], 'schema:introspect:tables')
+      const result = await introspect<TableNameRow>('SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = current_schema() ORDER BY tablename', [], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
-      const bindings = [schema ?? configuredSchema, table]
+      const bindings = [schema ?? null, table]
       const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
       const resolvedSchema = exists.rows[0]?.schema
       if (resolvedSchema === undefined) return undefined
