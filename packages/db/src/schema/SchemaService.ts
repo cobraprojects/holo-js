@@ -17,7 +17,7 @@ import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
-import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
   name: string
