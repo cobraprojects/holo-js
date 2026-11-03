@@ -162,7 +162,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     })
 
     it.runIf(driver === 'sqlite')('restores boolean, JSON and date types on columns created before the upgrade', async () => {
-      await openCastDatabase()
+      const { db } = await openCastDatabase()
       const Legacy = defineModel(legacyTable, { timestamps: false, guarded: [], casts: legacyCasts })
 
       const created = await Legacy.create({
@@ -177,6 +177,12 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(found.settings).toEqual({ theme: 'dark' })
       expect(found.published_on).toEqual(new Date('2026-02-03T00:00:00.000Z'))
       expect(found.seen_at).toEqual(new Date('2026-02-03T04:05:06.000Z'))
+
+      await Legacy.update(created.id, { settings: null })
+      const stored = await db.queryCompiled<{ id: number }>({
+        sql: `SELECT id FROM ${db.getDialect().quoteIdentifier(legacyTable)} WHERE settings IS NULL`,
+      })
+      expect(stored.rows.map(row => Number(row.id))).toEqual([created.id])
     })
   })
 }
