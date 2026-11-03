@@ -6129,6 +6129,75 @@ export default defineMigration({
     expect(generated).not.toContain('defineGeneratedTable("users"')
   }, 30000)
 
+  it('writes the Generated schema from the migrations that committed when a later migration fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    observers: 'server/db/observers',
+    factories: 'server/db/factories',
+    commands: 'server/commands',
+  },
+  models: [],
+  migrations: [
+    'server/db/migrations/2026_01_01_000001_create_users.ts',
+    'server/db/migrations/2026_01_01_000002_fail.ts',
+  ],
+  seeders: [],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000002_fail.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    throw new Error('second migration failed on purpose')
+  },
+  async down() {},
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status).not.toBe(0)
+    expect(migrated.stderr).toContain('second migration failed on purpose')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .resolves.toContain('export const users = defineGeneratedTable("users", {')
+  }, 30000)
+
   it('refuses destructive database commands in production without a terminal unless --force is passed', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

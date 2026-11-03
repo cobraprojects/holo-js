@@ -333,6 +333,27 @@ if (!applicationRuntime) {
   configureDB(manager)
 }
 const writeProjectGeneratedSchema = () => writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+
+async function writeGeneratedSchemaAfterFailedRun(): Promise<void> {
+  try {
+    await writeProjectGeneratedSchema()
+  } catch (error) {
+    process.stderr.write(`Unable to write the Generated schema after the failed run: ${errorMessage(error)}\n`)
+  }
+}
+
+async function changeSchema<TResult>(change: () => Promise<TResult>): Promise<TResult> {
+  let result: TResult
+  try {
+    result = await change()
+  } catch (error) {
+    await writeGeneratedSchemaAfterFailedRun()
+    throw error
+  }
+
+  await writeProjectGeneratedSchema()
+  return result
+}
 const migrations = isSchemaChangingKind(payload.kind)
   ? await loadAllMigrations()
   : []
@@ -343,11 +364,7 @@ try {
   }
 
   if (payload.kind === 'migrate') {
-    const migrate = async () => {
-      const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
-      await writeProjectGeneratedSchema()
-      return executed
-    }
+    const migrate = () => changeSchema(() => createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {}))
     const run = payload.options?.isolated === true
       ? await runWithMigrationLock(projectRoot, migrate)
       : { kind: 'ran' as const, result: await migrate() }
@@ -360,15 +377,13 @@ try {
     await writeProjectGeneratedSchema()
     writeOutput('Generated schema written from the database.')
   } else if (payload.kind === 'fresh') {
-    const schema = createSchemaService(manager.connection())
-    await dropAllTablesForFresh(manager.connection(), schema)
-
-    const executed = await createMigrationService(manager.connection(), migrations).migrate({})
-    await writeProjectGeneratedSchema()
+    const executed = await changeSchema(async () => {
+      await dropAllTablesForFresh(manager.connection(), createSchemaService(manager.connection()))
+      return createMigrationService(manager.connection(), migrations).migrate({})
+    })
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
   } else if (payload.kind === 'rollback') {
-    const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
-    await writeProjectGeneratedSchema()
+    const rolledBack = await changeSchema(() => createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {}))
     printExecutedItems(rolledBack, 'No migrations were rolled back.', 'Migrations rolled back:')
   } else if (payload.kind === 'seed') {
     const executed = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed(payload.options ?? {})
