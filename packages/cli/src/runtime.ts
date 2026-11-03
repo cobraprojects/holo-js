@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
+import { Readable } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeConfigCache } from '@holo-js/config'
 import {
@@ -13,6 +14,7 @@ import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { errorMessage } from './error-message'
 import { isSchemaChangingKind } from './runtime-kinds'
+import { RUNTIME_FAILURE_FD } from './runtime-failure'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
 import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
@@ -148,10 +150,11 @@ export function runRuntimeInvocation(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
+    let failure = ''
     let error: Error | null = null
 
     child.stdin.on('error', stdinError => {
@@ -166,6 +169,13 @@ export function runRuntimeInvocation(
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk
     })
+    const failureChannel = child.stdio[RUNTIME_FAILURE_FD]
+    if (failureChannel instanceof Readable) {
+      failureChannel.setEncoding('utf8')
+      failureChannel.on('data', (chunk: string) => {
+        failure += chunk
+      })
+    }
     child.on('error', spawnError => {
       error = spawnError
     })
@@ -175,12 +185,18 @@ export function runRuntimeInvocation(
         error,
         stdout,
         stderr,
+        failure,
       })
     })
   })
 }
 
 export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResult): string {
+  const failure = result.failure?.trim()
+  if (failure) {
+    return failure
+  }
+
   const stderr = result.stderr?.trim()
   if (stderr) {
     return formatRuntimeFailureText(stderr)
@@ -205,23 +221,11 @@ function stripRuntimeErrorPrefix(line: string): string {
   return line.replace(RUNTIME_ERROR_PREFIX, '')
 }
 
-function isRuntimeErrorSourceLine(line: string): boolean {
-  return line.startsWith('throw ')
-    || line.startsWith('at ')
-    || line === '^'
-    || /^\^+$/.test(line)
-}
-
 function formatRuntimeFailureText(text: string): string {
   const lines = text
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean)
-
-  const friendlyLine = lines.find(line => line.includes('Unable to ') && !isRuntimeErrorSourceLine(line))
-  if (friendlyLine) {
-    return stripRuntimeErrorPrefix(friendlyLine)
-  }
 
   const errorLine = lines.find(line => RUNTIME_ERROR_PREFIX.test(line))
   if (errorLine) {

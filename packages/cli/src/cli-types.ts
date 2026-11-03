@@ -89,6 +89,7 @@ export type RuntimeSpawnResult = {
   readonly error?: Error | ({ code?: string } & Record<string, unknown>) | null
   readonly stdout?: string
   readonly stderr?: string
+  readonly failure?: string
 }
 
 export type NewProjectInput = {
