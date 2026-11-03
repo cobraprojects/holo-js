@@ -5,6 +5,7 @@
 ### Added
 
 - Database: `table.dropForeign()` inside `schema.table()` also takes an array of columns and drops the key with the conventional name `{table}_{columns}_foreign`, as in Laravel. The new `table.dropConstrainedForeignId(column)` drops the column's `{table}_{column}_foreign` key, then the column, which is how you drop a constrained column on MySQL. Neither is supported on SQLite yet. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign) and [dropConstrainedForeignId()](apps/docs/docs/database/migrations.md#dropconstrainedforeignid).
+- Database: on SQLite, `renameColumn()`, `dropColumn()` and `renameIndex()` inside `schema.table()` now work, as in Laravel, instead of throwing a `CapabilityError`. `renameColumn()` and `dropColumn()` use SQLite's native `ALTER TABLE`; renamed columns keep their data, indexes, foreign keys and enum checks. SQLite refuses to drop a column that an index, unique constraint, primary key or foreign key uses, and Holo raises its error unchanged, so drop the index first. `renameIndex()` drops the index and creates it under the new name with the same columns and uniqueness in one transaction. Adding and dropping foreign keys on an existing SQLite table still throws a `CapabilityError`. See [dropColumn()](apps/docs/docs/database/migrations.md#dropcolumn), [renameColumn()](apps/docs/docs/database/migrations.md#renamecolumn) and [renameIndex()](apps/docs/docs/database/migrations.md#renameindex).
 
 ### Changed
 
