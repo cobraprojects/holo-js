@@ -355,6 +355,7 @@ export type {
   RegisteredModels,
   ModelAttributeKey,
   ModelCastDefinition,
+  ModelCastedTable,
   ModelDefinition,
   DynamicRelationResolver,
   ModelInsertPayload,

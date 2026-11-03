@@ -7,7 +7,7 @@ const registeredPivot = defineGeneratedTable('pivot_type_registered', {
   approved: column.boolean(),
 })
 
-declare module '../src/schema/generated' {
+declare module '../src' {
   interface GeneratedSchemaTables {
     pivot_type_registered: typeof registeredPivot
   }

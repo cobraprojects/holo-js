@@ -36,6 +36,7 @@ import {
   assertUniqueCommandTokens,
   assertUniqueEntries,
   captureAuthorizationDefinitionNames,
+  collectBuiltInCasts,
   collectFiles,
   deriveBroadcastNameFromPath,
   deriveChannelPatternFromPath,
@@ -229,12 +230,14 @@ async function discoverProjectRegistry(
         throw new Error(`Discovered model "${relativePath}" does not export a Holo model.`)
       }
 
+      const casts = collectBuiltInCasts(exportedModel.value.definition.casts)
       models.push({
         sourcePath: relativePath,
         name: exportedModel.value.definition.name,
         tableName: exportedModel.value.definition.table.tableName,
         prunable: Boolean(exportedModel.value.definition.prunable),
         ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
+        ...(casts ? { casts } : {}),
       })
     } catch (error) {
       if (!isUnresolvedModelSchemaError(error)) {

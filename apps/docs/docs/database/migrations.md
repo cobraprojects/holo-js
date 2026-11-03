@@ -46,7 +46,7 @@ export default defineModel('posts', {
 })
 ```
 
-With the migration above, `post.status` is typed as `'draft' | 'published'`, `post.published_at` as `Date | null`, and `Post.where('...')` autocompletes every column name. Columns with a default (or generated columns like `id`) are optional when you create a record.
+With the migration above, `post.status` is typed as `'draft' | 'published'`, `post.published_at` as `Date | null`, and `Post.where('...')` autocompletes every column name. Columns with a default (or generated columns like `id`) are optional when you create a record. A model's [casts](/orm/casts#how-casts-and-types-fit-together) set the type of columns the database can't describe, such as JSON in a SQLite `text` column.
 
 ## Generating migrations
 
@@ -422,7 +422,7 @@ Each method creates these database column types:
 | `ulid()`, `foreignUlid()` | `TEXT` | `VARCHAR(26)` | `CHAR(26)` |
 | `snowflake()`, `foreignSnowflake()` | `TEXT` | `VARCHAR(32)` | `VARCHAR(32)` |
 
-The SQLite types follow Laravel, so `schema.getColumns()` reports them and SQLite keeps each value's storage class: strings that look like numbers stay strings, and JSON text is stored unchanged. Tables that an earlier Holo version created on SQLite keep the types they were created with, such as `TEXT` for strings, dates, and JSON and `INTEGER` for booleans, and their values read and write the same way.
+The SQLite types follow Laravel, so `schema.getColumns()` reports them and SQLite keeps each value's storage class: strings that look like numbers stay strings, and JSON text is stored unchanged. Tables that an earlier Holo version created on SQLite keep the types they were created with, such as `TEXT` for strings, dates, and JSON and `INTEGER` for booleans. Their models see those columns as strings and integers until you add [casts](/orm/casts#sqlite-tables-created-before-0-6).
 
 ### id()
 
@@ -552,7 +552,7 @@ table.timestamp('published_at').nullable()
 
 ### json()
 
-Adds a JSON column. It becomes `JSONB` on PostgreSQL, `JSON` on MySQL, and `text` on SQLite. Reads return the parsed value.
+Adds a JSON column. It becomes `JSONB` on PostgreSQL, `JSON` on MySQL, and `text` on SQLite. On PostgreSQL and MySQL, reads return the parsed value. On SQLite the database only knows the column as text, so add a [`'json'` cast](/orm/casts#json-columns) to the model to read and type it as JSON.
 
 ```ts
 table.json('shipping_address').nullable()

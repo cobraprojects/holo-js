@@ -162,13 +162,31 @@ export function renderGeneratedIndexModule(): string {
   ].join('\n')
 }
 
+type ModelTableTypeEntry = Pick<GeneratedModelRegistryEntry, 'tableName' | 'casts'>
+
+function renderModelTableType(entry: ModelTableTypeEntry): string {
+  const generatedTable = `GeneratedSchemaTable<${JSON.stringify(entry.tableName)}>`
+  const casts = Object.entries(entry.casts ?? {})
+  if (casts.length === 0) {
+    return generatedTable
+  }
+
+  return `ModelCastedTable<${generatedTable}, { ${casts.map(([key, cast]) => `readonly ${JSON.stringify(key)}: ${JSON.stringify(cast)}`).join(', ')} }>`
+}
+
+function renderModelTableTypeImports(entries: readonly ModelTableTypeEntry[]): readonly string[] {
+  return entries.some(entry => Object.keys(entry.casts ?? {}).length > 0)
+    ? ['GeneratedSchemaTable', 'ModelCastedTable']
+    : ['GeneratedSchemaTable']
+}
+
 export function renderGeneratedModelTypes(models: readonly GeneratedModelRegistryEntry[]): string {
   const aliases = models.map((entry, index) => {
-    return `type HoloModel${index} = ModelReference<GeneratedSchemaTable<${JSON.stringify(entry.tableName)}>, EmptyScopeMap>`
+    return `type HoloModel${index} = ModelReference<${renderModelTableType(entry)}, EmptyScopeMap>`
   })
   const modelTypeImports = aliases.length > 0
     ? [
-        'import type { EmptyScopeMap, GeneratedSchemaTable, ModelReference } from \'@holo-js/db\'',
+        `import type { ${['EmptyScopeMap', ...renderModelTableTypeImports(models), 'ModelReference'].join(', ')} } from '@holo-js/db'`,
         '',
       ]
     : []
@@ -534,7 +552,7 @@ export function renderGeneratedQueueTypes(
   ].join('\n')
 }
 
-type AuthTypeModelRegistryEntry = Pick<GeneratedModelRegistryEntry, 'name' | 'tableName'>
+type AuthTypeModelRegistryEntry = Pick<GeneratedModelRegistryEntry, 'name' | 'tableName' | 'casts'>
 
 function getAuthProviderModelNames(
   auth: Pick<NormalizedHoloAuthConfig, 'guards' | 'providers'> | undefined,
@@ -558,14 +576,12 @@ export function renderGeneratedAuthTypes(
   const userModels = getAuthProviderModelNames(auth)
     .map(modelName => modelByName.get(modelName))
     .filter((model): model is AuthTypeModelRegistryEntry => Boolean(model))
-  const userTableNames = [...new Set(userModels.map(model => model.tableName))]
-  const userType = userModels.length > 0
-    ? userTableNames.map(tableName => `InferSelect<GeneratedSchemaTable<${JSON.stringify(tableName)}>>`).join(' | ')
-    : undefined
+  const userRecordTypes = [...new Set(userModels.map(model => `InferSelect<${renderModelTableType(model)}>`))]
+  const userType = userRecordTypes.length > 0 ? userRecordTypes.join(' | ') : undefined
   const imports = userType
     ? [
         'import type { AuthUserLike } from \'@holo-js/auth\'',
-        'import type { GeneratedSchemaTable, InferSelect } from \'@holo-js/db\'',
+        `import type { ${[...renderModelTableTypeImports(userModels), 'InferSelect'].join(', ')} } from '@holo-js/db'`,
         '',
       ]
     : []

@@ -31,9 +31,12 @@ import type {
   DynamicRelationResolver,
   DefineModelOptions,
   EntityWithLoaded,
+  EmptyModelCastMap,
   EmptyScopeMap,
   GeneratedSchemaTable,
   ModelAttributeKey,
+  ModelCastedTable,
+  ModelCastMap,
   ModelColumnName,
   ModelDefinition,
   ModelRecord,
@@ -53,6 +56,13 @@ type ModelTableBuilderResult<
 > = {
   build(): BoundTableDefinition<TName, TColumns>
 }
+type CastedModelOptions<
+  TTable extends TableDefinition,
+  TScopes extends ModelScopesDefinition,
+  TRelations extends RelationMap,
+  THidden extends readonly string[],
+  TCasts extends ModelCastMap,
+> = DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden, readonly casts?: TCasts }
 type SharedModelDefinitionFields<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
@@ -122,30 +132,33 @@ export function defineModel<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden, TCasts>,
+): StaticModelApi<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TColumns extends ColumnShapeInput,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
 >(
   tableName: TName,
   builder: (table: TableDefinitionBuilder<TName, EmptyColumnShape>) => ModelTableBuilderResult<TName, TColumns>,
-  options?: DefineModelOptions<BoundTableDefinition<TName, TColumns>, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<BoundTableDefinition<TName, TColumns>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelCastedTable<BoundTableDefinition<TName, TColumns>, TCasts>, TScopes, TRelations, THidden, TCasts>,
+): StaticModelApi<ModelCastedTable<BoundTableDefinition<TName, TColumns>, TCasts>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
 >(
   tableName: TName,
-  options?: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelCastedTable<GeneratedSchemaTable<TName>, TCasts>, TScopes, TRelations, THidden, TCasts>,
+): StaticModelApi<ModelCastedTable<GeneratedSchemaTable<TName>, TCasts>, TScopes, TRelations, THidden>
 export function defineModel(
   tableOrName: string | TableDefinition,
   builderOrOptions?:
@@ -175,10 +188,11 @@ export function defineModelFromTable<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden, TCasts>,
+): StaticModelApi<ModelCastedTable<TTable, TCasts>, TScopes, TRelations, THidden>
 export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,

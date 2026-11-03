@@ -72,6 +72,7 @@ export type {
   ModelRecord,
   ModelReference,
   ModelCastDefinition,
+  ModelCastedTable,
   MorphedByManyRelationDefinition,
   MorphManyRelationDefinition,
   MorphOneOfManyRelationDefinition,
