@@ -6320,6 +6320,39 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }, 30000)
 
+  it('fails holo build and warns in holo dev without creating a missing SQLite database file', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeDevServerProbe(projectRoot)
+
+    const built = runCliProcess(projectRoot, ['build'])
+    expect(built.status).toBe(1)
+    expect(built.stderr).toContain('Unable to read the database schema of connection "default": the database does not exist. Run "holo migrate" to create it.')
+    expect(built.stdout).not.toContain('dev server tables')
+
+    const dev = runCliProcess(projectRoot, ['dev'])
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stderr).toContain('[Holo CLI] Starting with the existing Generated schema. Unable to read the database schema of connection "default"')
+
+    expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
+  }, 60000)
+
+  it.each(['migrate', 'migrate:fresh'])('creates the missing directory and file of the SQLite database on %s', async (command) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/data/database.sqlite' })
+
+    const migrated = runCliProcess(projectRoot, [command], { env: { APP_ENV: 'development' } })
+
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
+    for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+      expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+    }
+  }, 60000)
+
   it.each([
     { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
     { failure: 'an import of a missing module', source: 'import \'holo-missing-migration-package\'\nexport default {}\n', reported: 'holo-missing-migration-package' },

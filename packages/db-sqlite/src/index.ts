@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   DatabaseError,
@@ -84,6 +86,15 @@ export class SQLiteAdapter implements DriverAdapter {
       throw new Error(`Unable to open SQLite database "${this.filename}": ${message}`, { cause: error })
     }
     this.connected = true
+  }
+
+  async databaseExists(): Promise<boolean> {
+    return this.connected || this.filename === ':memory:' || existsSync(this.filename)
+  }
+
+  async ensureDatabaseExists(): Promise<void> {
+    await mkdir(dirname(resolve(this.filename)), { recursive: true })
+    await appendFile(this.filename, '')
   }
 
   async disconnect(): Promise<void> {

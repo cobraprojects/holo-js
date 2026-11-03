@@ -90,6 +90,7 @@ export interface DriverAdapter {
   disconnect(): Promise<void>
   isConnected(): boolean
   isDatabaseMissingError?(error: unknown): boolean
+  databaseExists?(): Promise<boolean>
   ensureDatabaseExists?(): Promise<void>
   runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
   beforeMigrationTransaction?(): Promise<unknown>

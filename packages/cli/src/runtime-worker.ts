@@ -197,8 +197,18 @@ async function dropAllTablesForFresh(
   })
 }
 
+async function createMissingDatabase(connection: DatabaseContext): Promise<void> {
+  const adapter = connection.getAdapter()
+  if (await adapter.databaseExists?.() === false) {
+    await adapter.ensureDatabaseExists?.()
+  }
+}
+
 async function readDatabaseSchema(connection: DatabaseContext): Promise<TableDefinition[]> {
   try {
+    if (await connection.getAdapter().databaseExists?.() === false) {
+      throw new Error('the database does not exist. Run "holo migrate" to create it.')
+    }
     await connection.initialize()
     return await holoRuntimeInternals.createSchemaReader(connection).readGeneratedSchema()
   } catch (error) {
@@ -355,6 +365,9 @@ const migrations = isSchemaChangingKind(payload.kind)
   : []
 
 try {
+  if (payload.kind === 'migrate' || payload.kind === 'fresh') {
+    await createMissingDatabase(manager.connection())
+  }
   if (!applicationRuntime && payload.kind !== 'generate-schema') {
     await manager.initializeAll()
   }
