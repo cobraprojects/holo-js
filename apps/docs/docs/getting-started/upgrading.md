@@ -207,7 +207,7 @@ Foreign keys declared inside `createTable()` or added with a new column are now 
 
 ### PostgreSQL `schema` sets `search_path`
 
-A PostgreSQL connection's `schema` option now also sets the connection's `search_path`, as Laravel does. Before, Holo read the configured schema but ran unqualified statements in the server's default `search_path`, usually `public`. If you set `schema` to something other than `public` without a `search_path`, `holo migrate` and unqualified queries now create and use tables in that schema. A `search_path` in the connection URL or options keeps working. See [PostgreSQL and MySQL](/database/#postgresql-and-mysql).
+A PostgreSQL connection's `schema` option now also sets the connection's `search_path`, as Laravel does. Before, Holo read the configured schema but ran unqualified statements in the server's default `search_path`, usually `public`. If you set `schema` to something other than `public` without a `search_path`, `holo migrate` and unqualified queries now create and use tables in that schema. With `schema: 'public'`, as new projects set it, the `search_path` is `public` alone, so move tables that live in a schema named after the database user into `public`. A `search_path` in the URL's `options` parameter or in `PGOPTIONS` still wins over `schema`. See [PostgreSQL schema](/database/#postgresql-schema).
 
 On PostgreSQL, `schema.getColumns()`, `getIndexes()` and `getForeignKeys()` read the configured schema, as `getTables()` already did. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
 

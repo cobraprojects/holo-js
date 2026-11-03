@@ -87,6 +87,36 @@ function quoteDatabaseIdentifier(database: string): string {
   return `"${database.replaceAll('"', '""')}"`
 }
 
+function escapeStartupOptionValue(value: string): string {
+  return value.replace(/[\\\s]/g, character => `\\${character}`)
+}
+
+function parseAbsoluteUrl(connectionString: string): URL | undefined {
+  return URL.canParse(connectionString) ? new URL(connectionString) : undefined
+}
+
+function withConfiguredSearchPath(
+  connectionString: string | undefined,
+  schema: string | undefined,
+): Pick<PoolConfig, 'connectionString' | 'options'> {
+  if (!schema) {
+    return { connectionString }
+  }
+
+  const searchPath = `-c search_path=${escapeStartupOptionValue(quoteDatabaseIdentifier(schema))}`
+  const url = connectionString ? parseAbsoluteUrl(connectionString) : undefined
+  const urlOptions = url?.searchParams.get('options')
+  if (url && urlOptions) {
+    url.searchParams.set('options', `${searchPath} ${urlOptions}`)
+    return { connectionString: url.toString() }
+  }
+
+  return {
+    connectionString,
+    options: [searchPath, process.env.PGOPTIONS].filter(Boolean).join(' '),
+  }
+}
+
 function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
   const parsed = new URL(connectionString)
   const database = parsed.pathname.replace(/^\/+/, '')
@@ -387,7 +417,7 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   supportsConcurrentTransactionScopes: true,
   create(connection) {
     return createPostgresAdapter({ config: {
-      connectionString: connection.url,
+      ...withConfiguredSearchPath(connection.url, connection.schema),
       host: connection.host,
       port: connection.port,
       user: connection.username,

@@ -6332,13 +6332,16 @@ process.stdout.write('framework build ran\\n')
     }, 60000)
   }
 
-  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('writes the Generated schema from the configured non-public PostgreSQL schema', async () => {
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1').each([
+    { searchPath: 'only the configured schema', query: '' },
+    { searchPath: 'a matching search_path in the URL', query: `?options=${encodeURIComponent('-c search_path=tenant')}` },
+  ])('migrates into and writes the Generated schema from the configured non-public PostgreSQL schema with $searchPath', async ({ query }) => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const postgres = isolatedMigrationDatabases[0]
     const databaseName = `holo_tenant_${randomUUID().replaceAll('-', '')}`
     const credentials = `${encodeURIComponent(livePostgresServer.user)}:${encodeURIComponent(livePostgresServer.password)}`
-    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}?options=${encodeURIComponent('-c search_path=tenant')}`
+    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}${query}`
     await writeSchemaSourceProject(projectRoot, { driver: 'postgres', url, schema: 'tenant' })
     await postgres.create(databaseName)
     try {
@@ -6359,6 +6362,21 @@ process.stdout.write('framework build ran\\n')
         expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
         for (const line of generatedUsersColumns.postgres) expect(generated).toContain(line)
         expect(generated).not.toContain('public_only')
+      }
+      const database = postgres.open(databaseName)
+      try {
+        const tables = await database.queryCompiled<{ table_schema: string, table_name: string }>({
+          sql: "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('public', 'tenant') ORDER BY table_schema, table_name",
+          source: 'test',
+        })
+        expect(tables.rows).toEqual([
+          { table_schema: 'public', table_name: 'users' },
+          { table_schema: 'tenant', table_name: '_holo_migrations' },
+          { table_schema: 'tenant', table_name: 'profiles' },
+          { table_schema: 'tenant', table_name: 'users' },
+        ])
+      } finally {
+        await database.disconnect()
       }
     } finally {
       await postgres.drop(databaseName)

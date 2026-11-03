@@ -103,6 +103,7 @@ type RuntimeAdapterConnectionConfig = Pick<HoloProjectConnectionConfig, 'max' | 
   password?: string
   database?: string
   ssl?: boolean | Record<string, unknown>
+  schema?: string
 }
 
 function coercePort(value: number | string | undefined): number | undefined {
@@ -184,6 +185,7 @@ function resolveConnectionConfig(
         password,
         database,
         ssl,
+        schema: schemaName,
         max: normalized.max,
         connectionTimeoutMillis: normalized.connectionTimeoutMillis,
         idleTimeoutMillis: normalized.idleTimeoutMillis,

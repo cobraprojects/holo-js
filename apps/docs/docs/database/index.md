@@ -104,6 +104,22 @@ main: {
 },
 ```
 
+### PostgreSQL schema
+
+On PostgreSQL, `schema` sets the connection's `search_path`, as Laravel's `search_path` setting does. Every pooled connection starts with it, so migrations, the schema builder, queries, models and the CLI create and read unqualified tables in that schema, and the generated schema is read from it. With `schema: 'tenant'`, `holo migrate` creates its tables in `tenant`, and a `public` table with the same name is ignored. Leave `schema` out to keep the server's default `search_path`.
+
+A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no `options`, wins over `schema`:
+
+```ts
+main: {
+  driver: 'postgres',
+  url: 'postgres://app@127.0.0.1/my_app?options=-c%20search_path%3Dtenant,public',
+  schema: 'tenant',
+},
+```
+
+Keep its first schema the same as `schema`, because the generated schema is read from `schema`.
+
 ### PostgreSQL dates and time zones
 
 PostgreSQL reads and writes `date` and `timestamp` values in `app.timezone`, which comes from [`APP_TIMEZONE`](/reference/environment), not in the Node process's time zone. A `timestamp` column without a time zone holds the wall-clock time in `app.timezone`, and a `Date` you save is written as that wall-clock time. A `timestamptz` column holds the exact instant. A `date` reads back as a `Date` at midnight in `app.timezone`. On a day the zone skipped entirely, such as 2011-12-30 in `Pacific/Apia`, there is no midnight, so the `date` reads back as the next day, as in Laravel. Saving the loaded value stores that next day. To avoid this, set `APP_TIMEZONE=UTC` (the default).
@@ -482,7 +498,7 @@ try {
 | `password` | `string` | PostgreSQL and MySQL |
 | `database` | `string` | Database name (or SQLite file) |
 | `filename` | `string` | Same as `database` |
-| `schema` | `string` | PostgreSQL schema, such as `public` |
+| `schema` | `string` | PostgreSQL schema, such as `public`. Sets the `search_path`. See [PostgreSQL schema](#postgresql-schema) |
 | `ssl` | `boolean \| object` | PostgreSQL and MySQL |
 | `max` | `number` | PostgreSQL pool size, at least `1` |
 | `connectionTimeoutMillis` | `number` | PostgreSQL pool wait, `0` or more |
