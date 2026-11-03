@@ -188,7 +188,8 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
     })
 
     it.runIf(driver === 'sqlite')('keeps enum check names when renaming a table and when a later change() rebuilds it', async () => {
-      const { db, schema } = await openDatabase(driver)
+      const { db } = await openDatabase(driver)
+      const schema = createSchemaService(db)
       const name = `holo_kept_${randomUUID().replaceAll('-', '').slice(0, 20)}`
       const moved = `${name}_moved`
       onTestFinished(() => schema.dropTable(moved))
