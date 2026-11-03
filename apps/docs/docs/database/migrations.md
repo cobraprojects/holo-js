@@ -307,6 +307,8 @@ Returns the names of every table on the connection, as a `string[]`.
 const tables = await schema.getTables()
 ```
 
+On PostgreSQL, `getTables()`, `getColumns()`, `getIndexes()` and `getForeignKeys()` read the connection's configured `schema`, which is `public` by default. Pass a schema-qualified name such as `reports.daily_totals` to read a table in another schema.
+
 ### getColumns()
 
 Returns the columns of a table. Each entry has `name`, `type` (the database's native type), `logicalType`, `notNull`, `defaultValue`, and `primaryKey`.

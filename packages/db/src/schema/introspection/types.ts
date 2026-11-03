@@ -24,6 +24,7 @@ export interface DatabaseIndexStructure {
   readonly name: string
   readonly unique: boolean
   readonly primary: boolean
+  readonly constraint: boolean
   readonly columns: readonly string[]
   readonly representable: boolean
 }

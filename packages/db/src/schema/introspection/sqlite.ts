@@ -10,11 +10,42 @@ type IndexRow = { name: string, unique: number, origin: string, partial: number 
 type IndexColumnRow = { cid: number, name: string | null }
 type ForeignKeyRow = { id: number, table: string, from: string, to: string | null, on_update: string, on_delete: string }
 
+export type SQLiteTableObject = { type: 'index' | 'trigger', name: string, sql: string }
+
 function splitTableName(tableName: string): { schema: string, table: string } {
   const separator = tableName.lastIndexOf('.')
   return separator === -1
     ? { schema: 'main', table: tableName }
     : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
+}
+
+export async function readSQLiteCreateTableSql(connection: DatabaseContext, tableName: string): Promise<string | null | undefined> {
+  const { schema, table } = splitTableName(tableName)
+  const result = await connection.introspectCompiled<TableSqlRow>({
+    sql: `SELECT sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type = 'table' AND name = ?`,
+    bindings: [table],
+    source: `schema:introspect:table:${tableName}`,
+  })
+  return result.rows[0]?.sql
+}
+
+export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
+  const { schema, table } = splitTableName(tableName)
+  const result = await connection.introspectCompiled<SQLiteTableObject>({
+    sql: `SELECT type, name, sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name`,
+    bindings: [table],
+    source: `schema:introspect:objects:${tableName}`,
+  })
+  return result.rows
+}
+
+export async function listSQLiteReferencingTables(connection: DatabaseContext, tableName: string): Promise<string[]> {
+  const result = await connection.introspectCompiled<TableNameRow>({
+    sql: 'SELECT DISTINCT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = \'table\' AND f."table" = ? ORDER BY m.name',
+    bindings: [tableName],
+    source: `schema:introspect:referencingTables:${tableName}`,
+  })
+  return result.rows.map(row => row.name)
 }
 
 function readDefinitionDetails(createTableSql: string) {
@@ -44,6 +75,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
         name: index.name,
         unique: index.unique === 1,
         primary: index.origin === 'pk',
+        constraint: index.origin !== 'c',
         columns: columns.rows.flatMap(column => column.name === null ? [] : [column.name]),
         representable: index.partial === 0 && columns.rows.every(column => column.name !== null),
       })
@@ -74,8 +106,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
     async readTableStructure(tableName) {
       const { schema, table } = splitTableName(tableName)
-      const tableSql = await introspect<TableSqlRow>(`SELECT sql FROM ${connection.getDialect().quoteIdentifier(schema)}.sqlite_master WHERE type = 'table' AND name = ?`, [table], `schema:introspect:table:${tableName}`)
-      const createTableSql = tableSql.rows[0]?.sql
+      const createTableSql = await readSQLiteCreateTableSql(connection, tableName)
       if (createTableSql === undefined) return undefined
 
       const details = readDefinitionDetails(createTableSql ?? '')

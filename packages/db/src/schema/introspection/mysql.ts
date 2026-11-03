@@ -47,6 +47,7 @@ function groupIndexes(rows: readonly IndexRow[]): DatabaseIndexStructure[] {
     name,
     unique: entry.unique,
     primary: name === 'PRIMARY',
+    constraint: entry.unique,
     columns: entry.columns,
     representable: entry.representable,
   }))
