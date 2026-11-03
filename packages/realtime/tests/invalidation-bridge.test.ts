@@ -101,36 +101,57 @@ it('coalesces a burst of remote invalidations for one table and limits concurren
   expect(maxActive).toBeLessThanOrEqual(4)
 }, 30_000)
 
-it('limits a sustained remote write loop to about one refresh per 100 ms and always delivers the final state', async () => {
+async function runSustainedRemoteWriteLoop(slowRefreshMs: number) {
   const { adapter, db } = await openRealtimeDatabase()
-  let runs = 0
+  const refreshStarts: number[] = []
   let lastScore: unknown
+  let slowNextRefresh = false
   const sustained = query({
     name: 'records.sustained',
     access: 'public',
     handler: async () => {
-      runs += 1
+      refreshStarts.push(Date.now())
+      if (slowNextRefresh) {
+        slowNextRefresh = false
+        await new Promise(resolve => setTimeout(resolve, slowRefreshMs))
+      }
       const score = await db.table('records').where('id', 1).value('score')
       lastScore = score
       return { score }
     },
   })
   await subscribeRealtimeQuery(sustained)
-  const before = runs
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  onTestFinished(() => { vi.useRealTimers() })
+  refreshStarts.length = 0
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  const received: Promise<void>[] = []
 
   for (let value = 1; value <= 50; value += 1) {
+    slowNextRefresh ||= value === 12
     await adapter.execute(`UPDATE records SET score = ${value} WHERE id = 1`)
-    received.push(bridge.receive(remoteInvalidation(['db:main:records'])))
-    await new Promise(resolve => setTimeout(resolve, 10))
+    void bridge.receive(remoteInvalidation(['db:main:records']))
+    await vi.advanceTimersByTimeAsync(10)
   }
-  await Promise.all(received)
-  await new Promise(resolve => setTimeout(resolve, 400))
+  await vi.advanceTimersByTimeAsync(1_000)
 
-  expect(runs - before).toBeLessThanOrEqual(7)
+  const refreshGaps = refreshStarts.slice(1).map((start, index) => start - (refreshStarts[index] ?? start))
+  return { lastScore, refreshCount: refreshStarts.length, refreshGaps }
+}
+
+it('limits a sustained remote write loop to one refresh per 100 ms and always delivers the final state', async () => {
+  const { lastScore, refreshCount, refreshGaps } = await runSustainedRemoteWriteLoop(0)
+
+  expect(refreshGaps.filter(gap => gap < 100)).toEqual([])
+  expect(refreshCount).toBeLessThanOrEqual(6)
   expect(lastScore).toBe(50)
-}, 30_000)
+})
+
+it('keeps remote refreshes 100 ms apart when one refresh outlasts the interval during a sustained remote write loop', async () => {
+  const { lastScore, refreshGaps } = await runSustainedRemoteWriteLoop(150)
+
+  expect(refreshGaps.filter(gap => gap < 100)).toEqual([])
+  expect(lastScore).toBe(50)
+})
 
 it('keeps a remote refresh after a reset that happens while stuck remote refreshes hold the concurrency slots', async () => {
   const { adapter, db } = await openRealtimeDatabase()
