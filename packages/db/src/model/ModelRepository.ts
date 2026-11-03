@@ -16,13 +16,14 @@ import {
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { normalizeDialectReadValue, storesJson } from '../schema/normalization'
+import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
+import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
@@ -1957,7 +1958,7 @@ export class ModelRepository<
         const written = this.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
-        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
+        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.valueTransformer.resolveCast(deletedAtColumn), deletedAt) } as never)
         entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {
@@ -3706,10 +3707,16 @@ export class ModelRepository<
     const connection = this.getConnection()
     const table = this.resolvePivotTable(relation.pivotTable, connection)
     const dialect = connection.getDriver() as SchemaDialectName
+    const timestampColumns: readonly string[] = relation.pivotTimestamps ? PIVOT_TIMESTAMP_COLUMNS : []
     return Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
         const definition = typeof table === 'string' ? undefined : table.columns[column]
-        return [column, definition ? normalizeDialectReadValue(dialect, definition, value) : value]
+        if (!definition) {
+          return [column, value]
+        }
+
+        const normalized = normalizeDialectReadValue(dialect, definition, value)
+        return [column, timestampColumns.includes(column) && storesText(definition) ? this.applyCastGet('datetime', normalized) : normalized]
       }),
     )
   }

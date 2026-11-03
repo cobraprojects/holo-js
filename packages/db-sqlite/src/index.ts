@@ -17,7 +17,11 @@ class TransactionError extends Error {}
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
 function normalizeBinding(value: unknown): unknown {
-  return typeof value === 'boolean' ? Number(value) : value
+  if (typeof value === 'boolean') {
+    return Number(value)
+  }
+
+  return value instanceof Date ? value.toISOString() : value
 }
 
 type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'

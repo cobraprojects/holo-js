@@ -206,6 +206,10 @@ export function storesJson(dialect: SchemaDialectName | undefined, column: AnyCo
   return column.kind === 'json' || (dialect === 'sqlite' && column.kind === 'text')
 }
 
+export function storesText(column: AnyColumnDefinition): boolean {
+  return column.kind === 'string' || column.kind === 'text'
+}
+
 export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
