@@ -134,7 +134,7 @@ describe('destructive database commands', () => {
     await commands.run('migrate:fresh', { seed: true, force: true })
 
     expect(commands.runs).toEqual([
-      { kind: 'fresh', options: { seed: false } },
+      { kind: 'fresh', options: {} },
       expect.objectContaining({ kind: 'seed', options: expect.objectContaining({ force: true, environment: 'production' }) }),
     ])
   })

@@ -12,7 +12,6 @@ import {
   type AuthorizationDiscoveryModule,
   type GeneratedCommandRegistryEntry,
   type GeneratedJobRegistryEntry,
-  type InactiveGeneratedModelModule,
   type MinimalListenerDefinition,
   type NormalizedDiscoveredQueueJob,
   hasEventDefinitionMarker,
@@ -236,10 +235,6 @@ export function isUnresolvedModelSchemaError(error: unknown): boolean {
     && (error.message.includes('is not present in the generated schema registry')
       || ('code' in error && error.code === 'SCHEMA_ERROR'
         && /^Table ".+" does not define a primary key column\.$/.test(error.message)))
-}
-
-export function isInactiveGeneratedModelModule(value: unknown): value is InactiveGeneratedModelModule {
-  return isRecord(value) && value.holoModelPendingSchema === true
 }
 
 export function isMigrationDefinition(value: unknown): value is MigrationDefinition {

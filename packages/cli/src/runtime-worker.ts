@@ -367,16 +367,6 @@ try {
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
     await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
-
-    if (payload.options?.seed) {
-      const seeded = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed({
-        ...(Array.isArray(payload.options.only) ? { only: payload.options.only } : {}),
-        quietly: payload.options.quietly === true,
-        force: payload.options.force === true,
-        environment: typeof payload.options.environment === 'string' ? payload.options.environment : 'development',
-      })
-      printExecutedItems(seeded, 'No seeders were executed.', 'Seeders executed:')
-    }
   } else if (payload.kind === 'rollback') {
     const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
     await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)

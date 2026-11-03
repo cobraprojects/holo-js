@@ -55,7 +55,6 @@ import {
   renderScaffoldAppConfig,
   renderScaffoldDatabaseConfig,
   renderScaffoldEnvFiles,
-  resolveAuthUserModelSchemaImportPath,
 } from './project-renderers'
 import {
   renderScaffoldGitignore,
@@ -315,14 +314,7 @@ export async function scaffoldProject(
       await ensureRateLimitStorageIgnore(projectRoot)
     }
     const userModelPath = resolve(projectRoot, config.paths.models, 'User.ts')
-    await writeFile(
-      userModelPath,
-      renderAuthUserModel(resolveAuthUserModelSchemaImportPath(
-        userModelPath,
-        generatedSchemaPath,
-      )),
-      'utf8',
-    )
+    await writeFile(userModelPath, renderAuthUserModel(), 'utf8')
 
     for (const migrationFile of createAuthMigrationFiles()) {
       await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')

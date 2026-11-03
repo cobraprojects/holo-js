@@ -50,7 +50,6 @@ import {
   importProjectModule,
   inferMigrationNameFromEntry,
   isCliModelReference,
-  isInactiveGeneratedModelModule,
   isMigrationDefinition,
   isUnresolvedModelSchemaError,
   isSeederDefinition,
@@ -228,10 +227,6 @@ async function discoverProjectRegistry(
       const moduleValue = await modules.import(filePath)
       const exportedModel = resolveNamedExportEntry(moduleValue, isCliModelReference)
       if (!exportedModel) {
-        if (isInactiveGeneratedModelModule(moduleValue)) {
-          continue
-        }
-
         throw new Error(`Discovered model "${relativePath}" does not export a Holo model.`)
       }
 
