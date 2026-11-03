@@ -199,6 +199,19 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
     expect(overridden.database.connections.main).toMatchObject({ driver: 'postgres' })
   })
 
+  it.each([
+    { databaseDriver: 'sqlite' as const, unset: { logging: false }, set: { logging: true } },
+    { databaseDriver: 'mysql' as const, unset: { ssl: false, logging: false }, set: { ssl: true, logging: true } },
+    { databaseDriver: 'postgres' as const, unset: { ssl: false, logging: false }, set: { ssl: true, logging: true } },
+  ])('reads DB_SSL and DB_LOGGING for a $databaseDriver scaffold', async ({ databaseDriver, unset, set }) => {
+    const root = await createProject()
+    await writeConfig(root, 'database', renderScaffoldDatabaseConfig({ databaseDriver, projectName: 'Fixture' }))
+    const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(defaults.database.connections.main).toMatchObject(unset)
+    const configured = await loadConfigDirectory(root, { processEnv: { DB_SSL: 'true', DB_LOGGING: 'true' }, preferCache: false })
+    expect(configured.database.connections.main).toMatchObject(set)
+  })
+
   it('loads finite PostgreSQL scaffold budgets and numeric environment overrides', async () => {
     const root = await createProject()
     const options = { databaseDriver: 'postgres' as const, projectName: 'Fixture', storageDefaultDisk: 'public' as const, optionalPackages: [] }

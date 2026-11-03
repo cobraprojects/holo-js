@@ -51,12 +51,6 @@ export async function initializeProjectRuntime(
   return initializeHolo(projectRoot, options)
 }
 
-export function parseBooleanEnv(value: string | undefined): boolean | undefined {
-  if (value === 'true') return true
-  if (value === 'false') return false
-  return undefined
-}
-
 export async function cacheProjectConfig(
   projectRoot: string,
   cacheWriter: typeof writeConfigCache = writeConfigCache,
@@ -65,82 +59,6 @@ export async function cacheProjectConfig(
     return await cacheWriter(projectRoot, { processEnv: process.env })
   } catch (error) {
     throw new Error(error instanceof Error && error.message ? error.message : 'Failed to cache config.', { cause: error })
-  }
-}
-
-export function createEnvRuntimeConfig() {
-  return {
-    db: {
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: process.env.DB_DRIVER,
-          url: process.env.DB_URL,
-          host: process.env.DB_HOST,
-          port: process.env.DB_PORT,
-          username: process.env.DB_USERNAME,
-          password: process.env.DB_PASSWORD,
-          database: process.env.DB_DATABASE,
-          schema: process.env.DB_SCHEMA,
-          ssl: parseBooleanEnv(process.env.DB_SSL),
-          logging: parseBooleanEnv(process.env.DB_LOGGING),
-        },
-      },
-    },
-  }
-}
-
-export function normalizeRuntimeConnectionInput(
-  connection: object | string | undefined,
-): Record<string, unknown> {
-  if (typeof connection === 'string') {
-    return { url: connection }
-  }
-
-  return connection ? { ...(connection as Record<string, unknown>) } : {}
-}
-
-export function isDefined(value: unknown): boolean {
-  return value !== undefined
-}
-
-export function filterDefinedRuntimeConnectionInput(
-  connection: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(connection).filter(([, value]) => isDefined(value)),
-  )
-}
-
-export function mergeRuntimeDatabaseConfig(
-  config: {
-    defaultConnection?: string
-    connections?: Record<string, object | string>
-  } | undefined,
-  envRuntimeConfig: ReturnType<typeof createEnvRuntimeConfig>,
-) {
-  const envDefault = envRuntimeConfig.db.connections.default
-  const hasEnvOverrides = Object.values(envDefault).some(isDefined)
-
-  if (!config) {
-    return envRuntimeConfig.db
-  }
-
-  if (!hasEnvOverrides) {
-    return config
-  }
-
-  const defaultConnection = config.defaultConnection ?? 'default'
-  const connections = { ...(config.connections ?? {}) }
-  connections[defaultConnection] = {
-    ...normalizeRuntimeConnectionInput(connections[defaultConnection]),
-    ...filterDefinedRuntimeConnectionInput(envDefault),
-  }
-
-  return {
-    ...config,
-    defaultConnection,
-    connections,
   }
 }
 
@@ -338,11 +256,6 @@ export async function withRuntimeEnvironment<T>(
   const environment = await getRuntimeEnvironment(projectRoot, kind)
 
   try {
-    const envRuntimeConfig = createEnvRuntimeConfig()
-    const runtimeDatabaseConfig = mergeRuntimeDatabaseConfig(
-      environment.project.config.database,
-      envRuntimeConfig,
-    )
     const migrationPublishers = isSchemaChangingKind(kind)
       ? await loadProjectPluginMigrationPublishers(projectRoot)
       : []
@@ -350,7 +263,7 @@ export async function withRuntimeEnvironment<T>(
       kind,
       projectRoot,
       runtimeConfig: {
-        db: runtimeDatabaseConfig,
+        db: environment.project.config.database,
       },
       models: environment.bundledModels.map(entry => pathToFileURL(entry).href),
       migrations: environment.bundledMigrations.map(entry => pathToFileURL(entry).href),

@@ -89,6 +89,8 @@ export default defineDatabaseConfig({
       username: env('DB_USERNAME', 'postgres'),
       password: env('DB_PASSWORD'),
       database: env('DB_DATABASE', 'my_app'),
+      ssl: env('DB_SSL', false),
+      logging: env('DB_LOGGING', false),
       schema: env('DB_SCHEMA', 'public'),
     },
   },
@@ -522,10 +524,12 @@ New projects read these from `.env`:
 | `DB_URL` | `url` (SQLite projects) |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` | PostgreSQL and MySQL credentials |
 | `DB_SCHEMA` | PostgreSQL `schema` |
+| `DB_SSL` | `ssl` (PostgreSQL and MySQL projects) |
+| `DB_LOGGING` | `logging` |
 | `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT_MS`, `DB_IDLE_TIMEOUT_MS` | PostgreSQL pool |
 | `DB_MAX_CONCURRENT_QUERIES`, `DB_QUERY_QUEUE_LIMIT` | `concurrency` settings |
 
-These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them.
+These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them. The app and CLI commands such as `holo migrate` use the same resolved config, so a variable your config doesn't read, or a value it sets without `env()`, changes neither.
 
 ## Next steps
 

@@ -76,12 +76,9 @@ import {
   splitCsv,
 } from '../src/parsing'
 import {
-  createEnvRuntimeConfig,
   createRuntimeInvocation,
   getRuntimeEnvironment,
   getRuntimeFailureMessage,
-  mergeRuntimeDatabaseConfig,
-  parseBooleanEnv,
   resolveConfigModuleUrl,
   runRuntimeInvocation,
   withRuntimeEnvironment,
@@ -6585,6 +6582,39 @@ process.stdout.write('framework build ran\\n')
     }
   }, 90000)
 
+  for (const database of isolatedMigrationDatabases) {
+    it.skipIf(!database.enabled)(`migrates the ${database.driver} database that config/database.ts sets, not a shell DB_DATABASE`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const suffix = randomUUID().replaceAll('-', '')
+      const configuredDatabase = `holo_configured_${suffix}`
+      const shellDatabase = `holo_shell_${suffix}`
+      await writeSchemaSourceProject(projectRoot, database.connection(configuredDatabase))
+      await database.create(configuredDatabase)
+      await database.create(shellDatabase)
+      const tablesOf = async (databaseName: string) => {
+        const connection = database.open(databaseName)
+        try {
+          return await createSchemaService(connection).getTables()
+        } finally {
+          await connection.disconnect()
+        }
+      }
+      try {
+        const migrated = runCliProcess(projectRoot, ['migrate'], { env: { DB_DATABASE: shellDatabase } })
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+          expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+        }
+        expect(await tablesOf(configuredDatabase)).toEqual(expect.arrayContaining(['_holo_migrations', 'profiles', 'users']))
+        expect(await tablesOf(shellDatabase)).toEqual([])
+      } finally {
+        await database.drop(configuredDatabase)
+        await database.drop(shellDatabase)
+      }
+    }, 90000)
+  }
+
   it('runs plain migrate without @holo-js/cache and fails migrate --isolated with the documented error', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -8341,13 +8371,6 @@ export default {
     const notePath = join(projectRoot, 'note.txt')
     await writeTextFile(notePath, 'ready')
 
-    vi.stubEnv('DB_DRIVER', 'postgres')
-    vi.stubEnv('DB_SSL', 'true')
-    vi.stubEnv('DB_LOGGING', 'false')
-    expect(parseBooleanEnv(undefined)).toBeUndefined()
-    expect(parseBooleanEnv('true')).toBe(true)
-    expect(parseBooleanEnv('false')).toBe(false)
-    expect(parseBooleanEnv('wat')).toBeUndefined()
     expect(getRegistryMigrationSlug('2026_01_01_000000_create_users_table')).toBe('create_users_table')
     expect(() => getRegistryMigrationSlug('2026_01_01_000000_!!!')).toThrow()
     expect(hasRegisteredMigrationSlug({
@@ -8382,210 +8405,6 @@ export default {
     expect(resolvePackageManagerDevCommand('yarn')).toBe('yarn dev')
     expect(projectInternals.resolveNamedExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
     expect(projectInternals.resolveNamedExportEntry('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
-    expect(createEnvRuntimeConfig()).toMatchObject({
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'postgres',
-            ssl: true,
-            logging: false,
-          },
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig(undefined, createEnvRuntimeConfig())).toEqual(
-      createEnvRuntimeConfig().db,
-    )
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: 'postgresql://manifest',
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'postgres',
-            url: 'postgresql://env',
-            host: undefined,
-            port: '5432',
-            username: 'env-user',
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: true,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          url: 'postgresql://env',
-          driver: 'postgres',
-          host: undefined,
-          port: '5432',
-          username: 'env-user',
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: true,
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({}, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './env.sqlite',
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: true,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: 'sqlite',
-          url: './env.sqlite',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: true,
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: 'secret',
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-          password: 'secret',
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './env.sqlite',
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: false,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './env.sqlite',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
     expect(resolveConfigModuleUrl()).toContain('/config/dist/index.mjs')
     expect(resolveConfigModuleUrl(specifier => `mock:${specifier}`)).toBe('mock:@holo-js/config')
     expect(resolveConfigModuleUrl(null as never)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
@@ -10155,45 +9974,6 @@ export default defineAbility('reports.export', () => true)
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"posts": {')
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"reports.export": {')
   }, 30000)
-
-  it('preserves manifest connection fields when env overrides are partial', () => {
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: 'secret',
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-          password: 'secret',
-        },
-      },
-    })
-  })
 
   it('does not touch generated ownership or registry files when prepare output is unchanged', async () => {
     const projectRoot = await createTempProject()
