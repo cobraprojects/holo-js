@@ -2,9 +2,8 @@ import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
-import { toTableDefinition } from './introspection/definitions'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
+import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, readInlineForeignKeyClause, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -41,10 +40,10 @@ export class SQLiteSchemaOperations {
         )
       }
 
-      return definitions.flatMap((definition): Array<string | AnyColumnDefinition> => {
+      return definitions.flatMap((definition) => {
         const columnName = readColumnDefinitionName(definition)
         if (columnName === column.name) {
-          return [keepInlineColumnConstraints(structure, definition, column)]
+          return [this.compileChangedColumn(tableName, definition, column)]
         }
 
         if (columnName === undefined && readEnumChecks(definition).some(check => check.column === column.name)) {
@@ -231,26 +230,21 @@ export class SQLiteSchemaOperations {
       ...schemaObjects.map(object => ({ sql: object.sql, source: `schema:sqliteRebuild:restore:${object.type}:${object.name}` })),
     ])
   }
+
+  private compileChangedColumn(tableName: string, definition: string, column: AnyColumnDefinition): string {
+    const inline = readInlineColumnConstraints(definition)
+    return this.compiler.compileRebuiltColumn(tableName, {
+      ...column,
+      primaryKey: inline.primaryKey,
+      unique: inline.unique,
+      references: undefined,
+      ...(inline.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
+    }, readInlineForeignKeyClause(definition))
+  }
 }
 
 function isAutoIncrementDefinition(definition: string | AnyColumnDefinition): boolean {
   return typeof definition === 'string'
     ? readInlineColumnConstraints(definition).autoIncrement
     : definition.idStrategy === 'autoIncrement'
-}
-
-function keepInlineColumnConstraints(
-  structure: DatabaseTableStructure,
-  definition: string,
-  column: AnyColumnDefinition,
-): AnyColumnDefinition {
-  const inline = readInlineColumnConstraints(definition)
-  const references = inline.references ? toTableDefinition(structure).columns[column.name]?.references : undefined
-  return {
-    ...column,
-    primaryKey: inline.primaryKey,
-    unique: inline.unique,
-    references,
-    ...(inline.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
-  }
 }

@@ -178,6 +178,40 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       }])
     })
 
+    it.runIf(driver === 'mysql')('reads enum values that MySQL stores with backslash escapes and doubled quotes as written', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_escaped_enum')
+      onTestFinished(() => schema.dropTable(name))
+      await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`id\` BIGINT PRIMARY KEY, \`path\` ENUM('C:\\\\temp', 'it''s', 'say \\"hi\\"', 'a\\\\\\'b', 'tab\\there') NOT NULL)`, source: 'schema' })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns.path?.enumValues).toEqual(['C:\\temp', 'it\'s', 'say "hi"', 'a\\\'b', 'tab\there'])
+    })
+
+    it.runIf(driver === 'sqlite')('reads tables whose implicit foreign keys reference a missing parent or one without a primary key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const keyless = uniqueName('holo_read_keyless')
+      const orphans = uniqueName('holo_read_orphans')
+      const children = uniqueName('holo_read_keyless_children')
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(orphans)
+        await schema.dropTable(keyless)
+      })
+      await db.executeCompiled({ sql: `CREATE TABLE "${keyless}" ("code" TEXT NOT NULL)`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${orphans}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "${uniqueName('holo_read_missing')}")`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "keyless_code" TEXT REFERENCES "${keyless}")`, source: 'schema' })
+
+      const reader = createSchemaReader(db)
+      const definitions = [(await reader.readTable(orphans))!, (await reader.readTable(children))!]
+
+      expect(definitions.map(definition => Object.keys(definition.columns))).toEqual([['id', 'parent_id'], ['id', 'keyless_code']])
+      const rendered = renderGeneratedSchemaModule(definitions)
+      expect(rendered).toContain('"parent_id": column.integer().nullable(),')
+      expect(rendered).toContain('"keyless_code": column.text().nullable(),')
+    })
+
     it.runIf(driver === 'sqlite')('reads a parenthesized string default that contains parentheses as its literal value', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_paren_default')
@@ -201,6 +235,27 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const definition = (await createSchemaReader(db).readTable(name))!
 
       expect(definition.columns.id).toEqual({ kind: 'id', name: 'id', nullable: false, hasDefault: false, generated: true, primaryKey: true, unique: false, idStrategy: 'autoIncrement' })
+    })
+
+    it.runIf(driver === 'sqlite')('reads an INTEGER PRIMARY KEY that is not the rowid alias as a required primary-key column', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const withoutRowId = uniqueName('holo_read_without_rowid')
+      const descending = uniqueName('holo_read_desc_key')
+      onTestFinished(async () => {
+        await schema.dropTable(withoutRowId)
+        await schema.dropTable(descending)
+      })
+      await db.executeCompiled({ sql: `CREATE TABLE "${withoutRowId}" ("id" INTEGER PRIMARY KEY, "value" TEXT NOT NULL) WITHOUT ROWID`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${descending}" ("id" INTEGER PRIMARY KEY DESC, "value" TEXT NOT NULL)`, source: 'schema' })
+      await expect(db.table(withoutRowId).insert({ value: 'needs an id' })).rejects.toThrow()
+
+      const reader = createSchemaReader(db)
+      const definitions = [(await reader.readTable(withoutRowId))!, (await reader.readTable(descending))!]
+
+      for (const definition of definitions) {
+        expect(definition.columns.id).toEqual({ kind: 'integer', name: 'id', nullable: false, hasDefault: false, generated: false, primaryKey: true, unique: false })
+      }
+      expect(renderGeneratedSchemaModule(definitions)).toContain('"id": column.integer().primaryKey(),')
     })
 
     it.runIf(driver === 'postgres')('reads vector dimensions, uuid and jsonb columns', async () => {

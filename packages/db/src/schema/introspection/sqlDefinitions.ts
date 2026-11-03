@@ -217,6 +217,13 @@ const INLINE_UNIQUE_PATTERN = new RegExp(
 )
 const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
 
+export function readInlineForeignKeyClause(definition: string): string | undefined {
+  for (const [clause, quoted] of definition.matchAll(INLINE_FOREIGN_KEY_PATTERN)) {
+    if (quoted === undefined) return clause.trim()
+  }
+  return undefined
+}
+
 function withoutInlineClause(definition: string, pattern: RegExp): string | undefined {
   const rewritten = definition.replace(pattern, (match, quoted: string | undefined) => quoted ?? '')
   return rewritten === definition ? undefined : rewritten

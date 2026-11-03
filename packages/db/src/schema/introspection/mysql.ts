@@ -1,6 +1,6 @@
 import { splitTablePath } from '../identifiers'
 import { createIntrospect } from './introspect'
-import { readStringLength, readStringLiterals } from './sqlDefinitions'
+import { readStringLength } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
 
@@ -11,6 +11,9 @@ type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: st
 
 const SCHEMA_BINDING = 'COALESCE(?, DATABASE())'
 const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|now|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?$/i
+const MYSQL_STRING_LITERAL_PATTERN = /'((?:[^'\\]|\\.|'')*)'/gs
+const MYSQL_ESCAPE_SEQUENCE_PATTERN = /\\(.)|''/gs
+const MYSQL_ESCAPED_CHARACTERS: Readonly<Record<string, string>> = { '0': '\0', 'b': '\b', 'n': '\n', 'r': '\r', 't': '\t', 'Z': '\x1a', '%': '\\%', '_': '\\_' }
 const NUMERIC_TYPE_PATTERN = /^(?:tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real|bit)\b/i
 
 function readColumnDefault(row: ColumnRow): DatabaseColumnDefault {
@@ -23,9 +26,19 @@ function readColumnDefault(row: ColumnRow): DatabaseColumnDefault {
   return { kind: 'literal', value: row.column_default }
 }
 
+function decodeMySQLStringLiteral(body: string): string {
+  return body.replace(MYSQL_ESCAPE_SEQUENCE_PATTERN, (_sequence, escaped: string | undefined) => escaped === undefined
+    ? '\''
+    : MYSQL_ESCAPED_CHARACTERS[escaped] ?? escaped)
+}
+
+function readMySQLStringLiterals(text: string): string[] {
+  return [...text.matchAll(MYSQL_STRING_LITERAL_PATTERN)].map(([, body = '']) => decodeMySQLStringLiteral(body))
+}
+
 function readEnumColumns(columns: readonly ColumnRow[]): DatabaseEnumCheckStructure[] {
   return columns.flatMap(column => /^enum\(/i.test(column.column_type)
-    ? [{ column: column.name, values: readStringLiterals(column.column_type.slice(5, -1)) }]
+    ? [{ column: column.name, values: readMySQLStringLiterals(column.column_type.slice(5, -1)) }]
     : [])
 }
 

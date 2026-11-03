@@ -1,4 +1,3 @@
-import { SchemaError } from '../../core/errors'
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
@@ -68,6 +67,13 @@ function readDefinitionDetails(createTableSql: string) {
   return { foreignKeyNames, enumChecks }
 }
 
+function readRowIdAlias(columns: readonly ColumnRow[], indexes: readonly DatabaseIndexStructure[]): string | undefined {
+  const [onlyPrimaryKey, ...otherPrimaryKeys] = columns.filter(row => row.pk > 0)
+  const primaryKeyHasOwnIndex = indexes.some(index => index.primary)
+  if (!onlyPrimaryKey || otherPrimaryKeys.length > 0 || primaryKeyHasOwnIndex) return undefined
+  return onlyPrimaryKey.type.toLowerCase() === 'integer' ? onlyPrimaryKey.name : undefined
+}
+
 export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const introspect = createIntrospect(connection)
 
@@ -104,9 +110,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     const foreignKeys: DatabaseForeignKeyStructure[] = []
     for (const row of result.rows) {
       const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
-      if (to === undefined) {
-        throw new SchemaError(`SQLite cannot read the foreign key on column "${row.from}" of table "${table}" because table "${row.table}" has no primary key for it to reference.`)
-      }
+      if (to === undefined) continue
       const name = names.get(row.from)
       foreignKeys.push({
         ...(name ? { name } : {}),
@@ -133,8 +137,8 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
       const details = readDefinitionDetails(createTableSql ?? '')
       const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
-      const [onlyPrimaryKey, ...otherPrimaryKeys] = columns.rows.filter(row => row.pk > 0)
-      const rowIdAlias = onlyPrimaryKey && otherPrimaryKeys.length === 0 && onlyPrimaryKey.type.toLowerCase() === 'integer' ? onlyPrimaryKey.name : undefined
+      const indexes = await readIndexes(schema, table)
+      const rowIdAlias = readRowIdAlias(columns.rows, indexes)
       const structure: DatabaseTableStructure = {
         dialect: 'sqlite',
         tableName,
@@ -150,7 +154,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           autoIncrement: row.name === rowIdAlias,
           computed: row.hidden === 2 || row.hidden === 3,
         })),
-        indexes: await readIndexes(schema, table),
+        indexes,
         foreignKeys: await readForeignKeys(schema, table, details.foreignKeyNames),
         enumChecks: details.enumChecks,
       }
