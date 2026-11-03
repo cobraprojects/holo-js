@@ -69,20 +69,42 @@ export default defineMigration({
 
 Restate `nullable()` and `default()` on each changed column, because `change()` replaces the column's definition. A `json()` column is still `TEXT` on SQLite, so keep its `'json'` cast.
 
-The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as UTC text in the format of SQLite's `CURRENT_TIMESTAMP`, such as `2026-01-02 03:04:05`, as Holo now writes every SQLite date. Earlier releases wrote ISO 8601 text such as `2026-01-02T03:04:05.000Z`. Holo still reads those values as the right `Date`, but they don't compare or order correctly against the new format or against values your `CURRENT_TIMESTAMP` defaults stored. Rewrite them once in a migration, for each date column:
+The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as UTC text in the format of SQLite's `CURRENT_TIMESTAMP`, such as `2026-01-02 03:04:05`, as Holo now writes every SQLite date. Earlier releases wrote ISO 8601 text such as `2026-01-02T03:04:05.000Z`. Holo still reads those values as the right `Date`, but they don't compare or order correctly against the new format or against values your `CURRENT_TIMESTAMP` defaults stored. Holo's own tables hold them too, and password-reset and email-verification links match their dates exactly, so a link issued before the upgrade stops working until its row is rewritten. Rewrite every date column once in a migration, your tables and Holo's:
 
 ```ts [server/db/migrations/2026_06_01_000000_rewrite_sqlite_dates.ts]
 import { defineMigration } from '@holo-js/db'
 
+const dateColumns: Record<string, readonly string[]> = {
+  posts: ['published_at', 'created_at', 'updated_at'],
+  users: ['email_verified_at', 'created_at', 'updated_at'],
+  sessions: ['created_at', 'last_activity_at', 'expires_at', 'invalidated_at'],
+  auth_identities: ['created_at', 'updated_at'],
+  personal_access_tokens: ['last_used_at', 'expires_at', 'created_at', 'updated_at'],
+  password_reset_tokens: ['expires_at', 'used_at', 'created_at', 'updated_at'],
+  email_verification_tokens: ['expires_at', 'used_at', 'created_at', 'updated_at'],
+  auth_multi_factor_credentials: ['enabled_at', 'created_at', 'updated_at'],
+  notifications: ['read_at', 'created_at', 'updated_at'],
+  media: ['created_at', 'updated_at'],
+  _holo_migrations: ['migrated_at'],
+}
+
 export default defineMigration({
-  async up({ db }) {
-    const rows = await db.table('posts').select('id', 'created_at').where('created_at', 'like', '%T%Z').get()
-    for (const row of rows) {
-      await db.table('posts').where('id', row.id).update({ created_at: new Date(String(row.created_at)) })
+  async up({ db, schema }) {
+    if (db.getDialect().name !== 'sqlite') return
+    for (const [table, columns] of Object.entries(dateColumns)) {
+      if (!(await schema.hasTable(table))) continue
+      for (const column of columns) {
+        const rows = await db.table(table).select('id', column).where(column, 'like', '%T%Z').get()
+        for (const row of rows) {
+          await db.table(table).where('id', row.id).update({ [column]: new Date(String(row[column])) })
+        }
+      }
     }
   },
 })
 ```
+
+Replace `posts` with your own tables and their date columns. The other entries are the tables Holo's auth, session, notification and media migrations create, and Holo's migration log; use your configured names if you renamed them, such as a password broker's `table` or the media table. A table that doesn't exist is skipped. The database cache, lock, queue job and failed job tables store their times as integer milliseconds, so they need no rewrite.
 
 PostgreSQL and MySQL state booleans, JSON, timestamps and enum values themselves, so their models need no new casts. See [SQLite tables created before 0.6](/orm/casts#sqlite-tables-created-before-0-6).
 
