@@ -810,6 +810,10 @@ The column keeps its primary key, unique constraint and foreign key; change thos
 
 On SQLite, Holo rebuilds the table from the database: it reads the table's definition, replaces only the changed column, copies the rows, and restores the table's indexes and triggers. Every other column keeps its stored type, constraints and collation, including columns your migrations never declared, so tables created by raw SQL can be changed too.
 
+On SQLite, the changed column gets the new type, nullability and default, and keeps the rest of its stored definition: its `COLLATE` clause, its `CHECK` constraints other than an enum's list of values, and its `GENERATED ALWAYS AS` expression. Holo has no collation modifier, so you can't change a collation with `change()`. SQLite doesn't allow a default on a generated column, so `change()` throws `SchemaError` when you give a generated column a `default()`.
+
+On MySQL, `change()` runs `MODIFY COLUMN` with the new definition, so the column loses a collation it had.
+
 As in Laravel, the rebuild runs with foreign key checks off, so rows in other tables that reference the rebuilt table are kept, even with `ON DELETE CASCADE`, and `RESTRICT` keys don't block it. Holo then checks every foreign key and puts the checks back as they were. If a foreign key would be left pointing at a missing row, `change()` throws `SchemaError` and the table is left unchanged. Inside a migration the checks are already off for the whole migration. Inside your own transaction SQLite can't turn them off, so `change()` throws `SchemaError` when another table references the rebuilt table; run it outside the transaction or in a migration.
 
 ## Shortcut columns
