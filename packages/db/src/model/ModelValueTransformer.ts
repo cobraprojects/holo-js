@@ -191,7 +191,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private isUntypedIncrementingKey(key: string): boolean {
     const { untyped, primaryKey, uniqueIdConfig } = this.definition
-    return untyped && key === primaryKey && !uniqueIdConfig?.columns.includes(key as never)
+    return untyped && key === primaryKey && key === 'id' && !uniqueIdConfig?.columns.includes(key as never)
   }
 
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {
