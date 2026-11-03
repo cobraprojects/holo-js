@@ -1007,7 +1007,7 @@ Holo names foreign keys `{table}_{column}_foreign` by default. The `post_tags` e
 
 ### dropForeign()
 
-Drops a foreign key by its constraint name. Available inside `table()`. Not supported on SQLite.
+Drops a foreign key by its constraint name, or by its columns. Available inside `table()`. Not supported on SQLite.
 
 ```ts
 await schema.table('posts', (table) => {
@@ -1015,11 +1015,31 @@ await schema.table('posts', (table) => {
 })
 ```
 
+When you pass an array of columns, Holo drops the key with the conventional name `{table}_{columns}_foreign`. This call drops `posts_user_id_foreign`:
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropForeign(['user_id'])
+})
+```
+
+Dropping a foreign key that doesn't exist fails.
+
 On PostgreSQL, Holo versions before 0.5.7 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
 
 ```ts
 await schema.table('posts', (table) => {
   table.dropForeign('posts_user_id_fkey')
+})
+```
+
+### dropConstrainedForeignId()
+
+Drops the foreign key `{table}_{column}_foreign`, then the column. Available inside `table()`. Not supported on SQLite. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropConstrainedForeignId('user_id')
 })
 ```
 

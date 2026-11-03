@@ -500,6 +500,91 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getForeignKeys(child)).toEqual([])
     })
 
+    it('drops conventional foreign keys by their columns and raises when the key is missing', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parent = `holo_fk_parent_${suffix}`
+      const child = `holo_fk_child_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(child)
+        await schema.dropTable(parent)
+      })
+      await schema.createTable(parent, table => { table.id() })
+      await schema.createTable(child, table => {
+        table.id()
+        table.foreignId('created_by_id').nullable().constrained(parent)
+      })
+      if (driver === 'sqlite') {
+        await expect(schema.table(child, table => { table.dropForeign(['created_by_id']) })).rejects.toThrow(CapabilityError)
+        return
+      }
+      await schema.table(child, table => {
+        table.foreignId('updated_by_id').nullable().constrained(parent)
+      })
+
+      await schema.table(child, table => {
+        table.dropForeign(['created_by_id'])
+        table.dropForeign(['updated_by_id'])
+      })
+
+      await db.table(child).insert({ created_by_id: 99, updated_by_id: 99 })
+      expect(await schema.getForeignKeys(child)).toEqual([])
+      await expect(schema.table(child, table => { table.dropForeign(['created_by_id']) })).rejects.toThrow()
+    })
+
+    it('drops a legacy PostgreSQL foreign key by its database-assigned name', async () => {
+      if (driver !== 'postgres') {
+        return
+      }
+      const { db, schema } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parent = `holo_fk_parent_${suffix}`
+      const child = `holo_fk_child_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(child)
+        await schema.dropTable(parent)
+      })
+      await schema.createTable(parent, table => { table.id() })
+      await db.unsafeExecute(unsafeSql(`CREATE TABLE "${child}" ("id" serial PRIMARY KEY, "created_by_id" integer REFERENCES "${parent}" ("id"))`))
+      await expect(db.table(child).insert({ created_by_id: 99 })).rejects.toThrow()
+
+      await schema.table(child, table => { table.dropForeign(`${child}_created_by_id_fkey`) })
+
+      await db.table(child).insert({ created_by_id: 99 })
+      expect(await schema.getForeignKeys(child)).toEqual([])
+    })
+
+    it('drops a constrained foreign id column together with its key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const parent = `holo_fk_parent_${suffix}`
+      const child = `holo_fk_child_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(child)
+        await schema.dropTable(parent)
+      })
+      await schema.createTable(parent, table => { table.id() })
+      await schema.createTable(child, table => {
+        table.id()
+        table.string('name').nullable()
+        table.foreignId('created_by_id').nullable().constrained(parent)
+      })
+      if (driver === 'sqlite') {
+        await expect(schema.table(child, table => { table.dropConstrainedForeignId('created_by_id') })).rejects.toThrow(CapabilityError)
+        return
+      }
+      if (driver === 'mysql') {
+        await expect(schema.table(child, table => { table.dropColumn('created_by_id') })).rejects.toThrow()
+      }
+
+      await schema.table(child, table => { table.dropConstrainedForeignId('created_by_id') })
+
+      expect((await schema.getColumns(child)).map(column => column.name)).not.toContain('created_by_id')
+      expect(await schema.getForeignKeys(child)).toEqual([])
+      await db.table(child).insert({ name: 'Unconstrained' })
+      expect(await db.table(child).pluck('name')).toEqual(['Unconstrained'])
+    })
+
     it('names a foreign key declared by createTable with the given constraint name', async () => {
       const { db, schema, table, adapter } = await openDatabase(driver)
       const parent = table.tableName.split('.').at(-1)!
