@@ -543,6 +543,16 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getIndexes(name)).toEqual(before)
     })
 
+    it('raises when renaming a missing index', async () => {
+      const { schema, table } = await openDatabase(driver)
+      const name = table.tableName.split('.').at(-1)!
+      const before = await schema.getIndexes(name)
+
+      await expect(schema.table(name, table => { table.renameIndex(`${name}_missing`, `${name}_renamed`) })).rejects.toThrow()
+
+      expect(await schema.getIndexes(name)).toEqual(before)
+    })
+
     it.runIf(driver === 'sqlite')('refuses to rename a partial index instead of recreating it without its condition', async () => {
       const { db, schema, table, adapter } = await openDatabase(driver)
       const name = table.tableName
