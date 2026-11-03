@@ -974,13 +974,30 @@ When you don't pass a name, Holo builds one from the table and columns: `comment
 
 ### dropIndex()
 
-Drops an index by name. Available inside `table()`.
+Drops an index by name, or by its columns. Available inside `table()`. A name that doesn't exist raises an error and changes nothing.
 
 ```ts
 await schema.table('comments', (table) => {
   table.dropIndex('comments_post_id_status_index')
 })
 ```
+
+When you pass an array of columns, Holo drops the index with the conventional name `{table}_{columns}_index`. This call drops `comments_post_id_status_index`, and the second drops the index of `morphs('commentable')`:
+
+```ts
+await schema.table('comments', (table) => {
+  table.dropIndex(['post_id', 'status'])
+  table.dropIndex(['commentable_type', 'commentable_id'])
+})
+```
+
+Index names keep the old table name after `renameTable()`, so drop them by their existing name. On PostgreSQL, Holo looks for the index in the table's schema, so a schema-qualified table such as `tenant.comments` works.
+
+A `unique()` column is backed by a unique constraint on PostgreSQL, and `dropIndex()` can't drop it. Use [dropUnique()](#dropunique).
+
+::: warning Upgrading from 0.5.x
+Before 0.6.0, `dropIndex()` on SQLite and PostgreSQL did nothing when the name was wrong. A wrong name now raises an error, as in Laravel. If a migration that hasn't run yet drops an index by a guessed name, check the name with [getIndexes()](#getindexes) first.
+:::
 
 ### dropUnique()
 
@@ -1014,7 +1031,7 @@ On SQLite, those columns are unique through an index that SQLite creates itself,
 
 ### renameIndex()
 
-Renames an index. Available inside `table()`. SQLite can't rename an index, so Holo reads the index's columns and uniqueness from the database, then drops it and creates it under the new name in one transaction, as Laravel does. SQLite partial and expression indexes can't be recreated that way, so Holo refuses to rename them; drop the index and create it again with raw SQL.
+Renames an index. Available inside `table()`. On PostgreSQL, Holo looks for the index in the table's schema. SQLite can't rename an index, so Holo reads the index's columns and uniqueness from the database, then drops it and creates it under the new name in one transaction, as Laravel does. SQLite partial and expression indexes can't be recreated that way, so Holo refuses to rename them; drop the index and create it again with raw SQL.
 
 ```ts
 await schema.table('comments', (table) => {

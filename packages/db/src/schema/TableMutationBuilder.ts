@@ -497,7 +497,8 @@ export class TableMutationBuilder {
     this.operations.push({ kind: 'dropPrimaryKey', constraintName: name })
   }
 
-  dropIndex(indexName: string): void {
+  dropIndex(index: string | readonly string[]): void {
+    const indexName = typeof index === 'string' ? index : resolveConventionalIndexName(this.table, index)
     this.operations.push({ kind: 'dropIndex', indexName })
   }
 
