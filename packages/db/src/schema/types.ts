@@ -64,6 +64,7 @@ export interface TableDefinition<
   readonly tableName: TName
   readonly columns: TColumns
   readonly indexes: readonly TableIndexDefinition[]
+  readonly primaryKeyName?: string
 }
 
 export interface TableIndexDefinition {

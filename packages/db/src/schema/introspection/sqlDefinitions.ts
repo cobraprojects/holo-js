@@ -78,8 +78,13 @@ export function splitTableDefinitions(createTableSql: string): string[] {
   return splitCreateTableSql(createTableSql)?.definitions ?? []
 }
 
+const PRIMARY_KEY_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?PRIMARY\s+KEY\b/i
 const TABLE_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?(?:PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY)\b/i
 const LEADING_IDENTIFIER_PATTERN = new RegExp(`^(${IDENTIFIER_PATTERN})`, 'i')
+
+export function isPrimaryKeyConstraintDefinition(definition: string): boolean {
+  return PRIMARY_KEY_CONSTRAINT_PATTERN.test(definition)
+}
 
 export function readColumnDefinitionName(definition: string): string | undefined {
   if (TABLE_CONSTRAINT_PATTERN.test(definition)) return undefined
@@ -124,74 +129,6 @@ export function readForeignKey(definition: string, columnName: string | undefine
   return tableLevel[1] ? { column, name: unquoteIdentifier(tableLevel[1]) } : { column }
 }
 
-const IDENTIFIER = `(?:${IDENTIFIER_PATTERN})`
-const REFERENCES_CLAUSE_PATTERN = new RegExp(
-  `\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?REFERENCES\\s+${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})?(?:\\s*\\(\\s*${IDENTIFIER}(?:\\s*,\\s*${IDENTIFIER})*\\s*\\))?`
-  + '(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:SET\\s+NULL|SET\\s+DEFAULT|CASCADE|RESTRICT|NO\\s+ACTION)|\\s+MATCH\\s+\\w+|\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)*',
-  'gi',
-)
-const INLINE_UNIQUE_PATTERN = new RegExp(
-  `\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE(?:\\s+ON\\s+CONFLICT\\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE))?\\b`,
-  'gi',
-)
-const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
-
-function removeKeywordClause(definition: string, pattern: RegExp): string | undefined {
-  const masked = maskQuotedText(definition)
-  for (const match of definition.matchAll(pattern)) {
-    const keywordIndex = match.index + match[0].search(/\S/)
-    if (masked[keywordIndex] !== ' ') {
-      return definition.slice(0, match.index) + definition.slice(match.index + match[0].length)
-    }
-  }
-  return undefined
-}
-
-function readTableUniqueColumns(definition: string): string[] | undefined {
-  const match = definition.match(TABLE_UNIQUE_PATTERN)
-  return match?.[1]?.split(',').map(column => readColumnDefinitionName(column.trim()) ?? column.trim())
-}
-
-function removeDefinitions(
-  definitions: readonly string[],
-  rewrite: (definition: string, columnName: string | undefined) => string | null | undefined,
-): string[] | undefined {
-  let removed = false
-  const kept: string[] = []
-  for (const definition of definitions) {
-    const rewritten = rewrite(definition, readColumnDefinitionName(definition))
-    if (rewritten === undefined) {
-      kept.push(definition)
-      continue
-    }
-    removed = true
-    if (rewritten !== null) kept.push(rewritten)
-  }
-  return removed ? kept : undefined
-}
-
-export function removeForeignKeyDefinitions(
-  definitions: readonly string[],
-  matches: (foreignKey: ForeignKeyDefinition) => boolean,
-): string[] | undefined {
-  return removeDefinitions(definitions, (definition, columnName) => {
-    const foreignKey = readForeignKey(definition, columnName)
-    if (!foreignKey || !matches(foreignKey)) return undefined
-    return columnName ? removeKeywordClause(definition, REFERENCES_CLAUSE_PATTERN) : null
-  })
-}
-
-export function removeUniqueDefinitions(definitions: readonly string[], columns: readonly string[]): string[] | undefined {
-  return removeDefinitions(definitions, (definition, columnName) => {
-    if (columnName) {
-      return columns.length === 1 && columns[0] === columnName && readInlineColumnConstraints(definition).unique
-        ? removeKeywordClause(definition, INLINE_UNIQUE_PATTERN)
-        : undefined
-    }
-    return readTableUniqueColumns(definition)?.join('\0') === columns.join('\0') ? null : undefined
-  })
-}
-
 const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i
 
 export function readStringLength(type: string): number | undefined {
@@ -208,16 +145,84 @@ export interface InlineColumnConstraints {
   readonly references: boolean
 }
 
-function maskQuotedText(text: string): string {
-  return text.replace(QUOTED_TEXT_PATTERN, quoted => ' '.repeat(quoted.length))
-}
-
 export function readInlineColumnConstraints(definition: string): InlineColumnConstraints {
-  const keywords = maskQuotedText(definition)
+  const keywords = definition.replace(QUOTED_TEXT_PATTERN, ' ')
   return {
     primaryKey: /\bPRIMARY\s+KEY\b/i.test(keywords),
     autoIncrement: /\bAUTOINCREMENT\b/i.test(keywords),
     unique: /\bUNIQUE\b/i.test(keywords),
     references: /\bREFERENCES\b/i.test(keywords),
   }
+}
+
+const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
+  `(${QUOTED_TEXT_PATTERN.source})|\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
+  'gi',
+)
+
+export function withoutInlinePrimaryKey(definition: string): string {
+  return definition.replace(INLINE_PRIMARY_KEY_PATTERN, (match, quoted: string | undefined) => quoted ?? '')
+}
+
+const IDENTIFIER = `(?:${IDENTIFIER_PATTERN})`
+const QUOTED_TEXT_GROUP = `(${QUOTED_TEXT_PATTERN.source})`
+const INLINE_FOREIGN_KEY_PATTERN = new RegExp(
+  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?REFERENCES\\s+${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})?(?:\\s*\\(\\s*${IDENTIFIER}(?:\\s*,\\s*${IDENTIFIER})*\\s*\\))?`
+  + '(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:SET\\s+NULL|SET\\s+DEFAULT|CASCADE|RESTRICT|NO\\s+ACTION)|\\s+MATCH\\s+\\w+|\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)*',
+  'gi',
+)
+const INLINE_UNIQUE_PATTERN = new RegExp(
+  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE(?:\\s+ON\\s+CONFLICT\\s+\\w+)?\\b`,
+  'gi',
+)
+const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
+
+function withoutInlineClause(definition: string, pattern: RegExp): string | undefined {
+  const rewritten = definition.replace(pattern, (match, quoted: string | undefined) => quoted ?? '')
+  return rewritten === definition ? undefined : rewritten
+}
+
+function readTableUniqueColumns(definition: string): string[] | undefined {
+  const match = definition.match(TABLE_UNIQUE_PATTERN)
+  return match?.[1]?.split(',').map(column => readColumnDefinitionName(column.trim()) ?? column.trim())
+}
+
+function rewriteDefinitions(
+  definitions: readonly string[],
+  rewrite: (definition: string, columnName: string | undefined) => string | null | undefined,
+): string[] | undefined {
+  let rewroteAny = false
+  const kept: string[] = []
+  for (const definition of definitions) {
+    const rewritten = rewrite(definition, readColumnDefinitionName(definition))
+    if (rewritten === undefined) {
+      kept.push(definition)
+      continue
+    }
+    rewroteAny = true
+    if (rewritten !== null) kept.push(rewritten)
+  }
+  return rewroteAny ? kept : undefined
+}
+
+export function withoutForeignKeyDefinitions(
+  definitions: readonly string[],
+  matches: (foreignKey: ForeignKeyDefinition) => boolean,
+): string[] | undefined {
+  return rewriteDefinitions(definitions, (definition, columnName) => {
+    const foreignKey = readForeignKey(definition, columnName)
+    if (!foreignKey || !matches(foreignKey)) return undefined
+    return columnName ? withoutInlineClause(definition, INLINE_FOREIGN_KEY_PATTERN) : null
+  })
+}
+
+export function withoutUniqueDefinitions(definitions: readonly string[], columns: readonly string[]): string[] | undefined {
+  return rewriteDefinitions(definitions, (definition, columnName) => {
+    if (columnName) {
+      return columns.length === 1 && columns[0] === columnName && readInlineColumnConstraints(definition).unique
+        ? withoutInlineClause(definition, INLINE_UNIQUE_PATTERN)
+        : undefined
+    }
+    return readTableUniqueColumns(definition)?.join('\0') === columns.join('\0') ? null : undefined
+  })
 }

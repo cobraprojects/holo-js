@@ -43,9 +43,15 @@ export function inferModelName(tableName: string): string {
 }
 
 export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): Extract<keyof TTable['columns'], string> {
-  const primaryKey = Object.values(table.columns).find(column => column.primaryKey)
+  const [primaryKey, ...otherPrimaryKeys] = Object.values(table.columns).filter(column => column.primaryKey)
   if (!primaryKey) {
     throw new SchemaError(`Table "${table.tableName}" does not define a primary key column.`)
+  }
+
+  if (otherPrimaryKeys.length > 0) {
+    throw new SchemaError(
+      `Table "${table.tableName}" has a composite primary key, which models do not support. Set the model's primaryKey option to one column, or use the table as a belongsToMany pivot.`,
+    )
   }
 
   return primaryKey.name as Extract<keyof TTable['columns'], string>

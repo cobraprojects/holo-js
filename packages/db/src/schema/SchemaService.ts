@@ -1,7 +1,7 @@
 import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
-import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
+import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
@@ -11,7 +11,7 @@ import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
 import { createSchemaReader } from './introspection'
 import { toTableDefinition } from './introspection/definitions'
-import { readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, removeForeignKeyDefinitions, removeUniqueDefinitions, splitCreateTableSql } from './introspection/sqlDefinitions'
+import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, withoutForeignKeyDefinitions, withoutUniqueDefinitions, splitCreateTableSql, withoutInlinePrimaryKey } from './introspection/sqlDefinitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -625,17 +625,7 @@ export class SchemaService {
 
   private async executeTableMutation(
     tableName: string,
-    operation:
-      | { kind: 'addColumn', columnName: string, column: AnyColumnBuilder }
-      | { kind: 'alterColumn', columnName: string, column: AnyColumnBuilder }
-      | { kind: 'dropColumn', columnName: string }
-      | { kind: 'renameColumn', fromColumnName: string, toColumnName: string }
-      | { kind: 'createIndex', index: TableIndexDefinition }
-      | { kind: 'dropIndex', indexName: string }
-      | { kind: 'dropUnique', indexName: string, columns?: readonly string[] }
-      | { kind: 'renameIndex', fromIndexName: string, toIndexName: string }
-      | { kind: 'createForeignKey', columnName: string, reference: ForeignKeyReference, constraintName?: string }
-      | { kind: 'dropForeignKey', constraintName: string, columns?: readonly string[] },
+    operation: ReturnType<TableMutationBuilder['getOperations']>[number],
   ): Promise<void> {
     switch (operation.kind) {
       case 'addColumn': {
@@ -727,7 +717,49 @@ export class SchemaService {
           dropForeignKeyOperation(tableName, operation.constraintName),
         ))
         return
+      case 'createPrimaryKey':
+        await this.createPrimaryKey(tableName, operation.columns, operation.constraintName)
+        return
+      case 'dropPrimaryKey':
+        await this.dropPrimaryKey(tableName, operation.constraintName)
     }
+  }
+
+  private async createPrimaryKey(tableName: string, columns: readonly string[], constraintName?: string): Promise<void> {
+    const compiler = this.createCompiler()
+    if (!this.isSqlite()) {
+      await this.execute(compiler.compile(createPrimaryKeyOperation(tableName, columns, constraintName)))
+      return
+    }
+
+    await this.rebuildSqliteTable(tableName, (structure, definitions) => {
+      if (structure.columns.some(column => column.primaryKey)) {
+        throw new SchemaError(`Table "${tableName}" already has a primary key. Drop it with dropPrimary() first.`)
+      }
+
+      return [...definitions, compiler.compilePrimaryKeyConstraint(columns, constraintName)]
+    })
+  }
+
+  private async dropPrimaryKey(tableName: string, constraintName?: string): Promise<void> {
+    const structure = await createSchemaReader(this.connection).readTableStructure(tableName)
+    if (!structure?.columns.some(column => column.primaryKey)) {
+      throw new SchemaError(`Table "${tableName}" has no primary key to drop.`)
+    }
+
+    if (this.isSqlite()) {
+      await this.rebuildSqliteTable(tableName, (_structure, definitions) => definitions
+        .filter(definition => !isPrimaryKeyConstraintDefinition(definition))
+        .map(definition => readColumnDefinitionName(definition) === undefined ? definition : withoutInlinePrimaryKey(definition)))
+      return
+    }
+
+    const actualName = structure.indexes.find(index => index.primary)?.name ?? 'PRIMARY'
+    if (this.isPostgres() && constraintName !== undefined && constraintName !== actualName) {
+      throw new SchemaError(`Table "${tableName}" has primary key "${actualName}", not "${constraintName}".`)
+    }
+
+    await this.execute(this.createCompiler().compile(dropPrimaryKeyOperation(tableName, actualName)))
   }
 
   private async executeRename(
@@ -852,7 +884,7 @@ export class SchemaService {
   private async dropSqliteForeignKey(tableName: string, constraintName: string, columns?: readonly string[]): Promise<void> {
     const unnamedColumn = columns?.length === 1 ? columns[0] : undefined
     await this.rebuildSqliteTable(tableName, (_structure, definitions) => {
-      const kept = removeForeignKeyDefinitions(definitions, foreignKey => foreignKey.name === undefined
+      const kept = withoutForeignKeyDefinitions(definitions, foreignKey => foreignKey.name === undefined
         ? foreignKey.column === unnamedColumn
         : foreignKey.name === constraintName)
       if (!kept) {
@@ -871,7 +903,7 @@ export class SchemaService {
     }
 
     await this.rebuildSqliteTable(tableName, (_structure, definitions) => {
-      const kept = removeUniqueDefinitions(definitions, inlineColumns)
+      const kept = withoutUniqueDefinitions(definitions, inlineColumns)
       if (!kept) {
         throw new SchemaError(`SQLite cannot drop missing unique "${indexName}" on table "${tableName}".`)
       }
