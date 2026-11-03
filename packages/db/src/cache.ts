@@ -1316,6 +1316,11 @@ function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'
   return otherPrimaryKeys.length === 0 ? primaryKey : undefined
 }
 
+function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, primaryKey: string): boolean {
+  const table = source.table ?? getGeneratedTableDefinition(source.tableName)
+  return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
+}
+
 function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string): string | undefined {
   const primaryKey = resolveRowDependencyKey(plan.source)
   return primaryKey === undefined
@@ -2117,11 +2122,14 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   const directDependencies = new Set<string>()
   const exactPredicates = new Map<string, DatabaseDependencyPredicateEntry>()
   const predicates = new Map<string, DatabaseDependencyPredicateEntry>()
+  let hasUnknownRowKey = primaryKey === undefined
   for (const row of rows) {
     const dependency = primaryKey === undefined ? undefined : createRowDependency(row[primaryKey])
     if (dependency) {
       dependencies.add(dependency)
       directDependencies.add(dependency)
+    } else {
+      hasUnknownRowKey = true
     }
 
     if (includeMetadata) {
@@ -2150,13 +2158,15 @@ export function inferAutomaticInsertCacheInvalidationPlan(
       dependencies.add(dependency)
     }
   }
-  const lastInsertDependency = createRowDependency(lastInsertId)
+  const lastInsertDependency = rows.length === 1 && primaryKey !== undefined && hasAutoIncrementKey(source, primaryKey)
+    ? createRowDependency(lastInsertId)
+    : undefined
   if (lastInsertDependency) {
     dependencies.add(lastInsertDependency)
     directDependencies.add(lastInsertDependency)
   }
 
-  if (dependencies.size === 1) {
+  if (hasUnknownRowKey && !lastInsertDependency) {
     const rowWildcardDependency = createTableRowWildcardCacheDependency(connectionName, tableName)
     dependencies.add(rowWildcardDependency)
     directDependencies.add(rowWildcardDependency)
