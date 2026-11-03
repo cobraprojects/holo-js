@@ -299,6 +299,32 @@ describe.each(drivers)('relation key matching on %s', (driver) => {
   })
 })
 
+describe.each(drivers)('an untyped model with a boolean cast on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('writes booleans to integer and boolean columns as a typed model does', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const name = await createTable('flags', (table) => {
+      table.id()
+      table.integer('active')
+      table.boolean('enabled')
+    })
+    const typedTable = defineGeneratedTable(name, { id: column.id(), active: column.integer(), enabled: column.boolean() })
+    const Typed = defineModel(typedTable, { connectionName: 'analytics', name: 'TypedFlag', fillable: ['active', 'enabled'], timestamps: false, casts: { active: 'boolean' } })
+    const Untyped = defineModel(name, { connectionName: 'analytics', name: 'UntypedFlag', fillable: ['active', 'enabled'], timestamps: false, casts: { active: 'boolean', enabled: 'boolean' } })
+
+    await Typed.create({ active: true, enabled: false })
+    const created = await Untyped.create({ active: true, enabled: false })
+    const stored = await DB.table(name, 'analytics').orderBy('id').get()
+
+    expect(stored[1]).toEqual({ ...stored[0], id: stored[1]?.id })
+    expect((await Untyped.findOrFail(created.get('id'))).toJSON()).toMatchObject({ active: true, enabled: false })
+    expect(await Untyped.where('active', 1).count()).toBe(2)
+  })
+})
+
 describe.each(drivers)('an untyped model with guarded: [] on %s', (driver) => {
   afterEach(() => {
     resetDB()

@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, readIntegerKey, storesText } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, readIntegerKey, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -214,7 +214,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
-      return this.isDateLikeCast(this.resolveCast(key)) ? dateLikeWriteValue(this.getSchemaDialectName(), value) : value
+      return this.applyDefinitionlessWriteNormalization(key, value)
     }
 
     if (column.kind === 'json') {
@@ -224,9 +224,17 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)
   }
 
-  private isDateLikeCast(cast: ModelCastDefinition | undefined): boolean {
-    const name = this.parseBuiltInCast(cast)?.name
-    return name === 'date' || name === 'datetime' || name === 'timestamp'
+  private applyDefinitionlessWriteNormalization(key: string, value: unknown): unknown {
+    switch (this.parseBuiltInCast(this.resolveCast(key))?.name) {
+      case 'date':
+      case 'datetime':
+      case 'timestamp':
+        return dateLikeWriteValue(this.getSchemaDialectName(), value)
+      case 'boolean':
+        return booleanStorageValue(value)
+      default:
+        return value
+    }
   }
 
   private getSchemaDialectName(): SchemaDialectName {

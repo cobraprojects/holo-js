@@ -43,6 +43,14 @@ function coerceBoolean(value: unknown): boolean | null | undefined {
   return Boolean(value)
 }
 
+export function booleanStorageValue(value: unknown): number | null | undefined {
+  if (value == null) {
+    return value as null | undefined
+  }
+
+  return coerceBoolean(value) ? 1 : 0
+}
+
 export function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
@@ -281,17 +289,7 @@ export function normalizeDialectWriteValue(
     case 'bigInteger':
       return typeof value === 'boolean' ? Number(value) : value
     case 'boolean':
-      if (value == null) {
-        return value
-      }
-      {
-        const normalized = coerceBoolean(value)
-        if (dialect === 'postgres') {
-          return normalized
-        }
-
-        return normalized ? 1 : 0
-      }
+      return dialect === 'postgres' ? coerceBoolean(value) : booleanStorageValue(value)
     case 'json':
       return value == null ? value : stringifyJson(value)
     case 'date':
