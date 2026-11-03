@@ -6359,6 +6359,26 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }, 60000)
 
+  it('migrates, builds and queries the SQLite database a relative file: URL points at', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: 'file:./storage/database.sqlite' })
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['migrate', 'build', 'dev']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+    }
+
+    expect(await readdir(projectRoot)).not.toContain('file:')
+    const database = new DatabaseSync(join(projectRoot, 'storage/database.sqlite'))
+    try {
+      expect(database.prepare('SELECT name FROM sqlite_master WHERE name = ?').get('users')).toEqual({ name: 'users' })
+    } finally {
+      database.close()
+    }
+  }, 90000)
+
   for (const database of schemaSourceDatabases) {
     it.skipIf(!database.enabled).each(['migrate', 'migrate:fresh'])(`creates the missing ${database.driver} database of a second connection a migration uses on %s`, async (command) => {
       const projectRoot = await createTempProject()

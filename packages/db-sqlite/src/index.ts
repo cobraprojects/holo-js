@@ -23,6 +23,24 @@ function isInMemoryDatabase(filename: string): boolean {
   return filename === ':memory:' || filename === ''
 }
 
+function resolveSQLiteFilename(filename: string): string {
+  if (!filename.startsWith('file:')) return filename
+
+  const location = filename.slice('file:'.length).replace(/#.*$/s, '')
+  const queryStart = location.indexOf('?')
+  if (queryStart !== -1) {
+    throw new Error(`SQLite URL "${filename}" has query parameters, which Holo doesn't support. Remove "${location.slice(queryStart)}" from the URL.`)
+  }
+  if (!location.startsWith('//')) return decodeURIComponent(location)
+
+  const pathStart = location.indexOf('/', 2)
+  const authority = pathStart === -1 ? location.slice(2) : location.slice(2, pathStart)
+  if (authority !== '' && authority !== 'localhost') {
+    throw new Error(`SQLite URL "${filename}" names the host "${authority}". Use "file:" with a local path.`)
+  }
+  return decodeURIComponent(pathStart === -1 ? '' : location.slice(pathStart))
+}
+
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
 function normalizeBinding(value: unknown): unknown {
@@ -82,7 +100,7 @@ export class SQLiteAdapter implements DriverAdapter {
   constructor(options: SQLiteAdapterOptions = {}) {
     this.database = options.database
     this.connected = !!options.database
-    this.filename = options.filename ?? ':memory:'
+    this.filename = resolveSQLiteFilename(options.filename ?? ':memory:')
     this.transactionKey = options.database || isInMemoryDatabase(this.filename) ? this : resolve(this.filename)
     this.createDatabaseInstance = options.createDatabase ?? ((filename) => {
       const database = new Database(filename, { fileMustExist: !isInMemoryDatabase(filename) })

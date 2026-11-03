@@ -55,7 +55,7 @@ Connections live under `connections`, keyed by a name you choose. `defaultConnec
 
 ### SQLite
 
-Point `url` at a file path. Holo opens the file the first time your app queries the connection, and never creates it: a query against a missing file fails with `Database file at path "<path>" does not exist. Run "holo migrate" to create it.` Only `npx holo migrate` and `npx holo migrate:fresh` create the file and its directory. `:memory:` gives you an in-memory database, which starts empty in every process and is gone when the process exits. Use it for tests. Don't use it as the default connection of an app you build: `holo build` and `holo dev` read the schema types from a new, empty in-memory database, so the generated schema has no tables.
+Point `url` at a file path, or at a `file:` URL such as `file:./storage/database.sqlite` (query parameters such as `?mode=ro` aren't supported). Holo opens the file the first time your app queries the connection, and never creates it: a query against a missing file fails with `Database file at path "<path>" does not exist. Run "holo migrate" to create it.` Only `npx holo migrate` and `npx holo migrate:fresh` create the file and its directory. `:memory:` gives you an in-memory database, which starts empty in every process and is gone when the process exits. Use it for tests. Don't use it as the default connection of an app you build: `holo build` and `holo dev` read the schema types from a new, empty in-memory database, so the generated schema has no tables.
 
 ```ts [config/database.ts]
 import { defineDatabaseConfig } from '@holo-js/db'
