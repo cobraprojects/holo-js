@@ -203,6 +203,27 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(definition.columns.id).toEqual({ kind: 'id', name: 'id', nullable: false, hasDefault: false, generated: true, primaryKey: true, unique: false, idStrategy: 'autoIncrement' })
     })
 
+    it.runIf(driver === 'sqlite')('reads an INTEGER PRIMARY KEY that is not the rowid alias as a required primary-key column', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const withoutRowId = uniqueName('holo_read_without_rowid')
+      const descending = uniqueName('holo_read_desc_key')
+      onTestFinished(async () => {
+        await schema.dropTable(withoutRowId)
+        await schema.dropTable(descending)
+      })
+      await db.executeCompiled({ sql: `CREATE TABLE "${withoutRowId}" ("id" INTEGER PRIMARY KEY, "value" TEXT NOT NULL) WITHOUT ROWID`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${descending}" ("id" INTEGER PRIMARY KEY DESC, "value" TEXT NOT NULL)`, source: 'schema' })
+      await expect(db.table(withoutRowId).insert({ value: 'needs an id' })).rejects.toThrow()
+
+      const reader = createSchemaReader(db)
+      const definitions = [(await reader.readTable(withoutRowId))!, (await reader.readTable(descending))!]
+
+      for (const definition of definitions) {
+        expect(definition.columns.id).toEqual({ kind: 'integer', name: 'id', nullable: false, hasDefault: false, generated: false, primaryKey: true, unique: false })
+      }
+      expect(renderGeneratedSchemaModule(definitions)).toContain('"id": column.integer().primaryKey(),')
+    })
+
     it.runIf(driver === 'postgres')('reads vector dimensions, uuid and jsonb columns', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_vectors')
