@@ -21,6 +21,9 @@ import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailabl
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 import { assertExampleAppRequestSecurity } from '../../../tests/example-app-request-security.mjs'
 import { assertExampleAppStorageRuntime } from '../../../tests/example-app-storage-runtime.mjs'
+import { sendFetchThroughConnectionResetSafeDispatcher } from '../../../tests/example-app-fetch.mjs'
+
+sendFetchThroughConnectionResetSafeDispatcher()
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
