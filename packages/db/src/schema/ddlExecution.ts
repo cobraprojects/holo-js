@@ -1,10 +1,15 @@
+import { forgetColumnListings } from './columnListing'
 import { isMySQLConnection } from './connectionDialect'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement } from './ddl'
 
 export async function executeStatements(connection: DatabaseContext, statements: readonly DDLStatement[]): Promise<void> {
-  for (const statement of statements) {
-    await connection.executeCompiled(statement)
+  try {
+    for (const statement of statements) {
+      await connection.executeCompiled(statement)
+    }
+  } finally {
+    forgetColumnListings(connection.getConnectionName())
   }
 }
 

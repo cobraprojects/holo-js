@@ -70,5 +70,6 @@ export function readInsertedKey(
   value: number | string | undefined,
 ): number | string | undefined {
   const definition = table && Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
-  return definition && readsAsInteger(definition) && readsIntegerText(value) ? Number(parseInteger(value)) : value
+  const readsInteger = table ? definition !== undefined && readsAsInteger(definition) : true
+  return readsInteger && readsIntegerText(value) ? Number(parseInteger(value)) : value
 }

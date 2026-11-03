@@ -75,7 +75,7 @@ await Post.where('titel', 'Hello')
 Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default. A column with a `'json'`, `'boolean'`, `'number'`, `'string'`, `'date'`, `'datetime'`, `'timestamp'`, or `'vector'` cast takes the cast's type instead, both when you read it and when you write it. Models you reach by name, such as `belongsTo('User')`, and the user from `auth.user()` get the same types.
 
 ::: tip
-If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo dev`, `npx holo migrate` or `npx holo build` writes the full types. A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema` at runtime.
+If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo dev`, `npx holo migrate` or `npx holo build` writes the full types. A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema` at runtime.
 :::
 
 ## Conventions
@@ -139,7 +139,7 @@ export default defineModel('events', {
 })
 ```
 
-See [multiple connections](/database/connections) for configuring named connections.
+The generated schema covers only the default connection, so a model on another connection is untyped, as in Laravel: its attributes are `unknown`, and casts, `fillable` and `guarded` work as usual. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection) for what it does at runtime, and [multiple connections](/database/connections) for configuring named connections.
 
 ## Mass assignment
 

@@ -18,6 +18,7 @@ export type ModelSelectableColumn<TTable extends TableDefinition> = ModelColumnN
 export interface AnyModelDefinition {
   readonly kind: 'model'
   readonly table: TableDefinition
+  readonly untyped: boolean
   readonly name: string
   readonly primaryKey: string
   readonly connectionName?: string
@@ -932,6 +933,7 @@ export interface ModelDefinition<
 > {
   readonly kind: 'model'
   readonly table: TTable
+  readonly untyped: boolean
   readonly name: string
   readonly primaryKey: ModelAttributeKey<TTable>
   readonly connectionName?: string

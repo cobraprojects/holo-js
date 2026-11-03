@@ -26,6 +26,10 @@ export async function openExampleAppDatabase(projectRoot) {
   }
 }
 
+function withNumericIds(rows) {
+  return rows.map(row => ({ ...row, id: Number(row.id) }))
+}
+
 export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, projectRoot) {
   const require = createRequire(join(projectRoot, 'package.json'))
   const modelApi = await import(pathToFileURL(require.resolve('@holo-js/db')).href)
@@ -46,7 +50,7 @@ export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, 
         const value = `${name}:${method}`
         const id = await DB[method](async tx => {
           const id = await tx.table('named_connection_records').insertGetId({ value })
-          assert.ok(typeof id === 'number' || typeof id === 'string', `${name}/${method}: insertGetId must return the generated ID`)
+          assert.equal(typeof id, 'number', `${name}/${method}: insertGetId must return the generated ID as a number`)
           assert.equal(await tx.table('named_connection_records').where('id', id).value('value'), value)
           return id
         }, name)
@@ -57,10 +61,10 @@ export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, 
           throw new Error('named rollback')
         }, name), /named rollback/)
       }
-      assert.deepEqual(await DB.table('named_connection_records', name).orderBy('id').get(), committed)
+      assert.deepEqual(withNumericIds(await DB.table('named_connection_records', name).orderBy('id').get()), committed)
       const records = () => DB.table('named_connection_records', name)
       const directId = await records().insertGetId({ value: 'direct' })
-      assert.ok(typeof directId === 'number' || typeof directId === 'string', `${name}: direct insertGetId must return the generated ID`)
+      assert.equal(typeof directId, 'number', `${name}: direct insertGetId must return the generated ID as a number`)
       assert.equal(await records().where('id', directId).value('value'), 'direct')
       await records().insertOrIgnore({ value: 'direct', score: 99 })
       assert.equal(await records().where('id', directId).value('score'), 0)
@@ -77,7 +81,7 @@ export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, 
       assert.equal((await records().insert([{ value: 'bulk-a' }, { value: 'bulk-b' }])).affectedRows, 2)
       assert.deepEqual(await records().whereIn('value', ['bulk-a', 'bulk-b']).orderBy('value').pluck('value'), ['bulk-a', 'bulk-b'])
       assert.equal((await records().whereIn('value', ['direct', 'bulk-a', 'bulk-b']).delete()).affectedRows, 3)
-      assert.deepEqual(await records().orderBy('id').get(), committed)
+      assert.deepEqual(withNumericIds(await records().orderBy('id').get()), committed)
     } finally {
       await schema.dropTable('named_connection_records')
     }

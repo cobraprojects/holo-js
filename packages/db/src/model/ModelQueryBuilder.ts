@@ -212,7 +212,7 @@ class ModelQueryBuilderBase<
   ): TableQueryPredicates<TTable> {
     const nested = new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
-      new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
+      this.repository.createTableQuery(this.getConnection()),
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
     const callbackResult = callback(nested)
     const result = callbackResult instanceof ModelQueryBuilderBase ? callbackResult : nested
@@ -1878,6 +1878,7 @@ class ModelQueryBuilderBase<
   }
 
   async update(values: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().update(this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(values, 'update'), 'update'))
   }
 
@@ -1885,6 +1886,7 @@ class ModelQueryBuilderBase<
     columnPath: ModelJsonColumnPath<TTable>,
     value: unknown,
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().update(this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload({ [columnPath]: value } as Record<string, unknown>, 'update'), 'update'))
   }
 
@@ -1893,6 +1895,7 @@ class ModelQueryBuilderBase<
     amount = 1,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().increment(
       column,
       amount,
@@ -1905,6 +1908,7 @@ class ModelQueryBuilderBase<
     amount = 1,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrement(
       column,
       amount,
@@ -1916,6 +1920,7 @@ class ModelQueryBuilderBase<
     columns: Partial<Record<ModelColumnName<TTable>, number>>,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().incrementEach(
       columns as Readonly<Record<string, number>>,
       this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
@@ -1926,6 +1931,7 @@ class ModelQueryBuilderBase<
     columns: Partial<Record<ModelColumnName<TTable>, number>>,
     extraValues: Partial<ModelRecord<TTable>> = {},
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrementEach(
       columns as Readonly<Record<string, number>>,
       this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(extraValues, 'update'), 'update'),
@@ -1955,6 +1961,7 @@ class ModelQueryBuilderBase<
     uniqueBy: readonly ModelColumnName<TTable>[],
     updateColumns: readonly ModelColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {
+    await this.repository.loadGuardableColumns()
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
       this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(value, 'create'), 'create', timestamp)

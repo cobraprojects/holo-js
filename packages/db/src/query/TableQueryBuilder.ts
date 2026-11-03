@@ -164,6 +164,21 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+type KeyedInsert = (
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+) => Promise<number | string | undefined>
+
+let keyedInsert: KeyedInsert
+
+export function insertGetIdByKey(
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+): Promise<number | string | undefined> {
+  return keyedInsert(query, values, keyColumn)
+}
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
@@ -2710,20 +2725,20 @@ export class TableQueryBuilder<
 
   private async executeInsert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
-    returnGeneratedId = false,
+    generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
     const captureReturningRows = await this.shouldCaptureInsertReturningRows()
-    const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && returnGeneratedId)
+    const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && generatedKeyColumn !== undefined)
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, {
             returning: captureReturningRows,
-            returningColumn: captureReturningRows ? undefined : this.resolvePrimaryKeyColumn(),
+            returningColumn: captureReturningRows ? undefined : generatedKeyColumn,
           }),
-          true,
+          generatedKeyColumn ?? this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows),
@@ -2745,7 +2760,7 @@ export class TableQueryBuilder<
     const result: MutationExecutionResult = captureReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true, returning: true }),
-          true,
+          this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true }),
@@ -2762,10 +2777,18 @@ export class TableQueryBuilder<
     return insertResult
   }
 
+  static {
+    keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+  }
+
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
     assertSinglePrimaryKey(this.source.table)
-    const result = await this.executeInsert(values, true)
-    return readInsertedKey(this.plan.source.table, this.resolvePrimaryKeyColumn(), result.lastInsertId)
+    return this.insertGetKey(values, this.resolvePrimaryKeyColumn())
+  }
+
+  private async insertGetKey(values: Readonly<Record<string, unknown>>, keyColumn: string): Promise<number | string | undefined> {
+    const result = await this.executeInsert(values, keyColumn)
+    return readInsertedKey(this.plan.source.table, keyColumn, result.lastInsertId)
   }
 
   async upsert(
@@ -2784,7 +2807,7 @@ export class TableQueryBuilder<
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns, { returning: true }),
-          true,
+          this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns),
@@ -3159,13 +3182,13 @@ export class TableQueryBuilder<
       | ReturnType<typeof createUpsertQueryPlan>
       | ReturnType<typeof createUpdateQueryPlan>
       | ReturnType<typeof createDeleteQueryPlan>,
-    includeLastInsertId = false,
+    lastInsertIdColumn?: string,
   ): Promise<MutationExecutionResult> {
     const result = await this.connection.queryCompiled(this.getCompiler().compile(plan))
     const rows = this.freezeMutationRows(result.rows)
     return {
       affectedRows: result.rowCount,
-      lastInsertId: includeLastInsertId ? this.readReturnedLastInsertId(rows) : undefined,
+      lastInsertId: lastInsertIdColumn === undefined ? undefined : this.readReturnedLastInsertId(rows, lastInsertIdColumn),
       rows: rows.length === 0
         ? undefined
         : Object.freeze({
@@ -3180,16 +3203,16 @@ export class TableQueryBuilder<
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
   }
 
+  private resolveSinglePrimaryKeyColumn(): string | undefined {
+    const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(this.source.table)
+    return otherPrimaryKeys.length === 0 ? primaryKey : undefined
+  }
+
   private readReturnedLastInsertId(
     rows: readonly Readonly<Record<string, unknown>>[],
+    column: string,
   ): number | string | undefined {
-    if (rows.length !== 1) {
-      return undefined
-    }
-
-    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
-    const [primaryKey, ...otherPrimaryKeys] = primaryKeys
-    const value = primaryKey !== undefined && otherPrimaryKeys.length === 0 ? rows[0]?.[primaryKey] : undefined
+    const value = rows.length === 1 ? rows[0]?.[column] : undefined
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined

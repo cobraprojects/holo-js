@@ -14,10 +14,11 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
+import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
-import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
@@ -112,11 +113,15 @@ function findWriteColumn(definition: AnyModelDefinition, key: string) {
   const columnName = key.includes('->') ? key.split('->')[0]! : key
   assertAttributeNameAllowed(columnName)
   const column = ownEntry(definition.table.columns, columnName)
-  if (!column) {
+  if (!column && !definition.untyped) {
     throw new SecurityError(`Column "${columnName}" is not defined on model "${definition.name}".`)
   }
 
   return { columnName, column }
+}
+
+function isClassCast(cast: ModelCastDefinition | undefined): boolean {
+  return typeof cast === 'object' && !('kind' in cast && cast.kind === 'enum')
 }
 
 function hasDefinition<TTable extends TableDefinition>(
@@ -1373,6 +1378,7 @@ export class ModelRepository<
   }
 
   async create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+    await this.loadGuardableColumns()
     this.assertMassAssignable(applyPendingModelAttributes(this.definition, values))
     return this.createRecord(values)
   }
@@ -1721,12 +1727,13 @@ export class ModelRepository<
       const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
+      await this.assertGuardableAttributes(entity.toAttributes())
       const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
-        : { lastInsertId: await query.insertGetId(payload) }
+        : { lastInsertId: await insertGetIdByKey(query, payload, this.definition.primaryKey) }
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
@@ -1822,16 +1829,16 @@ export class ModelRepository<
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
       }
 
-      if (column.generated) {
+      if (column?.generated) {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
       if (enforceGuards) {
-        this.assertWritableColumn(columnName)
+        this.assertWritableColumn(columnName, key)
       }
 
       if (key.includes('->')) {
-        if (!storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
+        if (column && !storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
           throw new SecurityError(`Column "${columnName}" must be a JSON column to support nested JSON updates.`)
         }
 
@@ -1867,6 +1874,7 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const written = entity.getDirty()
+      await this.assertGuardableAttributes(written)
       const dirty = this.sanitizeWritePayload(written, 'update', false, false)
       if (Object.keys(dirty).length === 0) {
         return this.finishUnchangedSave(entity)
@@ -2142,16 +2150,20 @@ export class ModelRepository<
     }
   }
 
+  createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
+    const table = this.definition.table
+    return this.definition.untyped
+      ? new TableQueryBuilder(table, connection, createSelectQueryPlan(createTableSource(table.tableName)))
+      : new TableQueryBuilder(table, connection)
+  }
+
   private createQuery(
     applySoftDeletes: boolean,
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
   ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
-    let query = new ModelQueryBuilder(
-      this,
-      new TableQueryBuilder(this.definition.table, this.getConnection()),
-    )
+    let query = new ModelQueryBuilder(this, this.createTableQuery())
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
@@ -2783,7 +2795,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    if (!(column in related.definition.table.columns)) {
+    if (!related.definition.untyped && !(column in related.definition.table.columns)) {
       throw new SecurityError(`Column "${column}" is not defined on related model "${related.definition.name}".`)
     }
 
@@ -3289,7 +3301,13 @@ export class ModelRepository<
 
     return projected
       ? joined
-      : joined.select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
+      : joined.select(...this.listRelatedColumnSelections(related, relatedTable))
+  }
+
+  private listRelatedColumnSelections(related: ModelRepository, relatedTable: string): readonly string[] {
+    return related.definition.untyped
+      ? [`${relatedTable}.*`]
+      : Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`)
   }
 
   private async getThroughEntitiesByParentKey(
@@ -3743,19 +3761,54 @@ export class ModelRepository<
     for (const key of Object.keys(values)) {
       const { columnName, column } = findWriteColumn(this.definition, key)
 
-      if (column.generated) {
+      if (column?.generated) {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
-      this.assertWritableColumn(columnName)
+      this.assertWritableColumn(columnName, key)
     }
 
     return values
   }
 
-  private assertWritableColumn(column: string): void {
+  async loadGuardableColumns(): Promise<void> {
+    if (this.guardsByColumnListing()) {
+      await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    }
+  }
+
+  private async assertGuardableAttributes(values: Record<string, unknown>): Promise<void> {
+    if (!this.guardsByColumnListing() || areModelGuardsDisabled()) {
+      return
+    }
+
+    const columns = await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    const unknownKey = Object.keys(values).find(key => !key.includes('->') && !this.isGuardableColumn(key, columns))
+    if (unknownKey !== undefined) {
+      throw new SecurityError(`Column "${unknownKey}" is not writable on model "${this.definition.name}".`)
+    }
+  }
+
+  private guardsByColumnListing(): boolean {
+    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
+  }
+
+  private isGuardableColumn(
+    key: string,
+    columns = getLoadedColumnListing(this.getConnectionName(), this.definition.table.tableName),
+  ): boolean {
+    if (ownEntry(this.definition.mutators, key) || isClassCast(ownEntry(this.definition.casts, key))) return true
+    if (key.includes('->')) return false
+    return columns === undefined || columns.size === 0 || columns.has(key)
+  }
+
+  private assertWritableColumn(column: string, key: string): void {
     if (!this.isWritableColumn(column)) {
       throw new SecurityError(`Column "${column}" is not writable on model "${this.definition.name}".`)
+    }
+
+    if (this.guardsByColumnListing() && !areModelGuardsDisabled() && !this.isGuardableColumn(key)) {
+      throw new SecurityError(`Column "${key}" is not writable on model "${this.definition.name}".`)
     }
   }
 

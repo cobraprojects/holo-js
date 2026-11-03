@@ -67,6 +67,10 @@ export function getConnectionGeneratedTableDefinition(tableName: string, connect
   return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
 }
 
+export function isGeneratedSchemaConnection(connectionName: string): boolean {
+  return generatedSchemaSource.connectionName === connectionName
+}
+
 export function resolveGeneratedTableDefinition<
   TTables extends Record<string, TableDefinition>,
   TName extends Extract<keyof TTables, string>,

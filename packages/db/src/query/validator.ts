@@ -1,11 +1,12 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
-import { isInlineIntegerValue } from './ast'
+import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { storesJson } from '../schema/normalization'
 import type { TableColumnsShape } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   QueryAggregateSelection,
+  QueryColumnSelection,
   QueryJoinClause,
   QueryColumnPredicate,
   QueryDatePredicate,
@@ -188,6 +189,23 @@ function assertColumnReference(
   }
 
   assertKnownColumn(column, tableName, allowedColumns)
+}
+
+function assertColumnSelection(
+  selection: QueryColumnSelection,
+  tableName: string,
+  allowedColumns?: Set<string>,
+): void {
+  const allColumnsOf = readAllColumnsSelectionTable(selection.column)
+  if (allColumnsOf !== undefined && !selection.alias) {
+    assertQualifiedIdentifier(allColumnsOf, 'Column reference')
+    return
+  }
+
+  assertColumnReference(selection.column, tableName, allowedColumns)
+  if (selection.alias) {
+    assertIdentifier(selection.alias, 'Selection alias')
+  }
 }
 
 function assertJoinClause(join: QueryJoinClause): void {
@@ -585,10 +603,7 @@ export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName):
           continue
         }
 
-        assertColumnReference(selection.column, plan.source.tableName, allowedColumns)
-        if (selection.alias) {
-          assertIdentifier(selection.alias, 'Selection alias')
-        }
+        assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
 
       for (const join of plan.joins) {

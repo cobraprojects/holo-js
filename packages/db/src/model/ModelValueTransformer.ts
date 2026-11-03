@@ -186,7 +186,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     const column = ownEntry(this.definition.table.columns, key)
-    return !!column && storesText(column)
+    return column ? storesText(column) : this.definition.untyped
   }
 
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {

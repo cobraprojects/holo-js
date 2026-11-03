@@ -1,6 +1,6 @@
 import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
-import { assertAttributeNameAllowed, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
@@ -96,6 +96,7 @@ class EntityBase<
     })
     applyWriteState = (entity, state) => {
       entity.#attributes = snapshotAttributes(state.attributes)
+      entity.#exposeUntypedAttributes()
       entity.#original = snapshotAttributes(state.original)
       entity.#changes = snapshotAttributes(state.changes)
       entity.#persisted = state.persisted
@@ -115,7 +116,11 @@ class EntityBase<
     this.#changes = exists ? {} : { ...attributes }
     this.#persisted = exists
     this.#relations = {}
-    initializeEntityModelProperties(this, this.getRepositoryRuntime())
+    initializeEntityModelProperties(this, this.getRepositoryRuntime(), this.#attributes)
+  }
+
+  #exposeUntypedAttributes(): void {
+    exposeUntypedEntityAttributes(this, this.getRepositoryRuntime(), this.#attributes)
   }
 
   getRepository(): ModelRepositoryLike<TTable> {
@@ -186,12 +191,14 @@ class EntityBase<
   set<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
     this.getRepositoryRuntime().assertMassAssignable?.({ [key]: value })
     this.#attributes[key] = value
+    this.#exposeUntypedAttributes()
     return this
   }
 
   fill(values: Partial<ModelRecord<TTable>>): this {
     this.getRepositoryRuntime().assertMassAssignable?.(values)
     Object.assign(this.#attributes, values)
+    this.#exposeUntypedAttributes()
     return this
   }
 
@@ -205,6 +212,7 @@ class EntityBase<
       assertAttributeNameAllowed(key)
     }
     Object.assign(this.#attributes, values)
+    this.#exposeUntypedAttributes()
     return this
   }
 
@@ -272,6 +280,7 @@ class EntityBase<
     this.#original = snapshotAttributes(entity.toAttributes())
     this.#changes = { ...changes }
     this.#persisted = true
+    this.#exposeUntypedAttributes()
     return this
   }
 
@@ -317,6 +326,7 @@ class EntityBase<
   setComputed(name: string, value: unknown): this {
     this.#attributes[name] = value
     this.#original[name] = value
+    this.#exposeUntypedAttributes()
     return this
   }
 
@@ -504,6 +514,7 @@ class EntityBase<
     this.#original = { ...persisted.#original }
     this.#changes = { ...changes }
     this.#persisted = true
+    this.#exposeUntypedAttributes()
   }
 
   private async persistEntity(
@@ -686,6 +697,7 @@ class EntityBase<
     this.#changes = {}
     this.#relations = {}
     this.#persisted = true
+    this.#exposeUntypedAttributes()
     return this
   }
 
