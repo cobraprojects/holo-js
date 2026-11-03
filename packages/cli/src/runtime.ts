@@ -281,8 +281,10 @@ export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResul
   return `Runtime command "${kind}" failed.`
 }
 
+const RUNTIME_ERROR_PREFIX = /^(?:[A-Za-z][\w.]*Error|Error)(?: \[[A-Z_]+\])?:\s+/
+
 function stripRuntimeErrorPrefix(line: string): string {
-  return line.replace(/^(?:[A-Za-z][\w.]*Error|Error):\s+/, '')
+  return line.replace(RUNTIME_ERROR_PREFIX, '')
 }
 
 function isRuntimeErrorSourceLine(line: string): boolean {
@@ -303,7 +305,7 @@ function formatRuntimeFailureText(text: string): string {
     return stripRuntimeErrorPrefix(friendlyLine)
   }
 
-  const errorLine = lines.find(line => /^(?:[A-Za-z][\w.]*Error|Error):\s+/.test(line))
+  const errorLine = lines.find(line => RUNTIME_ERROR_PREFIX.test(line))
   if (errorLine) {
     return stripRuntimeErrorPrefix(errorLine)
   }

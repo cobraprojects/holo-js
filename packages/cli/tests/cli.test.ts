@@ -6320,6 +6320,30 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }, 30000)
 
+  it.each([
+    { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
+    { failure: 'an import of a missing module', source: 'import \'holo-missing-migration-package\'\nexport default {}\n', reported: 'holo-missing-migration-package' },
+  ])('runs prepare, build and dev without evaluating a migration with $failure, and migrate reports it', async ({ source, reported }) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, schemaSourceDatabases[0].connection('database'))
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_02_000001_broken.ts', source)
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['prepare', 'build', 'dev']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+    }
+    const registry = await loadGeneratedProjectRegistry(projectRoot)
+    expect(registry?.migrations.map(entry => entry.name)).toContain('2026_01_02_000001_broken')
+
+    const failed = runCliProcess(projectRoot, ['migrate'])
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain(reported)
+  }, 90000)
+
   for (const database of schemaSourceDatabases) {
     it.skipIf(!database.enabled)(`writes the Generated schema from the ${database.driver} database after migrate, rollback and fresh`, async () => {
       const projectRoot = await createTempProject()
@@ -12066,10 +12090,10 @@ export default {
       await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo model')
 
       await rm(join(projectRoot, 'server/models/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo migration')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/Bad.mjs" must use a timestamped file name')
 
       await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('must match YYYY_MM_DD_HHMMSS_description')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/manual_name.mjs" must use a timestamped file name')
       await expect(loadRegisteredMigrations(projectRoot, {
         ...defaultProjectConfig(),
         migrations: ['server/db/migrations/manual_name.mjs'],

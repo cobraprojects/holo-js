@@ -219,7 +219,6 @@ async function discoverProjectRegistry(
   await modules.bundle([
     ...(hasGeneratedSchema ? [generatedSchemaPath] : []),
     ...modelFiles,
-    ...migrationFiles,
     ...seederFiles,
     ...jobFiles,
     ...eventFiles,
@@ -261,20 +260,10 @@ async function discoverProjectRegistry(
   }
   assertUniqueEntries('model', models)
 
-  const migrations: GeneratedMigrationRegistryEntry[] = []
-  for (const filePath of migrationFiles) {
+  const migrations: GeneratedMigrationRegistryEntry[] = migrationFiles.map((filePath) => {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await modules.import(filePath)
-    const migration = resolveNamedExport(moduleValue, isMigrationDefinition)
-    if (!migration) {
-      throw new Error(`Discovered migration "${relativePath}" does not export a Holo migration.`)
-    }
-
-    migrations.push({
-      sourcePath: relativePath,
-      name: migration.name ? validateMigrationName(migration.name) : inferMigrationNameFromEntry(relativePath),
-    })
-  }
+    return { sourcePath: relativePath, name: inferMigrationNameFromEntry(relativePath) }
+  })
   assertUniqueEntries('migration', migrations)
 
   const seeders: GeneratedSeederRegistryEntry[] = []
