@@ -109,11 +109,7 @@ async function renderGeneratedSchemaRuntimeArtifact(
 
   const moduleValue = await importProjectModule(projectRoot, schemaPath)
   const tables = extractGeneratedSchemaTables(moduleValue)
-  return renderGeneratedSchemaRuntimeModule(tables, extractGeneratedSchemaConnection(moduleValue))
-}
-
-function extractGeneratedSchemaConnection(moduleValue: unknown): string | undefined {
-  return isRecord(moduleValue) && typeof moduleValue.connectionName === 'string' ? moduleValue.connectionName : undefined
+  return renderGeneratedSchemaRuntimeModule(tables)
 }
 
 export function renderGeneratedIndexModule(): string {

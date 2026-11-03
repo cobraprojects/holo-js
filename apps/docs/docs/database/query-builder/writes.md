@@ -59,6 +59,8 @@ const userId = await DB.table('users').insertGetId({
 })
 ```
 
+On a model whose table is in the Generated schema, the key's TypeScript type stays `number`, even though a key beyond `Number.MAX_SAFE_INTEGER` is a string at runtime. Other integer columns past that range still throw `HydrationError` when read. Making the type match the runtime value is tracked in [#499](https://github.com/cobraprojects/holo-js/issues/499).
+
 ### insertOrIgnore()
 
 `insertOrIgnore()` skips rows that would violate a unique constraint instead of throwing:

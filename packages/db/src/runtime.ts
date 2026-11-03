@@ -358,6 +358,21 @@ export function createRuntimeConnectionOptions(
   }
 }
 
+export function resolveRuntimeDefaultConnectionName(config: RuntimeConfigInput): string {
+  const topLevelDb = asRecord(config.db) as RuntimeDatabaseConfig | undefined
+  const connections = topLevelDb?.connections ?? {}
+  const connectionEntries = Object.entries(connections)
+  if (!hasRuntimeConnectionEntries(connectionEntries)) {
+    return 'default'
+  }
+
+  if (topLevelDb?.defaultConnection) {
+    return topLevelDb.defaultConnection
+  }
+
+  return Object.hasOwn(connections, 'default') ? 'default' : connectionEntries[0][0]
+}
+
 export function resolveRuntimeConnectionManagerOptions(
   config: RuntimeConfigInput,
 ): ConnectionManager {
@@ -374,12 +389,7 @@ export function resolveRuntimeConnectionManagerOptions(
     })
   }
 
-  const configuredDefault = topLevelDb?.defaultConnection
-  const defaultConnection = configuredDefault
-    ? configuredDefault
-    : Object.hasOwn(connections, 'default')
-      ? 'default'
-      : connectionEntries[0][0]
+  const defaultConnection = resolveRuntimeDefaultConnectionName(config)
 
   const resolvedConnections = connectionEntries
     .map(([name, input]) => [

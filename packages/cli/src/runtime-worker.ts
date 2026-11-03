@@ -219,15 +219,13 @@ async function writeGeneratedSchema(
   outputPath: string | undefined,
   runtimeOutputPath: string | undefined,
 ): Promise<void> {
-  const connection = manager.connection()
-  const connectionName = connection.getConnectionName()
-  const tables = await readDatabaseSchema(connection)
-  registerGeneratedTables(Object.fromEntries(tables.map(table => [table.tableName, table])), { connectionName })
+  const tables = await readDatabaseSchema(manager.connection())
+  registerGeneratedTables(Object.fromEntries(tables.map(table => [table.tableName, table])))
   if (outputPath) {
-    await writeTextFile(outputPath, renderGeneratedSchemaModule(tables, connectionName))
+    await writeTextFile(outputPath, renderGeneratedSchemaModule(tables))
   }
   if (runtimeOutputPath) {
-    await writeTextFile(runtimeOutputPath, renderGeneratedSchemaRuntimeModule(tables, connectionName))
+    await writeTextFile(runtimeOutputPath, renderGeneratedSchemaRuntimeModule(tables))
   }
 }
 
