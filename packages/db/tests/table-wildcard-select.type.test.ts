@@ -39,3 +39,34 @@ it('types the row of a table.* selection from the table columns', async () => {
     DB.table(posts).select('missing')
   }
 })
+
+it('types a table.* selection of a definition without a join and of a model exactly', async () => {
+  if (false) {
+    const row = await DB.table(posts).select('wildcard_posts.*').first()
+    expectTypeOf(row).toEqualTypeOf<{ id: number, title: string } | undefined>()
+    const joinedByName = await DB.table(posts)
+      .join('wildcard_post_stats', 'wildcard_post_stats.post_id', '=', 'wildcard_posts.id')
+      .select('wildcard_posts.*')
+      .first()
+    expectTypeOf(joinedByName).toEqualTypeOf<{ id: number, title: string } | undefined>()
+    const post = await Post.query().select('wildcard_posts.*').firstOrFail()
+    expectTypeOf(post.get('title')).toEqualTypeOf<string>()
+    expectTypeOf(post.get('id')).toEqualTypeOf<number>()
+  }
+})
+
+it('types a table.* selection of a table name as an untyped row', async () => {
+  if (false) {
+    const row = await DB.table('wildcard_posts').select('wildcard_posts.*').first()
+    expectTypeOf(row).toEqualTypeOf<Record<string, unknown> | undefined>()
+    expectTypeOf(row!.title).toEqualTypeOf<unknown>()
+    const joined = await DB.table('wildcard_posts')
+      .join('wildcard_post_stats', 'wildcard_post_stats.post_id', '=', 'wildcard_posts.id')
+      .select('wildcard_posts.*')
+      .first()
+    expectTypeOf(joined).toEqualTypeOf<Record<string, unknown> | undefined>()
+    const aliased = await DB.table('wildcard_posts').select('wildcard_posts.*', 'wildcard_posts.id as postId').first()
+    expectTypeOf(aliased!.title).toEqualTypeOf<unknown>()
+    expectTypeOf(aliased!.postId).toEqualTypeOf<unknown>()
+  }
+})

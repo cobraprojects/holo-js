@@ -69,20 +69,44 @@ export default defineMigration({
 
 Restate `nullable()` and `default()` on each changed column, because `change()` replaces the column's definition. A `json()` column is still `TEXT` on SQLite, so keep its `'json'` cast.
 
-The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as UTC text in the format of SQLite's `CURRENT_TIMESTAMP`, such as `2026-01-02 03:04:05`, as Holo now writes every SQLite date. Earlier releases wrote ISO 8601 text such as `2026-01-02T03:04:05.000Z`. Holo still reads those values as the right `Date`, but they don't compare or order correctly against the new format or against values your `CURRENT_TIMESTAMP` defaults stored. Rewrite them once in a migration, for each date column:
+The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as UTC text in the format of SQLite's `CURRENT_TIMESTAMP`, such as `2026-01-02 03:04:05`, as Holo now writes every SQLite date. Earlier releases wrote ISO 8601 text such as `2026-01-02T03:04:05.000Z`. Holo still reads those values as the right `Date`, and password-reset and email-verification links issued before the upgrade still work. But those values don't compare or order correctly against the new format or against values your `CURRENT_TIMESTAMP` defaults stored. For example, a notification sent after the upgrade is listed below older ones from the same day, and the database session sweep keeps sessions that expired earlier the same day. Holo's own tables hold these values too. Rewrite every date column once in a migration, your tables and Holo's:
 
 ```ts [server/db/migrations/2026_06_01_000000_rewrite_sqlite_dates.ts]
 import { defineMigration } from '@holo-js/db'
 
+const dateColumns = [
+  { table: 'posts', key: ['id'], columns: ['created_at', 'updated_at'] },
+  { table: 'post_tag', key: ['post_id', 'tag_id'], columns: ['created_at', 'updated_at'] },
+  { table: 'users', key: ['id'], columns: ['email_verified_at', 'created_at', 'updated_at'] },
+  { table: 'sessions', key: ['id'], columns: ['created_at', 'last_activity_at', 'expires_at', 'invalidated_at'] },
+  { table: 'auth_identities', key: ['id'], columns: ['created_at', 'updated_at'] },
+  { table: 'personal_access_tokens', key: ['id'], columns: ['last_used_at', 'expires_at', 'created_at', 'updated_at'] },
+  { table: 'password_reset_tokens', key: ['id'], columns: ['expires_at', 'used_at', 'created_at', 'updated_at'] },
+  { table: 'email_verification_tokens', key: ['id'], columns: ['expires_at', 'used_at', 'created_at', 'updated_at'] },
+  { table: 'auth_multi_factor_credentials', key: ['id'], columns: ['enabled_at', 'created_at', 'updated_at'] },
+  { table: 'notifications', key: ['id'], columns: ['read_at', 'created_at', 'updated_at'] },
+  { table: 'media', key: ['id'], columns: ['created_at', 'updated_at'] },
+  { table: '_holo_migrations', key: ['id'], columns: ['migrated_at'] },
+]
+
 export default defineMigration({
-  async up({ db }) {
-    const rows = await db.table('posts').select('id', 'created_at').where('created_at', 'like', '%T%Z').get()
-    for (const row of rows) {
-      await db.table('posts').where('id', row.id).update({ created_at: new Date(String(row.created_at)) })
+  async up({ db, schema }) {
+    if (db.getDialect().name !== 'sqlite') return
+    for (const { table, key, columns } of dateColumns) {
+      if (!(await schema.hasTable(table))) continue
+      for (const column of columns) {
+        const rows = await db.table(table).select(...key, column).where(column, 'like', '%T%Z').get()
+        for (const row of rows) {
+          const match = key.reduce((query, name) => query.where(name, row[name]), db.table(table))
+          await match.update({ [column]: new Date(String(row[column])) })
+        }
+      }
     }
   },
 })
 ```
+
+Replace `posts` and `post_tag` with your own tables, their date columns, and the columns that identify a row: its primary key, or both foreign keys of a pivot table without an `id`. The other entries are the tables that Holo's auth, session, notification and media migrations create, and Holo's migration log. If you renamed one, such as a password broker's `table` or the media table, use your name. A table that doesn't exist is skipped. The database cache, lock, queue job and failed job tables store their times as integer milliseconds, so they need no rewrite.
 
 PostgreSQL and MySQL state booleans, JSON, timestamps and enum values themselves, so their models need no new casts. See [SQLite tables created before 0.6](/orm/casts#sqlite-tables-created-before-0-6).
 
@@ -212,7 +236,7 @@ import { diffSchema } from '@holo-js/db' // [!code ++]
 
 ### Tables resolve through the generated schema
 
-`DB.table('name')`, model tables and pivot tables resolve through the generated schema only, and only on the default connection, the one the generated schema is read from. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, uses no definition until the generated schema is written again, so the JSON and boolean values you write to it aren't converted. Pass a table definition to `DB.table()` to use its columns right away. Query-builder reads return the driver's values in both cases. See [Start a query](/database/query-builder/#start-a-query).
+`DB.table('name')`, model tables and pivot tables resolve through the generated schema only, and only on the default connection, the one the generated schema is read from. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, uses no definition until the generated schema is written again, so the JSON values you write to it aren't encoded, and booleans bind as `1` or `0`, as Laravel's do on every driver. On PostgreSQL, a text column of such a table stores `'1'`, where it stored `'true'` before. Pass a table definition to `DB.table()` to use its columns right away. Query-builder reads return the driver's values in both cases. See [Start a query](/database/query-builder/#start-a-query).
 
 A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it. A model with `connectionName` set to another connection is untyped, as in Laravel: its attributes are `unknown` in TypeScript, and at runtime it uses the `id` key, the timestamp and soft-delete columns by convention, your casts, and the driver's values. If it sets only a non-empty `guarded`, it can write only the table's real columns, as in Laravel; with `guarded: []` it can write any attribute or JSON path. A same-named table on the default connection no longer changes how it reads or writes, but TypeScript still types the model from that table. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection).
 

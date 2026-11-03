@@ -120,7 +120,7 @@ const events = await DB.table('events', 'analytics').get()
 const archived = await DB.table('posts').from('archived_posts').get()
 ```
 
-## Booleans in SQLite
+## Booleans
 
 Pass JavaScript booleans directly in filters, inserts, updates, and upserts, including queries started with a string table name:
 
@@ -131,7 +131,7 @@ await DB.table('users').where('id', 7).update({ active: true })
 const activeUsers = await DB.table('users').where('active', true).get()
 ```
 
-The SQLite driver binds scalar `true` as `1` and `false` as `0`; you don't need to register a table schema for this conversion. Query-builder rows keep SQLite's numeric values when read back. For boolean model attributes, use a [boolean cast](/orm/casts#built-in-casts). Booleans inside JSON values remain JSON booleans.
+As Laravel does, Holo binds scalar `true` as `1` and `false` as `0` on every driver, so a filter matches what an insert stored, and you don't need to register a table schema for this conversion. A column of a table definition you pass to `DB.table()` gets the value its type stores, so a PostgreSQL `boolean` column binds `true` and `false`. Query-builder rows keep the database's values when read back. For boolean model attributes, use a [boolean cast](/orm/casts#built-in-casts). Booleans inside JSON values remain JSON booleans.
 
 ## Get all rows
 

@@ -28,12 +28,25 @@ type SelectionName<TSelection extends string> = TSelection extends `${string} as
 
 type WildcardTableName<TSelection extends string> = TSelection extends TableWildcardSelection<infer TTable> ? TTable : never
 
-type WildcardSelectedColumns<
+type DeclaredWildcardColumns<
   TAvailableColumns extends Record<string, unknown>,
   TTableName extends string,
 > = {
-  [TColumn in keyof TAvailableColumns & string as TColumn extends `${TTableName}.${infer TName}` ? TName : never]: TAvailableColumns[TColumn]
+  [TColumn in keyof TAvailableColumns as TColumn extends `${TTableName}.${infer TName}` ? TName : never]: TAvailableColumns[TColumn]
 }
+
+type UndeclaredWildcardTable<
+  TAvailableColumns extends Record<string, unknown>,
+  TTableName extends string,
+> = TTableName extends string
+  ? [keyof DeclaredWildcardColumns<TAvailableColumns, TTableName>] extends [never] ? TTableName : never
+  : never
+
+type WildcardSelectedColumns<
+  TAvailableColumns extends Record<string, unknown>,
+  TTableName extends string,
+> = DeclaredWildcardColumns<TAvailableColumns, TTableName>
+  & ([UndeclaredWildcardTable<TAvailableColumns, TTableName>] extends [never] ? unknown : Record<string, unknown>)
 
 type NamedSelectedColumns<
   TAvailableColumns extends Record<string, unknown>,
