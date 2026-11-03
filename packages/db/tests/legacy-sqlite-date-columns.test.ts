@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
+  belongsTo,
   belongsToMany,
   clearGeneratedTables,
   createSchemaService,
@@ -28,6 +29,10 @@ beforeEach(() => {
   clearGeneratedTables()
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 async function readGeneratedTables(db: DatabaseContext, tableNames: readonly string[]): Promise<TableDefinition[]> {
   const reader = createSchemaReader(db)
   const tables: TableDefinition[] = []
@@ -39,8 +44,8 @@ async function readGeneratedTables(db: DatabaseContext, tableNames: readonly str
   return tables
 }
 
-async function registerLegacyTables(db: DatabaseContext): Promise<TableDefinition[]> {
-  const tables = await readGeneratedTables(db, legacyTables)
+async function registerLegacyTables(db: DatabaseContext, extraTables: readonly string[] = []): Promise<TableDefinition[]> {
+  const tables = await readGeneratedTables(db, [...legacyTables, ...extraTables])
   registerGeneratedTables(Object.fromEntries(tables.map(table => [table.tableName, table])))
   return tables
 }
@@ -72,6 +77,19 @@ async function storedText(db: DatabaseContext, column: string, id: number): Prom
     bindings: [id],
   })
   return result.rows[0]?.value
+}
+
+async function storedPivotTimestamps(db: DatabaseContext, tagId: number): Promise<unknown[]> {
+  const result = await db.queryCompiled<Record<string, unknown>>({
+    sql: 'SELECT "created_at", "updated_at" FROM "legacy_date_tag_user" WHERE "tag_id" = ?',
+    bindings: [tagId],
+  })
+  return [result.rows[0]?.created_at, result.rows[0]?.updated_at]
+}
+
+function freezeClock(instant: string): void {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(instant))
 }
 
 describe('SQLite date columns created before 0.6', () => {
@@ -155,6 +173,67 @@ describe('SQLite date columns created before 0.6', () => {
     expect(pivot?.created_at).toBeInstanceOf(Date)
     expect(pivot?.updated_at).toEqual(pivot?.created_at)
     expect(loaded.tags[0]?.created_at).toBeInstanceOf(Date)
+  })
+
+  it('stores framework model timestamps in the CURRENT_TIMESTAMP format', async () => {
+    const { db } = await openLegacyDatabase()
+    await db.executeCompiled({ sql: 'CREATE TABLE "legacy_date_posts" ("id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, "user_id" INTEGER NOT NULL, "created_at" TEXT, "updated_at" TEXT)', source: 'test:legacy-sqlite-date-table' })
+    await registerLegacyTables(db, ['legacy_date_posts'])
+    const { User } = defineLegacyModels()
+    const Post = defineModel('legacy_date_posts', { guarded: [], relations: { author: belongsTo(() => User, 'user_id') }, touches: ['author'] })
+    freezeClock('2026-03-04T10:00:00.123Z')
+    const user = await User.create({ name: 'Ada' })
+    expect(await storedText(db, 'created_at', user.id)).toBe('2026-03-04 10:00:00.123')
+    expect(await storedText(db, 'updated_at', user.id)).toBe('2026-03-04 10:00:00.123')
+
+    vi.setSystemTime(new Date('2026-03-04T10:30:00.456Z'))
+    await user.update({ name: 'Grace' })
+    expect(await storedText(db, 'updated_at', user.id)).toBe('2026-03-04 10:30:00.456')
+
+    vi.setSystemTime(new Date('2026-03-04T10:45:00.321Z'))
+    await Post.create({ user_id: user.id })
+    expect(await db.table('legacy_date_posts').where('user_id', user.id).value('created_at')).toBe('2026-03-04 10:45:00.321')
+    expect(await storedText(db, 'updated_at', user.id)).toBe('2026-03-04 10:45:00.321')
+
+    vi.setSystemTime(new Date('2026-03-04T11:00:00.789Z'))
+    await user.delete()
+    expect(await storedText(db, 'deleted_at', user.id)).toBe('2026-03-04 11:00:00.789')
+    expect((await User.onlyTrashed().where('deleted_at', '<', new Date('2026-03-04T12:00:00.000Z')).get()).map(entry => entry.id)).toEqual([user.id])
+  })
+
+  it('stores withTimestamps pivot writes in the CURRENT_TIMESTAMP format so same-day comparisons hold', async () => {
+    const { db } = await openLegacyDatabase()
+    const Tag = defineModel('legacy_date_tags', { guarded: [] })
+    const User = defineModel('legacy_date_users', {
+      guarded: [],
+      relations: { tags: belongsToMany(() => Tag, 'legacy_date_tag_user', 'user_id', 'tag_id').withTimestamps().withPivot('is_primary') },
+    })
+    const RecentUser = defineModel('legacy_date_users', {
+      relations: {
+        tags: belongsToMany(() => Tag, 'legacy_date_tag_user', 'user_id', 'tag_id')
+          .withTimestamps()
+          .wherePivot('updated_at', '<', new Date('2026-03-04T12:00:00.000Z')),
+      },
+    })
+    const user = await User.create({ name: 'Ada' })
+    const math = await Tag.create({ name: 'math' })
+    const art = await Tag.create({ name: 'art' })
+
+    freezeClock('2026-03-04T10:00:00.123Z')
+    await user.attach('tags', math.id)
+    expect(await storedPivotTimestamps(db, math.id)).toEqual(['2026-03-04 10:00:00.123', '2026-03-04 10:00:00.123'])
+
+    vi.setSystemTime(new Date('2026-03-04T10:30:00.456Z'))
+    await user.sync('tags', [math.id, art.id])
+    expect(await storedPivotTimestamps(db, art.id)).toEqual(['2026-03-04 10:30:00.456', '2026-03-04 10:30:00.456'])
+
+    vi.setSystemTime(new Date('2026-03-04T11:00:00.789Z'))
+    await user.updateExistingPivot('tags', math.id, { is_primary: 1 })
+    expect(await storedPivotTimestamps(db, math.id)).toEqual(['2026-03-04 10:00:00.123', '2026-03-04 11:00:00.789'])
+
+    vi.useRealTimers()
+    const loaded = await RecentUser.with('tags').findOrFail(user.id)
+    expect(loaded.tags.map(tag => tag.name).sort()).toEqual(['art', 'math'])
   })
 
   it('reads a legacy INTEGER pivot boolean as a boolean once change() rebuilds the column', async () => {

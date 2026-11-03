@@ -1,10 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import { dateLikeWriteValue } from '../schema/normalization'
-import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
-import { ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -94,7 +91,7 @@ export class PivotMutation {
   }
 
   private async execute(connection: DatabaseContext, actions: readonly Action[]): Promise<void> {
-    const timestamp = new Date().toISOString()
+    const timestamp = new Date()
     const timestamped = this.context.timestamps ? actions.map(action => action.kind === 'delete' ? action : {
       ...action,
       attributes: this.timestampAttributes(action.attributes, action.kind === 'insert', timestamp),
@@ -132,19 +129,13 @@ export class PivotMutation {
     }
   }
 
-  private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date().toISOString()): Attributes {
+  private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date()): Attributes {
     if (!this.context.timestamps) return attributes
     return {
       ...attributes,
-      ...(inserting ? { created_at: attributes.created_at ?? this.timestampValue('created_at', timestamp) } : {}),
-      updated_at: this.timestampValue('updated_at', timestamp),
+      ...(inserting ? { created_at: attributes.created_at ?? timestamp } : {}),
+      updated_at: timestamp,
     }
-  }
-
-  private timestampValue(column: string, timestamp: string): unknown {
-    const { table } = this.context
-    if (typeof table !== 'string' && ownEntry(table.columns, column)) return timestamp
-    return dateLikeWriteValue(this.connection.getDriver() as SchemaDialectName, timestamp)
   }
 
   private normalize(ids: unknown, attributes: Attributes = {}): Entry[] {
