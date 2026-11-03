@@ -50,7 +50,7 @@ await DB.table('tags').insert([
 
 ### insertGetId()
 
-`insertGetId()` inserts one row and returns its auto-incrementing ID. When the table's definition describes the key as an integer, the ID is a number on every database, as its reads return it:
+`insertGetId()` inserts one row and returns its auto-incrementing ID. With a table name, the ID is the value the driver returns, so on PostgreSQL a `bigint` key such as `5` comes back as `'5'`. When you pass a table definition whose key is an integer, the ID is a number on every database:
 
 ```ts
 const userId = await DB.table('users').insertGetId({

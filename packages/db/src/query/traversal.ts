@@ -1,5 +1,5 @@
 import { rebindDatabaseQueryObservationResult } from '../cache'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
@@ -27,7 +27,7 @@ export async function* queryBatches<
   transform: (rows: readonly TRow[]) => readonly TValue[] | Promise<readonly TValue[]>,
 ): AsyncGenerator<readonly TValue[], void, unknown> {
   const plan = input.getPlan()
-  const table = plan.source.table ?? getGeneratedTableDefinition(plan.source.tableName)
+  const table = plan.source.table ?? getConnectionGeneratedTableDefinition(plan.source.tableName, input.getConnectionName())
   const tableName = plan.source.alias ?? plan.source.tableName
   const primaryKeys = traversal.primaryKey !== undefined ? [traversal.primaryKey] : resolveTablePrimaryKeyColumns(table)
   const idColumn = traversal.column === undefined ? undefined : traversal.column.includes('.') ? traversal.column : `${tableName}.${traversal.column}`

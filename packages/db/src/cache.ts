@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
-import { getGeneratedTableDefinition } from './schema/generated'
+import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 
@@ -1309,20 +1309,20 @@ function getPrimaryKeyColumn(plan: SelectQueryPlan): string {
   return Object.values(columns).find(column => column.primaryKey)?.name ?? 'id'
 }
 
-function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>): string | undefined {
-  const table = source.table ?? getGeneratedTableDefinition(source.tableName)
+function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
+  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   if (!table) return 'id'
   const [primaryKey, ...otherPrimaryKeys] = listTablePrimaryKeyColumns(table)
   return otherPrimaryKeys.length === 0 ? primaryKey : undefined
 }
 
-function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, primaryKey: string): boolean {
-  const table = source.table ?? getGeneratedTableDefinition(source.tableName)
+function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string, primaryKey: string): boolean {
+  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
 }
 
 function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string): string | undefined {
-  const primaryKey = resolveRowDependencyKey(plan.source)
+  const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
   return primaryKey === undefined
     ? undefined
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
@@ -2111,7 +2111,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   includeMetadata = false,
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
-  const primaryKey = resolveRowDependencyKey(source)
+  const primaryKey = resolveRowDependencyKey(source, connectionName)
   const createRowDependency = (value: unknown) => primaryKey === undefined
     ? undefined
     : createTableRowCacheDependency(connectionName, tableName, primaryKey, value)
@@ -2158,7 +2158,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
       dependencies.add(dependency)
     }
   }
-  const lastInsertDependency = rows.length === 1 && primaryKey !== undefined && hasAutoIncrementKey(source, primaryKey)
+  const lastInsertDependency = rows.length === 1 && primaryKey !== undefined && hasAutoIncrementKey(source, connectionName, primaryKey)
     ? createRowDependency(lastInsertId)
     : undefined
   if (lastInsertDependency) {

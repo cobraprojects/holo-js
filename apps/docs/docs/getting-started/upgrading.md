@@ -173,7 +173,7 @@ import { diffSchema } from '@holo-js/db' // [!code ++]
 
 ### Tables resolve through the generated schema
 
-`DB.table('name')`, model tables and pivot tables resolve through the generated schema only. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, is queried with the driver's raw values until the generated schema is written again, so its JSON and boolean columns aren't converted. Pass a table definition to `DB.table()` to use its columns right away. See [Start a query](/database/query-builder/#start-a-query).
+`DB.table('name')`, model tables and pivot tables resolve through the generated schema only, and only on the default connection, the one the generated schema is read from. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, uses no definition until the generated schema is written again, so the JSON and boolean values you write to it aren't converted. Pass a table definition to `DB.table()` to use its columns right away. Query-builder reads return the driver's values in both cases. See [Start a query](/database/query-builder/#start-a-query).
 
 A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it.
 

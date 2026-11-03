@@ -94,7 +94,9 @@ const drafts = await posts.where('status', 'draft').get()
 const published = await posts.where('status', 'published').get()
 ```
 
-A table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, JSON, boolean and date columns are read and written the way the definition says. A table that isn't in the Generated schema, such as one created earlier in the same script, is queried with the driver's raw values until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
+Rows come back with the values the database driver returns, as in Laravel's query builder. For example, PostgreSQL returns `bigint` columns as strings, and SQLite and MySQL return booleans as `1` and `0`. Use a [model](/orm/) with [casts](/orm/casts) when you want typed attributes.
+
+On the default connection, a table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, Holo uses its columns and primary key to check the columns you name and to prepare the values you write and compare. The Generated schema describes only the default connection, so a table name on another connection uses no definition. A table that isn't in the Generated schema, such as one created earlier in the same script, uses no definition until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
 
 You can alias the table with `as`:
 
