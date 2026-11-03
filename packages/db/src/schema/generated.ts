@@ -24,7 +24,7 @@ const generatedTables = (() => {
 
 const generatedSchemaSource = (() => {
   const runtime = globalThis as typeof globalThis & {
-    __holoGeneratedSchemaSource__?: { connectionName?: string }
+    __holoGeneratedSchemaSource__?: { connectionName?: string, readFromConnection?: string }
   }
 
   runtime.__holoGeneratedSchemaSource__ ??= {}
@@ -35,12 +35,22 @@ export function setGeneratedSchemaConnection(connectionName: string | undefined)
   generatedSchemaSource.connectionName = connectionName
 }
 
-export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
+export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(
+  tables: TTables,
+  options: { readonly connectionName?: string } = {},
+): TTables {
   for (const table of Object.values(tables)) {
     generatedTables.set(table.tableName, table)
   }
+  if (options.connectionName !== undefined) {
+    generatedSchemaSource.readFromConnection = options.connectionName
+  }
 
   return tables
+}
+
+function generatedSchemaConnection(): string | undefined {
+  return generatedSchemaSource.connectionName ?? generatedSchemaSource.readFromConnection
 }
 
 export function defineGeneratedTable<
@@ -56,6 +66,7 @@ export function defineGeneratedTable<
 
 export function clearGeneratedTables(): void {
   generatedTables.clear()
+  generatedSchemaSource.readFromConnection = undefined
 }
 
 export function getGeneratedTableDefinition<TName extends string>(tableName: TName): GeneratedSchemaTable<TName> | undefined {
@@ -63,12 +74,12 @@ export function getGeneratedTableDefinition<TName extends string>(tableName: TNa
 }
 
 export function getConnectionGeneratedTableDefinition(tableName: string, connectionName: string): TableDefinition | undefined {
-  const schemaConnection = generatedSchemaSource.connectionName
+  const schemaConnection = generatedSchemaConnection()
   return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
 }
 
 export function isGeneratedSchemaConnection(connectionName: string): boolean {
-  return generatedSchemaSource.connectionName === connectionName
+  return generatedSchemaConnection() === connectionName
 }
 
 export function resolveGeneratedTableDefinition<
@@ -257,7 +268,7 @@ function renderTableOptions(table: TableDefinition): string {
 
 function buildGeneratedSchemaModuleLines(
   tables: readonly TableDefinition[],
-  options: { withTypeAugmentation: boolean },
+  options: { withTypeAugmentation: boolean, connectionName: string | undefined },
 ): string[] {
   const renderedTables = [...tables].sort((left, right) => left.tableName.localeCompare(right.tableName))
   const usedBuilders = [
@@ -306,7 +317,13 @@ function buildGeneratedSchemaModuleLines(
       : `export const tables = Object.freeze(${tableEntries})`,
   )
   declarations.push('')
-  declarations.push('registerGeneratedTables(tables)')
+  if (options.connectionName === undefined) {
+    declarations.push('registerGeneratedTables(tables)')
+  } else {
+    declarations.push(`export const connectionName = ${JSON.stringify(options.connectionName)}`)
+    declarations.push('')
+    declarations.push('registerGeneratedTables(tables, { connectionName })')
+  }
   declarations.push('')
 
   return declarations
@@ -316,10 +333,10 @@ export function renderGeneratedSchemaPlaceholder(): string {
   return renderGeneratedSchemaModule([])
 }
 
-export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]): string {
-  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: true }).join('\n')
+export function renderGeneratedSchemaModule(tables: readonly TableDefinition[], connectionName?: string): string {
+  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: true, connectionName }).join('\n')
 }
 
-export function renderGeneratedSchemaRuntimeModule(tables: readonly TableDefinition[]): string {
-  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: false }).join('\n')
+export function renderGeneratedSchemaRuntimeModule(tables: readonly TableDefinition[], connectionName?: string): string {
+  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: false, connectionName }).join('\n')
 }
