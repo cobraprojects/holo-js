@@ -688,6 +688,19 @@ describe('native schema core', () => {
     ])
   })
 
+  it('drops foreign keys of a schema-qualified table by their conventional column names', () => {
+    const builder = new TableMutationBuilder('tenant.posts')
+
+    builder.dropForeign(['user_id'])
+    builder.dropConstrainedForeignId('author_id')
+
+    expect(builder.getOperations()).toEqual([
+      { kind: 'dropForeignKey', constraintName: 'tenant_posts_user_id_foreign' },
+      { kind: 'dropForeignKey', constraintName: 'tenant_posts_author_id_foreign' },
+      { kind: 'dropColumn', columnName: 'author_id' },
+    ])
+  })
+
   it('supports chained foreign key helpers', () => {
     const builder = new TableMutationBuilder('users')
 

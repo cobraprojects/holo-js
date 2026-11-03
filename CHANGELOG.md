@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Database: `table.dropForeign()` inside `schema.table()` also takes an array of columns and drops the key with the conventional name `{table}_{columns}_foreign`, as in Laravel. The new `table.dropConstrainedForeignId(column)` drops the column's `{table}_{column}_foreign` key, then the column, which is how you drop a constrained column on MySQL. Neither is supported on SQLite yet. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign) and [dropConstrainedForeignId()](apps/docs/docs/database/migrations.md#dropconstrainedforeignid).
+
 ### Changed
 
 - Database: new SQLite columns use Laravel's SQLite type names: `tinyint(1)` for booleans, `date` for dates, `datetime` for datetimes and timestamps, `varchar(255)` for strings, and `text` for JSON. `schema.getColumns()` reports these types, and booleans read back with the `boolean` logical type. Values read and write as before, and tables created earlier keep their types. See [Available column types](apps/docs/docs/database/migrations.md#available-column-types).
