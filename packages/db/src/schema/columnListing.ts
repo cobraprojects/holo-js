@@ -1,4 +1,5 @@
 import { createSchemaReader } from './introspection'
+import { getRootDatabaseContext } from '../core/contextOwnership'
 import type { DatabaseContext } from '../core/DatabaseContext'
 
 type ColumnListingEntry = {
@@ -6,16 +7,17 @@ type ColumnListingEntry = {
   columns?: ReadonlySet<string>
 }
 
-const listings = new Map<string, Map<string, ColumnListingEntry>>()
+const listings = new WeakMap<DatabaseContext, Map<string, ColumnListingEntry>>()
 
-function connectionListings(connectionName: string): Map<string, ColumnListingEntry> {
-  const existing = listings.get(connectionName)
+function connectionListings(connection: DatabaseContext): Map<string, ColumnListingEntry> {
+  const root = getRootDatabaseContext(connection)
+  const existing = listings.get(root)
   if (existing) {
     return existing
   }
 
   const created = new Map<string, ColumnListingEntry>()
-  listings.set(connectionName, created)
+  listings.set(root, created)
   return created
 }
 
@@ -25,7 +27,7 @@ async function readColumnListing(connection: DatabaseContext, tableName: string)
 }
 
 export function loadColumnListing(connection: DatabaseContext, tableName: string): Promise<ReadonlySet<string>> {
-  const tables = connectionListings(connection.getConnectionName())
+  const tables = connectionListings(connection)
   const cached = tables.get(tableName)
   if (cached) {
     return cached.load
@@ -48,10 +50,10 @@ export function loadColumnListing(connection: DatabaseContext, tableName: string
   return entry.load
 }
 
-export function getLoadedColumnListing(connectionName: string, tableName: string): ReadonlySet<string> | undefined {
-  return listings.get(connectionName)?.get(tableName)?.columns
+export function getLoadedColumnListing(connection: DatabaseContext, tableName: string): ReadonlySet<string> | undefined {
+  return listings.get(getRootDatabaseContext(connection))?.get(tableName)?.columns
 }
 
-export function forgetColumnListings(connectionName: string): void {
-  listings.delete(connectionName)
+export function forgetColumnListings(connection: DatabaseContext): void {
+  listings.delete(getRootDatabaseContext(connection))
 }

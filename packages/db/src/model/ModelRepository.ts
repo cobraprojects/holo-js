@@ -3796,7 +3796,7 @@ export class ModelRepository<
 
   private isGuardableColumn(
     key: string,
-    columns = getLoadedColumnListing(this.getConnectionName(), this.definition.table.tableName),
+    columns = getLoadedColumnListing(this.getConnection(), this.definition.table.tableName),
   ): boolean {
     if (ownEntry(this.definition.mutators, key) || isClassCast(ownEntry(this.definition.casts, key))) return true
     if (key.includes('->')) return false
