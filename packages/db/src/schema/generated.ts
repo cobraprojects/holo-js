@@ -261,7 +261,9 @@ function buildGeneratedSchemaModuleLines(
     ...(renderedTables.length > 0 ? ['defineGeneratedTable'] : []),
     'registerGeneratedTables',
   ]
+  const declaresEmptyTables = options.withTypeAugmentation && renderedTables.length === 0
   const declarations: string[] = [
+    ...(declaresEmptyTables ? ['/* eslint-disable @typescript-eslint/no-empty-object-type */'] : []),
     `import { ${usedBuilders.join(', ')} } from '@holo-js/db'`,
     '',
   ]
@@ -282,17 +284,22 @@ function buildGeneratedSchemaModuleLines(
 
   if (options.withTypeAugmentation) {
     declarations.push('declare module \'@holo-js/db\' {')
-    declarations.push('  interface GeneratedSchemaTables {')
-    declarations.push(...interfaceLines)
-    declarations.push('  }')
+    if (declaresEmptyTables) {
+      declarations.push('  interface GeneratedSchemaTables {}')
+    } else {
+      declarations.push('  interface GeneratedSchemaTables {')
+      declarations.push(...interfaceLines)
+      declarations.push('  }')
+    }
     declarations.push('}')
     declarations.push('')
   }
 
+  const tableEntries = exportedTableEntries.length > 0 ? `{ ${exportedTableEntries.join(', ')} }` : '{}'
   declarations.push(
     options.withTypeAugmentation
-      ? `export const tables = { ${exportedTableEntries.join(', ')} } as const`
-      : `export const tables = Object.freeze({ ${exportedTableEntries.join(', ')} })`,
+      ? `export const tables = ${tableEntries} as const`
+      : `export const tables = Object.freeze(${tableEntries})`,
   )
   declarations.push('')
   declarations.push('registerGeneratedTables(tables)')
@@ -302,19 +309,7 @@ function buildGeneratedSchemaModuleLines(
 }
 
 export function renderGeneratedSchemaPlaceholder(): string {
-  return [
-    '/* eslint-disable @typescript-eslint/no-empty-object-type */',
-    'import { registerGeneratedTables } from \'@holo-js/db\'',
-    '',
-    'declare module \'@holo-js/db\' {',
-    '  interface GeneratedSchemaTables {}',
-    '}',
-    '',
-    'export const tables = {} as const',
-    '',
-    'registerGeneratedTables(tables)',
-    '',
-  ].join('\n')
+  return renderGeneratedSchemaModule([])
 }
 
 export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]): string {

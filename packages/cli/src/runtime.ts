@@ -199,8 +199,10 @@ export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResul
   return `Runtime command "${kind}" failed.`
 }
 
+const RUNTIME_ERROR_PREFIX = /^(?:[A-Za-z][\w.]*Error|Error)(?: \[[A-Z_]+\])?:\s+/
+
 function stripRuntimeErrorPrefix(line: string): string {
-  return line.replace(/^(?:[A-Za-z][\w.]*Error|Error):\s+/, '')
+  return line.replace(RUNTIME_ERROR_PREFIX, '')
 }
 
 function isRuntimeErrorSourceLine(line: string): boolean {
@@ -221,7 +223,7 @@ function formatRuntimeFailureText(text: string): string {
     return stripRuntimeErrorPrefix(friendlyLine)
   }
 
-  const errorLine = lines.find(line => /^(?:[A-Za-z][\w.]*Error|Error):\s+/.test(line))
+  const errorLine = lines.find(line => RUNTIME_ERROR_PREFIX.test(line))
   if (errorLine) {
     return stripRuntimeErrorPrefix(errorLine)
   }
@@ -248,9 +250,14 @@ export async function withRuntimeEnvironment<T>(
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
+  if (kind === 'seed' || kind === 'media:regenerate') {
+    await withRuntimeEnvironment(projectRoot, 'generate-schema', {}, async () => undefined).catch((error: unknown) => {
+      process.stderr.write(`[Holo CLI] Continuing with the existing Generated schema. ${errorMessage(error)}\n`)
+    })
+  }
   if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
-    await prepareProjectDiscovery(projectRoot, project.config, true, isSchemaChangingKind(kind) ? 'regenerating' : 'current')
+    await prepareProjectDiscovery(projectRoot, project.config)
   }
 
   const environment = await getRuntimeEnvironment(projectRoot, kind)

@@ -1,10 +1,10 @@
-import { rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
 } from '@holo-js/kernel'
-import type { MigrationDefinition, SeederDefinition } from '@holo-js/db'
+import { renderGeneratedSchemaPlaceholder, type MigrationDefinition, type SeederDefinition } from '@holo-js/db'
+import { writeTextFile } from './atomic-file'
 import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
@@ -152,36 +152,27 @@ export async function prepareProjectDiscovery(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
   prepareFramework = true,
-  generatedSchema: GeneratedSchemaState = 'current',
 ): Promise<GeneratedProjectRegistry> {
   const modules = createProjectModuleBatch(projectRoot)
   try {
-    return await discoverProjectRegistry(projectRoot, config, prepareFramework, generatedSchema, modules)
+    return await discoverProjectRegistry(projectRoot, config, prepareFramework, modules)
   } finally {
     await modules.cleanup()
   }
 }
 
-type GeneratedSchemaState = 'current' | 'regenerating'
-
 async function importGeneratedSchema(
   projectRoot: string,
   generatedSchemaPath: string,
-  generatedSchema: GeneratedSchemaState,
   modules: ProjectModuleBatch,
 ): Promise<void> {
   try {
     await modules.import(generatedSchemaPath)
   } catch (error) {
-    if (generatedSchema === 'regenerating') {
-      await rm(generatedSchemaPath, { force: true })
-      return
-    }
-
-    throw new Error(
-      `Unable to load the Generated schema "${makeProjectRelativePath(projectRoot, generatedSchemaPath)}": ${errorMessage(error)}\n`
-      + 'Run "holo migrate" or "holo build" to write it again from the database.',
-      { cause: error },
+    await writeTextFile(generatedSchemaPath, renderGeneratedSchemaPlaceholder())
+    process.stderr.write(
+      `[Holo CLI] Discarded the Generated schema "${makeProjectRelativePath(projectRoot, generatedSchemaPath)}" `
+      + `because it failed to load: ${errorMessage(error).split('\n')[0]}\n`,
     )
   }
 }
@@ -190,7 +181,6 @@ async function discoverProjectRegistry(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
   prepareFramework: boolean,
-  generatedSchema: GeneratedSchemaState,
   modules: ProjectModuleBatch,
 ): Promise<GeneratedProjectRegistry> {
   const loadedConfig = await loadConfigWithNormalizers(projectRoot, {
@@ -230,7 +220,6 @@ async function discoverProjectRegistry(
   await modules.bundle([
     ...(hasGeneratedSchema ? [generatedSchemaPath] : []),
     ...modelFiles,
-    ...migrationFiles,
     ...seederFiles,
     ...jobFiles,
     ...eventFiles,
@@ -241,7 +230,7 @@ async function discoverProjectRegistry(
     ...abilityFiles,
   ])
   if (hasGeneratedSchema) {
-    await importGeneratedSchema(projectRoot, generatedSchemaPath, generatedSchema, modules)
+    await importGeneratedSchema(projectRoot, generatedSchemaPath, modules)
   }
   const commandBundleErrors = await bundleCommandModules(modules, commandFiles)
 
@@ -274,20 +263,10 @@ async function discoverProjectRegistry(
   }
   assertUniqueEntries('model', models)
 
-  const migrations: GeneratedMigrationRegistryEntry[] = []
-  for (const filePath of migrationFiles) {
+  const migrations: GeneratedMigrationRegistryEntry[] = migrationFiles.map((filePath) => {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await modules.import(filePath)
-    const migration = resolveNamedExport(moduleValue, isMigrationDefinition)
-    if (!migration) {
-      throw new Error(`Discovered migration "${relativePath}" does not export a Holo migration.`)
-    }
-
-    migrations.push({
-      sourcePath: relativePath,
-      name: migration.name ? validateMigrationName(migration.name) : inferMigrationNameFromEntry(relativePath),
-    })
-  }
+    return { sourcePath: relativePath, name: inferMigrationNameFromEntry(relativePath) }
+  })
   assertUniqueEntries('migration', migrations)
 
   const seeders: GeneratedSeederRegistryEntry[] = []

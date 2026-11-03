@@ -463,6 +463,7 @@
     "unused-class-member:packages/db/src/drivers/PooledTransactionClients.ts:PooledTransactionClients:release",
     "unused-class-member:packages/db/src/drivers/PooledTransactionClients.ts:PooledTransactionClients:require",
     "unused-class-member:packages/db/src/drivers/PooledTransactionClients.ts:PooledTransactionClients:run",
+    "unused-class-member:packages/db/src/drivers/registry.ts:DeferredDatabaseDriverAdapter:databaseExists",
     "unused-class-member:packages/db/src/factories/Factory.ts:Factory:create",
     "unused-class-member:packages/db/src/factories/Factory.ts:Factory:getAmount",
     "unused-class-member:packages/db/src/factories/Factory.ts:Factory:make",

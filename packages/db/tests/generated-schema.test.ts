@@ -192,6 +192,10 @@ describe('generated schema helpers', () => {
     }
   })
 
+  it('keeps the lint header on an empty Generated schema module, as on the scaffolded placeholder', () => {
+    expect(renderGeneratedSchemaModule([]).split('\n')[0]).toBe('/* eslint-disable @typescript-eslint/no-empty-object-type */')
+  })
+
   it('resolves explicit generated tables and falls back to a minimal table shape when absent', () => {
     const users = defineGeneratedTable('users', {
       id: column.id(),

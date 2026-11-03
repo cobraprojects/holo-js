@@ -1176,6 +1176,13 @@ async function writeLegacyGeneratedSchema(projectRoot: string): Promise<void> {
   ].join('\n'))
 }
 
+async function writeDevServerProbe(projectRoot: string): Promise<void> {
+  await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', `
+const { tables } = await import(new URL('../generated/schema.mjs', import.meta.url))
+process.stdout.write('dev server tables: ' + Object.keys(tables).sort().join(',') + '\\n')
+`)
+}
+
 function generatedTableNames(generated: string): string[] {
   return [...generated.matchAll(/defineGeneratedTable\("([^"]+)"/g)].map(match => match[1]!).sort()
 }
@@ -6176,7 +6183,7 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }
 
-  it('tells the user to run migrate or build when holo prepare cannot load a 0.5 Generated schema', async () => {
+  it('discards a 0.5 Generated schema that fails to load and finishes holo prepare with a notice', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -6184,10 +6191,90 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
 
     const prepared = runCliProcess(projectRoot, ['prepare'])
 
-    expect(prepared.status).toBe(1)
-    expect(prepared.stderr).toContain('Unable to load the Generated schema ".holo-js/generated/schema.generated.ts"')
-    expect(prepared.stderr).toContain('Run "holo migrate" or "holo build" to write it again from the database.')
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    expect(prepared.stderr.trim().split('\n')).toEqual([
+      expect.stringMatching(/^\[Holo CLI\] Discarded the Generated schema "\.holo-js\/generated\/schema\.generated\.ts" because it failed to load: .*generated is not a function/),
+    ])
+    for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+      expect(generatedTableNames(generated)).toEqual([])
+    }
   }, 30000)
+
+  it('fails holo build and warns in holo dev without creating a missing SQLite database file', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeDevServerProbe(projectRoot)
+
+    const built = runCliProcess(projectRoot, ['build'])
+    expect(built.status).toBe(1)
+    expect(built.stderr).toContain('Unable to read the database schema of connection "default": the database does not exist. Run "holo migrate" to create it.')
+    expect(built.stdout).not.toContain('dev server tables')
+
+    const dev = runCliProcess(projectRoot, ['dev'])
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stderr).toContain('[Holo CLI] Starting with the existing Generated schema. Unable to read the database schema of connection "default"')
+
+    expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
+  }, 60000)
+
+  it('runs prepare, migrate, build and dev on a fresh clone of a SQLite project whose storage directory is gitignored', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['prepare', 'migrate', 'build']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+      expect(result.stderr, command).toBe('')
+    }
+    await rm(join(projectRoot, '.holo-js/generated'), { recursive: true, force: true })
+    const dev = runCliProcess(projectRoot, ['dev'])
+
+    expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+    expect(dev.stderr).toBe('')
+    expect(dev.stdout).toContain('dev server tables: profiles,users')
+  }, 90000)
+
+  it.each(['migrate', 'migrate:fresh'])('creates the missing directory and file of the SQLite database on %s', async (command) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/data/database.sqlite' })
+
+    const migrated = runCliProcess(projectRoot, [command], { env: { APP_ENV: 'development' } })
+
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
+    for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+      expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+    }
+  }, 60000)
+
+  it.each([
+    { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
+    { failure: 'an import of a missing module', source: 'import \'holo-missing-migration-package\'\nexport default {}\n', reported: 'holo-missing-migration-package' },
+  ])('runs prepare, build and dev without evaluating a migration with $failure, and migrate reports it', async ({ source, reported }) => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, schemaSourceDatabases[0].connection('database'))
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_02_000001_broken.ts', source)
+    await writeDevServerProbe(projectRoot)
+
+    for (const command of ['prepare', 'build', 'dev']) {
+      const result = runCliProcess(projectRoot, [command])
+      expect(result.status, `${command}: ${result.stderr || result.stdout}`).toBe(0)
+    }
+    const registry = await loadGeneratedProjectRegistry(projectRoot)
+    expect(registry?.migrations.map(entry => entry.name)).toContain('2026_01_02_000001_broken')
+
+    const failed = runCliProcess(projectRoot, ['migrate'])
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain(reported)
+  }, 90000)
 
   for (const database of schemaSourceDatabases) {
     it.skipIf(!database.enabled)(`writes the Generated schema from the ${database.driver} database after migrate, rollback and fresh`, async () => {
@@ -6310,7 +6397,7 @@ process.stdout.write('framework build ran\\n')
       }
     }, 90000)
 
-    it.skipIf(!database.enabled)(`rewrites a 0.5 Generated schema that calls generated() from the ${database.driver} database on migrate, build, fresh and rollback`, async () => {
+    it.skipIf(!database.enabled)(`rewrites a 0.5 Generated schema that calls generated() from the ${database.driver} database on prepare, seed, migrate, build, fresh and rollback`, async () => {
       const projectRoot = await createTempProject()
       tempDirs.push(projectRoot)
       const databaseName = `holo_legacy_${randomUUID().replaceAll('-', '')}`
@@ -6319,6 +6406,17 @@ process.stdout.write('framework build ran\\n')
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('users', { name: 'User', fillable: ['name'] })
+`)
+      await writeProjectFile(projectRoot, 'server/db/seeders/UserSeeder.ts', `
+import { defineSeeder } from '@holo-js/db'
+import User from '../../models/User'
+
+export default defineSeeder({
+  name: 'UserSeeder',
+  async run() {
+    await User.create({ name: 'Seeded' })
+  },
+})
 `)
       await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', `
 process.stdout.write('framework build ran\\n')
@@ -6329,6 +6427,8 @@ process.stdout.write('framework build ran\\n')
         expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
         const upgrades = [
+          { command: ['prepare'], tables: [] },
+          { command: ['seed'], tables: ['profiles', 'users'] },
           { command: ['migrate'], tables: ['profiles', 'users'] },
           { command: ['build'], tables: ['profiles', 'users'] },
           { command: ['migrate:fresh'], tables: ['profiles', 'users'] },
@@ -6349,6 +6449,50 @@ process.stdout.write('framework build ran\\n')
         await database.drop(databaseName)
       }
     }, 120000)
+
+    it.skipIf(!database.enabled)(`starts holo dev on a fresh clone with the Generated schema of the migrated ${database.driver} database`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const databaseName = `holo_dev_${randomUUID().replaceAll('-', '')}`
+      await writeSchemaSourceProject(projectRoot, database.connection(databaseName))
+      await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { name: 'User', fillable: ['name'] })
+`)
+      await database.create(databaseName)
+      try {
+        const migrated = runCliProcess(projectRoot, ['migrate'])
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        await rm(join(projectRoot, '.holo-js/generated'), { recursive: true, force: true })
+        await writeDevServerProbe(projectRoot)
+
+        const dev = runCliProcess(projectRoot, ['dev'])
+
+        expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+        expect(dev.stdout).toContain('dev server tables: profiles,users')
+        const modelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+        expect(modelTypes).toContain('GeneratedSchemaTable<"users">')
+      } finally {
+        await database.drop(databaseName)
+      }
+    }, 90000)
+
+    it.skipIf(!database.enabled)(`starts holo dev with the existing Generated schema and a warning when the ${database.driver} database is unreachable`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const connection = database.driver === 'sqlite'
+        ? { driver: 'sqlite', url: './missing/directory/database.sqlite' }
+        : database.connection(`holo_missing_${randomUUID().replaceAll('-', '')}`)
+      await writeSchemaSourceProject(projectRoot, connection)
+      await writeDevServerProbe(projectRoot)
+
+      const dev = runCliProcess(projectRoot, ['dev'])
+
+      expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+      expect(dev.stdout).toContain('dev server tables: ')
+      expect(dev.stderr).toContain('[Holo CLI] Starting with the existing Generated schema. Unable to read the database schema of connection "default"')
+    }, 60000)
 
     it.skipIf(!database.enabled)(`fails holo build with an error naming the connection when the ${database.driver} database is unreachable`, async () => {
       const projectRoot = await createTempProject()
@@ -11768,10 +11912,10 @@ export default {
       await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo model')
 
       await rm(join(projectRoot, 'server/models/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('does not export a Holo migration')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/Bad.mjs" must use a timestamped file name')
 
       await rm(join(projectRoot, 'server/db/migrations/Bad.mjs'))
-      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('must match YYYY_MM_DD_HHMMSS_description')
+      await expect(prepareProjectDiscovery(projectRoot, loaded.config)).rejects.toThrow('server/db/migrations/manual_name.mjs" must use a timestamped file name')
       await expect(loadRegisteredMigrations(projectRoot, {
         ...defaultProjectConfig(),
         migrations: ['server/db/migrations/manual_name.mjs'],

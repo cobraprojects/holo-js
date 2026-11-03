@@ -10,7 +10,7 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 
 ### Deploy checklist
 
-1. Give the build environment access to the default connection's database. `holo build` reads it and fails when it can't.
+1. Give the build environment access to the default connection's database. `holo build` reads it and fails when it can't. On SQLite, the database file must exist where the build runs.
 2. If you run `npx holo migrate --isolated`, install `@holo-js/cache` and make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
 3. Run this one deploy's `npx holo migrate` from a single replica.
 4. Once every replica runs 0.6.0, drop the `_holo_migration_locks` table.
@@ -19,7 +19,11 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 
 `holo build` no longer loads or runs your migrations. It reads the tables and columns of the default connection's database and writes `.holo-js/generated/schema.generated.ts` from them. The build environment needs the same database settings as production and a reachable database. If it can't read the database, `holo build` fails with an error that names the connection. Run your migrations before you build. See [Build](/deployment/#build).
 
-A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes. Such a file fails to typecheck, and commands such as `holo dev` and `holo prepare` stop with an error that tells you to write it again. Run `npx holo migrate` or `npx holo build` once to write it from your database.
+A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes. Every command, including the `holo prepare` that your install runs, replaces such a file with an empty generated schema, prints a one-line notice and continues. `npx holo migrate`, `npx holo build` and `npx holo dev` then write it again from your database.
+
+`holo dev` now writes the generated schema from the database when it starts, so a fresh clone gets its model types without a separate `migrate`. If it can't read the database, it warns and starts with the schema it has. `holo seed` and `holo media:regenerate` write it before they run, too.
+
+On SQLite, `holo build` and `holo dev` no longer create a missing database file. `holo build` fails with the error that names the connection instead. `npx holo migrate` creates the file and its directory, so on a fresh clone run it before you build.
 
 ### Model types come from the database and casts
 
