@@ -321,9 +321,10 @@ describe('@holo-js/realtime', () => {
 
   it('uses the configured DB facade when no realtime database binding is provided', async () => {
     const db = await createContext()
-    configureDB({
-      connection: () => db,
-    } as never)
+    configureDB(createConnectionManager({
+      defaultConnection: 'main',
+      connections: { main: db },
+    }))
     configureRealtimeRuntime({
     })
     const query = defineRealtimeQuery({
