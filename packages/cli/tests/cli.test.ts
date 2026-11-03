@@ -1179,6 +1179,13 @@ async function writeLegacyGeneratedSchema(projectRoot: string): Promise<void> {
   ].join('\n'))
 }
 
+async function writeDevServerProbe(projectRoot: string): Promise<void> {
+  await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', `
+const { tables } = await import(new URL('../generated/schema.mjs', import.meta.url))
+process.stdout.write('dev server tables: ' + Object.keys(tables).sort().join(',') + '\\n')
+`)
+}
+
 function generatedTableNames(generated: string): string[] {
   return [...generated.matchAll(/defineGeneratedTable\("([^"]+)"/g)].map(match => match[1]!).sort()
 }
@@ -6486,6 +6493,50 @@ process.stdout.write('framework build ran\\n')
         await database.drop(databaseName)
       }
     }, 120000)
+
+    it.skipIf(!database.enabled)(`starts holo dev on a fresh clone with the Generated schema of the migrated ${database.driver} database`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const databaseName = `holo_dev_${randomUUID().replaceAll('-', '')}`
+      await writeSchemaSourceProject(projectRoot, database.connection(databaseName))
+      await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { name: 'User', fillable: ['name'] })
+`)
+      await database.create(databaseName)
+      try {
+        const migrated = runCliProcess(projectRoot, ['migrate'])
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        await rm(join(projectRoot, '.holo-js/generated'), { recursive: true, force: true })
+        await writeDevServerProbe(projectRoot)
+
+        const dev = runCliProcess(projectRoot, ['dev'])
+
+        expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+        expect(dev.stdout).toContain('dev server tables: profiles,users')
+        const modelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+        expect(modelTypes).toContain('GeneratedSchemaTable<"users">')
+      } finally {
+        await database.drop(databaseName)
+      }
+    }, 90000)
+
+    it.skipIf(!database.enabled)(`starts holo dev with the existing Generated schema and a warning when the ${database.driver} database is unreachable`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const connection = database.driver === 'sqlite'
+        ? { driver: 'sqlite', url: './missing/directory/database.sqlite' }
+        : database.connection(`holo_missing_${randomUUID().replaceAll('-', '')}`)
+      await writeSchemaSourceProject(projectRoot, connection)
+      await writeDevServerProbe(projectRoot)
+
+      const dev = runCliProcess(projectRoot, ['dev'])
+
+      expect(dev.status, dev.stderr || dev.stdout).toBe(0)
+      expect(dev.stdout).toContain('dev server tables: ')
+      expect(dev.stderr).toContain('[Holo CLI] Starting with the existing Generated schema. Unable to read the database schema of connection "default"')
+    }, 60000)
 
     it.skipIf(!database.enabled)(`fails holo build with an error naming the connection when the ${database.driver} database is unreachable`, async () => {
       const projectRoot = await createTempProject()
