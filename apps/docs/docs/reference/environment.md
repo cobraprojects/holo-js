@@ -75,7 +75,7 @@ Used in `config/database.ts`. See [database.ts](/reference/config#database-ts).
 | `DB_USERNAME` | `postgres` / `root` | Database user. |
 | `DB_PASSWORD` | empty | Database password. |
 | `DB_DATABASE` | project name | Database name. |
-| `DB_SCHEMA` | `public` | Postgres schema. |
+| `DB_SCHEMA` | `public` | Postgres schema. Sets the `search_path`. |
 | `DB_POOL_MAX` | `4` | Postgres: maximum pool size. |
 | `DB_CONNECTION_TIMEOUT_MS` | `5000` | Postgres: connection timeout. |
 | `DB_IDLE_TIMEOUT_MS` | `30000` | Postgres: idle connection timeout. |

@@ -9,6 +9,7 @@ export type DatabaseDriverConnection = Pick<HoloProjectConnectionConfig, 'max' |
   readonly password?: string
   readonly database?: string
   readonly ssl?: boolean | Record<string, unknown>
+  readonly schema?: string
 }
 
 export type DatabaseDriverFactory = {
