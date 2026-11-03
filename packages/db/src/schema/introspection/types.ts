@@ -4,7 +4,7 @@ export type SchemaReadingDialect = 'sqlite' | 'postgres' | 'mysql'
 export type DatabaseColumnDefault
   = | { readonly kind: 'none' }
     | { readonly kind: 'now' }
-    | { readonly kind: 'literal', readonly value: string | number | boolean | null }
+    | { readonly kind: 'literal', readonly value: string | boolean | null }
     | { readonly kind: 'expression', readonly sql: string }
 
 export interface DatabaseColumnStructure {
