@@ -209,7 +209,7 @@ On PostgreSQL, `insertGetId()` now returns an integer key as a number, as Larave
 
 These changes can make a migration that hasn't run yet fail, as it would in Laravel. Run your pending migrations against a copy of your database first.
 
-- `dropIndex()` with a name that doesn't exist raises an error on SQLite and PostgreSQL, as it already did on MySQL. Indexes keep their old names after `renameTable()`, so drop them by those names. `dropIndex()` also takes columns now. On PostgreSQL, drop the constraint of a `unique()` column with `dropUnique()`. See [dropIndex()](/database/migrations#dropindex).
+- `dropIndex()` with a name that doesn't exist raises an error on SQLite and PostgreSQL, as it already did on MySQL. Indexes keep their old names after `renameTable()`, so drop them by those names or by their columns. `dropIndex()` also takes columns now. On PostgreSQL, drop the constraint of a `unique()` column with `dropUnique()`. See [dropIndex()](/database/migrations#dropindex).
 - On PostgreSQL and SQLite, creating an index whose name another table already uses fails instead of skipping the index. This happens when you create a table under a name you renamed away; give its indexes names of their own. Running the same `createTable()` again still succeeds, now on MySQL too. See [unique(columns)](/database/migrations#unique-columns).
 - A `unique()` column whose generated name another table's index already uses fails the migration instead of skipping the unique.
 - On SQLite, `change()` inside your own transaction throws `SchemaError` when another table references the rebuilt table, because SQLite can't turn off foreign key checks there. Run it in a migration or outside the transaction. A rebuild that would leave a foreign key pointing at a missing row throws `SchemaError` and changes nothing.
@@ -217,17 +217,18 @@ These changes can make a migration that hasn't run yet fail, as it would in Lara
 
 ### Unique and foreign key names
 
-`unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key` and MySQL named them after the column. Existing constraints keep those names, so drop them by name:
+`unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key`, MySQL named them after the column, and SQLite named their index `sqlite_autoindex_{table}_{n}`. Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Before, PostgreSQL named them `{table}_{column}_fkey` and SQLite left them unnamed. Existing constraints keep their old names.
+
+`migrate:fresh` and every new database, such as CI's or a new developer's, run your migrations against tables that this release creates, so they carry the new names. A migration that drops a constraint by its old name, such as `dropUnique('tenants_owner_email_key')`, works on your upgraded database and fails on a fresh one. Drop uniques, indexes and foreign keys by their columns instead:
 
 ```ts
 await schema.table('tenants', (table) => {
-  table.dropUnique('tenants_owner_email_key')
+  table.dropUnique(['owner_email'])
+  table.dropForeign(['owner_id'])
 })
 ```
 
-On SQLite, drop a unique that an earlier release created inline by its columns, such as `table.dropUnique(['owner_email'])`. See [dropUnique()](/database/migrations#dropunique).
-
-Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Existing PostgreSQL keys keep their `{table}_{column}_fkey` names; drop them by that name. On SQLite, `dropForeign(['user_id'])` also drops the unnamed key an earlier release created on that column. `foreign(column, name)` inside `createTable()` now takes a constraint name, as it already did inside `table()`. See [dropForeign()](/database/migrations#dropforeign).
+Holo reads the table from the database and drops the constraint that covers exactly those columns, whatever its name, so the same migration works on both. Laravel computes the conventional name instead. `dropIndex([...])`, `dropConstrainedForeignId()` and `dropMorphs()` work the same way. If more than one constraint covers the columns, the error lists their names; drop by name only in a migration that runs on one database. `foreign(column, name)` inside `createTable()` now takes a constraint name, as it already did inside `table()`. See [dropUnique()](/database/migrations#dropunique) and [dropForeign()](/database/migrations#dropforeign).
 
 ### Composite primary keys
 

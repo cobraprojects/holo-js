@@ -1816,6 +1816,112 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await expect(schema.table(child, table => { table.dropForeign(['created_by_id']) })).rejects.toThrow()
     })
 
+    it('runs the same column-form drop migration on a database named by an earlier release and on a fresh one', async () => {
+      const { db, schema, adapter, table } = await openDatabase(driver)
+      const parent = table.tableName.split('.').at(-1)!
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 16)
+      const legacy = `holo_cover_legacy_${suffix}`
+      const fresh = `holo_cover_fresh_${suffix}`
+      const quote = (identifier: string) => db.getDialect().quoteIdentifier(identifier)
+      onTestFinished(async () => {
+        await schema.dropTable(legacy)
+        await schema.dropTable(fresh)
+      })
+      await adapter.execute(`CREATE TABLE ${quote(legacy)} (id INTEGER PRIMARY KEY, slug VARCHAR(255) UNIQUE, category_id INTEGER, FOREIGN KEY (category_id) REFERENCES ${quote(parent)} (id))`)
+      await schema.createTable(fresh, (table) => {
+        table.integer('id').primaryKey()
+        table.string('slug').unique()
+        table.integer('category_id').nullable()
+        table.foreign('category_id').references('id').on(parent)
+      })
+      const legacyUniqueName = { sqlite: `sqlite_autoindex_${legacy}_1`, postgres: `${legacy}_slug_key`, mysql: 'slug' }[driver]
+      const legacyForeignKeyName = { sqlite: undefined, postgres: `${legacy}_category_id_fkey`, mysql: `${legacy}_ibfk_1` }[driver]
+      expect((await schema.getIndexes(legacy)).find(index => index.columns.includes('slug'))?.name).toBe(legacyUniqueName)
+      expect((await createSchemaReader(db).readTableStructure(legacy))?.foreignKeys[0]?.name).toBe(legacyForeignKeyName)
+
+      for (const name of [legacy, fresh]) {
+        await schema.table(name, (table) => {
+          table.dropUnique(['slug'])
+          table.dropForeign(['category_id'])
+        })
+
+        await db.table(name).insert([{ id: 1, slug: 'same', category_id: 999 }, { id: 2, slug: 'same', category_id: 999 }])
+        expect(await db.table(name).count()).toBe(2)
+        expect(await schema.getForeignKeys(name)).toEqual([])
+        expect((await schema.getIndexes(name)).filter(index => index.unique && index.columns.includes('slug'))).toEqual([])
+      }
+    })
+
+    it('drops a constrained foreign id and a morph index under the names an earlier release gave them', async () => {
+      const { db, schema, adapter, table } = await openDatabase(driver)
+      const parent = table.tableName.split('.').at(-1)!
+      const legacy = `holo_cover_legacy_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const quote = (identifier: string) => db.getDialect().quoteIdentifier(identifier)
+      onTestFinished(() => schema.dropTable(legacy))
+      await adapter.execute(`CREATE TABLE ${quote(legacy)} (id INTEGER PRIMARY KEY, category_id INTEGER, taggable_type VARCHAR(255), taggable_id INTEGER, FOREIGN KEY (category_id) REFERENCES ${quote(parent)} (id))`)
+      await adapter.execute(`CREATE INDEX ${quote(`${legacy}_morph_lookup`)} ON ${quote(legacy)} (taggable_type, taggable_id)`)
+
+      await schema.table(legacy, (table) => {
+        table.dropConstrainedForeignId('category_id')
+        table.dropMorphs('taggable')
+      })
+
+      expect((await schema.getColumns(legacy)).map(column => column.name)).toEqual(['id'])
+      expect(await schema.getForeignKeys(legacy)).toEqual([])
+      expect((await schema.getIndexes(legacy)).filter(index => !index.columns.includes('id'))).toEqual([])
+    })
+
+    it('refuses a column-form drop that more than one index or foreign key covers and names the candidates', async () => {
+      const { schema, table } = await openDatabase(driver)
+      const parent = table.tableName.split('.').at(-1)!
+      const name = `holo_cover_twice_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.integer('id').primaryKey()
+        table.string('email')
+        table.integer('parent_id')
+        table.string('label')
+        table.unique(['email'], `${name}_email_first`)
+        table.unique(['email'], `${name}_email_second`)
+        table.index(['label'], `${name}_label_first`)
+        table.index(['label'], `${name}_label_second`)
+        table.foreign('parent_id', `${name}_parent_first`).references('id').on(parent)
+      })
+      await schema.table(name, (table) => { table.foreign('parent_id', `${name}_parent_second`).references('id').on(parent) })
+
+      await expect(schema.table(name, (table) => { table.dropUnique(['email']) }))
+        .rejects.toThrow(`Table "${name}" has more than one unique index on columns "email": "${name}_email_first", "${name}_email_second". Drop one by name.`)
+      await expect(schema.table(name, (table) => { table.dropIndex(['label']) }))
+        .rejects.toThrow(`Table "${name}" has more than one index on columns "label": "${name}_label_first", "${name}_label_second". Drop one by name.`)
+      await expect(schema.table(name, (table) => { table.dropForeign(['parent_id']) }))
+        .rejects.toThrow(`Table "${name}" has more than one foreign key on columns "parent_id": "${name}_parent_first", "${name}_parent_second". Drop one by name.`)
+      expect((await schema.getIndexes(name)).map(index => index.name)).toEqual(expect.arrayContaining([`${name}_email_first`, `${name}_email_second`, `${name}_label_first`, `${name}_label_second`]))
+      expect(await schema.getForeignKeys(name)).toHaveLength(2)
+    })
+
+    it('refuses a column-form drop that no index or foreign key covers exactly', async () => {
+      const { schema, table } = await openDatabase(driver)
+      const parent = table.tableName.split('.').at(-1)!
+      const name = `holo_cover_none_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.integer('id').primaryKey()
+        table.string('email')
+        table.integer('tenant_id')
+        table.index(['email'])
+        table.unique(['tenant_id', 'email'])
+        table.foreign('tenant_id').references('id').on(parent)
+      })
+
+      await expect(schema.table(name, (table) => { table.dropUnique(['email']) }))
+        .rejects.toThrow(`Table "${name}" has no unique index on columns "email".`)
+      await expect(schema.table(name, (table) => { table.dropIndex(['tenant_id']) }))
+        .rejects.toThrow(`Table "${name}" has no index on columns "tenant_id".`)
+      await expect(schema.table(name, (table) => { table.dropForeign(['email']) }))
+        .rejects.toThrow(`Table "${name}" has no foreign key on columns "email".`)
+      expect(await schema.getForeignKeys(name)).toHaveLength(1)
+    })
+
     it('drops a legacy PostgreSQL foreign key by its database-assigned name', async () => {
       if (driver !== 'postgres') {
         return
@@ -1902,7 +2008,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(added.indexes.map(index => [index.columns, index.unique])).toEqual(before.indexes.map(index => [index.columns, index.unique]))
       expect(added.foreignKeys).toEqual(expect.arrayContaining([
         ...before.foreignKeys,
-        { name: `${members}_parent_id_foreign`, table: parents, from: 'parent_id', to: 'id', onUpdate: 'NO ACTION', onDelete: 'CASCADE' },
+        { name: `${members}_parent_id_foreign`, columns: ['parent_id'], table: parents, from: 'parent_id', to: 'id', onUpdate: 'NO ACTION', onDelete: 'CASCADE' },
       ]))
       expect(added.foreignKeys).toHaveLength(2)
       await expect(db.table(members).insert({ parent_id: 99, owner_id: 1, email: 'b@example.com' })).rejects.toThrow()

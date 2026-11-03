@@ -3,7 +3,7 @@ import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
+import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
@@ -99,20 +99,20 @@ export class SQLiteSchemaOperations {
     })
   }
 
-  async dropForeignKey(tableName: string, constraintName: string, columns?: readonly string[]): Promise<void> {
+  async dropForeignKey(tableName: string, target: { readonly name?: string, readonly columns: readonly string[] }): Promise<void> {
     await this.rebuildTable(tableName, (_structure, table) => {
-      const kept = withoutForeignKeys(table, foreignKey => foreignKey.name === undefined
-        ? columns !== undefined && sameIdentifiers(foreignKey.columns, columns)
-        : foreignKey.name === constraintName)
+      const kept = withoutForeignKeys(table, foreignKey => target.name === undefined
+        ? foreignKey.name === undefined && sameIdentifiers(foreignKey.columns, target.columns)
+        : foreignKey.name === target.name)
       if (!kept) {
-        throw new SchemaError(`SQLite cannot drop missing foreign key "${constraintName}" on table "${tableName}".`)
+        throw new SchemaError(`SQLite cannot drop missing foreign key "${target.name ?? target.columns.join('", "')}" on table "${tableName}".`)
       }
       return kept
     })
   }
 
-  async dropInlineUnique(tableName: string, indexName: string, columns?: readonly string[]): Promise<boolean> {
-    const rewrite = await this.resolveInlineUniqueRewrite(tableName, indexName, columns)
+  async dropInlineUnique(tableName: string, indexName: string): Promise<boolean> {
+    const rewrite = await this.resolveInlineUniqueRewrite(tableName, indexName)
     if (!rewrite) {
       return false
     }
@@ -127,17 +127,9 @@ export class SQLiteSchemaOperations {
     return true
   }
 
-  private async resolveInlineUniqueRewrite(
-    tableName: string,
-    indexName: string,
-    columns: readonly string[] | undefined,
-  ): Promise<UniqueRewrite | undefined> {
+  private async resolveInlineUniqueRewrite(tableName: string, indexName: string): Promise<UniqueRewrite | undefined> {
     const index = (await readTableStructure(this.connection, tableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
-    if (!index) {
-      return columns === undefined ? undefined : table => withoutUniquesOnColumns(table, columns)
-    }
-
-    if (!index.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
+    if (!index?.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined
     }
 

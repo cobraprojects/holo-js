@@ -2,6 +2,7 @@ import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, r
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
+import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
@@ -255,6 +256,10 @@ export class SchemaService {
     await runAtomically(this.connection, connection => executeStatements(connection, statements))
   }
 
+  private async resolveCoveringIndexName(tableName: string, columns: readonly string[], unique: boolean): Promise<string> {
+    return resolveCoveringIndex(tableName, await this.readTableStructure(tableName), columns, unique).name
+  }
+
   private async resolveUniqueBacking(tableName: string, indexName: string): Promise<UniqueBacking> {
     const index = (await this.readTableStructure(tableName))?.indexes.find(candidate => candidate.name === indexName)
     return index?.constraint && !index.primary ? 'constraint' : 'index'
@@ -273,7 +278,9 @@ export class SchemaService {
           break
         case 'dropIndex':
         case 'dropUnique':
-          assertValidIndexName(operation.indexName)
+          if ('indexName' in operation) {
+            assertValidIndexName(operation.indexName)
+          }
           break
         case 'renameIndex':
           assertValidIndexName(operation.fromIndexName)
@@ -315,17 +322,21 @@ export class SchemaService {
       case 'createIndex':
         await this.execute(this.createCompiler().compile(createIndexOperation(tableName, operation.index)))
         return
-      case 'dropIndex':
-        await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, operation.indexName)))
+      case 'dropIndex': {
+        const indexName = 'indexName' in operation ? operation.indexName : await this.resolveCoveringIndexName(tableName, operation.columns, false)
+        await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, indexName)))
         return
-      case 'dropUnique':
-        if (this.isSqlite() && await this.sqlite.dropInlineUnique(tableName, operation.indexName, operation.columns)) {
+      }
+      case 'dropUnique': {
+        const indexName = 'indexName' in operation ? operation.indexName : await this.resolveCoveringIndexName(tableName, operation.columns, true)
+        if (this.isSqlite() && await this.sqlite.dropInlineUnique(tableName, indexName)) {
           return
         }
         await this.execute(this.createCompiler().compile(
-          dropUniqueOperation(tableName, operation.indexName, await this.resolveUniqueBacking(tableName, operation.indexName)),
+          dropUniqueOperation(tableName, indexName, await this.resolveUniqueBacking(tableName, indexName)),
         ))
         return
+      }
       case 'renameIndex':
         await (this.isSqlite()
           ? this.sqlite.renameIndex(tableName, operation.fromIndexName, operation.toIndexName)
@@ -344,16 +355,23 @@ export class SchemaService {
           createForeignKeyOperation(tableName, operation.columnName, operation.reference, operation.constraintName),
         ))
         return
-      case 'dropForeignKey':
+      case 'dropForeignKey': {
+        const foreignKey = 'constraintName' in operation
+          ? { name: operation.constraintName, columns: [] }
+          : resolveCoveringForeignKey(tableName, await this.readTableStructure(tableName), operation.columns)
         if (this.isSqlite()) {
-          await this.sqlite.dropForeignKey(tableName, operation.constraintName, operation.columns)
+          await this.sqlite.dropForeignKey(tableName, foreignKey)
           return
+        }
+        if (foreignKey.name === undefined) {
+          throw new SchemaError(`Table "${tableName}" has an unnamed foreign key on columns "${foreignKey.columns.join('", "')}".`)
         }
         this.assertAlterCapability('dropping foreign keys')
         await this.execute(this.createCompiler().compile(
-          dropForeignKeyOperation(tableName, operation.constraintName),
+          dropForeignKeyOperation(tableName, foreignKey.name),
         ))
         return
+      }
       case 'createPrimaryKey':
         await (this.isSqlite()
           ? this.sqlite.createPrimaryKey(tableName, operation.columns, operation.constraintName)

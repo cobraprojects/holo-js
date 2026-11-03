@@ -1,7 +1,7 @@
 import { parseSqlDefault } from './defaults'
 import { splitTablePath } from '../identifiers'
 import { createIntrospect } from './introspect'
-import { readStringLength, readStringLiterals } from './sqlDefinitions'
+import { readForeignKeyColumns, readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
 
@@ -154,6 +154,7 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
         })),
         foreignKeys: foreignKeys.rows.map(row => ({
           name: row.name,
+          columns: readForeignKeyColumns(foreignKeys.rows, row.name),
           table: row.table_schema === row.owner_schema ? row.table_name : `${row.table_schema}.${row.table_name}`,
           from: row.from_column,
           to: row.to_column,

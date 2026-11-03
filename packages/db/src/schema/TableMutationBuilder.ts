@@ -1,7 +1,7 @@
 import { column, type AnyColumnBuilder } from './columns'
 import { SOFT_DELETE_COLUMN_NAME, softDeleteColumn, TIMESTAMP_COLUMN_NAMES, timestampColumn } from './conventionalColumns'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
-import { resolveConventionalIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
+import { resolveConventionalIndexName } from './generatedNames'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
 
 interface AddColumnMutationOperation {
@@ -32,16 +32,12 @@ interface CreateIndexMutationOperation {
   index: TableIndexDefinition
 }
 
-interface DropIndexMutationOperation {
-  kind: 'dropIndex'
-  indexName: string
-}
+type CoveredColumnsTarget = { columns: readonly string[] }
+type IndexTarget = { indexName: string } | CoveredColumnsTarget
 
-interface DropUniqueMutationOperation {
-  kind: 'dropUnique'
-  indexName: string
-  columns?: readonly string[]
-}
+type DropIndexMutationOperation = { kind: 'dropIndex' } & IndexTarget
+
+type DropUniqueMutationOperation = { kind: 'dropUnique' } & IndexTarget
 
 interface RenameIndexMutationOperation {
   kind: 'renameIndex'
@@ -56,11 +52,7 @@ interface CreateForeignKeyMutationOperation {
   constraintName?: string
 }
 
-interface DropForeignKeyMutationOperation {
-  kind: 'dropForeignKey'
-  constraintName: string
-  columns?: readonly string[]
-}
+type DropForeignKeyMutationOperation = { kind: 'dropForeignKey' } & ({ constraintName: string } | CoveredColumnsTarget)
 
 interface CreatePrimaryKeyMutationOperation {
   kind: 'createPrimaryKey'
@@ -94,6 +86,10 @@ type TableMutationOperation
     | DropPrimaryKeyMutationOperation
 
 type ColumnMutationMode = 'addColumn' | 'alterColumn'
+
+function toIndexTarget(index: string | readonly string[]): IndexTarget {
+  return typeof index === 'string' ? { indexName: index } : { columns: [...index] }
+}
 type ColumnFactory<TBuilder extends AnyColumnBuilder = AnyColumnBuilder> = () => TBuilder
 
 class TableForeignKeyBuilder {
@@ -503,16 +499,11 @@ export class TableMutationBuilder {
   }
 
   dropIndex(index: string | readonly string[]): void {
-    const indexName = typeof index === 'string' ? index : resolveConventionalIndexName(this.table, index)
-    this.operations.push({ kind: 'dropIndex', indexName })
+    this.operations.push({ kind: 'dropIndex', ...toIndexTarget(index) })
   }
 
   dropUnique(index: string | readonly string[]): void {
-    if (typeof index === 'string') {
-      this.operations.push({ kind: 'dropUnique', indexName: index })
-      return
-    }
-    this.operations.push({ kind: 'dropUnique', indexName: resolveGeneratedUniqueIndexName(this.table, index), columns: [...index] })
+    this.operations.push({ kind: 'dropUnique', ...toIndexTarget(index) })
   }
 
   renameIndex(fromIndexName: string, toIndexName: string): void {
@@ -532,11 +523,9 @@ export class TableMutationBuilder {
   }
 
   dropForeign(index: string | readonly string[]): void {
-    if (typeof index === 'string') {
-      this.operations.push({ kind: 'dropForeignKey', constraintName: index })
-      return
-    }
-    this.operations.push({ kind: 'dropForeignKey', constraintName: resolveConventionalIndexName(this.table, index, 'foreign'), columns: [...index] })
+    this.operations.push(typeof index === 'string'
+      ? { kind: 'dropForeignKey', constraintName: index }
+      : { kind: 'dropForeignKey', columns: [...index] })
   }
 
   dropConstrainedForeignId(columnName: string): void {
