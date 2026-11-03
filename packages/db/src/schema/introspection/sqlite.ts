@@ -1,7 +1,7 @@
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
-import { readColumnDefinitionName, readEnumChecks, readForeignKey, readStringLength, splitTableDefinitions } from './sqlDefinitions'
+import { readEnumChecks, readForeignKeys, readStringLength, splitTableDefinitions, type ForeignKeyDefinition } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseEnumCheckStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
@@ -54,17 +54,30 @@ export async function listSQLiteReferencingTables(connection: DatabaseContext, t
 }
 
 function readDefinitionDetails(createTableSql: string) {
-  const foreignKeyNames = new Map<string, string>()
+  const declaredForeignKeys: ForeignKeyDefinition[] = []
   const enumChecks: DatabaseEnumCheckStructure[] = []
 
   for (const definition of splitTableDefinitions(createTableSql)) {
-    const columnName = readColumnDefinitionName(definition)
-    const foreignKey = readForeignKey(definition, columnName)
-    if (foreignKey?.name) foreignKeyNames.set(foreignKey.column, foreignKey.name)
+    declaredForeignKeys.push(...readForeignKeys(definition))
     enumChecks.push(...readEnumChecks(definition))
   }
 
-  return { foreignKeyNames, enumChecks }
+  return { declaredForeignKeys, enumChecks }
+}
+
+function sameIdentifier(left: string, right: string | undefined): boolean {
+  return left.toLowerCase() === right?.toLowerCase()
+}
+
+function sameIdentifiers(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => sameIdentifier(name, right[index]))
+}
+
+function claimForeignKeyName(declared: ForeignKeyDefinition[], rows: readonly ForeignKeyRow[]): string | undefined {
+  const columns = rows.map(row => row.from)
+  const index = declared.findIndex(foreignKey => sameIdentifier(foreignKey.table, rows[0]?.table) && sameIdentifiers(foreignKey.columns, columns))
+  const [claimed] = index === -1 ? [] : declared.splice(index, 1)
+  return claimed?.name
 }
 
 function readRowIdAlias(columns: readonly ColumnRow[], indexes: readonly DatabaseIndexStructure[]): string | undefined {
@@ -99,7 +112,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     return result.rows.map(row => row.name)
   }
 
-  async function readForeignKeys(schema: string, table: string, names: ReadonlyMap<string, string>): Promise<DatabaseForeignKeyStructure[]> {
+  async function readForeignKeyStructures(schema: string, table: string, declared: readonly ForeignKeyDefinition[]): Promise<DatabaseForeignKeyStructure[]> {
     const result = await introspect<ForeignKeyRow>('SELECT id, seq, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq', [table, schema], `schema:introspect:foreignKeys:${table}`)
     const parentPrimaryKeys = new Map<string, string[]>()
     const readParentPrimaryKey = async (parent: string): Promise<string[]> => {
@@ -107,11 +120,16 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       parentPrimaryKeys.set(parent, primaryKey)
       return primaryKey
     }
+    const unclaimed = [...declared]
+    const names = new Map<number, string | undefined>()
+    for (const id of new Set(result.rows.map(row => row.id))) {
+      names.set(id, claimForeignKeyName(unclaimed, result.rows.filter(row => row.id === id)))
+    }
     const foreignKeys: DatabaseForeignKeyStructure[] = []
     for (const row of result.rows) {
       const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
       if (to === undefined) continue
-      const name = names.get(row.from)
+      const name = names.get(row.id)
       foreignKeys.push({
         ...(name ? { name } : {}),
         table: row.table,
@@ -155,7 +173,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           computed: row.hidden === 2 || row.hidden === 3,
         })),
         indexes,
-        foreignKeys: await readForeignKeys(schema, table, details.foreignKeyNames),
+        foreignKeys: await readForeignKeyStructures(schema, table, details.declaredForeignKeys),
         enumChecks: details.enumChecks,
       }
       return structure
