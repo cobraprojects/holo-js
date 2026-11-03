@@ -164,7 +164,21 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
-export const insertGetKey = Symbol('insertGetKey')
+type KeyedInsert = (
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+) => Promise<number | string | undefined>
+
+let keyedInsert: KeyedInsert
+
+export function insertGetIdByKey(
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+): Promise<number | string | undefined> {
+  return keyedInsert(query, values, keyColumn)
+}
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
@@ -2763,12 +2777,16 @@ export class TableQueryBuilder<
     return insertResult
   }
 
-  async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
-    assertSinglePrimaryKey(this.source.table)
-    return this[insertGetKey](values, this.resolvePrimaryKeyColumn())
+  static {
+    keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
   }
 
-  async [insertGetKey](values: Readonly<Record<string, unknown>>, keyColumn: string): Promise<number | string | undefined> {
+  async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
+    assertSinglePrimaryKey(this.source.table)
+    return this.insertGetKey(values, this.resolvePrimaryKeyColumn())
+  }
+
+  private async insertGetKey(values: Readonly<Record<string, unknown>>, keyColumn: string): Promise<number | string | undefined> {
     const result = await this.executeInsert(values, keyColumn)
     return readInsertedKey(this.plan.source.table, keyColumn, result.lastInsertId)
   }

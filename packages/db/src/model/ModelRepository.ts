@@ -14,7 +14,7 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder, insertGetKey } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson } from '../schema/normalization'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
@@ -1725,7 +1725,7 @@ export class ModelRepository<
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
-        : { lastInsertId: await query[insertGetKey](payload, this.definition.primaryKey) }
+        : { lastInsertId: await insertGetIdByKey(query, payload, this.definition.primaryKey) }
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
