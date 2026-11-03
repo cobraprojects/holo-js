@@ -11,6 +11,7 @@ import {
 } from './project'
 import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
+import { errorMessage } from './error-message'
 import { isSchemaChangingKind } from './runtime-kinds'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
 import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
@@ -311,6 +312,18 @@ function formatRuntimeFailureText(text: string): string {
 }
 
 /* v8 ignore start */
+async function refreshDiscoveryAfterFailedRun(
+  projectRoot: string,
+  config: RuntimeEnvironment['project']['config'],
+  failure: Error,
+): Promise<void> {
+  try {
+    await prepareProjectDiscovery(projectRoot, config)
+  } catch (error) {
+    throw new Error(`${failure.message}\nUnable to refresh generated types after the failed run: ${errorMessage(error)}`, { cause: error })
+  }
+}
+
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
   kind: RuntimeCommandKind,
@@ -358,7 +371,11 @@ export async function withRuntimeEnvironment<T>(
     })
 
     if (result.status !== 0 || result.error) {
-      throw new Error(getRuntimeFailureMessage(kind, result))
+      const failure = new Error(getRuntimeFailureMessage(kind, result))
+      if (isSchemaChangingKind(kind)) {
+        await refreshDiscoveryAfterFailedRun(projectRoot, environment.project.config, failure)
+      }
+      throw failure
     }
 
     const output = await callback((result.stdout ?? '').trim())
