@@ -317,8 +317,15 @@ function startsTableConstraint(tokens: readonly SqlToken[]): boolean {
   return first?.kind === 'word' && TABLE_CONSTRAINT_STARTS.has(first.keyword ?? '')
 }
 
+function declaresOrdinaryTable(cursor: TokenCursor): boolean {
+  if (!cursor.accept('CREATE')) return false
+  if (!cursor.accept('TEMP')) cursor.accept('TEMPORARY')
+  return cursor.accept('TABLE')
+}
+
 export function parseCreateTableSql(createTableSql: string): StoredTable | undefined {
   const tokens = tokenizeSql(createTableSql)
+  if (!declaresOrdinaryTable(new TokenCursor(createTableSql, tokens))) return undefined
   const bodyIndex = tokens.findIndex(token => token.kind === 'group')
   const body = tokens[bodyIndex]
   if (!body?.children) return undefined

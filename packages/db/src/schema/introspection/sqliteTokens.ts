@@ -10,8 +10,8 @@ export interface SqlToken {
 }
 
 const IDENTIFIER_QUOTES: Readonly<Record<string, string>> = { '"': '"', '`': '`', '[': ']' }
-const WORD_START_PATTERN = /[\p{L}_]/u
-const WORD_CHARACTER_PATTERN = /[\p{L}\p{N}_$]/u
+const WORD_START_PATTERN = /[A-Za-z_\u0080-\u{10FFFF}]/u
+const WORD_CHARACTER_PATTERN = /[\w$\u0080-\u{10FFFF}]/u
 const LITERAL_PATTERN = /x'[\da-f]*'|0x[\da-f]+|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/iy
 
 interface LexResult {

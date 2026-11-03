@@ -225,7 +225,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
 
   return {
     async listTables() {
-      const result = await introspect<TableNameRow>('SELECT name FROM sqlite_master WHERE type = \'table\' AND name NOT LIKE \'sqlite_%\' ORDER BY name', [], 'schema:introspect:tables')
+      const result = await introspect<TableNameRow>('SELECT name FROM pragma_table_list WHERE schema = ? AND type IN (\'table\', \'virtual\') AND name NOT LIKE \'sqlite_%\' ORDER BY name', [MAIN_SCHEMA], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
