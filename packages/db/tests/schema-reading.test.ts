@@ -189,6 +189,29 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(definition.columns.path?.enumValues).toEqual(['C:\\temp', 'it\'s', 'say "hi"', 'a\\\'b', 'tab\there'])
     })
 
+    it.runIf(driver === 'sqlite')('reads tables whose implicit foreign keys reference a missing parent or one without a primary key', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const keyless = uniqueName('holo_read_keyless')
+      const orphans = uniqueName('holo_read_orphans')
+      const children = uniqueName('holo_read_keyless_children')
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(orphans)
+        await schema.dropTable(keyless)
+      })
+      await db.executeCompiled({ sql: `CREATE TABLE "${keyless}" ("code" TEXT NOT NULL)`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${orphans}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "${uniqueName('holo_read_missing')}")`, source: 'schema' })
+      await db.executeCompiled({ sql: `CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "keyless_code" TEXT REFERENCES "${keyless}")`, source: 'schema' })
+
+      const reader = createSchemaReader(db)
+      const definitions = [(await reader.readTable(orphans))!, (await reader.readTable(children))!]
+
+      expect(definitions.map(definition => Object.keys(definition.columns))).toEqual([['id', 'parent_id'], ['id', 'keyless_code']])
+      const rendered = renderGeneratedSchemaModule(definitions)
+      expect(rendered).toContain('"parent_id": column.integer().nullable(),')
+      expect(rendered).toContain('"keyless_code": column.text().nullable(),')
+    })
+
     it.runIf(driver === 'sqlite')('reads a parenthesized string default that contains parentheses as its literal value', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_paren_default')

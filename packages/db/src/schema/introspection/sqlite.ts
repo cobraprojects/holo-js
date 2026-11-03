@@ -1,4 +1,3 @@
-import { SchemaError } from '../../core/errors'
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
@@ -111,9 +110,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     const foreignKeys: DatabaseForeignKeyStructure[] = []
     for (const row of result.rows) {
       const to = row.to ?? (await readParentPrimaryKey(row.table))[row.seq]
-      if (to === undefined) {
-        throw new SchemaError(`SQLite cannot read the foreign key on column "${row.from}" of table "${table}" because table "${row.table}" has no primary key for it to reference.`)
-      }
+      if (to === undefined) continue
       const name = names.get(row.from)
       foreignKeys.push({
         ...(name ? { name } : {}),
