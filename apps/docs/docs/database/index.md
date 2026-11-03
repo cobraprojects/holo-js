@@ -55,7 +55,7 @@ Connections live under `connections`, keyed by a name you choose. `defaultConnec
 
 ### SQLite
 
-Point `url` at a file path. `:memory:` gives you an in-memory database.
+Point `url` at a file path. `:memory:` gives you an in-memory database, which starts empty in every process and is gone when the process exits. Use it for tests. Don't use it as the default connection of an app you build: `holo build` and `holo dev` read the schema types from a new, empty in-memory database, so the generated schema has no tables.
 
 ```ts [config/database.ts]
 import { defineDatabaseConfig } from '@holo-js/db'

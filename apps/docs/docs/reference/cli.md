@@ -146,7 +146,7 @@ Your scaffolded `package.json` already has `"dev": "holo dev"`, so `npm run dev`
 
 ### build
 
-Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection. A SQLite database file that doesn't exist counts as unreadable: `holo build` never creates it. Run `npx holo migrate` to create it.
+Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection. A SQLite database file that doesn't exist counts as unreadable: `holo build` never creates it. Run `npx holo migrate` to create it. A SQLite `:memory:` database is new and empty in every process, so `holo build` can't read your tables from one and writes a generated schema with no tables.
 
 ```bash
 npx holo build [...frameworkArgs]
