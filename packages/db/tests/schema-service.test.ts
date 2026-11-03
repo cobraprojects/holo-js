@@ -309,6 +309,87 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(await schema.getForeignKeys(children)).toEqual([])
     })
 
+    it.runIf(driver === 'sqlite')('keeps every foreign key of a column referencing several parents when change() rebuilds it', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const firstParents = `holo_first_parents_${suffix}`
+      const secondParents = `holo_second_parents_${suffix}`
+      const children = `holo_children_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(children)
+        await schema.dropTable(secondParents)
+        await schema.dropTable(firstParents)
+      })
+      await adapter.execute(`CREATE TABLE "${firstParents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${secondParents}" ("id" INTEGER PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${children}" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER NOT NULL REFERENCES "${firstParents}" ("id") REFERENCES "${secondParents}" ("id"))`)
+      await db.table(firstParents).insert([{ id: 1 }, { id: 2 }])
+      await db.table(secondParents).insert([{ id: 1 }, { id: 3 }])
+
+      await schema.table(children, (table) => { table.integer('parent_id').nullable().change() })
+
+      await db.table(children).insert([{ id: 1, parent_id: 1 }, { id: 2, parent_id: null }])
+      await expect(db.table(children).insert({ id: 3, parent_id: 2 })).rejects.toThrow()
+      await expect(db.table(children).insert({ id: 4, parent_id: 3 })).rejects.toThrow()
+      expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, null])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps the collation of a unique column when change() rebuilds it', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_collated_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY, "email" TEXT NOT NULL COLLATE NOCASE UNIQUE)`)
+      await db.table(name).insert({ id: 1, email: 'A' })
+
+      await schema.table(name, (table) => { table.text('email').nullable().change() })
+
+      await expect(db.table(name).insert({ id: 2, email: 'a' })).rejects.toThrow()
+      await db.table(name).insert({ id: 3, email: null })
+      expect(await db.table(name).orderBy('id').pluck('email')).toEqual(['A', null])
+    })
+
+    it.runIf(driver === 'sqlite')('keeps a descending INTEGER PRIMARY KEY apart from the rowid when change() rebuilds it', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const name = `holo_descending_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+      onTestFinished(() => schema.dropTable(name))
+      await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY DESC, "title" TEXT NOT NULL)`)
+      await db.table(name).insert([{ id: null, title: 'first' }, { id: null, title: 'second' }])
+
+      await schema.table(name, (table) => { table.integer('id').nullable().change() })
+
+      expect(await db.table(name).orderBy('title').get()).toEqual([{ id: null, title: 'first' }, { id: null, title: 'second' }])
+      expect((await schema.getColumns(name)).find(column => column.name === 'id')).toMatchObject({ primaryKey: true })
+    })
+
+    it.runIf(driver === 'sqlite')('replaces only the type, nullability and default of a column on change() and keeps its other constraints', async () => {
+      const { db, schema, adapter } = await openDatabase(driver)
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+      const firstParents = `holo_first_codes_${suffix}`
+      const secondParents = `holo_second_codes_${suffix}`
+      const name = `holo_coded_${suffix}`
+      onTestFinished(async () => {
+        await schema.dropTable(name)
+        await schema.dropTable(secondParents)
+        await schema.dropTable(firstParents)
+      })
+      await adapter.execute(`CREATE TABLE "${firstParents}" ("code" TEXT PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${secondParents}" ("code" TEXT PRIMARY KEY)`)
+      await adapter.execute(`CREATE TABLE "${name}" ("id" INTEGER PRIMARY KEY, "code" VARCHAR(10) NOT NULL DEFAULT 'xyz' COLLATE NOCASE CHECK (length("code") <= 5) REFERENCES "${firstParents}" ("code") REFERENCES "${secondParents}" ("code") UNIQUE ON CONFLICT IGNORE)`)
+      await db.table(firstParents).insert([{ code: 'abc' }, { code: 'xyz' }, { code: 'one' }, { code: 'longer' }])
+      await db.table(secondParents).insert([{ code: 'abc' }, { code: 'xyz' }, { code: 'two' }, { code: 'longer' }])
+
+      await schema.table(name, (table) => { table.text('code').nullable().default('abc').change() })
+
+      expect((await schema.getColumns(name)).find(column => column.name === 'code')).toMatchObject({ type: 'TEXT', notNull: false })
+      await db.table(name).insert({ id: 1 })
+      await db.table(name).insert({ id: 2, code: null })
+      await db.table(name).insert({ id: 3, code: 'ABC' })
+      await expect(db.table(name).insert({ id: 4, code: 'longer' })).rejects.toThrow()
+      await expect(db.table(name).insert({ id: 5, code: 'one' })).rejects.toThrow()
+      await expect(db.table(name).insert({ id: 6, code: 'two' })).rejects.toThrow()
+      expect(await db.table(name).orderBy('id').pluck('code')).toEqual(['abc', null])
+    })
+
     it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
       const { db, schema } = await openDatabase(driver)
       const suffix = randomUUID().replaceAll('-', '').slice(0, 20)

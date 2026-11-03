@@ -3,7 +3,7 @@ import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, readInlineForeignKeyClause, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
+import { isAutoIncrementDefinition, isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readPreservedColumnConstraints, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -18,7 +18,7 @@ type SQLiteForeignKeysRow = {
 type SQLiteTableRewrite = (
   structure: DatabaseTableStructure,
   definitions: readonly string[],
-) => Array<string | AnyColumnDefinition>
+) => string[]
 
 export type ForeignKeyConstraintSuspender = <TResult>(callback: () => Promise<TResult>) => Promise<TResult>
 
@@ -43,7 +43,7 @@ export class SQLiteSchemaOperations {
       return definitions.flatMap((definition) => {
         const columnName = readColumnDefinitionName(definition)
         if (columnName === column.name) {
-          return [this.compileChangedColumn(tableName, definition, column)]
+          return [this.compiler.compileChangedColumn(tableName, column, readPreservedColumnConstraints(definition, column.name))]
         }
 
         if (columnName === undefined && readEnumChecks(definition).some(check => check.column === column.name)) {
@@ -231,20 +231,4 @@ export class SQLiteSchemaOperations {
     ])
   }
 
-  private compileChangedColumn(tableName: string, definition: string, column: AnyColumnDefinition): string {
-    const inline = readInlineColumnConstraints(definition)
-    return this.compiler.compileRebuiltColumn(tableName, {
-      ...column,
-      primaryKey: inline.primaryKey,
-      unique: inline.unique,
-      references: undefined,
-      ...(inline.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
-    }, readInlineForeignKeyClause(definition))
-  }
-}
-
-function isAutoIncrementDefinition(definition: string | AnyColumnDefinition): boolean {
-  return typeof definition === 'string'
-    ? readInlineColumnConstraints(definition).autoIncrement
-    : definition.idStrategy === 'autoIncrement'
 }

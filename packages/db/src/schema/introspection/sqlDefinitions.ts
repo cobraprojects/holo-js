@@ -146,7 +146,6 @@ export function readEnumChecks(definition: string): { name?: string, column: str
       }])
 }
 
-const INLINE_FOREIGN_KEY_NAME_PATTERN = new RegExp(`CONSTRAINT\\s+(${IDENTIFIER_PATTERN})\\s+REFERENCES\\b`, 'i')
 const TABLE_FOREIGN_KEY_PATTERN = new RegExp(
   `^(?:CONSTRAINT\\s+(${IDENTIFIER_PATTERN})\\s+)?FOREIGN\\s+KEY\\s*\\(\\s*(${IDENTIFIER_PATTERN})\\s*\\)`,
   'i',
@@ -159,9 +158,9 @@ export interface ForeignKeyDefinition {
 
 export function readForeignKey(definition: string, columnName: string | undefined): ForeignKeyDefinition | undefined {
   if (columnName) {
-    if (!readInlineColumnConstraints(definition).references) return undefined
-    const name = definition.match(INLINE_FOREIGN_KEY_NAME_PATTERN)?.[1]
-    return name === undefined ? { column: columnName } : { column: columnName, name: unquoteIdentifier(name) }
+    const reference = readColumnConstraints(definition).find(constraint => constraint.keyword === 'REFERENCES')
+    if (!reference) return undefined
+    return reference.name === undefined ? { column: columnName } : { column: columnName, name: reference.name }
   }
 
   const [, name, column] = definition.match(TABLE_FOREIGN_KEY_PATTERN) ?? []
@@ -176,58 +175,135 @@ export function readStringLength(type: string): number | undefined {
   return match ? Number(match[1]) : undefined
 }
 
-const QUOTED_TEXT_PATTERN = new RegExp(`${STRING_LITERAL_PATTERN}|"(?:[^"]|"")*"|\`(?:[^\`]|\`\`)*\`|\\[[^\\]]*\\]`, 'g')
-
-export interface InlineColumnConstraints {
-  readonly primaryKey: boolean
-  readonly autoIncrement: boolean
-  readonly unique: boolean
-  readonly references: boolean
+interface SqlToken {
+  readonly start: number
+  readonly end: number
+  readonly word?: string
 }
 
-export function readInlineColumnConstraints(definition: string): InlineColumnConstraints {
-  const keywords = definition.replace(QUOTED_TEXT_PATTERN, ' ')
+const WORD_CHARACTER_PATTERN = /[\w$]/
+
+function quotedTextEnd(sql: string, start: number, closingQuote: string): number {
+  for (let index = sql.indexOf(closingQuote, start + 1); index !== -1; index = sql.indexOf(closingQuote, index + 2)) {
+    if (closingQuote === ']' || sql.charAt(index + 1) !== closingQuote) return index + 1
+  }
+  return sql.length
+}
+
+function tokenEnd(sql: string, start: number): number {
+  const character = sql.charAt(start)
+  const closingQuote = QUOTE_PAIRS[character]
+  if (closingQuote) return quotedTextEnd(sql, start, closingQuote)
+  if (character === '(') {
+    const closeIndex = findClosingParenthesis(sql, start)
+    return closeIndex === -1 ? sql.length : closeIndex + 1
+  }
+  if (!WORD_CHARACTER_PATTERN.test(character)) return start + 1
+
+  let end = start + 1
+  while (end < sql.length && WORD_CHARACTER_PATTERN.test(sql.charAt(end))) end += 1
+  return end
+}
+
+function tokenize(sql: string): SqlToken[] {
+  const tokens: SqlToken[] = []
+  for (let start = 0; start < sql.length;) {
+    const commentEndIndex = commentEnd(sql, start)
+    if (commentEndIndex !== undefined) {
+      start = commentEndIndex
+      continue
+    }
+    if (/\s/.test(sql.charAt(start))) {
+      start += 1
+      continue
+    }
+    const end = tokenEnd(sql, start)
+    const text = sql.slice(start, end)
+    tokens.push(WORD_CHARACTER_PATTERN.test(text.charAt(0)) ? { start, end, word: text.toUpperCase() } : { start, end })
+    start = end
+  }
+  return tokens
+}
+
+const COLUMN_CONSTRAINT_KEYWORDS = new Set(['CONSTRAINT', 'PRIMARY', 'NOT', 'NULL', 'UNIQUE', 'CHECK', 'DEFAULT', 'COLLATE', 'REFERENCES', 'GENERATED', 'AS'])
+
+function startsColumnConstraint(tokens: readonly SqlToken[], index: number): boolean {
+  const word = tokens[index]?.word
+  if (word === undefined || !COLUMN_CONSTRAINT_KEYWORDS.has(word)) return false
+
+  const previous = tokens[index - 1]?.word
+  if (previous === 'CONSTRAINT' || tokens[index - 2]?.word === 'CONSTRAINT') return false
+  if (word === 'NULL') return previous !== 'NOT' && previous !== 'SET' && previous !== 'DEFAULT'
+  if (word === 'DEFAULT') return previous !== 'SET'
+  if (word === 'NOT') return tokens[index + 1]?.word !== 'DEFERRABLE'
+  if (word === 'AS') return previous !== 'ALWAYS'
+  return true
+}
+
+interface ColumnConstraint {
+  readonly keyword: string
+  readonly name?: string
+  readonly words: readonly string[]
+  readonly text: string
+}
+
+interface ColumnDefinitionParts {
+  readonly nameAndType: string
+  readonly constraints: readonly ColumnConstraint[]
+}
+
+function readColumnConstraint(definition: string, tokens: readonly SqlToken[]): ColumnConstraint {
+  const first = tokens[0]
+  const last = tokens[tokens.length - 1]
+  const text = first && last ? definition.slice(first.start, last.end) : ''
+  const words = tokens.flatMap(token => token.word === undefined ? [] : [token.word])
+  const nameToken = first?.word === 'CONSTRAINT' ? tokens[1] : undefined
+  const keyword = (nameToken ? tokens[2]?.word : first?.word) ?? ''
+  return nameToken
+    ? { keyword, name: unquoteIdentifier(definition.slice(nameToken.start, nameToken.end)), words, text }
+    : { keyword, words, text }
+}
+
+function readColumnDefinitionParts(definition: string): ColumnDefinitionParts {
+  const tokens = tokenize(definition)
+  const starts = tokens.flatMap((_token, index) => index > 0 && startsColumnConstraint(tokens, index) ? [index] : [])
+  const nameAndTypeEnd = tokens[(starts[0] ?? tokens.length) - 1]?.end ?? 0
   return {
-    primaryKey: /\bPRIMARY\s+KEY\b/i.test(keywords),
-    autoIncrement: /\bAUTOINCREMENT\b/i.test(keywords),
-    unique: /\bUNIQUE\b/i.test(keywords),
-    references: /\bREFERENCES\b/i.test(keywords),
+    nameAndType: definition.slice(0, nameAndTypeEnd).trim(),
+    constraints: starts.map((start, position) => readColumnConstraint(definition, tokens.slice(start, starts[position + 1]))),
   }
 }
 
-const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
-  `(${QUOTED_TEXT_PATTERN.source})|(?:\\s+CONSTRAINT\\s+(?:${IDENTIFIER_PATTERN}))?\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
-  'gi',
-)
+function readColumnConstraints(definition: string): readonly ColumnConstraint[] {
+  return readColumnDefinitionParts(definition).constraints
+}
+
+export function isAutoIncrementDefinition(definition: string): boolean {
+  return readColumnConstraints(definition)
+    .some(constraint => constraint.keyword === 'PRIMARY' && constraint.words.includes('AUTOINCREMENT'))
+}
+
+const CHANGED_COLUMN_CONSTRAINT_KEYWORDS = new Set(['NOT', 'NULL', 'DEFAULT'])
+
+export function readPreservedColumnConstraints(definition: string, columnName: string): string[] {
+  return readColumnConstraints(definition)
+    .filter(constraint => !CHANGED_COLUMN_CONSTRAINT_KEYWORDS.has(constraint.keyword))
+    .filter(constraint => constraint.keyword !== 'CHECK' || !readEnumChecks(constraint.text).some(check => check.column === columnName))
+    .map(constraint => constraint.text)
+}
+
+function withoutColumnConstraints(definition: string, removes: (constraint: ColumnConstraint) => boolean): string | undefined {
+  const { nameAndType, constraints } = readColumnDefinitionParts(definition)
+  const kept = constraints.filter(constraint => !removes(constraint))
+  if (kept.length === constraints.length) return undefined
+  return [nameAndType, ...kept.map(constraint => constraint.text)].join(' ')
+}
 
 export function withoutInlinePrimaryKey(definition: string): string {
-  return definition.replace(INLINE_PRIMARY_KEY_PATTERN, (match, quoted: string | undefined) => quoted ?? '')
+  return withoutColumnConstraints(definition, constraint => constraint.keyword === 'PRIMARY') ?? definition
 }
 
-const IDENTIFIER = `(?:${IDENTIFIER_PATTERN})`
-const QUOTED_TEXT_GROUP = `(${QUOTED_TEXT_PATTERN.source})`
-const INLINE_FOREIGN_KEY_PATTERN = new RegExp(
-  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?REFERENCES\\s+${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})?(?:\\s*\\(\\s*${IDENTIFIER}(?:\\s*,\\s*${IDENTIFIER})*\\s*\\))?`
-  + '(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:SET\\s+NULL|SET\\s+DEFAULT|CASCADE|RESTRICT|NO\\s+ACTION)|\\s+MATCH\\s+\\w+|\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)*',
-  'gi',
-)
-const INLINE_UNIQUE_PATTERN = new RegExp(
-  `${QUOTED_TEXT_GROUP}|\\s+(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE(?:\\s+ON\\s+CONFLICT\\s+\\w+)?\\b`,
-  'gi',
-)
-const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+${IDENTIFIER}\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
-
-export function readInlineForeignKeyClause(definition: string): string | undefined {
-  for (const [clause, quoted] of definition.matchAll(INLINE_FOREIGN_KEY_PATTERN)) {
-    if (quoted === undefined) return clause.trim()
-  }
-  return undefined
-}
-
-function withoutInlineClause(definition: string, pattern: RegExp): string | undefined {
-  const rewritten = definition.replace(pattern, (match, quoted: string | undefined) => quoted ?? '')
-  return rewritten === definition ? undefined : rewritten
-}
+const TABLE_UNIQUE_PATTERN = new RegExp(`^(?:CONSTRAINT\\s+(?:${IDENTIFIER_PATTERN})\\s+)?UNIQUE\\s*\\(([^)]*)\\)`, 'i')
 
 function readTableUniqueColumns(definition: string): string[] | undefined {
   const match = definition.match(TABLE_UNIQUE_PATTERN)
@@ -257,17 +333,20 @@ export function withoutForeignKeyDefinitions(
   matches: (foreignKey: ForeignKeyDefinition) => boolean,
 ): string[] | undefined {
   return rewriteDefinitions(definitions, (definition, columnName) => {
+    if (columnName) {
+      return withoutColumnConstraints(definition, constraint => constraint.keyword === 'REFERENCES'
+        && matches(constraint.name === undefined ? { column: columnName } : { column: columnName, name: constraint.name }))
+    }
     const foreignKey = readForeignKey(definition, columnName)
-    if (!foreignKey || !matches(foreignKey)) return undefined
-    return columnName ? withoutInlineClause(definition, INLINE_FOREIGN_KEY_PATTERN) : null
+    return foreignKey && matches(foreignKey) ? null : undefined
   })
 }
 
 export function withoutUniqueDefinitions(definitions: readonly string[], columns: readonly string[]): string[] | undefined {
   return rewriteDefinitions(definitions, (definition, columnName) => {
     if (columnName) {
-      return columns.length === 1 && columns[0] === columnName && readInlineColumnConstraints(definition).unique
-        ? withoutInlineClause(definition, INLINE_UNIQUE_PATTERN)
+      return columns.length === 1 && columns[0] === columnName
+        ? withoutColumnConstraints(definition, constraint => constraint.keyword === 'UNIQUE')
         : undefined
     }
     return readTableUniqueColumns(definition)?.join('\0') === columns.join('\0') ? null : undefined
