@@ -16,6 +16,7 @@ import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { advanceSchemaGeneration } from './schemaGeneration'
+import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -58,11 +59,6 @@ type ScopeState = {
 type TransactionCallbackState = {
   afterCommit: TransactionCallback[]
   afterRollback: TransactionCallback[]
-}
-
-type TransactionFrame = {
-  open: boolean
-  schemaChanged: boolean
 }
 
 type RootAttemptState = {
@@ -377,7 +373,10 @@ export class DatabaseContext {
     statement: CompiledStatement,
     options?: DatabaseOperationOptions,
   ): Promise<DriverExecutionResult> {
-    this._markSchemaChanged()
+    const transaction = currentRootTransaction(this)
+    if (transaction) {
+      transaction.schemaChanged = true
+    }
     try {
       return await this.executeCompiled(statement, options)
     } finally {
@@ -426,17 +425,6 @@ export class DatabaseContext {
     }
 
     return undefined
-  }
-
-  private _markSchemaChanged(): void {
-    let transaction = this._scope.kind === 'root' ? this._findAmbientTransaction() : this
-    while (transaction?._scope.kind === 'savepoint') {
-      transaction = transaction._parent
-    }
-
-    if (transaction?._transactionFrame) {
-      transaction._transactionFrame.schemaChanged = true
-    }
   }
 
   private _isActiveTransaction(): boolean {
@@ -523,7 +511,7 @@ export class DatabaseContext {
 
         let value: T
         try {
-          value = await this._runTransactionCallback(child, callback)
+          value = await runInRootTransaction(this, frame, () => this._runTransactionCallback(child, callback))
         } catch (error) {
           await this._callTransactionHook('rollback', rollbackAdapter)
           throw error
@@ -932,8 +920,6 @@ export class DatabaseContext {
     } catch (error) {
       markPinnedTransactionStuck(this._adapter)
       throw error
-    } finally {
-      advanceSchemaGeneration()
     }
   }
 

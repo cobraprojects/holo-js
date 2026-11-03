@@ -71,8 +71,8 @@ async function openSharedDatabase(driver: SharedDriver) {
   })
   const db = createDatabase({ adapter: defaultAdapter, dialect: createDialect('sqlite') })
   configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db, analytics } }))
-  const SharedEvent = defineModel(tableName, { connectionName: 'analytics', name: 'Event', guarded: ['admin'], timestamps: false })
-  return { tableName, maintenance, SharedEvent }
+  const SharedEvent = defineModel(tableName, { connectionName: 'analytics', name: 'SharedEvent', guarded: ['admin'], timestamps: false })
+  return { tableName, db, analytics, maintenance, SharedEvent }
 }
 
 class RollbackRequested extends Error {}
@@ -218,5 +218,36 @@ describe('guarded model column listing', () => {
 
       expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
     })
+
+    it.skipIf(skip)('sees a column a root connection added inside its transaction while another connection\'s transaction was nested in it', async () => {
+      const { tableName, db, maintenance, SharedEvent } = await openSharedDatabase(driver)
+      const schema = createSchemaService(maintenance)
+
+      await maintenance.transaction(async () => {
+        await db.transaction(async () => {
+          await schema.table(tableName, (table) => {
+            table.string('summary').nullable()
+          })
+          await expect(SharedEvent.create({ summary: 'before' })).rejects.toThrow('Column "summary" is not writable')
+        })
+      })
+
+      expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
+    })
+  })
+
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('keeps a transaction\'s snapshot of the columns out of the shared listing', async () => {
+    const { tableName, analytics, maintenance, SharedEvent } = await openSharedDatabase('postgres')
+
+    await analytics.transaction(async (transaction) => {
+      await transaction.executeCompiled({ sql: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', source: 'test:isolation' })
+      await transaction.queryCompiled({ sql: 'SELECT 1', source: 'test:snapshot' })
+      await createSchemaService(maintenance).table(tableName, (table) => {
+        table.string('summary').nullable()
+      })
+      await expect(SharedEvent.create({ summary: 'inside' })).rejects.toThrow('Column "summary" is not writable')
+    })
+
+    expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
   })
 })
