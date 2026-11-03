@@ -1,5 +1,216 @@
 # Upgrade Guide
 
+## Upgrading from 0.5.6 to 0.6.0
+
+Update every installed `@holo-js/*` package to `0.6.0` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No database migration is needed: the next `npx holo migrate` or `npx holo build` writes your types from the database you already have. 0.6.0 removes public APIs and changes how `holo build` and `migrate --isolated` work, so review the sections below before deploying. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#unreleased) lists the release changes.
+
+0.6.0 makes your database the only description of your schema, as in Laravel. Holo no longer keeps a schema registry in memory or replays migrations that already ran. After `migrate`, `migrate:rollback`, `migrate:fresh` and `holo build`, it reads the default connection's database and writes the generated schema from it, and a model's casts set the types the database can't state. See [Migrations and model types](/database/migrations#migrations-and-model-types).
+
+The release also brings Laravel's [`primary()`](/database/migrations#primary-columns), [`dropPrimary()`](/database/migrations#dropprimary), [`dropUnique()`](/database/migrations#dropunique), [`dropConstrainedForeignId()`](/database/migrations#dropconstrainedforeignid), [`dropMorphs()`](/database/migrations#dropmorphs), [`dropTimestamps()`](/database/migrations#droptimestamps) and [`dropSoftDeletes()`](/database/migrations#dropsoftdeletes). On SQLite, `schema.table()` can now rename and drop columns, rename indexes, and add and drop foreign keys.
+
+### Deploy checklist
+
+1. Give the build environment access to the default connection's database. `holo build` reads it and fails when it can't.
+2. If you run `npx holo migrate --isolated`, install `@holo-js/cache` and make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
+3. Run this one deploy's `npx holo migrate` from a single replica.
+4. Once every replica runs 0.6.0, drop the `_holo_migration_locks` table.
+
+### `holo build` reads your database
+
+`holo build` no longer loads or runs your migrations. It reads the tables and columns of the default connection's database and writes `.holo-js/generated/schema.generated.ts` from them. The build environment needs the same database settings as production and a reachable database. If it can't read the database, `holo build` fails with an error that names the connection. Run your migrations before you build. See [Build](/deployment/#build).
+
+A `schema.generated.ts` written by an earlier release can still call `.generated()`, which 0.6.0 removes, and then fails to typecheck. Run `npx holo migrate` or `npx holo build` once to write it again.
+
+### Model types come from the database and casts
+
+A model's attribute types start from its columns in the database. A built-in cast now sets the attribute's type where the database can't state it:
+
+- `'boolean'`, `'number'` and `'string'` casts type the attribute as `boolean`, `number` and `string`.
+- `'date'`, `'datetime'` and `'timestamp'` casts type it as `Date`, and `'vector'` as `readonly number[]`.
+- A `'json'` cast types it as a `table.json()` column is typed.
+
+The cast's type applies when you read the attribute and when you pass it to `create()`, `update()`, `make()`, `fill()` and `pendingAttributes`. Enum, encrypted, binary and custom casts, `enumCast()` included, keep the column's type. See [How casts and types fit together](/orm/casts#how-casts-and-types-fit-together).
+
+New SQLite tables use Laravel's type names: `tinyint(1)` for booleans, `date` for dates, `datetime` for datetimes and timestamps, `varchar(255)` for strings, and `text` for JSON. SQLite tables created before 0.6.0 keep their stored `INTEGER` and `TEXT` types, so the database reports their booleans as numbers and their dates and JSON as strings. Add casts to type those columns, and add a `'json'` cast to every SQLite JSON column, old or new:
+
+```ts [server/models/User.ts]
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', {
+  casts: {
+    is_admin: 'boolean', // [!code ++]
+    preferences: 'json', // [!code ++]
+    email_verified_at: 'datetime', // [!code ++]
+  },
+})
+```
+
+PostgreSQL and MySQL state booleans, JSON, timestamps and enum values themselves, so their models need no new casts. See [SQLite tables created before 0.6](/orm/casts#sqlite-tables-created-before-0-6).
+
+Two cast writes change:
+
+- A `'json'` cast stores SQL `NULL` for `null`, and encodes a string as a JSON string, as Laravel's does. Before, `null` was stored as the JSON text `null` and a string was stored as given. Pass the value itself, not a string you encoded with `JSON.stringify()`, or it is encoded twice. Rows written earlier with the text `null` still read as `null`, but `whereNull()` doesn't match them.
+- A `true` or `false` written to an integer column, for example through a `'boolean'` cast on PostgreSQL, is stored as `1` or `0`.
+
+On SQLite, `diffSchema()` reports the columns of tables created before 0.6.0 as type mismatches against your table definitions, for example `TEXT` against `varchar(255)`. New `date` and `datetime` columns have SQLite's `NUMERIC` affinity, so a numeric-looking string such as `'20240101'` written to one is stored as a number.
+
+### `migrate --isolated` uses a cache lock
+
+`npx holo migrate --isolated` takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers), as Laravel's does, instead of a row in the `_holo_migration_locks` table. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends, and expires after an hour if a runner stops. Holo doesn't renew it during the run.
+
+`--isolated` now needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`. Without them, it fails with an error that says what to set up. Plain `npx holo migrate` doesn't use the cache. If your app has no cache yet, install one:
+
+```bash
+npx holo install cache --driver redis
+```
+
+A `database` store keeps its locks in a table, so create the cache tables with a plain `migrate` before the first isolated run:
+
+```bash
+npx holo install cache --driver database
+npx holo cache:table
+npx holo migrate
+```
+
+See [Isolating migration runs](/database/migrations#isolating-migration-runs).
+
+::: warning Run the upgrade deploy's migrate from one replica
+Replicas still on 0.5.x lock through the `_holo_migration_locks` table, and replicas on 0.6.0 lock through the cache. The two locks don't see each other, so during a rolling upgrade both versions could migrate at once. For the deploy that ships 0.6.0, run `npx holo migrate` from a single replica. Go back to `--isolated` on every replica in later deploys.
+:::
+
+Holo no longer creates the `_holo_migration_locks` table. Once every replica runs 0.6.0, drop it with a migration:
+
+```ts [server/db/migrations/2026_11_10_000000_drop_holo_migration_locks.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.dropTable('_holo_migration_locks')
+  },
+})
+```
+
+`dropTable()` drops the table only if it exists, so the migration also runs on databases that never used `--isolated`.
+
+`MigrationService.migrateIsolated()` and the `IsolatedMigrationResult` type are removed from `@holo-js/db`. Use `npx holo migrate --isolated`.
+
+### `change()` restates every modifier
+
+`change()` replaces the column's definition with exactly the modifiers you give, as in Laravel. Before, Holo kept modifiers such as `nullable()` and `default()` from the column's earlier definition. Restate every modifier you want to keep:
+
+```ts [server/db/migrations/2026_11_10_000100_change_users_bio.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.table('users', (table) => {
+      table.text('bio').change() // [!code --]
+      table.text('bio').nullable().default('').change() // [!code ++]
+    })
+  },
+})
+```
+
+Check every `change()` call, including those in migrations that already ran: `migrate:fresh` and new databases, such as CI's, run every migration again. On SQLite, `change()` now rebuilds the table from the database, so it keeps every other column, index, foreign key and trigger, including columns your migrations never declared. See [change()](/database/migrations#change).
+
+### Removed APIs
+
+| Removed | Use instead |
+| --- | --- |
+| `SchemaService.sync()`, `SchemaService.previewSync()`, the `SchemaSyncPlan` type | A migration that calls `createTable()` |
+| The `generated()` column modifier | A database [`default()`](/database/migrations#default) or [`defaultNow()`](/database/migrations#defaultnow), or a generated column created with [raw SQL](/database/#raw-sql) |
+| `SchemaService.register()`, `SchemaRegistry`, `createSchemaRegistry()`, `DatabaseContext.getSchemaRegistry()`, the `schemaRegistry` option of `createDatabase()` | The generated schema, which `holo migrate` and `holo build` write from your database |
+| `MigrationService.planSquash()`, `MigrationService.hasRan()`, `MigrationService.getExecutionPolicy()`, the `MigrationSquashPlan` and `MigrationExecutionPolicy` types | `MigrationService.status()` |
+| `createSchemaDiff()` | `diffSchema()` |
+| `MigrationService.migrateIsolated()`, the `IsolatedMigrationResult` type | `npx holo migrate --isolated` |
+
+`alterColumnOperation()` and `compileAlterColumn()` no longer take the previous column definition.
+
+Replace `sync()` with a migration, as in Laravel:
+
+```ts [server/db/migrations/2026_11_10_000200_create_comments_table.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.sync() // [!code --]
+    await schema.createTable('comments', (table) => { // [!code ++]
+      table.id() // [!code ++]
+      table.foreignId('post_id').constrained().cascadeOnDelete() // [!code ++]
+      table.text('body') // [!code ++]
+      table.timestamps() // [!code ++]
+    }) // [!code ++]
+  },
+  async down({ schema }) {
+    await schema.dropTable('comments')
+  },
+})
+```
+
+Replace `generated()` with a default the database fills in, so the column stays optional in `create()`:
+
+```ts
+table.timestamp('synced_at').generated() // [!code --]
+table.timestamp('synced_at').defaultNow() // [!code ++]
+```
+
+A column the database fills in without a default, such as through a trigger or a generated column expression, is now required in `create()`.
+
+Read `status()` to see whether a migration ran:
+
+```ts
+const ran = await migrations.hasRan('2026_05_01_090000_add_views_to_posts') // [!code --]
+const ran = (await migrations.status()).some(migration => // [!code ++]
+  migration.name === '2026_05_01_090000_add_views_to_posts' && migration.status === 'ran') // [!code ++]
+```
+
+`diffSchema()` takes the same arguments `createSchemaDiff()` did:
+
+```ts
+import { createSchemaDiff } from '@holo-js/db' // [!code --]
+import { diffSchema } from '@holo-js/db' // [!code ++]
+```
+
+### Tables resolve through the generated schema
+
+`DB.table('name')`, model tables and pivot tables resolve through the generated schema only. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, is queried with the driver's raw values until the generated schema is written again, so its JSON and boolean columns aren't converted. Pass a table definition to `DB.table()` to use its columns right away. See [Start a query](/database/query-builder/#start-a-query).
+
+A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it.
+
+### Schema operations that now fail instead of doing nothing
+
+These changes can make a migration that hasn't run yet fail, as it would in Laravel. Run your pending migrations against a copy of your database first.
+
+- `dropIndex()` with a name that doesn't exist raises an error on SQLite and PostgreSQL, as it already did on MySQL. Indexes keep their old names after `renameTable()`, so drop them by those names. `dropIndex()` also takes columns now. On PostgreSQL, drop the constraint of a `unique()` column with `dropUnique()`. See [dropIndex()](/database/migrations#dropindex).
+- On PostgreSQL and SQLite, creating an index whose name another table already uses fails instead of skipping the index. This happens when you create a table under a name you renamed away; give its indexes names of their own. Running the same `createTable()` again still succeeds, now on MySQL too. See [unique(columns)](/database/migrations#unique-columns).
+- A `unique()` column whose generated name another table's index already uses fails the migration instead of skipping the unique.
+- On SQLite, `change()` inside your own transaction throws `SchemaError` when another table references the rebuilt table, because SQLite can't turn off foreign key checks there. Run it in a migration or outside the transaction. A rebuild that would leave a foreign key pointing at a missing row throws `SchemaError` and changes nothing.
+- On SQLite, `dropColumn()` raises SQLite's error for a column that an index, unique constraint, primary key or foreign key uses. Drop the index or unique first. See [dropColumn()](/database/migrations#dropcolumn).
+
+### Unique and foreign key names
+
+`unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key` and MySQL named them after the column. Existing constraints keep those names, so drop them by name:
+
+```ts
+await schema.table('tenants', (table) => {
+  table.dropUnique('tenants_owner_email_key')
+})
+```
+
+On SQLite, drop a unique that an earlier release created inline by its columns, such as `table.dropUnique(['owner_email'])`. See [dropUnique()](/database/migrations#dropunique).
+
+Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Existing PostgreSQL keys keep their `{table}_{column}_fkey` names; drop them by that name. On SQLite, `dropForeign(['user_id'])` also drops the unnamed key an earlier release created on that column. `foreign(column, name)` inside `createTable()` now takes a constraint name, as it already did inside `table()`. See [dropForeign()](/database/migrations#dropforeign).
+
+### Composite primary keys
+
+[`primary(columns)`](/database/migrations#primary-columns) gives a table a primary key on several columns. Models don't support composite keys, as in Laravel: a model on such a table throws `SchemaError` unless you set its `primaryKey` option to one of the key columns. Query the table with `DB.table()` or use it as a `belongsToMany` pivot. See [Primary keys](/orm/#primary-keys).
+
+### PostgreSQL `schema` sets `search_path`
+
+A PostgreSQL connection's `schema` option now also sets the connection's `search_path`, as Laravel does. Before, Holo read the configured schema but ran unqualified statements in the server's default `search_path`, usually `public`. If you set `schema` to something other than `public` without a `search_path`, `holo migrate` and unqualified queries now create and use tables in that schema. A `search_path` in the connection URL or options keeps working. See [PostgreSQL and MySQL](/database/#postgresql-and-mysql).
+
+On PostgreSQL, `schema.getColumns()`, `getIndexes()` and `getForeignKeys()` read the configured schema, as `getTables()` already did. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
+
 ## Upgrading from 0.5.5 to 0.5.6
 
 Update every installed `@holo-js/*` package to `0.5.6` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#056---2026-11-01) lists the release changes.
