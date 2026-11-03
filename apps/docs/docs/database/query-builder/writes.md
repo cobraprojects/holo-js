@@ -50,7 +50,7 @@ await DB.table('tags').insert([
 
 ### insertGetId()
 
-`insertGetId()` inserts one row and returns its auto-incrementing ID. An integer ID is a number on every database, as in Laravel, including a PostgreSQL `bigint` key that the driver returns as text. A key that isn't numeric, such as a UUID, comes back as the string the database returns:
+`insertGetId()` inserts one row and returns its auto-incrementing ID. An integer ID is a number on every database, as in Laravel, including a PostgreSQL `bigint` key that the driver returns as text. A key beyond `Number.MAX_SAFE_INTEGER`, such as a snowflake ID, comes back as its exact text instead, so no digits are lost and the call never fails after the row is written. A model's auto-increment key reads the same way. A key that isn't numeric, such as a UUID, comes back as the string the database returns:
 
 ```ts
 const userId = await DB.table('users').insertGetId({

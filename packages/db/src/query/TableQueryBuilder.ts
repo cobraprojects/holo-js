@@ -1988,7 +1988,7 @@ export class TableQueryBuilder<
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
     const integerColumns = resolveIntegerResultColumns(this.plan)
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
-    if (aggregates.length === 0 && integerColumns.length === 0) return rows
+    if (aggregates.length === 0 && integerColumns.size === 0) return rows
     return rows.map(row => {
       const values: Record<string, unknown> = readIntegerResultColumns(row, integerColumns)
       for (const selection of aggregates) {
