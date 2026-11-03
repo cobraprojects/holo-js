@@ -95,7 +95,7 @@ import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
@@ -211,7 +211,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: getGeneratedTableDefinition(source.tableName) }
+    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
