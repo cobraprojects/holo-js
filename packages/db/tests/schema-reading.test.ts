@@ -178,6 +178,17 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       }])
     })
 
+    it.runIf(driver === 'mysql')('reads enum values that MySQL stores with backslash escapes and doubled quotes as written', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_escaped_enum')
+      onTestFinished(() => schema.dropTable(name))
+      await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`id\` BIGINT PRIMARY KEY, \`path\` ENUM('C:\\\\temp', 'it''s', 'say \\"hi\\"', 'a\\\\\\'b', 'tab\\there') NOT NULL)`, source: 'schema' })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns.path?.enumValues).toEqual(['C:\\temp', 'it\'s', 'say "hi"', 'a\\\'b', 'tab\there'])
+    })
+
     it.runIf(driver === 'sqlite')('reads a parenthesized string default that contains parentheses as its literal value', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_paren_default')
