@@ -1,11 +1,12 @@
 import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
-import { createSchemaReader } from './introspection'
+import { createSchemaReader, readTableStructure } from './introspection'
 import { toTableDefinition } from './introspection/definitions'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { isPrimaryKeyConstraintDefinition, readColumnDefinitionName, readEnumChecks, readInlineColumnConstraints, splitCreateTableSql, withoutForeignKeyDefinitions, withoutInlinePrimaryKey, withoutUniqueDefinitions } from './introspection/sqlDefinitions'
-import { createSQLiteSchemaCompiler, executeStatements, readTableStructure } from './schemaConnection'
+import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
+import { executeStatements } from './ddlExecution'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DatabaseTableStructure } from './introspection'
 import type { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
@@ -114,9 +115,7 @@ export class SQLiteSchemaOperations {
   }
 
   async dropInlineUnique(tableName: string, indexName: string, columns?: readonly string[]): Promise<boolean> {
-    const indexes = (await readTableStructure(this.connection, tableName))?.indexes ?? []
-    const index = indexes.find(candidate => candidate.name === indexName)
-    const inlineColumns = index ? (index.name.startsWith(SQLITE_AUTOINDEX_PREFIX) ? index.columns : undefined) : columns
+    const inlineColumns = await this.resolveInlineUniqueColumns(tableName, indexName, columns)
     if (!inlineColumns) {
       return false
     }
@@ -129,6 +128,24 @@ export class SQLiteSchemaOperations {
       return kept
     })
     return true
+  }
+
+  private async resolveInlineUniqueColumns(
+    tableName: string,
+    indexName: string,
+    columns: readonly string[] | undefined,
+  ): Promise<readonly string[] | undefined> {
+    const indexes = (await readTableStructure(this.connection, tableName))?.indexes ?? []
+    const index = indexes.find(candidate => candidate.name === indexName)
+    if (!index) {
+      return columns
+    }
+
+    if (!index.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
+      return undefined
+    }
+
+    return index.columns
   }
 
   private async rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {

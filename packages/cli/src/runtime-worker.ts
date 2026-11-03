@@ -343,14 +343,10 @@ async function writeGeneratedSchemaAfterFailedRun(): Promise<void> {
 }
 
 async function changeSchema<TResult>(change: () => Promise<TResult>): Promise<TResult> {
-  let result: TResult
-  try {
-    result = await change()
-  } catch (error) {
+  const result = await change().catch(async (error: unknown) => {
     await writeGeneratedSchemaAfterFailedRun()
     throw error
-  }
-
+  })
   await writeProjectGeneratedSchema()
   return result
 }

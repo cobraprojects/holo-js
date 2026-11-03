@@ -7,15 +7,22 @@ export function resolveTablePrimaryKeyColumns(table: TableDefinition | undefined
 }
 
 export function assertSinglePrimaryKey(table: TableDefinition | undefined): void {
+  assertSingleColumnKey(table, resolveTablePrimaryKeyColumns(table))
+}
+
+export function resolveTablePrimaryKey(table: TableDefinition | undefined): string {
   const primaryKeys = resolveTablePrimaryKeyColumns(table)
+  assertSingleColumnKey(table, primaryKeys)
+  return primaryKeys[0]
+}
+
+function assertSingleColumnKey(
+  table: TableDefinition | undefined,
+  primaryKeys: readonly [string, ...string[]],
+): asserts primaryKeys is readonly [string] {
   if (primaryKeys.length > 1) {
     throw new SchemaError(
       `Table "${table?.tableName}" has a composite primary key (${primaryKeys.join(', ')}); this operation needs a single primary-key column.`,
     )
   }
-}
-
-export function resolveTablePrimaryKey(table: TableDefinition | undefined): string {
-  assertSinglePrimaryKey(table)
-  return resolveTablePrimaryKeyColumns(table)[0]
 }
