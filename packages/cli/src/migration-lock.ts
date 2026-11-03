@@ -36,6 +36,10 @@ function lockUnsupportedRequirement(store: CacheStoreDescriptor): string {
     + `Use a default cache store that supports locks and ${SHARED_STORE_EXAMPLES}`
 }
 
+function lockAcquisitionError(store: CacheStoreDescriptor, cause: unknown): Error {
+  return new Error(`${MIGRATION_LOCK_SOURCE} ${describeStore(store)} couldn't take the lock: ${errorMessage(cause)}`, { cause })
+}
+
 type MissingCacheTables = {
   readonly tableName: string
   readonly lockTableName: string
@@ -86,6 +90,12 @@ function describeLockFailure(store: CacheStoreDescriptor, error: unknown): Error
     : migrationLockError(lockUnsupportedRequirement(store), error)
 }
 
+async function describeAcquisitionFailure(projectRoot: string, store: CacheStoreDescriptor, error: unknown): Promise<Error> {
+  if (isMissingCacheTablesError(error)) return describeMissingCacheTables(projectRoot, store, error)
+  if (isDriverResolutionError(error)) return migrationLockError(storeUnavailableRequirement(store), error)
+  return lockAcquisitionError(store, error)
+}
+
 async function openMigrationLock(projectRoot: string) {
   const environment = await initializeCacheMaintenanceEnvironment(projectRoot).catch((error: unknown) => {
     throw describeCacheSetupFailure(error)
@@ -106,9 +116,7 @@ export async function runWithMigrationLock<TResult>(
   const { lock, store, close } = await openMigrationLock(projectRoot)
   try {
     const acquired = await lock.get().catch(async (error: unknown) => {
-      throw isMissingCacheTablesError(error)
-        ? await describeMissingCacheTables(projectRoot, store, error)
-        : describeLockFailure(store, error)
+      throw await describeAcquisitionFailure(projectRoot, store, error)
     })
     if (!acquired) {
       return { kind: 'skipped' }

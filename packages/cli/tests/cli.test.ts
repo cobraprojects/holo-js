@@ -7006,6 +7006,26 @@ export default defineMigration({
     expect(sqliteTableNames(projectRoot)).not.toContain('users')
   }, 30000)
 
+  it('fails migrate --isolated with the connection error when the database cache store cannot reach its database', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeIsolatedMigrationProject(projectRoot, {
+      driver: 'postgres',
+      host: '127.0.0.1',
+      port: 1,
+      username: 'holo',
+      database: 'holo_unreachable',
+    }, 'database')
+    linkBuiltWorkspacePackagesSync(projectRoot)
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain('[Holo CLI] migrate --isolated takes its lock from the default cache store, but cache store "shared" (driver "database") couldn\'t take the lock: ')
+    expect(isolated.stderr).toContain('ECONNREFUSED')
+    expect(isolated.stderr).not.toContain('can\'t provide a lock')
+  }, 30000)
+
   it('executes plugin-published migrations through the existing migration lifecycle', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
