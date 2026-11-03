@@ -1,5 +1,5 @@
 import type { LoadedHoloConfig } from '@holo-js/config'
-import { DB, type TableQueryBuilder } from '@holo-js/db'
+import { DB, column, defineGeneratedTable, type TableQueryBuilder } from '@holo-js/db'
 import { serializeAuthTimestamp } from './authPersistence'
 import {
   type CoreNotificationJsonPrimitive,
@@ -50,10 +50,25 @@ export interface CoreNotificationStore {
   delete(query: CoreNotificationQuery, ids: readonly string[]): Promise<number>
 }
 
+function defineNotificationsTable(tableName: string) {
+  return defineGeneratedTable(tableName, {
+    id: column.string().primaryKey(),
+    type: column.string().nullable(),
+    notifiable_type: column.string(),
+    notifiable_id: column.string(),
+    data: column.json(),
+    read_at: column.timestamp().nullable(),
+    created_at: column.timestamp(),
+    updated_at: column.timestamp(),
+  })
+}
+
+type NotificationsTable = ReturnType<typeof defineNotificationsTable>
+
 function applyNotificationScope(
-  builder: TableQueryBuilder<string>,
+  builder: TableQueryBuilder<NotificationsTable>,
   query: CoreNotificationQuery,
-): TableQueryBuilder<string> {
+): TableQueryBuilder<NotificationsTable> {
   let scoped = builder
     .where('notifiable_type', query.recipient.type)
     .where('notifiable_id', String(query.recipient.id))
@@ -75,14 +90,14 @@ function applyNotificationScope(
 export function createCoreNotificationStore(
   loadedConfig: Pick<LoadedHoloConfig, 'database' | 'notifications'>,
 ): CoreNotificationStore {
-  const tableName = loadedConfig.notifications.table
+  const notificationsTable = defineNotificationsTable(loadedConfig.notifications.table)
   const connectionName = loadedConfig.database.defaultConnection
-  const scopedQuery = (query: CoreNotificationQuery): TableQueryBuilder<string> => applyNotificationScope(
-    DB.table(tableName, connectionName),
+  const scopedQuery = (query: CoreNotificationQuery): TableQueryBuilder<NotificationsTable> => applyNotificationScope(
+    DB.table(notificationsTable, connectionName),
     query,
   )
   const currentTimestamp = (): Date | string => serializeAuthTimestamp(new Date(), DB.connection(connectionName).getDriver())
-  const unreadQuery = (query: CoreNotificationQuery): TableQueryBuilder<string> => scopedQuery(query).whereNull('read_at')
+  const unreadQuery = (query: CoreNotificationQuery): TableQueryBuilder<NotificationsTable> => scopedQuery(query).whereNull('read_at')
 
   const createPage = async (
     query: CoreNotificationQuery,
@@ -124,8 +139,8 @@ export function createCoreNotificationStore(
       return result.affectedRows ?? 0
     },
     async create(record: CoreNotificationRecord): Promise<void> {
-      await DB.table(tableName, connectionName).insertOrIgnore(serializeNotificationRecordForRow(record, DB.connection(connectionName).getDriver()))
-      const persisted = await DB.table(tableName, connectionName).where('id', record.id).first<Record<string, unknown>>()
+      await DB.table(notificationsTable, connectionName).insertOrIgnore(serializeNotificationRecordForRow(record, DB.connection(connectionName).getDriver()))
+      const persisted = await DB.table(notificationsTable, connectionName).where('id', record.id).first<Record<string, unknown>>()
       if (!persisted) {
         throw new Error('[@holo-js/core] Notification persistence failed closed.')
       }
