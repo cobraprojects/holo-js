@@ -159,7 +159,7 @@ export function readInlineColumnConstraints(definition: string): InlineColumnCon
 }
 
 const INLINE_PRIMARY_KEY_PATTERN = new RegExp(
-  `(${QUOTED_TEXT_PATTERN.source})|\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
+  `(${QUOTED_TEXT_PATTERN.source})|(?:\\s+CONSTRAINT\\s+(?:${IDENTIFIER_PATTERN}))?\\s+PRIMARY\\s+KEY(?:\\s+(?:ASC|DESC))?(?:\\s+ON\\s+CONFLICT\\s+\\w+)?(?:\\s+AUTOINCREMENT)?\\b`,
   'gi',
 )
 

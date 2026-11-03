@@ -17,6 +17,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
+  protected override keepsPrimaryKeyInline(column: AnyColumnDefinition): boolean {
+    return column.idStrategy === 'autoIncrement'
+  }
+
   protected override compileColumnType(column: ColumnDefinition): string {
     return resolveDialectColumnType('sqlite', column)
   }
