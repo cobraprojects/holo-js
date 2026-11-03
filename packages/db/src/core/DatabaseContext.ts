@@ -62,6 +62,7 @@ type TransactionCallbackState = {
 
 type TransactionFrame = {
   open: boolean
+  schemaChanged: boolean
 }
 
 type RootAttemptState = {
@@ -372,6 +373,18 @@ export class DatabaseContext {
     ), options)
   }
 
+  async executeSchemaStatement(
+    statement: CompiledStatement,
+    options?: DatabaseOperationOptions,
+  ): Promise<DriverExecutionResult> {
+    this._markSchemaChanged()
+    try {
+      return await this.executeCompiled(statement, options)
+    } finally {
+      advanceSchemaGeneration()
+    }
+  }
+
   async transaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
     options?: DatabaseTransactionOptions,
@@ -413,6 +426,17 @@ export class DatabaseContext {
     }
 
     return undefined
+  }
+
+  private _markSchemaChanged(): void {
+    let transaction = this._scope.kind === 'root' ? this._findAmbientTransaction() : this
+    while (transaction?._scope.kind === 'savepoint') {
+      transaction = transaction._parent
+    }
+
+    if (transaction?._transactionFrame) {
+      transaction._transactionFrame.schemaChanged = true
+    }
   }
 
   private _isActiveTransaction(): boolean {
@@ -463,7 +487,7 @@ export class DatabaseContext {
       scope: 'transaction',
       depth: 1,
     }
-    const frame: TransactionFrame = { open: true }
+    const frame: TransactionFrame = { open: true, schemaChanged: false }
     let transaction: DatabaseContext | undefined
     let commitStarted = false
 
@@ -512,6 +536,10 @@ export class DatabaseContext {
           await this._rollbackAdapterTransaction().catch(() => undefined)
           runCommitFailureRestores(child)
           throw commitError
+        }
+
+        if (frame.schemaChanged) {
+          advanceSchemaGeneration()
         }
 
         return { value, transaction: child, entry }
@@ -625,7 +653,7 @@ export class DatabaseContext {
       options,
       savepointName,
     )
-    const frame: TransactionFrame = { open: true }
+    const frame: TransactionFrame = { open: true, schemaChanged: false }
     const tx = this._createChildContext({
       kind: 'savepoint',
       depth: this._scope.depth + 1,
