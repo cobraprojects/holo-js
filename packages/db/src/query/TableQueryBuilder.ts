@@ -3538,11 +3538,12 @@ export class TableQueryBuilder<
     return rows.flatMap((row) => {
       const value = row[column]
       if (value === null) return []
-      if (typeof value !== 'number' || Number.isNaN(value)) {
+      const numericValue = this.normalizeNumericResult(value)
+      if (numericValue === undefined) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return [value]
+      return [numericValue]
     })
   }
 
