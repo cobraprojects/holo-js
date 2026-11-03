@@ -118,7 +118,7 @@ main: {
 },
 ```
 
-The generated schema and the schema builder read the schema that unqualified statements use, which is the first schema of the `search_path` that exists. With the URL above and no `tenant` schema in the database, `holo migrate` creates its tables in `public`, and the generated schema lists them from `public`.
+The generated schema, the schema builder and `migrate:fresh` use the schema that unqualified statements use, which is the first schema of the `search_path` that exists. With the URL above and no `tenant` schema in the database, `holo migrate` creates its tables in `public`, the generated schema lists them from `public`, and `migrate:fresh` drops them from `public`.
 
 ### PostgreSQL dates and time zones
 

@@ -6539,7 +6539,7 @@ process.stdout.write('framework build ran\\n')
     }
   }, 90000)
 
-  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('migrates into and writes the Generated schema from the schema an explicit search_path selects when the configured schema is missing', async () => {
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('migrates, refreshes and writes the Generated schema in the schema an explicit search_path selects when the configured schema is missing', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const postgres = isolatedMigrationDatabases[0]
@@ -6563,8 +6563,22 @@ process.stdout.write('framework build ran\\n')
           source: 'test',
         })
         expect(tables.rows.map(row => row.table_name)).toEqual(['_holo_migrations', 'profiles', 'users'])
+        await database.executeCompiled({ sql: "INSERT INTO public.users (name) VALUES ('before fresh')", source: 'test' })
       } finally {
         await database.disconnect()
+      }
+
+      const fresh = runCliProcess(projectRoot, ['migrate:fresh'], { env: { APP_ENV: 'development' } })
+      expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
+      for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+        expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+      }
+      const refreshed = postgres.open(databaseName)
+      try {
+        const users = await refreshed.queryCompiled<{ name: string }>({ sql: 'SELECT name FROM public.users', source: 'test' })
+        expect(users.rows).toEqual([])
+      } finally {
+        await refreshed.disconnect()
       }
     } finally {
       await postgres.drop(databaseName)

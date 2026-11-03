@@ -66,7 +66,7 @@ type FreshDropConnection = {
     name: string
     quoteIdentifier(identifier: string): string
   }
-  getSchemaName(): string | undefined
+  queryCompiled<TRow extends Record<string, unknown>>(statement: { sql: string, source: string }): Promise<{ rows: TRow[] }>
   executeCompiled(statement: { sql: string, source: string }): Promise<unknown>
 }
 
@@ -157,34 +157,21 @@ function normalizeRuntimeMigration(
   }
 }
 
-function compileFreshDropIdentifierPath(
-  quoteIdentifier: (identifier: string) => string,
-  identifier: string,
-): string {
-  if (!identifier.includes('.')) {
-    return quoteIdentifier(identifier)
-  }
-
-  return identifier
-    .split('.')
-    .map(part => quoteIdentifier(part))
-    .join('.')
-}
-
 async function dropAllTablesForFresh(
   connection: FreshDropConnection,
   schema: FreshDropSchema,
 ): Promise<void> {
   const tables = await schema.getTables()
   if (connection.getDialect().name === 'postgres') {
-    const schemaName = connection.getSchemaName()
-    const quoteIdentifier = connection.getDialect().quoteIdentifier
+    const { quoteIdentifier } = connection.getDialect()
+    const current = await connection.queryCompiled<{ schema: string }>({ sql: 'SELECT current_schema() AS schema', source: 'schema:currentSchema' })
+    const schemaName = current.rows[0]?.schema
+    if (!schemaName) return
 
     for (const tableName of tables) {
-      const qualifiedTableName = schemaName ? `${schemaName}.${tableName}` : tableName
       await connection.executeCompiled({
-        sql: `DROP TABLE IF EXISTS ${compileFreshDropIdentifierPath(quoteIdentifier, qualifiedTableName)} CASCADE`,
-        source: `schema:dropTableFresh:${qualifiedTableName}`,
+        sql: `DROP TABLE IF EXISTS ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)} CASCADE`,
+        source: `schema:dropTableFresh:${schemaName}.${tableName}`,
       })
     }
     return
