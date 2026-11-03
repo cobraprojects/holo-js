@@ -13,10 +13,8 @@ export type {
   MigrationDefinition,
   GeneratedMigrationTemplate,
   MigrationStatus,
-  MigrationSquashPlan,
   MigrationTemplateKind,
   MigrationTemplateOptions,
   MigrateOptions,
-  MigrationExecutionPolicy,
   RollbackOptions,
 } from './types'
