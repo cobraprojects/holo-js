@@ -86,6 +86,8 @@ async function runApp(framework, driver) {
       await admin.query(`CREATE DATABASE ${name}`)
     })
     env.DB_MYSQL_URL = `mysql://${encodeURIComponent(mysqlServer.user)}:${encodeURIComponent(mysqlServer.password)}@${mysqlServer.host}:${mysqlServer.port}/${name}`
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeFile(filename, '')
     env.DB_SQLITE_URL = filename
     env.DB_URL = env[`DB_${driver.toUpperCase()}_URL`]
     await mkdir(join(root, 'coverage'), { recursive: true })

@@ -560,8 +560,8 @@ async function assertFreshCloneServesWithoutDatabase(projectRoot, journey, cliPa
   devServer.stdout?.on('data', chunk => output += String(chunk))
   devServer.stderr?.on('data', chunk => output += String(chunk))
   try {
-    await waitForRenderedApp({ projectName: journey.projectName, port }, devServer)
-    const response = await fetch(`http://127.0.0.1:${port}/api/journey-records`)
+    await waitForRenderedApp({ projectName: journey.projectName, host: 'localhost', port }, devServer)
+    const response = await fetch(`http://localhost:${port}/api/journey-records`)
     const body = await response.text()
     assert.equal(response.status, 500, `Expected the database route to fail before holo migrate, got ${response.status}: ${body}`)
     const missingDatabaseMessage = 'Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.'
@@ -585,7 +585,7 @@ async function waitForOutput(readOutput, expected) {
 }
 
 async function waitForRenderedApp(journey, server) {
-  const url = `http://127.0.0.1:${journey.port}`
+  const url = `http://${journey.host ?? '127.0.0.1'}:${journey.port}`
   const deadline = Date.now() + 45_000
   let lastError
 
