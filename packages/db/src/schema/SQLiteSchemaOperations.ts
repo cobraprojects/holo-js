@@ -3,7 +3,7 @@ import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { findStoredColumn, hasAutoIncrement, isGeneratedColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
+import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex, withoutUniquesOnColumns } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
@@ -215,12 +215,18 @@ export class SQLiteSchemaOperations {
     const dependentObjects = await readSQLiteDependentObjects(connection, tableName)
     const rebuildStatement = this.compiler.compileRebuildTable(tableName, temporaryTableName, rewrite(structure, storedTable), storedTable.options)
     const rebuiltTable = parseCreateTableSql(rebuildStatement.sql)
-    const copiedColumns = structure.columns.filter(existing => !existing.computed).map(existing => existing.name)
+    if (!rebuiltTable) {
+      throw new SchemaError(`SQLite cannot read the rebuilt definition of table "${tableName}".`)
+    }
+    const copiedColumns = [
+      ...structure.columns.filter(existing => !existing.computed).map(existing => existing.name),
+      ...this.readHiddenRowIdColumns(tableName, rebuiltTable),
+    ]
 
     await executeStatements(connection, [
       rebuildStatement,
       this.compiler.compileCopyTableRows(tableName, temporaryTableName, copiedColumns),
-      ...(rebuiltTable && hasAutoIncrement(rebuiltTable) ? this.compiler.compileMoveAutoIncrementSequence(tableName, temporaryTableName) : []),
+      ...(hasAutoIncrement(rebuiltTable) ? this.compiler.compileMoveAutoIncrementSequence(tableName, temporaryTableName) : []),
       ...this.compiler.compileDropDependentObjects(dependentObjects),
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
@@ -228,4 +234,15 @@ export class SQLiteSchemaOperations {
     ])
   }
 
+  private readHiddenRowIdColumns(tableName: string, rebuiltTable: StoredTable): string[] {
+    if (!keepsRowIdOnlyAsHiddenColumn(rebuiltTable)) {
+      return []
+    }
+
+    const rowIdName = findUnshadowedRowIdName(rebuiltTable)
+    if (!rowIdName) {
+      throw new SchemaError(`SQLite cannot rebuild table "${tableName}" because its columns "rowid", "_rowid_", and "oid" hide the row ids it must keep.`)
+    }
+    return [rowIdName]
+  }
 }
