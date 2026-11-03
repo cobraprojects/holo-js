@@ -229,6 +229,8 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
     schemaQualifiedIdentifiers: false,
     nativeUpsert: true,
     ddlAddColumnSupport: true,
+    ddlRenameColumnSupport: true,
+    ddlDropColumnSupport: true,
     ddlAlterSupport: false,
     introspection: true,
   }

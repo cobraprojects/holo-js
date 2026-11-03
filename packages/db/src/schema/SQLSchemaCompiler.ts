@@ -247,6 +247,10 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileCreateIndex(tableName: string, index: TableIndexDefinition): DDLStatement {
+    return this.compileIndexCreation(tableName, index, 'IF NOT EXISTS ')
+  }
+
+  protected compileIndexCreation(tableName: string, index: TableIndexDefinition, existenceClause: string): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
     const indexName = this.resolveIndexName(tableName, index)
     const quotedColumns = index.columns.map((column) => {
@@ -255,7 +259,7 @@ export abstract class SQLSchemaCompiler {
     }).join(', ')
 
     return {
-      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
+      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${existenceClause}${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
       source: `schema:createIndex:${tableName}:${indexName}`,
     }
   }
