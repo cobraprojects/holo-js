@@ -14,10 +14,16 @@ type LoadedCacheConfig = Awaited<ReturnType<typeof loadConfigDirectory>> & {
   }
 }
 
+type CacheLockModule = {
+  get(): Promise<boolean>
+  release(): Promise<boolean>
+}
+
 type CacheRepositoryModule = {
   driver(name: string): CacheRepositoryModule
   flush(): Promise<void>
   forget(key: string): Promise<boolean>
+  lock(name: string, seconds: number): CacheLockModule
 }
 
 type CacheCliModule = {

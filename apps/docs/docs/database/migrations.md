@@ -162,7 +162,18 @@ When several replicas run `migrate` at the same time, add `--isolated`:
 npx holo migrate --isolated
 ```
 
-The first run takes a database lock and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is held in a `_holo_migration_locks` table and expires an hour after it was last renewed, so a runner that stops without releasing it doesn't block later deploys for longer than that. The run renews the lock before each migration. A single migration that runs longer than an hour can let another runner in, which can apply that migration again. Split very long data backfills into shorter runs, and don't start a second `migrate --isolated` while one is still working on a long migration.
+The first run takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers) and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is released when the run ends. If a runner stops without releasing it, the lock expires after an hour.
+
+`--isolated` needs `@holo-js/cache` installed, and every server must use the same default cache store. Use a `redis` or `database` store when you run more than one server. A `file` store only coordinates processes that share the same cache folder, and a `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). If `@holo-js/cache` isn't installed or the default store can't give a lock, `migrate --isolated` fails with an error that says what to set up.
+
+A `database` cache store keeps its locks in a table, so create the cache tables before the first isolated run:
+
+```bash
+npx holo cache:table
+npx holo migrate
+```
+
+A plain `migrate` doesn't use the cache.
 
 ### Rolling back
 
@@ -981,22 +992,22 @@ await schema.createTable('posts', (table) => {
 
 ### foreign(column)
 
-Adds a foreign key to an existing column. Chain `references()`, `on()`, or `constrained()` and an action shortcut. Inside `table()`, you can pass a constraint name as the second argument.
+Adds a foreign key to an existing column. Chain `references()`, `on()`, or `constrained()` and an action shortcut. Pass a constraint name as the second argument to use it instead of the default name.
 
 ```ts
 await schema.createTable('post_tags', (table) => {
   table.integer('post_id')
   table.integer('tag_id')
   table.foreign('post_id').references('id').on('posts').cascadeOnDelete()
-  table.foreign('tag_id').references('id').on('tags').cascadeOnDelete()
+  table.foreign('tag_id', 'post_tags_tag_fk').references('id').on('tags').cascadeOnDelete()
 })
 ```
 
-Holo names foreign keys `{table}_{column}_foreign` by default.
+Holo names foreign keys `{table}_{column}_foreign` by default. The `post_tags` example names its foreign keys `post_tags_post_id_foreign` and `post_tags_tag_fk`.
 
 ### dropForeign()
 
-Drops a foreign key by its constraint name. Available inside `table()`. Not supported on SQLite.
+Drops a foreign key by its constraint name, or by its columns. Available inside `table()`. Not supported on SQLite.
 
 ```ts
 await schema.table('posts', (table) => {
@@ -1004,11 +1015,31 @@ await schema.table('posts', (table) => {
 })
 ```
 
+When you pass an array of columns, Holo drops the key with the conventional name `{table}_{columns}_foreign`. This call drops `posts_user_id_foreign`:
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropForeign(['user_id'])
+})
+```
+
+Dropping a foreign key that doesn't exist fails.
+
 On PostgreSQL, Holo versions before 0.5.7 created foreign keys declared inside `createTable()` or added through a new column without a constraint name, so PostgreSQL named them `{table}_{column}_fkey`. Drop those existing constraints by that name:
 
 ```ts
 await schema.table('posts', (table) => {
   table.dropForeign('posts_user_id_fkey')
+})
+```
+
+### dropConstrainedForeignId()
+
+Drops the foreign key `{table}_{column}_foreign`, then the column. Available inside `table()`. Not supported on SQLite. Use it to undo `foreignId().constrained()`. MySQL refuses `dropColumn()` on a column that a foreign key uses.
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropConstrainedForeignId('user_id')
 })
 ```
 

@@ -495,8 +495,16 @@ export class TableMutationBuilder {
     return new TableForeignKeyBuilder(operation)
   }
 
-  dropForeign(indexName: string): void {
-    this.operations.push({ kind: 'dropForeignKey', constraintName: indexName })
+  dropForeign(index: string | readonly string[]): void {
+    const constraintName = typeof index === 'string'
+      ? index
+      : resolveConventionalIndexName(this.table, index, 'foreign')
+    this.operations.push({ kind: 'dropForeignKey', constraintName })
+  }
+
+  dropConstrainedForeignId(columnName: string): void {
+    this.dropForeign([columnName])
+    this.dropColumn(columnName)
   }
 
   morphs(name: string, indexName?: string): this {

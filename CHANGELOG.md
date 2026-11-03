@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- Database: `table.dropForeign()` inside `schema.table()` also takes an array of columns and drops the key with the conventional name `{table}_{columns}_foreign`, as in Laravel. The new `table.dropConstrainedForeignId(column)` drops the column's `{table}_{column}_foreign` key, then the column, which is how you drop a constrained column on MySQL. Neither is supported on SQLite yet. See [dropForeign()](apps/docs/docs/database/migrations.md#dropforeign) and [dropConstrainedForeignId()](apps/docs/docs/database/migrations.md#dropconstrainedforeignid).
+
 ### Changed
 
 - Database: new SQLite columns use Laravel's SQLite type names: `tinyint(1)` for booleans, `date` for dates, `datetime` for datetimes and timestamps, `varchar(255)` for strings, and `text` for JSON. `schema.getColumns()` reports these types, and booleans read back with the `boolean` logical type. Values read and write as before, and tables created earlier keep their types. See [Available column types](apps/docs/docs/database/migrations.md#available-column-types).
+- CLI: `holo migrate --isolated` takes an atomic `migrations` lock from the application's default cache store, as Laravel's does, instead of a database lease. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends and expires after an hour if a runner stops. `--isolated` needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`; a `database` store needs its tables from `holo cache:table` first. Without `@holo-js/cache`, or with a default store that can't give a lock, `--isolated` fails with an error that says what to set up. Plain `holo migrate` doesn't use the cache. Holo no longer creates the `_holo_migration_locks` table. See [Isolating migration runs](apps/docs/docs/database/migrations.md#isolating-migration-runs).
+- Database: `table.foreign(column, name)` inside `createTable()` names the foreign key `name`, as it already did inside `table()` and as Laravel's `foreign()` does. Before, `createTable()`'s `foreign()` took no name and always used `{table}_{column}_foreign`. See [foreign(column)](apps/docs/docs/database/migrations.md#foreign-column).
+
+### Compatibility and upgrade requirements
+
+- Database: `MigrationService.migrateIsolated()` and the `IsolatedMigrationResult` type are removed from `@holo-js/db`. Use `holo migrate --isolated`.
+- Deploys that run `holo migrate --isolated` on several servers must set the default cache store to a shared `redis` or `database` store. You can drop a leftover `_holo_migration_locks` table.
 
 ### Fixed
 

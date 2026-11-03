@@ -4,7 +4,8 @@ import { writeLauncher, writeLauncherSync } from '../../../tests/support/launche
 import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
@@ -17,6 +18,8 @@ import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
 import { DB, TableQueryBuilder, createDatabase, createDialect, createSchemaService, generateMigrationTemplate } from '@holo-js/db'
 import { createSQLiteAdapter } from '../../db-sqlite/src'
+import { createPostgresAdapter } from '../../db-postgres/src'
+import { createMySQLAdapter } from '../../db-mysql/src'
 import {
   stageWorkspacePackagesSync,
   resolveInstalledDependencyRoot,
@@ -914,6 +917,180 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
     symlinkPackageDependencySync(nodeModulesRoot, dependency, resolveInstalledDependencyRoot(workspaceRoot, dependency))
   }
   symlinkPackageDependencySync(nodeModulesRoot, `@holo-js/adapter-${framework}`, join(workspaceRoot, 'packages', `adapter-${framework}`))
+}
+
+type CliProcessResult = {
+  readonly status: number | null
+  readonly stdout: string
+  readonly stderr: string
+}
+
+function startCliProcess(projectRoot: string, args: readonly string[]): Promise<CliProcessResult> {
+  const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
+  return new Promise((resolveResult, rejectResult) => {
+    const child = spawn(process.execPath, [cliBinPath, ...args], { cwd: projectRoot, env: process.env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', rejectResult)
+    child.on('close', status => resolveResult({ status, stdout, stderr }))
+  })
+}
+
+async function waitForPath(path: string, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!(await stat(path).then(() => true, () => false))) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${path}.`)
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 50))
+  }
+}
+
+const isolatedMigrationCacheError = 'migrate --isolated takes its lock from the default cache store. Install @holo-js/cache and set a default cache store that supports locks and is shared by every server, such as database or redis.'
+
+const livePostgresServer = {
+  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+  user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
+  password: process.env.HOLO_POSTGRES_PASSWORD ?? '',
+}
+
+const liveMySQLServer = {
+  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
+  user: process.env.HOLO_MYSQL_USER ?? 'root',
+  password: process.env.HOLO_MYSQL_PASSWORD ?? '',
+}
+
+const isolatedMigrationDatabases = [
+  {
+    driver: 'postgres',
+    enabled: process.env.HOLO_POSTGRES_INTEGRATION === '1',
+    connection: (database: string) => ({ driver: 'postgres', ...livePostgresServer, username: livePostgresServer.user, database }),
+    open: (database: string) => createDatabase({
+      adapter: createPostgresAdapter({ config: { ...livePostgresServer, database } }),
+      dialect: createDialect('postgres'),
+    }),
+    async administer(statement: string) {
+      const admin = createPostgresAdapter({ config: { ...livePostgresServer, database: 'postgres' } })
+      await admin.initialize()
+      try {
+        await admin.execute(statement)
+      } finally {
+        await admin.disconnect()
+      }
+    },
+    create(database: string) {
+      return this.administer(`CREATE DATABASE ${database}`)
+    },
+    drop(database: string) {
+      return this.administer(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
+    },
+  },
+  {
+    driver: 'mysql',
+    enabled: process.env.HOLO_MYSQL_INTEGRATION === '1',
+    connection: (database: string) => ({ driver: 'mysql', ...liveMySQLServer, username: liveMySQLServer.user, database }),
+    open: (database: string) => createDatabase({
+      adapter: createMySQLAdapter({ config: { ...liveMySQLServer, database } }),
+      dialect: createDialect('mysql'),
+    }),
+    async administer(statement: string) {
+      const admin = createMySQLAdapter({ config: liveMySQLServer })
+      await admin.initialize()
+      try {
+        await admin.execute(statement)
+      } finally {
+        await admin.disconnect()
+      }
+    },
+    create(database: string) {
+      return this.administer(`CREATE DATABASE \`${database}\``)
+    },
+    drop(database: string) {
+      return this.administer(`DROP DATABASE IF EXISTS \`${database}\``)
+    },
+  },
+] as const
+
+const isolatedMigrationStores = [
+  { driver: 'database', enabled: true },
+  { driver: 'redis', enabled: process.env.HOLO_REDIS_INTEGRATION === '1' },
+] as const
+
+async function writeIsolatedMigrationProject(
+  projectRoot: string,
+  connection: Readonly<Record<string, string | number>>,
+  storeDriver: typeof isolatedMigrationStores[number]['driver'],
+): Promise<void> {
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: ${JSON.stringify(connection)},
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+    },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'shared',
+  prefix: ${JSON.stringify(`${basename(projectRoot)}:`)},
+  drivers: {
+    shared: {
+      driver: ${JSON.stringify(storeDriver)},
+      connection: 'default',
+    },
+  },
+})
+`)
+}
+
+async function writeBlockingUsersMigration(projectRoot: string): Promise<{ readonly started: string, readonly release: string }> {
+  const started = join(projectRoot, 'users-migration.started')
+  const release = join(projectRoot, 'users-migration.release')
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_02_000001_create_users.ts', `
+import { existsSync, writeFileSync } from 'node:fs'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    if (existsSync(${JSON.stringify(started)})) {
+      throw new Error('The users migration started twice.')
+    }
+    writeFileSync(${JSON.stringify(started)}, '')
+    while (!existsSync(${JSON.stringify(release)})) {
+      await sleep(50)
+    }
+    await schema.createTable('users', (table) => {
+      table.id()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+  return { started, release }
 }
 
 const tempDirs: string[] = []
@@ -5830,14 +6007,62 @@ export default defineMigration({
     }
   }, 30000)
 
-  it('skips migrate --isolated while another runner holds the migration lock', async () => {
+  for (const database of isolatedMigrationDatabases) {
+    for (const store of isolatedMigrationStores) {
+      it.skipIf(!database.enabled || !store.enabled)(`lets one of two concurrent migrate --isolated runs migrate on ${database.driver} with a ${store.driver} cache store`, async () => {
+        const projectRoot = await createTempProject()
+        tempDirs.push(projectRoot)
+        const databaseName = `holo_isolated_${randomUUID().replaceAll('-', '')}`
+        await writeIsolatedMigrationProject(projectRoot, database.connection(databaseName), store.driver)
+        await database.create(databaseName)
+        try {
+          if (store.driver === 'database') {
+            expect(runCliProcess(projectRoot, ['cache:table']).status).toBe(0)
+            const prepared = runCliProcess(projectRoot, ['migrate'])
+            expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+          }
+          linkBuiltWorkspacePackagesSync(projectRoot)
+          const markers = await writeBlockingUsersMigration(projectRoot)
+
+          const holder = startCliProcess(projectRoot, ['migrate', '--isolated'])
+          await Promise.race([
+            waitForPath(markers.started),
+            holder.then((result) => {
+              throw new Error(`The first run ended before migrating: ${result.stderr || result.stdout}`)
+            }),
+          ])
+          const skipped = await startCliProcess(projectRoot, ['migrate', '--isolated'])
+          await writeFile(markers.release, '', 'utf8')
+          const applied = await holder
+          await rm(markers.started)
+
+          expect(skipped.status, skipped.stderr || skipped.stdout).toBe(0)
+          expect(skipped.stdout).toContain('Another migration run holds the migration lock; no migrations were executed.')
+          expect(applied.status, applied.stderr || applied.stdout).toBe(0)
+          expect(applied.stdout).toContain('Migrations executed:')
+          expect(applied.stdout).toContain('2026_01_02_000001_create_users')
+
+          const rerun = runCliProcess(projectRoot, ['migrate', '--isolated'])
+          expect(rerun.status, rerun.stderr || rerun.stdout).toBe(0)
+          expect(rerun.stdout).toContain('No migrations were executed.')
+
+          const connection = database.open(databaseName)
+          try {
+            await expect(createSchemaService(connection).hasTable('users')).resolves.toBe(true)
+            await expect(createSchemaService(connection).hasTable('_holo_migration_locks')).resolves.toBe(false)
+          } finally {
+            await connection.disconnect()
+          }
+        } finally {
+          await database.drop(databaseName)
+        }
+      }, 60000)
+    }
+  }
+
+  it('runs plain migrate without @holo-js/cache and fails migrate --isolated with the documented error', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
-    await linkWorkspaceDb(projectRoot)
-
-    const built = await runWorkspacePackageBuild('@holo-js/db')
-    expect(built.status).toBe(0)
-
     await writeProjectFile(projectRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 
@@ -5850,10 +6075,6 @@ export default defineDatabaseConfig({
   },
 })
 `)
-    await mkdir(join(projectRoot, 'data'), { recursive: true })
-    const created = runCliProcess(projectRoot, ['migrate', '--isolated'])
-    expect(created.status, created.stderr || created.stdout).toBe(0)
-
     await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
 import { defineMigration } from '@holo-js/db'
 
@@ -5861,41 +6082,74 @@ export default defineMigration({
   async up({ schema }) {
     await schema.createTable('users', (table) => {
       table.id()
-      table.string('name')
     })
-  },
-  async down({ schema }) {
-    await schema.dropTable('users')
   },
 })
 `)
-    const database = createDatabase({
-      adapter: createSQLiteAdapter({ filename: join(projectRoot, 'data.sqlite') }),
-      dialect: createDialect('sqlite'),
-    })
+    linkBuiltWorkspacePackagesSync(projectRoot)
+    const cacheDist = join(ensureBuiltWorkspacePackagesSync().cachePackageRoot, 'dist')
+    await rename(cacheDist, `${cacheDist}.hidden`)
     try {
-      await new TableQueryBuilder('_holo_migration_locks', database).insert({
-        name: 'migrations',
-        owner: 'other-runner',
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      })
+      const isolated = await startCliProcess(projectRoot, ['migrate', '--isolated'])
+      expect(isolated.status).toBe(1)
+      expect(isolated.stderr).toContain(isolatedMigrationCacheError)
 
-      const artifactPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
-      await writeFile(artifactPath, '// written by the runner that holds the lock\n', 'utf8')
-      const skipped = runCliProcess(projectRoot, ['migrate', '--isolated'])
-      expect(skipped.status, skipped.stderr || skipped.stdout).toBe(0)
-      expect(skipped.stdout).toContain('holds the migration lock; no migrations were executed.')
-      await expect(createSchemaService(database).hasTable('users')).resolves.toBe(false)
-      await expect(readFile(artifactPath, 'utf8')).resolves.toBe('// written by the runner that holds the lock\n')
-
-      await new TableQueryBuilder('_holo_migration_locks', database).where('owner', 'other-runner').delete()
+      const migrated = await startCliProcess(projectRoot, ['migrate'])
+      expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+      expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
     } finally {
-      await database.disconnect()
+      await rename(`${cacheDist}.hidden`, cacheDist)
     }
+  }, 30000)
 
-    const applied = runCliProcess(projectRoot, ['migrate', '--isolated'])
-    expect(applied.status, applied.stderr || applied.stdout).toBe(0)
-    expect(applied.stdout).toContain('Migrations executed:')
+  it('fails migrate --isolated with the documented error when the default cache store cannot be resolved', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'shared',
+  drivers: {
+    shared: {
+      driver: 'unregistered-driver',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+    })
+  },
+})
+`)
+
+    const isolated = runCliProcess(projectRoot, ['migrate', '--isolated'])
+    expect(isolated.status).toBe(1)
+    expect(isolated.stderr).toContain(isolatedMigrationCacheError)
+    const database = new DatabaseSync(join(projectRoot, 'data.sqlite'))
+    try {
+      expect(database.prepare('SELECT name FROM sqlite_master WHERE name = ?').all('users')).toEqual([])
+    } finally {
+      database.close()
+    }
   }, 30000)
 
   it('executes plugin-published migrations through the existing migration lifecycle', async () => {
