@@ -88,8 +88,12 @@ export function resolveGeneratedForeignKeyName(
   return resolvedName
 }
 
+export function createGeneratedUniqueIndexName(tableName: string, columns: readonly string[]): string {
+  return shortenGeneratedName(createConventionalIndexName(tableName, columns, 'unique'), 'unique')
+}
+
 export function resolveGeneratedUniqueIndexName(tableName: string, columns: readonly string[]): string {
-  const indexName = shortenGeneratedName(createConventionalIndexName(tableName, columns, 'unique'), 'unique')
+  const indexName = createGeneratedUniqueIndexName(tableName, columns)
   assertValidIndexName(indexName)
   return indexName
 }

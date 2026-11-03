@@ -6,6 +6,7 @@ import type {
 } from './types'
 import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from './SchemaService'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
+import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
 
 export interface SchemaColumnMismatch {
   readonly column: string
@@ -158,7 +159,7 @@ async function diffTable(
     .filter(name => !actualIndexByName.has(name))
   for (const column of expectedColumns.filter(column => column.unique && !column.primaryKey)) {
     if (!actualIndexes.some(index => index.unique && index.columns.length === 1 && index.columns[0] === column.name)) {
-      const name = `${table.tableName}_${column.name}_unique`
+      const name = createGeneratedUniqueIndexName(table.tableName, [column.name])
       if (!missingIndexes.includes(name)) missingIndexes.push(name)
     }
   }
@@ -274,7 +275,11 @@ function isConstraintIndex(table: TableDefinition, index: IntrospectedIndex): bo
   const matchesPrimaryKey = index.columns.length === primaryKeys.length && index.columns.every((column, position) => column === primaryKeys[position])
   if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${table.tableName}_pkey` || index.name.startsWith(`sqlite_autoindex_${table.tableName}_`))) return true
   const column = index.columns.length === 1 ? table.columns[index.columns[0]!] : undefined
-  return Boolean(column?.unique && (index.name === column.name || index.name === `${table.tableName}_${column.name}_key` || index.name.startsWith(`sqlite_autoindex_${table.tableName}_`)))
+  const unqualifiedTableName = table.tableName.split('.').at(-1)!
+  return Boolean(column?.unique && (index.name === column.name
+    || index.name === `${unqualifiedTableName}_${column.name}_key`
+    || index.name === createGeneratedUniqueIndexName(table.tableName, [column.name])
+    || index.name.startsWith(`sqlite_autoindex_${unqualifiedTableName}_`)))
 }
 
 function normalizeExpectedIndex(
@@ -282,7 +287,7 @@ function normalizeExpectedIndex(
   index: TableIndexDefinition,
 ): { name: string, unique: boolean, columns: readonly string[] } {
   return {
-    name: index.name ?? `${table.tableName}_${index.columns.join('_')}_${index.unique ? 'unique' : 'index'}`,
+    name: index.name ?? createConventionalIndexName(table.tableName, index.columns, index.unique ? 'unique' : 'index'),
     unique: Boolean(index.unique),
     columns: index.columns,
   }
