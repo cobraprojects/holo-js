@@ -992,18 +992,18 @@ await schema.createTable('posts', (table) => {
 
 ### foreign(column)
 
-Adds a foreign key to an existing column. Chain `references()`, `on()`, or `constrained()` and an action shortcut. Inside `table()`, you can pass a constraint name as the second argument.
+Adds a foreign key to an existing column. Chain `references()`, `on()`, or `constrained()` and an action shortcut. Pass a constraint name as the second argument to use it instead of the default name.
 
 ```ts
 await schema.createTable('post_tags', (table) => {
   table.integer('post_id')
   table.integer('tag_id')
   table.foreign('post_id').references('id').on('posts').cascadeOnDelete()
-  table.foreign('tag_id').references('id').on('tags').cascadeOnDelete()
+  table.foreign('tag_id', 'post_tags_tag_fk').references('id').on('tags').cascadeOnDelete()
 })
 ```
 
-Holo names foreign keys `{table}_{column}_foreign` by default.
+Holo names foreign keys `{table}_{column}_foreign` by default. The `post_tags` example names its foreign keys `post_tags_post_id_foreign` and `post_tags_tag_fk`.
 
 ### dropForeign()
 
