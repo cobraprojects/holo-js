@@ -34,6 +34,7 @@
         "typescript": "catalog:",
         "typescript-eslint": "catalog:",
         "ulid": "catalog:",
+        "undici": "^8.12.3",
         "uuid": "catalog:",
         "vite": "catalog:",
         "vitest": "catalog:",
