@@ -33,7 +33,7 @@ async function createDatabaseStore(): Promise<SessionStore> {
     adapter: createSQLiteAdapter({ filename: join(root, 'sessions.sqlite') }),
   })
   connections.push(connection)
-  await connection.initialize()
+  await connection.getAdapter().ensureDatabaseExists?.()
   await sessionsMigration.up({ db: connection, schema: createSchemaService(connection) })
   configureDB(new ConnectionManager({ defaultConnection: 'main', connections: { main: connection } }))
   return createDatabaseSessionStore(createCoreDatabaseSessionAdapter('sessions', 'main'))

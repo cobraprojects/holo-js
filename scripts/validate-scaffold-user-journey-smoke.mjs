@@ -458,29 +458,8 @@ export default defineSessionConfig({
   const databasePath = join(projectRoot, 'config/database.ts')
   const originalDatabase = originalFiles.get(databasePath)
   assert.equal(typeof originalDatabase, 'string')
-  const devPort = await new Promise((resolvePromise, reject) => {
-    const server = createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      if (!address || typeof address === 'string') {
-        reject(new Error('Could not determine an available dev-server port.'))
-        return
-      }
-      server.close(error => error ? reject(error) : resolvePromise(address.port))
-    })
-  })
-  const devServer = spawn(process.execPath, [cliPath, 'dev'], {
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      ...localPackageEnv,
-      HOST: '127.0.0.1',
-      HOSTNAME: '127.0.0.1',
-      PORT: String(devPort),
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const devPort = await findAvailablePort()
+  const devServer = startDevServer(projectRoot, cliPath, localPackageEnv, devPort)
   const devJourney = { projectName: projectRoot.split('/').at(-1), port: devPort }
   try {
     await waitForRenderedApp(devJourney, devServer)
@@ -512,6 +491,96 @@ export default defineDatabaseConfig({
   } finally {
     await writeFile(databasePath, originalDatabase, 'utf8')
     await stopServer(devServer)
+  }
+}
+
+async function findAvailablePort() {
+  return await new Promise((resolvePromise, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Could not determine an available dev-server port.'))
+        return
+      }
+      server.close(error => error ? reject(error) : resolvePromise(address.port))
+    })
+  })
+}
+
+function startDevServer(projectRoot, cliPath, localPackageEnv, port) {
+  return spawn(process.execPath, [cliPath, 'dev'], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      ...localPackageEnv,
+      HOST: '127.0.0.1',
+      HOSTNAME: '127.0.0.1',
+      PORT: String(port),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+async function writeDatabaseRecordsRoute(projectRoot, framework, tableName) {
+  const body = `
+  return Response.json({ count: await DB.table('${tableName}').count() })
+`
+  if (framework === 'nuxt') {
+    await writeProjectFile(projectRoot, 'server/api/journey-records.get.ts', `
+import { defineEventHandler } from 'h3'
+import { DB } from '@holo-js/db'
+
+export default defineEventHandler(async () => {
+${body}
+})
+`)
+    return
+  }
+
+  const path = framework === 'next' ? 'app/api/journey-records/route.ts' : 'src/routes/api/journey-records/+server.ts'
+  await writeProjectFile(projectRoot, path, `
+import { DB } from '@holo-js/db'
+${framework === 'next' ? "import { holo } from '../../../.holo-js/generated/next/holo'" : ''}
+
+export async function GET() {
+${framework === 'next' ? '  await holo.getApp()' : ''}
+${body}
+}
+`)
+}
+
+async function assertFreshCloneServesWithoutDatabase(projectRoot, journey, cliPath, localPackageEnv) {
+  const databaseFile = join(projectRoot, 'storage/database.sqlite')
+  await rm(join(projectRoot, 'storage'), { recursive: true, force: true })
+  const port = await findAvailablePort()
+  const devServer = startDevServer(projectRoot, cliPath, localPackageEnv, port)
+  let output = ''
+  devServer.stdout?.on('data', chunk => output += String(chunk))
+  devServer.stderr?.on('data', chunk => output += String(chunk))
+  try {
+    await waitForRenderedApp({ projectName: journey.projectName, port }, devServer)
+    const response = await fetch(`http://127.0.0.1:${port}/api/journey-records`)
+    const body = await response.text()
+    assert.equal(response.status, 500, `Expected the database route to fail before holo migrate, got ${response.status}: ${body}`)
+    const missingDatabaseMessage = 'Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.'
+    await waitForOutput(() => `${body}\n${output}`, missingDatabaseMessage)
+    assert.equal(devServer.exitCode, null, 'holo dev exited on a fresh clone without a database')
+    assert.equal(await pathExists(databaseFile), false, 'The app runtime created the SQLite database file')
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`, { cause: error })
+  } finally {
+    await stopServer(devServer)
+  }
+  log(journey.framework, 'fresh clone served / without a database and reported the missing database file')
+}
+
+async function waitForOutput(readOutput, expected) {
+  const deadline = Date.now() + 10_000
+  while (!readOutput().includes(expected)) {
+    if (Date.now() > deadline) throw new Error(`Expected output to include: ${expected}`)
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 100))
   }
 }
 
@@ -962,8 +1031,10 @@ export default defineMigration({
 })
 `)
 
+  await writeDatabaseRecordsRoute(projectRoot, journey.framework, tableName)
   run(journey.framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await copyWorkspaceNativeDependencies(projectRoot)
+  await assertFreshCloneServesWithoutDatabase(projectRoot, journey, cliPath, localPackageEnv)
   run(journey.framework, 'npx', ['holo', 'migrate', '--force'], { cwd: projectRoot, env: localPackageEnv })
   run(journey.framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
   await copyWorkspaceNativeDependencies(projectRoot)
@@ -1000,6 +1071,9 @@ export default defineMigration({
 
   try {
     await waitForRenderedApp(journey, server)
+    const records = await fetch(`http://127.0.0.1:${journey.port}/api/journey-records`)
+    assert.equal(records.status, 200, `Expected the database route to work after holo migrate, got ${records.status}`)
+    assert.deepEqual(await records.json(), { count: 0 })
     await assertAuthSecurity(journey)
   } catch (error) {
     throw new Error([

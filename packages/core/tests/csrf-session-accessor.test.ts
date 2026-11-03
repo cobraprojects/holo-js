@@ -95,7 +95,7 @@ async function createStore(driver: string): Promise<SessionStore> {
     adapter: createSQLiteAdapter({ filename: join(root, 'sessions.sqlite') }),
   })
   cleanups.push(async () => { await connection.disconnect() })
-  await connection.initialize()
+  await connection.getAdapter().ensureDatabaseExists?.()
   await sessionsMigration.up({ db: connection, schema: createSchemaService(connection) })
   configureDB(new ConnectionManager({ defaultConnection: 'main', connections: { main: connection } }))
   return createDatabaseSessionStore(createCoreDatabaseSessionAdapter('sessions', 'main'))

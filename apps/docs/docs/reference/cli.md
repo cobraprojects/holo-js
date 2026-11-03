@@ -124,7 +124,7 @@ Write the generated schema types from your default connection's database, refres
 npx holo dev [...frameworkArgs]
 ```
 
-The dev server doesn't need the database. If `holo dev` can't read it, it prints a warning that names the connection and starts with the generated schema it already has, or an empty one. Run `npx holo migrate` once the database is reachable to write it.
+The dev server doesn't need the database. If `holo dev` can't read it, it prints a warning that names the connection and starts with the generated schema it already has, or an empty one. Run `npx holo migrate` once the database is reachable to write it. `holo dev` and your app never create a missing SQLite file: pages that don't query the database still work, and a query fails with an error that names the file and tells you to run `npx holo migrate`.
 
 While it runs, `holo dev` watches your Holo folders (`config/`, `.env` files, `server/models`, `server/jobs`, and so on) and refreshes the generated files when they change, restarting the dev server when needed.
 
@@ -468,7 +468,7 @@ npx holo make:channel orders.{orderId}
 
 Run every [migration](/database/migrations) that hasn't run yet, then write the generated schema types from the database. A skipped `--isolated` run leaves them unchanged. `migrate:rollback` and `migrate:fresh` write them too.
 
-When the default connection's database doesn't exist, `migrate` and `migrate:fresh` create it: the SQLite file and its directory, or the PostgreSQL or MySQL database.
+When the default connection's database doesn't exist, `migrate` and `migrate:fresh` create it: the SQLite file and its directory, or the PostgreSQL or MySQL database. They are the only commands that create a database. `holo seed` and other commands fail on a missing one.
 
 ```bash
 npx holo migrate [--step <n>] [--isolated]

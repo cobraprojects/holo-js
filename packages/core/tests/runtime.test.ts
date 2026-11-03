@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { symlinkPackageDependency } from '../../../tests/support/published-package'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -180,6 +181,16 @@ export default defineDatabaseConfig({
   },
 })
 `, 'utf8')
+}
+
+async function writeFailingBootPlugin(root: string): Promise<void> {
+  await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+export default defineAppConfig({ name: 'Runtime App', key: 'base64:key', url: 'https://runtime.test', plugins: ['holo-plugin-startup-failure'] })
+`, 'utf8')
+  await writeRuntimePluginPackage(root, 'holo-plugin-startup-failure', `
+export default { id: 'startup-failure', name: 'Startup Failure', contributes: { runtime: { boot: './boot.mjs' } } }
+`, { 'boot.mjs': `export default function boot() { throw new Error('startup failed') }` })
 }
 
 async function writeServicesConfig(root: string): Promise<void> {
@@ -2136,10 +2147,11 @@ export default defineQueueConfig({
     await runtime.shutdown()
 
     const failingRoot = await createProject()
-    await writeBaseConfig(failingRoot, join(failingRoot, 'missing', 'database.sqlite'))
+    await writeBaseConfig(failingRoot)
+    await writeFailingBootPlugin(failingRoot)
     const failingRuntime = await createHolo(failingRoot)
 
-    await expect(failingRuntime.initialize()).rejects.toThrow()
+    await expect(failingRuntime.initialize()).rejects.toThrow('startup failed')
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
     expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
   })
@@ -2175,9 +2187,31 @@ export default defineDatabaseConfig({
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
   }, 15000)
 
+  it.each([
+    ['a missing storage directory', false],
+    ['an existing storage directory', true],
+  ] as const)('boots with %s and fails the first SQLite query without creating the database', async (_label, createDirectory) => {
+    const root = await createProject()
+    const storage = join(root, 'storage')
+    const databasePath = join(storage, 'database.sqlite')
+    if (createDirectory) await mkdir(storage)
+    await writeBaseConfig(root, databasePath)
+
+    const runtime = await createHolo(root)
+    await expect(runtime.initialize()).resolves.toBeUndefined()
+    await expect(DB.table('posts').get()).rejects.toThrow(
+      `Database file at path "${databasePath}" does not exist. Run "holo migrate" to create it.`,
+    )
+    await runtime.shutdown()
+
+    expect(existsSync(databasePath)).toBe(false)
+    expect(existsSync(storage)).toBe(createDirectory)
+  })
+
   it('skips eager service boot during generated framework builds', async () => {
     const root = await createProject()
-    await writeBaseConfig(root, join(root, 'missing', 'database.sqlite'))
+    await writeBaseConfig(root)
+    await writeFailingBootPlugin(root)
 
     const runtime = await createHolo(root, {
       processEnv: {
@@ -2195,7 +2229,7 @@ export default defineDatabaseConfig({
     await runtime.shutdown()
 
     const normalRuntime = await createHolo(root)
-    await expect(normalRuntime.initialize()).rejects.toThrow()
+    await expect(normalRuntime.initialize()).rejects.toThrow('startup failed')
   })
 
   it('rejects a plugin boot hook that registers a job whose timeout is not below its connection retryAfter, and keeps no plugin job registered', async () => {

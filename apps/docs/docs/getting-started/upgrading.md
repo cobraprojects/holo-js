@@ -23,7 +23,7 @@ A `schema.generated.ts` written by an earlier release can still call `.generated
 
 `holo dev` now writes the generated schema from the database when it starts, so a fresh clone gets its model types without a separate `migrate`. If it can't read the database, it warns and starts with the schema it has. `holo seed` and `holo media:regenerate` write it before they run, too, and continue with the schema they have when they can't read the database.
 
-On SQLite, `holo build` and `holo dev` no longer create a missing database file. `holo build` fails with the error that names the connection instead. `npx holo migrate` creates the file and its directory, so on a fresh clone run it before you build.
+On SQLite, only `npx holo migrate` and `npx holo migrate:fresh` create a missing database file and its directory. `holo build` fails with the error that names the connection instead. Your app no longer opens the SQLite file when it starts, and it never creates it: pages that don't query the database work without it, and a query fails with `Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.` On a fresh clone, run `npx holo migrate` before you build.
 
 ### Model types come from the database and casts
 

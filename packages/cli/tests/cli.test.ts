@@ -6284,6 +6284,21 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
   }, 60000)
 
+  it('fails migrate:rollback and runs seed on a missing SQLite database file without creating it', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
+    expect(rolledBack.status, rolledBack.stdout).toBe(1)
+    expect(rolledBack.stderr).toContain('does not exist. Run "holo migrate" to create it.')
+    const seeded = runCliProcess(projectRoot, ['seed'], { env: { APP_ENV: 'development' } })
+    expect(seeded.status, seeded.stderr).toBe(0)
+
+    expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
+  }, 60000)
+
   it('runs prepare, migrate, build and dev on a fresh clone of a SQLite project whose storage directory is gitignored', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

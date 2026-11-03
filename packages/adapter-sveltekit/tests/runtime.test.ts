@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
@@ -47,6 +47,7 @@ describe('SvelteKit native runtime', () => {
   it.each(['memory', 'database'] as const)('preserves %s cached data and held locks while concurrent requests resolve uncached helpers', async (driver) => {
     const root = await mkdtemp(join(tmpdir(), 'holo-sveltekit-concurrent-runtime-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
+    await writeFile(join(root, 'database.sqlite'), '')
     const options = {
       projectRoot,
       preferCache: false,

@@ -16,6 +16,12 @@ export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@h
 
 class TransactionError extends Error {}
 
+const MISSING_DATABASE_ERROR_CODE = 'SQLITE_DATABASE_MISSING'
+
+function isInMemoryDatabase(filename: string): boolean {
+  return filename === ':memory:' || filename === ''
+}
+
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
 function normalizeBinding(value: unknown): unknown {
@@ -65,9 +71,9 @@ export class SQLiteAdapter implements DriverAdapter {
     this.database = options.database
     this.connected = !!options.database
     this.filename = options.filename ?? ':memory:'
-    this.transactionKey = options.database || this.filename === ':memory:' ? this : resolve(this.filename)
+    this.transactionKey = options.database || isInMemoryDatabase(this.filename) ? this : resolve(this.filename)
     this.createDatabaseInstance = options.createDatabase ?? ((filename) => {
-      const database = new Database(filename)
+      const database = new Database(filename, { fileMustExist: !isInMemoryDatabase(filename) })
       try {
         database.exec('PRAGMA journal_mode = WAL')
         return database
@@ -79,21 +85,11 @@ export class SQLiteAdapter implements DriverAdapter {
   }
 
   async initialize(): Promise<void> {
-    if (this.connected) {
-      return
-    }
-
-    try {
-      this.database = this.createDatabaseInstance(this.filename)
-    } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : 'Unknown SQLite driver error.'
-      throw new Error(`Unable to open SQLite database "${this.filename}": ${message}`, { cause: error })
-    }
     this.connected = true
   }
 
   async databaseExists(): Promise<boolean> {
-    return this.connected || this.filename === ':memory:' || existsSync(this.filename)
+    return !!this.database || isInMemoryDatabase(this.filename) || existsSync(this.filename)
   }
 
   async ensureDatabaseExists(): Promise<void> {
@@ -101,12 +97,12 @@ export class SQLiteAdapter implements DriverAdapter {
     await appendFile(this.filename, '')
   }
 
-  async disconnect(): Promise<void> {
-    if (!this.connected || !this.database) {
-      return
-    }
+  isDatabaseMissingError(error: unknown): boolean {
+    return error instanceof DatabaseError && error.code === MISSING_DATABASE_ERROR_CODE
+  }
 
-    this.database.close()
+  async disconnect(): Promise<void> {
+    this.database?.close()
     this.database = undefined
     this.connected = false
   }
@@ -227,12 +223,25 @@ export class SQLiteAdapter implements DriverAdapter {
   }
 
   private getDatabase(): SQLiteDatabaseLike {
-    if (!this.connected || !this.database) {
-      this.database = this.createDatabaseInstance(this.filename)
-      this.connected = true
+    this.database ??= this.openDatabase()
+    this.connected = true
+    return this.database
+  }
+
+  private openDatabase(): SQLiteDatabaseLike {
+    if (!isInMemoryDatabase(this.filename) && !existsSync(this.filename)) {
+      throw new DatabaseError(
+        `Database file at path "${this.filename}" does not exist. Run "holo migrate" to create it.`,
+        MISSING_DATABASE_ERROR_CODE,
+      )
     }
 
-    return this.database
+    try {
+      return this.createDatabaseInstance(this.filename)
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'Unknown SQLite driver error.'
+      throw new Error(`Unable to open SQLite database "${this.filename}": ${message}`, { cause: error })
+    }
   }
 
   private normalizeSavepointName(name: string): string {

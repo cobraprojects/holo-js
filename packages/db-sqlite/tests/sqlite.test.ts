@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,6 +22,7 @@ describe('@holo-js/db-sqlite', () => {
     const adapters = [createSQLiteAdapter({ filename }), createSQLiteAdapter({ filename })]
     const connections = adapters.map(adapter => createDatabase({ adapter, dialect: createDialect('sqlite') }))
     try {
+      await adapters[0]!.ensureDatabaseExists()
       await adapters[0]!.execute('CREATE TABLE records (id INTEGER PRIMARY KEY)')
       await Promise.all([
         ...connections.map((connection, index) => connection.writeTransaction(async tx => {
@@ -42,6 +44,7 @@ describe('@holo-js/db-sqlite', () => {
     const reader = createSQLiteAdapter({ filename })
     const writer = createSQLiteAdapter({ filename })
     try {
+      await writer.ensureDatabaseExists()
       await writer.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)')
       await writer.execute('INSERT INTO records VALUES (?, ?)', [1, 'before'])
       await reader.beginTransaction()
@@ -79,11 +82,54 @@ describe('@holo-js/db-sqlite', () => {
     }
   })
 
-  it('reports a real SQLite open failure for a missing directory', async () => {
-    const filename = join(tmpdir(), `holo-missing-${randomUUID()}`, 'database.sqlite')
+  it('opens a missing database lazily and fails the first query without creating the file or directory', async () => {
+    const directory = join(tmpdir(), `holo-missing-${randomUUID()}`)
+    const filename = join(directory, 'database.sqlite')
     const adapter = createSQLiteAdapter({ filename })
-    await expect(adapter.initialize()).rejects.toThrow(`Unable to open SQLite database "${filename}"`)
-    expect(adapter.isConnected()).toBe(false)
+
+    await expect(adapter.initialize()).resolves.toBeUndefined()
+    await expect(adapter.query('SELECT 1')).rejects.toThrow(
+      `Database file at path "${filename}" does not exist. Run "holo migrate" to create it.`,
+    )
+    expect(existsSync(directory)).toBe(false)
+  })
+
+  it('does not create a missing database file inside an existing directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'holo-sqlite-no-file-'))
+    const filename = join(directory, 'database.sqlite')
+    const adapter = createSQLiteAdapter({ filename })
+    try {
+      await adapter.initialize()
+      await expect(adapter.execute('CREATE TABLE records (id INTEGER PRIMARY KEY)')).rejects.toThrow('does not exist')
+      await expect(adapter.databaseExists()).resolves.toBe(false)
+      expect(existsSync(filename)).toBe(false)
+    } finally {
+      await adapter.disconnect()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('creates a missing database file when migrations run', async () => {
+    const directory = join(tmpdir(), `holo-sqlite-migrate-${randomUUID()}`)
+    const filename = join(directory, 'database.sqlite')
+    const adapter = createSQLiteAdapter({ filename })
+    const db = createDatabase({ connectionName: 'main', adapter, dialect: createDialect('sqlite') })
+    const migration = defineMigration({
+      name: '2026_05_31_000001_create_records',
+      async up({ schema }) {
+        await schema.createTable('records', (table) => {
+          table.id()
+        })
+      },
+    })
+    try {
+      await expect(createMigrationService(db, [migration]).migrate()).resolves.toEqual([migration])
+      expect(existsSync(filename)).toBe(true)
+      expect((await adapter.query('SELECT name FROM "_holo_migrations"')).rows).toEqual([{ name: migration.name }])
+    } finally {
+      await adapter.disconnect()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('runs queries against a real in-memory SQLite database through the public adapter', async () => {
