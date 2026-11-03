@@ -11,7 +11,7 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 ### Deploy checklist
 
 1. Give the build environment access to the default connection's database. `holo build` reads it and fails when it can't. On SQLite, the database file must exist where the build runs.
-2. If you run `npx holo migrate --isolated`, install `@holo-js/cache` and make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
+2. If you run `npx holo migrate --isolated`, make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
 3. Run this one deploy's `npx holo migrate` from a single replica.
 4. Once every replica runs 0.6.0, drop the `_holo_migration_locks` table.
 
@@ -84,7 +84,7 @@ On SQLite, `diffSchema()` reports the columns of tables created before 0.6.0 as 
 
 `npx holo migrate --isolated` takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers), as Laravel's does, instead of a row in the `_holo_migration_locks` table. A run that finds the lock held still skips its migrations and exits successfully. The lock is released when the run ends, and expires after an hour if a runner stops. Holo doesn't renew it during the run.
 
-`--isolated` now needs `@holo-js/cache` and a default store that every server shares, such as `redis` or `database`. Without them, it fails with an error that says what to set up. Plain `npx holo migrate` doesn't use the cache. If your app has no cache yet, install one:
+`--isolated` now needs a default store that every server shares, such as `redis` or `database`. Without a `config/cache.ts`, the default store is the `file` store in `storage/framework/cache/data`, which only coordinates processes that share that folder, so replicas on different servers all run the migrations. If Holo can't load the default store, or the store can't give a lock, `--isolated` fails with an error that says what to set up. Plain `npx holo migrate` doesn't use the cache. If your app has no cache config yet, install one:
 
 ```bash
 npx holo install cache --driver redis
