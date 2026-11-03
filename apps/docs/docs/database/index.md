@@ -91,6 +91,7 @@ export default defineDatabaseConfig({
       username: env('DB_USERNAME', 'postgres'),
       password: env('DB_PASSWORD'),
       database: env('DB_DATABASE', 'my_app'),
+      logging: env('DB_LOGGING', false),
       schema: env('DB_SCHEMA', 'public'),
     },
   },
@@ -120,7 +121,7 @@ main: {
 },
 ```
 
-Keep its first schema the same as `schema`, because the generated schema is read from `schema`.
+The generated schema, the schema builder and `migrate:fresh` use the schema that unqualified statements use, which is the first schema of the `search_path` that exists. With the URL above and no `tenant` schema in the database, `holo migrate` creates its tables in `public`, the generated schema lists them from `public`, and `migrate:fresh` drops them from `public`.
 
 ### PostgreSQL dates and time zones
 
@@ -524,10 +525,12 @@ New projects read these from `.env`:
 | `DB_URL` | `url` (SQLite projects) |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` | PostgreSQL and MySQL credentials |
 | `DB_SCHEMA` | PostgreSQL `schema` |
+| `DB_SSL` | `ssl` (MySQL projects). PostgreSQL TLS comes from `sslmode` in `DB_URL` or from `PGSSLMODE` |
+| `DB_LOGGING` | `logging` |
 | `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT_MS`, `DB_IDLE_TIMEOUT_MS` | PostgreSQL pool |
 | `DB_MAX_CONCURRENT_QUERIES`, `DB_QUERY_QUEUE_LIMIT` | `concurrency` settings |
 
-These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them.
+These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them. The app and CLI commands such as `holo migrate` use the same resolved config, so a variable your config doesn't read, or a value it sets without `env()`, changes neither.
 
 ## Next steps
 

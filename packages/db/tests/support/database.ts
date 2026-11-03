@@ -16,6 +16,7 @@ export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sq
       user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
       password: process.env.HOLO_POSTGRES_PASSWORD,
       database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+      ...(databaseOptions.schemaName ? { options: `-c search_path="${databaseOptions.schemaName}"` } : {}),
     } }) : createMySQLAdapter({ config: {
       host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
       port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
@@ -27,17 +28,21 @@ export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sq
   const db = createDatabase({ connectionName: 'default', ...databaseOptions, adapter, dialect: createDialect(driver) })
   configureDB(createConnectionManager({ defaultConnection: db.getConnectionName(), connections: { [db.getConnectionName()]: db } }))
   const name = `holo_native_${randomUUID().replaceAll('-', '')}`
+  const qualified = driver === 'postgres' ? `public.${name}` : driver === 'mysql' ? `${database}.${name}` : name
+  const fixture = driver === 'postgres' ? qualified : name
   const schema = createSchemaService(db)
   onTestFinished(async () => {
-    try { await schema.dropTable(name) } finally { await db.disconnect() }
+    try { await schema.dropTable(fixture) } finally { await db.disconnect() }
   })
-  await schema.createTable(name, table => {
+  if (driver === 'postgres' && databaseOptions.schemaName) {
+    await db.executeCompiled({ sql: `CREATE SCHEMA IF NOT EXISTS "${databaseOptions.schemaName}"`, source: 'schema' })
+  }
+  await schema.createTable(fixture, table => {
     table.integer('id').primaryKey()
     table.string('name')
     table.boolean('active').default(false)
     table.json('settings').nullable()
   })
-  const qualified = driver === 'postgres' ? `public.${name}` : driver === 'mysql' ? `${database}.${name}` : name
   const table = defineTable(qualified, { id: column.integer().primaryKey(), name: column.string(), active: column.boolean(), settings: column.json().nullable() })
   return { db, table, schema, adapter }
 }

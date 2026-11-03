@@ -4,8 +4,10 @@ import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/d
 import {
   column,
   configureDB,
+  createSchemaService,
   defineGeneratedTable,
   defineModel,
+  holoRuntimeInternals,
   registerDatabaseDriverFactory,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
@@ -118,5 +120,92 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL searc
     const timeout = await connectTo({ url: connectionUrl(), schema: tenant })
       .queryCompiled<{ statement_timeout: string }>({ sql: 'SHOW statement_timeout', source: 'query' })
     expect(timeout.rows).toEqual([{ statement_timeout: '7s' }])
+  }, 30_000)
+})
+
+async function createSchemas(schemas: readonly string[]): Promise<void> {
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database } })
+  onTestFinished(async () => {
+    for (const schema of schemas) await admin.execute(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
+    await admin.disconnect()
+  })
+  for (const schema of schemas) await admin.execute(`CREATE SCHEMA ${quoted(schema)}`)
+}
+
+async function createTableWithColumn(schema: string, tableName: string, columnName: string): Promise<void> {
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database } })
+  onTestFinished(async () => {
+    await admin.execute(`DROP TABLE IF EXISTS ${quoted(schema)}.${quoted(tableName)}`)
+    await admin.disconnect()
+  })
+  await admin.execute(`CREATE TABLE ${quoted(schema)}.${quoted(tableName)} (id SERIAL PRIMARY KEY, ${quoted(columnName)} TEXT)`)
+}
+
+async function readSchemaAfterUnqualifiedCreate(connection: Record<string, unknown>, tableName: string) {
+  const db = connectTo(connection)
+  const schema = createSchemaService(db)
+  await schema.createTable(tableName, (table) => {
+    table.id()
+    table.string('written_by_migration')
+  })
+  onTestFinished(async () => {
+    await createSchemaService(connectTo(connection)).dropTable(tableName)
+  })
+  const generated = await holoRuntimeInternals.createSchemaReader(db).readGeneratedSchema()
+  return {
+    generatedColumns: Object.keys(generated.find(table => table.tableName === tableName)?.columns ?? {}),
+    listed: (await schema.getTables()).includes(tableName),
+    columns: (await schema.getColumns(tableName)).map(column => column.name),
+  }
+}
+
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL schema reads follow the schema unqualified statements use', () => {
+  const written = { generatedColumns: ['id', 'written_by_migration'], listed: true, columns: ['id', 'written_by_migration'] }
+
+  it('reads public when the search_path names a missing configured schema before public', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const tenant = `holo_missing_${suffix}`
+
+    expect(await readSchemaAfterUnqualifiedCreate({ url: connectionUrl(`${tenant},public`), schema: tenant }, `holo_posts_${suffix}`))
+      .toEqual(written)
+  }, 30_000)
+
+  it('reads the configured non-public schema and ignores a public table with the same name', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const tenant = `holo_tenant_${suffix}`
+    const tableName = `holo_posts_${suffix}`
+    await createSchemas([tenant])
+    await createTableWithColumn('public', tableName, 'public_decoy')
+
+    expect(await readSchemaAfterUnqualifiedCreate({ url: connectionUrl(), schema: tenant }, tableName)).toEqual(written)
+  }, 30_000)
+
+  it('reads public with the default schema setting', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+
+    expect(await readSchemaAfterUnqualifiedCreate({ url: connectionUrl(), schema: 'public' }, `holo_posts_${suffix}`)).toEqual(written)
+  }, 30_000)
+
+  it('reads the explicit search_path schema and ignores a configured schema table with the same name', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const tenant = `holo_tenant_${suffix}`
+    const explicit = `holo_explicit_${suffix}`
+    const tableName = `holo_posts_${suffix}`
+    await createSchemas([tenant, explicit])
+    await createTableWithColumn(tenant, tableName, 'configured_decoy')
+
+    expect(await readSchemaAfterUnqualifiedCreate({ url: connectionUrl(explicit), schema: tenant }, tableName)).toEqual(written)
+  }, 30_000)
+
+  it('reads a schema-qualified table from its own schema', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const reports = `holo_reports_${suffix}`
+    const tableName = `holo_totals_${suffix}`
+    await createSchemas([reports])
+    await createTableWithColumn(reports, tableName, 'total')
+    await createTableWithColumn('public', tableName, 'public_decoy')
+    const schema = createSchemaService(connectTo({ url: connectionUrl(), schema: 'public' }))
+
+    expect((await schema.getColumns(`${reports}.${tableName}`)).map(column => column.name)).toEqual(['id', 'total'])
   }, 30_000)
 })

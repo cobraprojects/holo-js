@@ -233,11 +233,36 @@ Foreign keys declared inside `createTable()` or added with a new column are now 
 
 [`primary(columns)`](/database/migrations#primary-columns) gives a table a primary key on several columns. Models don't support composite keys, as in Laravel: a model on such a table throws `SchemaError` unless you set its `primaryKey` option to one of the key columns. Query the table with `DB.table()` or use it as a `belongsToMany` pivot. See [Primary keys](/orm/#primary-keys).
 
+### The CLI reads database settings only from `config/database.ts`
+
+`holo migrate`, `migrate:rollback`, `migrate:fresh`, `holo build` and the other database commands use the connection that `config/database.ts` resolves, as the app does and as Laravel's `artisan` does. Before, `DB_DRIVER`, `DB_URL`, `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SCHEMA`, `DB_SSL` and `DB_LOGGING` set in your shell overrode the default connection for those commands only, even where the config hard-coded a value, so a command could migrate a different database than the app used.
+
+A variable now matters only where your config reads it with `env()`. If you set `DB_SSL` or `DB_LOGGING` in your shell or CI, or relied on a shell `DB_*` variable to override a value your config sets literally, read it in `config/database.ts`:
+
+```ts [config/database.ts]
+import { defineDatabaseConfig } from '@holo-js/db'
+import { env } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    main: {
+      driver: 'mysql',
+      database: 'my_app', // [!code --]
+      database: env('DB_DATABASE', 'my_app'), // [!code ++]
+      ssl: env('DB_SSL', false), // [!code ++]
+      logging: env('DB_LOGGING', false), // [!code ++]
+    },
+  },
+})
+```
+
+New projects read `DB_LOGGING` this way, and new MySQL projects also read `DB_SSL`. On PostgreSQL, leave `ssl` out and set `sslmode` in `DB_URL` or `PGSSLMODE`, which the driver reads when `ssl` isn't set.
+
 ### PostgreSQL `schema` sets `search_path`
 
 A PostgreSQL connection's `schema` option now also sets the connection's `search_path`, as Laravel does. Before, Holo read the configured schema but ran unqualified statements in the server's default `search_path`, usually `public`. If you set `schema` to something other than `public` without a `search_path`, `holo migrate` and unqualified queries now create and use tables in that schema. With `schema: 'public'`, as new projects set it, the `search_path` is `public` alone, so move tables that live in a schema named after the database user into `public`. A `search_path` in the URL's `options` parameter or in `PGOPTIONS` still wins over `schema`. See [PostgreSQL schema](/database/#postgresql-schema).
 
-On PostgreSQL, `schema.getColumns()`, `getIndexes()` and `getForeignKeys()` read the configured schema, as `getTables()` already did. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
+On PostgreSQL, `schema.getTables()`, `getColumns()`, `getIndexes()` and `getForeignKeys()` read the schema that unqualified statements use, so they find the tables your migrations created. That is `schema`, or the first existing schema of a `search_path` that wins over it. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
 
 ## Upgrading from 0.5.5 to 0.5.6
 

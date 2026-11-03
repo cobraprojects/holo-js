@@ -76,12 +76,9 @@ import {
   splitCsv,
 } from '../src/parsing'
 import {
-  createEnvRuntimeConfig,
   createRuntimeInvocation,
   getRuntimeEnvironment,
   getRuntimeFailureMessage,
-  mergeRuntimeDatabaseConfig,
-  parseBooleanEnv,
   resolveConfigModuleUrl,
   runRuntimeInvocation,
   withRuntimeEnvironment,
@@ -5986,123 +5983,6 @@ await manager.disconnectAll()
     expect(invalid.stderr).toContain('Model "User" does not define a prunable query.')
   }, 120000)
 
-  it('merges DB environment settings with manifest runtime config', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    await linkWorkspaceDb(projectRoot)
-
-    const built = await runWorkspacePackageBuild('@holo-js/db')
-    expect(built.status).toBe(0)
-
-    await writeProjectFile(projectRoot, 'config/app.ts', `
-export default {
-  paths: {
-    models: 'server/models',
-    migrations: 'server/db/migrations',
-    seeders: 'server/db/seeders',
-    observers: 'server/db/observers',
-    factories: 'server/db/factories',
-    commands: 'server/commands',
-  },
-  models: ['server/models/Session.ts'],
-  migrations: [],
-  seeders: [],
-}
-`)
-    await writeProjectFile(projectRoot, 'config/database.ts', `
-import { defineDatabaseConfig } from '@holo-js/db'
-
-export default defineDatabaseConfig({
-  defaultConnection: 'default',
-  connections: {
-    default: {
-      driver: 'sqlite',
-    },
-  },
-})
-`)
-
-    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
-import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
-
-declare module '@holo-js/db' {
-  interface GeneratedSchemaTables {
-    sessions: typeof sessions
-  }
-}
-
-export const sessions = defineGeneratedTable('sessions', {
-  id: column.id(),
-  expires_at: column.string(),
-})
-
-export const tables = { sessions } as const
-
-registerGeneratedTables(tables)
-`)
-
-    await writeProjectFile(projectRoot, 'server/models/Session.ts', `
-import '../../.holo-js/generated/schema.generated'
-import { defineModel } from '@holo-js/db'
-
-export default defineModel('sessions', {
-  prunable: query => query.where('expires_at', '<', '2026-01-01T00:00:00.000Z'),
-})
-`)
-
-    await writeProjectFile(projectRoot, 'setup.mjs', `
-import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
-import { configureDB, createSchemaService, DB, registerDatabaseDriverFactory, resolveRuntimeConnectionManagerOptions } from '@holo-js/db'
-
-registerDatabaseDriverFactory(sqliteDatabaseDriverFactory)
-
-const manager = resolveRuntimeConnectionManagerOptions({
-  db: {
-    connections: {
-      default: {
-        driver: 'sqlite',
-        url: './env.sqlite',
-      },
-    },
-  },
-})
-
-configureDB(manager)
-await manager.initializeAll()
-
-const schema = createSchemaService(DB.connection())
-await schema.createTable('sessions', (table) => {
-  table.id()
-  table.string('expires_at')
-})
-
-const adapter = manager.connection().getAdapter()
-await adapter.execute("INSERT INTO \\"sessions\\" (\\"id\\", \\"expires_at\\") VALUES (1, '2020-01-01T00:00:00.000Z')")
-await adapter.execute("INSERT INTO \\"sessions\\" (\\"id\\", \\"expires_at\\") VALUES (2, '2027-01-01T00:00:00.000Z')")
-
-await manager.disconnectAll()
-`)
-
-    const setup = runNode(projectRoot, join(projectRoot, 'setup.mjs'))
-    if (setup.status !== 0) {
-      throw new Error(setup.stderr || setup.stdout)
-    }
-
-    const pruned = runCliProcess(projectRoot, ['prune'], {
-      env: {
-        DB_DRIVER: 'sqlite',
-        DB_URL: './env.sqlite',
-      },
-    })
-
-    if (pruned.status !== 0) {
-      throw new Error(pruned.stderr || pruned.stdout)
-    }
-    expect(pruned.stdout).toContain('Session: deleted 1')
-    await expect(readFile(join(projectRoot, 'env.sqlite'))).resolves.toBeDefined()
-    await expect(readFile(join(projectRoot, 'data/database.sqlite'))).rejects.toThrow()
-  }, 120000)
-
   it('rewrites schema.generated.ts after migrate rollback', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -6682,6 +6562,85 @@ process.stdout.write('framework build ran\\n')
       await postgres.drop(databaseName)
     }
   }, 90000)
+
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('migrates, refreshes and writes the Generated schema in the schema an explicit search_path selects when the configured schema is missing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const postgres = isolatedMigrationDatabases[0]
+    const databaseName = `holo_search_path_${randomUUID().replaceAll('-', '')}`
+    const credentials = `${encodeURIComponent(livePostgresServer.user)}:${encodeURIComponent(livePostgresServer.password)}`
+    const searchPath = encodeURIComponent('-c search_path=tenant,public')
+    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}?options=${searchPath}`
+    await writeSchemaSourceProject(projectRoot, { driver: 'postgres', url, schema: 'tenant' })
+    await postgres.create(databaseName)
+    try {
+      const migrated = runCliProcess(projectRoot, ['migrate'])
+      expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+      for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+        expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+        for (const line of generatedUsersColumns.postgres) expect(generated).toContain(line)
+      }
+      const database = postgres.open(databaseName)
+      try {
+        const tables = await database.queryCompiled<{ table_name: string }>({
+          sql: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+          source: 'test',
+        })
+        expect(tables.rows.map(row => row.table_name)).toEqual(['_holo_migrations', 'profiles', 'users'])
+        await database.executeCompiled({ sql: "INSERT INTO public.users (name) VALUES ('before fresh')", source: 'test' })
+      } finally {
+        await database.disconnect()
+      }
+
+      const fresh = runCliProcess(projectRoot, ['migrate:fresh'], { env: { APP_ENV: 'development' } })
+      expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
+      for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+        expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+      }
+      const refreshed = postgres.open(databaseName)
+      try {
+        const users = await refreshed.queryCompiled<{ name: string }>({ sql: 'SELECT name FROM public.users', source: 'test' })
+        expect(users.rows).toEqual([])
+      } finally {
+        await refreshed.disconnect()
+      }
+    } finally {
+      await postgres.drop(databaseName)
+    }
+  }, 90000)
+
+  for (const database of isolatedMigrationDatabases) {
+    it.skipIf(!database.enabled)(`migrates the ${database.driver} database that config/database.ts sets, not a shell DB_DATABASE`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const suffix = randomUUID().replaceAll('-', '')
+      const configuredDatabase = `holo_configured_${suffix}`
+      const shellDatabase = `holo_shell_${suffix}`
+      await writeSchemaSourceProject(projectRoot, database.connection(configuredDatabase))
+      await database.create(configuredDatabase)
+      await database.create(shellDatabase)
+      const tablesOf = async (databaseName: string) => {
+        const connection = database.open(databaseName)
+        try {
+          return await createSchemaService(connection).getTables()
+        } finally {
+          await connection.disconnect()
+        }
+      }
+      try {
+        const migrated = runCliProcess(projectRoot, ['migrate'], { env: { DB_DATABASE: shellDatabase } })
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+          expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
+        }
+        expect(await tablesOf(configuredDatabase)).toEqual(expect.arrayContaining(['_holo_migrations', 'profiles', 'users']))
+        expect(await tablesOf(shellDatabase)).toEqual([])
+      } finally {
+        await database.drop(configuredDatabase)
+        await database.drop(shellDatabase)
+      }
+    }, 90000)
+  }
 
   it('runs plain migrate without @holo-js/cache and fails migrate --isolated with the documented error', async () => {
     const projectRoot = await createTempProject()
@@ -8500,13 +8459,6 @@ export default {
     const notePath = join(projectRoot, 'note.txt')
     await writeTextFile(notePath, 'ready')
 
-    vi.stubEnv('DB_DRIVER', 'postgres')
-    vi.stubEnv('DB_SSL', 'true')
-    vi.stubEnv('DB_LOGGING', 'false')
-    expect(parseBooleanEnv(undefined)).toBeUndefined()
-    expect(parseBooleanEnv('true')).toBe(true)
-    expect(parseBooleanEnv('false')).toBe(false)
-    expect(parseBooleanEnv('wat')).toBeUndefined()
     expect(getRegistryMigrationSlug('2026_01_01_000000_create_users_table')).toBe('create_users_table')
     expect(() => getRegistryMigrationSlug('2026_01_01_000000_!!!')).toThrow()
     expect(hasRegisteredMigrationSlug({
@@ -8541,210 +8493,6 @@ export default {
     expect(resolvePackageManagerDevCommand('yarn')).toBe('yarn dev')
     expect(projectInternals.resolveNamedExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
     expect(projectInternals.resolveNamedExportEntry('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
-    expect(createEnvRuntimeConfig()).toMatchObject({
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'postgres',
-            ssl: true,
-            logging: false,
-          },
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig(undefined, createEnvRuntimeConfig())).toEqual(
-      createEnvRuntimeConfig().db,
-    )
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: 'postgresql://manifest',
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'postgres',
-            url: 'postgresql://env',
-            host: undefined,
-            port: '5432',
-            username: 'env-user',
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: true,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          url: 'postgresql://env',
-          driver: 'postgres',
-          host: undefined,
-          port: '5432',
-          username: 'env-user',
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: true,
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({}, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './env.sqlite',
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: true,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: 'sqlite',
-          url: './env.sqlite',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: true,
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: 'secret',
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-          password: 'secret',
-        },
-      },
-    })
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: 'sqlite',
-            url: './env.sqlite',
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: undefined,
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: false,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './env.sqlite',
-          host: undefined,
-          port: undefined,
-          username: undefined,
-          password: undefined,
-          database: undefined,
-          schema: undefined,
-          ssl: undefined,
-          logging: false,
-        },
-      },
-    })
     expect(resolveConfigModuleUrl()).toContain('/config/dist/index.mjs')
     expect(resolveConfigModuleUrl(specifier => `mock:${specifier}`)).toBe('mock:@holo-js/config')
     expect(resolveConfigModuleUrl(null as never)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
@@ -10314,45 +10062,6 @@ export default defineAbility('reports.export', () => true)
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"posts": {')
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"reports.export": {')
   }, 30000)
-
-  it('preserves manifest connection fields when env overrides are partial', () => {
-    expect(mergeRuntimeDatabaseConfig({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-        },
-      },
-    }, {
-      db: {
-        defaultConnection: 'default',
-        connections: {
-          default: {
-            driver: undefined,
-            url: undefined,
-            host: undefined,
-            port: undefined,
-            username: undefined,
-            password: 'secret',
-            database: undefined,
-            schema: undefined,
-            ssl: undefined,
-            logging: undefined,
-          },
-        },
-      },
-    })).toEqual({
-      defaultConnection: 'primary',
-      connections: {
-        primary: {
-          driver: 'sqlite',
-          url: './manifest.sqlite',
-          password: 'secret',
-        },
-      },
-    })
-  })
 
   it('does not touch generated ownership or registry files when prepare output is unchanged', async () => {
     const projectRoot = await createTempProject()

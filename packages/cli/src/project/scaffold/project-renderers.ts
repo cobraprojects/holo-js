@@ -499,6 +499,7 @@ export function renderScaffoldDatabaseConfig(
       '    main: {',
       "      driver: env('DB_DRIVER', 'sqlite'),",
       '      url: env(\'DB_URL\', \'./storage/database.sqlite\'),',
+      '      logging: env(\'DB_LOGGING\', false),',
       '    },',
       '  },',
       '})',
@@ -526,6 +527,8 @@ export function renderScaffoldDatabaseConfig(
     `      username: env('DB_USERNAME', '${username}'),`,
     '      password: env(\'DB_PASSWORD\'),',
     `      database: env('DB_DATABASE', '${packageName}'),`,
+    ...(options.databaseDriver === 'mysql' ? ['      ssl: env(\'DB_SSL\', false),'] : []),
+    '      logging: env(\'DB_LOGGING\', false),',
     ...(schemaLine ? [
       schemaLine,
       `      max: env('DB_POOL_MAX', ${postgresBudgetDefaults.DB_POOL_MAX}),`,
