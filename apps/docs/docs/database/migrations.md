@@ -976,6 +976,10 @@ When you don't pass a name, Holo builds one from the table and columns: `comment
 
 On PostgreSQL and SQLite, index names are shared by every table in a schema. If another table already has an index with the name, creating the index fails, as in Laravel, instead of skipping it. This happens after [renameTable()](#renametable), because the renamed table's indexes keep their names: pass a different name to the new table's index. Inside `createTable()`, the failure rolls back and creates no table. On MySQL, index names belong to their table, so this can't happen.
 
+::: warning Upgrading from 0.5.x
+Before 0.6.0, on SQLite and PostgreSQL, Holo skipped an index whose name another table already used, so the new table had no such index. Creating it now raises an error, as in Laravel. If a migration that hasn't run yet creates a table under a name you renamed away, give its indexes names of their own.
+:::
+
 ### dropIndex()
 
 Drops an index by name, or by its columns. Available inside `table()`. A name that doesn't exist raises an error and changes nothing.
