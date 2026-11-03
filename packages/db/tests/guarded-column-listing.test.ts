@@ -160,5 +160,33 @@ describe('guarded model column listing', () => {
 
       expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
     })
+
+    it.skipIf(skip)('sees a column another connection added once its transaction commits', async () => {
+      const { tableName, maintenance, SharedEvent } = await openSharedDatabase(driver)
+
+      await maintenance.transaction(async (transaction) => {
+        await createSchemaService(transaction).table(tableName, (table) => {
+          table.string('summary').nullable()
+        })
+        await expect(SharedEvent.create({ summary: 'before' })).rejects.toThrow('Column "summary" is not writable')
+      })
+
+      expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
+    })
+
+    it.skipIf(skip)('waits for the enclosing transaction to commit, not a released savepoint', async () => {
+      const { tableName, maintenance, SharedEvent } = await openSharedDatabase(driver)
+
+      await maintenance.transaction(async (transaction) => {
+        await transaction.transaction(async (savepoint) => {
+          await createSchemaService(savepoint).table(tableName, (table) => {
+            table.string('summary').nullable()
+          })
+        })
+        await expect(SharedEvent.create({ summary: 'before' })).rejects.toThrow('Column "summary" is not writable')
+      })
+
+      expect((await SharedEvent.create({ summary: 'after' })).get('summary')).toBe('after')
+    })
   })
 })
