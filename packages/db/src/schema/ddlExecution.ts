@@ -9,7 +9,7 @@ export async function executeStatements(connection: DatabaseContext, statements:
       await connection.executeCompiled(statement)
     }
   } finally {
-    forgetColumnListings(connection.getConnectionName())
+    forgetColumnListings(connection)
   }
 }
 
