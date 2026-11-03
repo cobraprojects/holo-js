@@ -3,7 +3,9 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const nextFixtureRoot = resolve(import.meta.dirname, '../../../apps/blog-next')
+const repoRoot = resolve(import.meta.dirname, '../../..')
+const nextFixtureRoot = join(repoRoot, 'apps/blog-next')
+const holoCli = join(repoRoot, 'packages/cli/dist/bin/holo.mjs')
 
 type CommandResult = {
   readonly stdout: string
@@ -49,8 +51,9 @@ async function withFixtureScript<T>(
 
 describe('@holo-js/core authorization real-world feature integration', () => {
   it('uses the real auth user and the real Post model facade without fake actors', async () => {
-    runFixtureCommand('bun', ['run', 'prepare'])
-    runFixtureCommand('bunx', ['holo', 'migrate:fresh', '--seed', '--force'])
+    for (const holoArgs of [['key:generate'], ['install', 'broadcast'], ['prepare'], ['migrate:fresh', '--seed', '--force']]) {
+      runFixtureCommand(process.execPath, [holoCli, ...holoArgs])
+    }
 
     const script = `
 import auth, { authRuntimeInternals, configureAuthRuntime } from '@holo-js/auth'
