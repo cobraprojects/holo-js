@@ -50,7 +50,7 @@ await DB.table('tags').insert([
 
 ### insertGetId()
 
-`insertGetId()` inserts one row and returns its auto-incrementing ID:
+`insertGetId()` inserts one row and returns its auto-incrementing ID. When the table's definition describes the key as an integer, the ID is a number on every database, as its reads return it:
 
 ```ts
 const userId = await DB.table('users').insertGetId({
@@ -156,7 +156,7 @@ An `update()` or `delete()` without a `where` clause affects every row in the ta
 
 ### Update JSON fields
 
-Use `->` in the key to set one value inside a JSON column, leaving the rest of the document alone:
+Use `->` in the key to set one value inside a JSON column, leaving the rest of the document alone. On SQLite, which stores JSON as text, a `text` column works too, as in Laravel. On PostgreSQL and MySQL the column must be a JSON column, or Holo throws a `SecurityError`.
 
 ```ts
 await DB.table('users')

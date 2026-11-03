@@ -96,6 +96,8 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getGeneratedTableDefinition } from '../schema/generated'
+import { storesJson } from '../schema/normalization'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
@@ -637,7 +639,7 @@ export class TableQueryBuilder<
 
   private assertJsonRootColumn(column: string, methodName: string): void {
     const columnDefinition = this.getSourceColumnDefinition(column)
-    if (columnDefinition && columnDefinition.kind !== 'json') {
+    if (columnDefinition && !storesJson(this.connection.getDriver() as SchemaDialectName, columnDefinition)) {
       throw new SecurityError(`${methodName}() requires "${column}" to be a JSON column.`)
     }
   }

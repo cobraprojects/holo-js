@@ -16,7 +16,7 @@ import {
 } from '../cache'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
-import { normalizeDialectReadValue } from '../schema/normalization'
+import { normalizeDialectReadValue, storesJson } from '../schema/normalization'
 import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
@@ -1830,7 +1830,7 @@ export class ModelRepository<
       }
 
       if (key.includes('->')) {
-        if (column.kind !== 'json') {
+        if (!storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
           throw new SecurityError(`Column "${columnName}" must be a JSON column to support nested JSON updates.`)
         }
 

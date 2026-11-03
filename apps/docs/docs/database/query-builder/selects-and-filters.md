@@ -865,7 +865,7 @@ const tasks = await DB.table('tasks').where('urgent', true).orWhereTodayOrAfter(
 
 ## JSON columns
 
-Reach into a JSON column with `->` between keys. This works in `where()` and the dedicated JSON methods.
+Reach into a JSON column with `->` between keys. This works in `where()` and the dedicated JSON methods. On SQLite, which stores JSON as text, a `text` column works too, as in Laravel. On PostgreSQL and MySQL the column must be a JSON column, or Holo throws a `SecurityError`.
 
 ```ts
 const euUsers = await DB.table('users')

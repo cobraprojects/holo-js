@@ -67,6 +67,8 @@ function splitSchemaTable(tableName: string): { readonly schemaName: string, rea
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  protected override readonly dialect = 'sqlite'
+
   override compileTableSchemaLookup(tableName: string): CompiledStatement | undefined {
     if (tableName.includes('.')) return undefined
 
