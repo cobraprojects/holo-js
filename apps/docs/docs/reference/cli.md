@@ -468,7 +468,7 @@ npx holo make:channel orders.{orderId}
 
 Run every [migration](/database/migrations) that hasn't run yet, then write the generated schema types from the database. A skipped `--isolated` run leaves them unchanged. `migrate:rollback` and `migrate:fresh` write them too.
 
-When the default connection's database doesn't exist, `migrate` and `migrate:fresh` create it: the SQLite file and its directory, or the PostgreSQL or MySQL database. They are the only commands that create a database. `holo seed` and other commands fail on a missing one.
+When the database of the default connection, or of another connection a migration uses, doesn't exist, `migrate` and `migrate:fresh` create it the first time they use it: the SQLite file and its directory, or the PostgreSQL or MySQL database. They are the only commands that create a database. `holo seed` and other commands fail on a missing one.
 
 ```bash
 npx holo migrate [--step <n>] [--isolated]

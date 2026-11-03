@@ -2,8 +2,13 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { registerDatabaseDriverFactory, type DatabaseDriverFactory, type RuntimeDatabaseConfig } from '@holo-js/db'
+import { createDatabasesOnFirstUse } from './database-creation'
 
-export async function loadProjectDatabaseDrivers(projectRoot: string, config: RuntimeDatabaseConfig | undefined): Promise<readonly DatabaseDriverFactory[]> {
+export async function loadProjectDatabaseDrivers(
+  projectRoot: string,
+  config: RuntimeDatabaseConfig | undefined,
+  options: { readonly createMissingDatabases?: boolean } = {},
+): Promise<readonly DatabaseDriverFactory[]> {
   const packageByDriver = {
     sqlite: { packageName: '@holo-js/db-sqlite', factoryExport: 'sqliteDatabaseDriverFactory' },
     postgres: { packageName: '@holo-js/db-postgres', factoryExport: 'postgresDatabaseDriverFactory' },
@@ -28,8 +33,9 @@ export async function loadProjectDatabaseDrivers(projectRoot: string, config: Ru
   for (const driver of drivers) {
     const { packageName, factoryExport } = packageByDriver[driver]
     const module = await import(pathToFileURL(require.resolve(packageName)).href) as Record<string, unknown>
-    const factory = module[factoryExport] as DatabaseDriverFactory | undefined
-    if (!factory) throw new Error(`Database driver package ${packageName} does not export ${factoryExport}.`)
+    const driverFactory = module[factoryExport] as DatabaseDriverFactory | undefined
+    if (!driverFactory) throw new Error(`Database driver package ${packageName} does not export ${factoryExport}.`)
+    const factory = options.createMissingDatabases ? createDatabasesOnFirstUse(driverFactory) : driverFactory
     registerDatabaseDriverFactory(factory)
     factories.push(factory)
   }

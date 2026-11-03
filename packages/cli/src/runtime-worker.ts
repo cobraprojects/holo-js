@@ -196,12 +196,6 @@ async function isDatabaseMissing(connection: DatabaseContext): Promise<boolean> 
   return typeof adapter.databaseExists === 'function' && !await adapter.databaseExists()
 }
 
-async function createMissingDatabase(connection: DatabaseContext): Promise<void> {
-  if (await isDatabaseMissing(connection)) {
-    await connection.getAdapter().ensureDatabaseExists?.()
-  }
-}
-
 async function readDatabaseSchema(connection: DatabaseContext): Promise<TableDefinition[]> {
   try {
     if (await isDatabaseMissing(connection)) {
@@ -337,7 +331,9 @@ const applicationRuntime = payload.kind === 'seed' || payload.kind === 'media:re
   : undefined
 const manager = applicationRuntime?.manager ?? resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
 if (!applicationRuntime) {
-  await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db)
+  await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db, {
+    createMissingDatabases: payload.kind === 'migrate' || payload.kind === 'fresh',
+  })
   configureDB(manager)
 }
 const writeProjectGeneratedSchema = () => writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
@@ -363,9 +359,6 @@ const migrations = isSchemaChangingKind(payload.kind)
   : []
 
 try {
-  if (payload.kind === 'migrate' || payload.kind === 'fresh') {
-    await createMissingDatabase(manager.connection())
-  }
   if (!applicationRuntime && payload.kind !== 'generate-schema') {
     await manager.initializeAll()
   }

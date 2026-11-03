@@ -1115,6 +1115,37 @@ const generatedUsersColumns = {
   ],
 } as const
 
+async function writeAnalyticsConnectionProject(
+  projectRoot: string,
+  analytics: Readonly<Record<string, string | number>>,
+): Promise<void> {
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './storage/database.sqlite' },
+    analytics: ${JSON.stringify(analytics)},
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_events.ts', `
+import { DB, createSchemaService, defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    await createSchemaService(DB.connection('analytics')).createTable('events', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down() {
+    await createSchemaService(DB.connection('analytics')).dropTable('events')
+  },
+})
+`)
+}
+
 async function writeSchemaSourceProject(
   projectRoot: string,
   connection: Readonly<Record<string, string | number>>,
@@ -6327,6 +6358,31 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
       expect(generatedTableNames(generated)).toEqual(['profiles', 'users'])
     }
   }, 60000)
+
+  for (const database of schemaSourceDatabases) {
+    it.skipIf(!database.enabled).each(['migrate', 'migrate:fresh'])(`creates the missing ${database.driver} database of a second connection a migration uses on %s`, async (command) => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const databaseName = database.driver === 'sqlite'
+        ? 'storage/analytics/events'
+        : `holo_analytics_${randomUUID().replaceAll('-', '')}`
+      await writeAnalyticsConnectionProject(projectRoot, database.connection(databaseName))
+      try {
+        const migrated = runCliProcess(projectRoot, [command], { env: { APP_ENV: 'development' } })
+
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        expect(migrated.stdout).toContain('2026_01_01_000001_create_events')
+        const connection = database.open(databaseName, projectRoot)
+        try {
+          await expect(createSchemaService(connection).hasTable('events')).resolves.toBe(true)
+        } finally {
+          await connection.disconnect()
+        }
+      } finally {
+        await database.drop(databaseName)
+      }
+    }, 60000)
+  }
 
   it.each([
     { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
