@@ -3,7 +3,7 @@ import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
-import type { AnyColumnDefinition, ColumnDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   protected override getDialectLabel(): string {
@@ -34,6 +34,16 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
 
   compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
     return [this.compileDropIndex(tableName, fromIndexName), this.compileCreateIndex(tableName, index)]
+  }
+
+  compileTableForeignKey(
+    tableName: string,
+    columnName: string,
+    reference: ForeignKeyReference,
+    constraintName?: string,
+  ): { name: string, definition: string } {
+    const name = this.resolveForeignKeyName(tableName, columnName, constraintName)
+    return { name, definition: this.compileForeignKeyConstraint(columnName, reference, name) }
   }
 
   compileRebuildTable(
