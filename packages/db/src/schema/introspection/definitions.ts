@@ -10,6 +10,7 @@ const BLOB_TYPES = new Set(['blob', 'tinyblob', 'mediumblob', 'longblob', 'bytea
 const REAL_TYPES = new Set(['real', 'double', 'double precision', 'float', 'float4', 'float8'])
 const BIG_INTEGER_TYPES = new Set(['bigint', 'bigserial', 'int8'])
 const INTEGER_TYPES = new Set(['integer', 'int', 'smallint', 'mediumint', 'tinyint', 'serial', 'smallserial', 'int2', 'int4'])
+const NUMBER_KINDS: ReadonlySet<LogicalColumnKind> = new Set(['id', 'integer', 'bigInteger', 'real'])
 
 function withoutLength(type: string): string {
   return type.replace(/\s*\([^)]*\)/, '').trim()
@@ -53,17 +54,24 @@ function readVectorDimensions(fullType: string): number | undefined {
   return match ? Number(match[1]) : undefined
 }
 
-function coerceDefaultValue(kind: LogicalColumnKind, value: string | number | boolean | null): unknown {
-  if (kind === 'boolean' && (typeof value === 'number' || typeof value === 'string')) {
-    return ['1', 't', 'true'].includes(String(value).toLowerCase())
+function readNumericLiteral(text: string): number | string {
+  const value = Number(text)
+  return text.trim() !== '' && Number.isFinite(value) ? value : text
+}
+
+function readJsonLiteral(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
   }
-  if (kind === 'json' && typeof value === 'string') {
-    try {
-      return JSON.parse(value) as unknown
-    } catch {
-      return value
-    }
-  }
+}
+
+function coerceDefaultValue(kind: LogicalColumnKind, value: string | boolean | null): unknown {
+  if (typeof value !== 'string') return value
+  if (kind === 'boolean') return ['1', 't', 'true'].includes(value.toLowerCase())
+  if (NUMBER_KINDS.has(kind)) return readNumericLiteral(value)
+  if (kind === 'json') return readJsonLiteral(value)
   return value
 }
 
