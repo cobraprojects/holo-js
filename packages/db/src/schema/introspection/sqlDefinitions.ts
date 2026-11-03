@@ -73,6 +73,13 @@ export function splitTableDefinitions(createTableSql: string): string[] {
   return splitCreateTableSql(createTableSql)?.definitions ?? []
 }
 
+const CREATE_INDEX_NAME_PATTERN = new RegExp(`^(CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+)(?:${IDENTIFIER_PATTERN})`, 'i')
+
+export function withIndexName(createIndexSql: string, quotedIndexName: string): string | undefined {
+  if (!CREATE_INDEX_NAME_PATTERN.test(createIndexSql)) return undefined
+  return createIndexSql.replace(CREATE_INDEX_NAME_PATTERN, (_match, prefix: string) => `${prefix}${quotedIndexName}`)
+}
+
 const PRIMARY_KEY_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?PRIMARY\s+KEY\b/i
 const TABLE_CONSTRAINT_PATTERN = /^(?:CONSTRAINT\s+\S+\s+)?(?:PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY)\b/i
 const LEADING_IDENTIFIER_PATTERN = new RegExp(`^(${IDENTIFIER_PATTERN})`, 'i')

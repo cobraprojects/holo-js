@@ -861,6 +861,21 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await expect(db.table(name).insert({ email: 'same@example.com' })).rejects.toThrow()
     })
 
+    it.runIf(driver === 'sqlite')('keeps the collation and sort order of a unique index when renaming it', async () => {
+      const { db, schema, table, adapter } = await openDatabase(driver)
+      const name = table.tableName
+      const original = `${name}_name_nocase`
+      const renamed = `${name}_name_renamed`
+      await adapter.execute(`CREATE UNIQUE INDEX "${original}" ON "${name}" ("name" COLLATE NOCASE DESC)`)
+      await db.table(table).insert({ id: 1, name: 'Hello' })
+
+      await schema.table(name, table => { table.renameIndex(original, renamed) })
+
+      expect((await schema.getIndexes(name)).map(index => index.name)).toEqual([renamed])
+      await expect(db.table(table).insert({ id: 2, name: 'hello' })).rejects.toThrow()
+      expect(await db.table(table).count()).toBe(1)
+    })
+
     it.runIf(driver === 'sqlite')('refuses to rename a partial index instead of recreating it without its condition', async () => {
       const { db, schema, table, adapter } = await openDatabase(driver)
       const name = table.tableName
