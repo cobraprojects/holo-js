@@ -1,8 +1,28 @@
 import { SchemaError } from '../core/errors'
-import type { TableDefinition } from './types'
+import type { AnyColumnDefinition, TableDefinition } from './types'
+
+function listDeclaredPrimaryKeyColumns(columns: Readonly<Record<string, AnyColumnDefinition>>): string[] {
+  return Object.values(columns).filter(column => column.primaryKey).map(column => column.name)
+}
+
+export function listTablePrimaryKeyColumns(table: TableDefinition): readonly string[] {
+  return table.primaryKeyColumns ?? listDeclaredPrimaryKeyColumns(table.columns)
+}
+
+export function resolvePrimaryKeyColumnOrder(
+  tableName: string,
+  columns: Readonly<Record<string, AnyColumnDefinition>>,
+  keyColumns: readonly string[],
+): readonly string[] | undefined {
+  const declared = listDeclaredPrimaryKeyColumns(columns)
+  if (keyColumns.length !== declared.length || keyColumns.some(column => !declared.includes(column))) {
+    throw new SchemaError(`Primary key columns (${keyColumns.join(', ')}) of table "${tableName}" must be exactly its primary-key columns (${declared.join(', ')}).`)
+  }
+  return keyColumns.every((column, position) => column === declared[position]) ? undefined : Object.freeze([...keyColumns])
+}
 
 export function resolveTablePrimaryKeyColumns(table: TableDefinition | undefined): readonly [string, ...string[]] {
-  const [first, ...rest] = Object.values(table?.columns ?? {}).filter(column => column.primaryKey).map(column => column.name)
+  const [first, ...rest] = table ? listTablePrimaryKeyColumns(table) : []
   return first === undefined ? ['id'] : [first, ...rest]
 }
 

@@ -1,5 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement, UniqueBacking } from './ddl'
@@ -124,8 +125,8 @@ export abstract class SQLSchemaCompiler {
   }
 
   private resolveTablePrimaryKeyConstraint(table: TableDefinition): { table: TableDefinition, primaryKeyConstraint?: string } {
-    const primaryKeyColumns = Object.values(table.columns).filter(column => column.primaryKey)
-    const [onlyPrimaryKeyColumn, ...otherPrimaryKeyColumns] = primaryKeyColumns
+    const primaryKeyColumns = listTablePrimaryKeyColumns(table)
+    const [onlyPrimaryKeyColumn, ...otherPrimaryKeyColumns] = primaryKeyColumns.flatMap(name => table.columns[name] ?? [])
     if (onlyPrimaryKeyColumn && otherPrimaryKeyColumns.length === 0 && this.keepsPrimaryKeyInline(onlyPrimaryKeyColumn)) {
       return { table }
     }
@@ -136,7 +137,7 @@ export abstract class SQLSchemaCompiler {
     const columns = Object.fromEntries(Object.entries(table.columns).map(([name, column]) => [name, { ...column, primaryKey: false }]))
     return {
       table: { ...table, columns },
-      primaryKeyConstraint: this.compilePrimaryKeyConstraint(primaryKeyColumns.map(column => column.name), table.primaryKeyName),
+      primaryKeyConstraint: this.compilePrimaryKeyConstraint(primaryKeyColumns, table.primaryKeyName),
     }
   }
 

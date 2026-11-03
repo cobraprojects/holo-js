@@ -49,6 +49,7 @@ export interface DatabaseTableStructure {
   readonly tableName: string
   readonly schema?: string
   readonly columns: readonly DatabaseColumnStructure[]
+  readonly primaryKeyColumns: readonly string[]
   readonly indexes: readonly DatabaseIndexStructure[]
   readonly foreignKeys: readonly DatabaseForeignKeyStructure[]
   readonly enumChecks: readonly DatabaseEnumCheckStructure[]

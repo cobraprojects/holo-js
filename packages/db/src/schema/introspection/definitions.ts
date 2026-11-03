@@ -1,6 +1,7 @@
 import { createGeneratedUniqueIndexName } from '../generatedNames'
 import { splitTablePath } from '../identifiers'
 import { SQLITE_AUTOINDEX_PREFIX } from './sqlite'
+import { resolvePrimaryKeyColumnOrder } from '../tablePrimaryKey'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableColumnsShape, TableDefinition, TableIndexDefinition } from '../types'
 import type { DatabaseColumnStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, SchemaReadingDialect } from './types'
 
@@ -141,11 +142,13 @@ export function toTableDefinition(structure: DatabaseTableStructure): TableDefin
   const indexes: TableIndexDefinition[] = structure.indexes
     .filter(index => index.representable && !index.primary && !uniqueIndexes.includes(index))
     .map(index => ({ name: index.name, columns: [...index.columns], unique: index.unique }))
+  const primaryKeyColumns = resolvePrimaryKeyColumnOrder(structure.tableName, columns, structure.primaryKeyColumns)
 
   return {
     kind: 'table',
     tableName: structure.tableName,
     columns,
     indexes,
+    ...(primaryKeyColumns ? { primaryKeyColumns } : {}),
   }
 }

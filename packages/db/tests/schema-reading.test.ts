@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { holoRuntimeInternals, renderGeneratedSchemaModule, SchemaError } from '../src'
+import { clearGeneratedTables, defineModel, holoRuntimeInternals, registerGeneratedTables, renderGeneratedSchemaModule, SchemaError } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -328,6 +328,40 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect(definition.columns.email?.unique).toBe(true)
       expect(definition.columns.customer_id?.references).toEqual({ table: customers, column: 'id', constraintName: `${tenant}_${orders}_customer_id_foreign` })
       expect((await reader.readGeneratedSchema()).map(table => table.tableName).sort()).toEqual([customers, orders].sort())
+    })
+
+    it.runIf(driver === 'postgres')('reads a primary key with INCLUDE columns as its key column and resolves its model', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_covering_pk')
+      onTestFinished(async () => {
+        clearGeneratedTables()
+        await schema.dropTable(name)
+      })
+      await db.executeCompiled({ sql: `CREATE TABLE "${name}" ("id" integer NOT NULL, "email" varchar(255) NOT NULL, PRIMARY KEY ("id") INCLUDE ("email"))`, source: 'schema' })
+      await db.table(name).insert([{ id: 1, email: 'first@example.com' }, { id: 2, email: 'second@example.com' }])
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+      registerGeneratedTables({ [name]: definition })
+
+      expect([definition.columns.id?.primaryKey, definition.columns.email?.primaryKey]).toEqual([true, false])
+      expect((await defineModel(name, { timestamps: false }).find(2))?.get('email')).toBe('second@example.com')
+    })
+
+    it.runIf(driver === 'postgres')('reads a unique index with INCLUDE columns as a unique key column', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_covering_unique')
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.string('code')
+        table.string('label')
+      })
+      await db.executeCompiled({ sql: `CREATE UNIQUE INDEX "${name}_code_unique" ON "${name}" ("code") INCLUDE ("label")`, source: 'schema' })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect([definition.columns.code?.unique, definition.columns.label?.unique]).toEqual([true, false])
+      expect(definition.indexes).toEqual([])
     })
 
     it.runIf(driver === 'postgres')('round-trips unique columns of a schema-qualified table through the generated schema as unique()', async () => {

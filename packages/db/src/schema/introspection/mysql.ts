@@ -81,6 +81,8 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
       const indexes = await introspect<IndexRow>(`SELECT index_name AS name, non_unique AS non_unique, column_name AS column_name, sub_part AS sub_part, expression AS expression FROM information_schema.statistics WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY index_name, seq_in_index`, bindings, `schema:introspect:indexes:${tableName}`)
       const foreignKeys = await introspect<ForeignKeyRow>(`SELECT kcu.constraint_name AS name, kcu.table_schema AS table_schema, kcu.referenced_table_schema AS referenced_schema, kcu.referenced_table_name AS table_name, kcu.column_name AS from_column, kcu.referenced_column_name AS to_column, rc.update_rule AS on_update, rc.delete_rule AS on_delete FROM information_schema.key_column_usage kcu JOIN information_schema.referential_constraints rc ON rc.constraint_name = kcu.constraint_name AND rc.constraint_schema = kcu.table_schema WHERE kcu.table_schema = ${SCHEMA_BINDING} AND kcu.table_name = ? AND kcu.referenced_table_name IS NOT NULL ORDER BY kcu.constraint_name, kcu.ordinal_position`, bindings, `schema:introspect:foreignKeys:${tableName}`)
 
+      const groupedIndexes = groupIndexes(indexes.rows)
+
       return {
         dialect: 'mysql',
         tableName,
@@ -97,7 +99,8 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
           autoIncrement: /\bauto_increment\b/i.test(row.extra),
           computed: /\b(?:VIRTUAL|STORED) GENERATED\b/i.test(row.extra),
         })),
-        indexes: groupIndexes(indexes.rows),
+        primaryKeyColumns: groupedIndexes.find(index => index.primary)?.columns ?? [],
+        indexes: groupedIndexes,
         foreignKeys: foreignKeys.rows.map(row => ({
           name: row.name,
           table: row.referenced_schema === row.table_schema ? row.table_name : `${row.referenced_schema}.${row.table_name}`,

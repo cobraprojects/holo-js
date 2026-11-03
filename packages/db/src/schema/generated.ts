@@ -1,6 +1,6 @@
 import { defineTable } from './defineTable'
 import type { ColumnInput } from './columns'
-import type { BoundTableDefinition } from './defineTable'
+import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
 
@@ -36,7 +36,7 @@ export function defineGeneratedTable<
 >(
   tableName: TName,
   columns: TColumns,
-  options: { indexes?: readonly TableIndexDefinition[] } = {},
+  options: Pick<DefineTableOptions, 'indexes' | 'primaryKeyColumns'> = {},
 ): BoundTableDefinition<TName, TColumns> {
   return defineTable(tableName, columns, options)
 }
@@ -225,6 +225,14 @@ function renderIndex(index: TableIndexDefinition): string {
   return `{ columns: ${JSON.stringify([...index.columns])}, unique: ${index.unique}${index.name ? `, name: ${JSON.stringify(index.name)}` : ''} }`
 }
 
+function renderTableOptions(table: TableDefinition): string {
+  const options = [
+    ...(table.indexes.length > 0 ? [`indexes: [${table.indexes.map(renderIndex).join(', ')}]`] : []),
+    ...(table.primaryKeyColumns ? [`primaryKeyColumns: ${JSON.stringify([...table.primaryKeyColumns])}`] : []),
+  ]
+  return options.length > 0 ? `, { ${options.join(', ')} }` : ''
+}
+
 function buildGeneratedSchemaModuleLines(
   tables: readonly TableDefinition[],
   options: { withTypeAugmentation: boolean },
@@ -250,7 +258,7 @@ function buildGeneratedSchemaModuleLines(
     for (const columnDefinition of Object.values(table.columns)) {
       declarations.push(`  ${JSON.stringify(columnDefinition.name)}: ${renderColumnBuilder(table, columnDefinition)},`)
     }
-    declarations.push(`}${table.indexes.length > 0 ? `, { indexes: [${table.indexes.map(renderIndex).join(', ')}] }` : ''})`)
+    declarations.push(`}${renderTableOptions(table)})`)
     declarations.push('')
   }
 

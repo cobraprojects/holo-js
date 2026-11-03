@@ -9,6 +9,7 @@ import { resolveDialectComparisonColumnType, type SchemaDialectName } from './ty
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
 import { splitTablePath } from './identifiers'
+import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
 
 export interface SchemaColumnMismatch {
   readonly column: string
@@ -275,7 +276,7 @@ function isConstraintIndex(table: TableDefinition, index: IntrospectedIndex): bo
   if (!index.unique || table.indexes.some(expected => normalizeExpectedIndex(table, expected).name === index.name)) return false
   const { table: tableName } = splitTablePath(table.tableName)
   const sqliteAutoindexPrefix = `${SQLITE_AUTOINDEX_PREFIX}${tableName}_`
-  const primaryKeys = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
+  const primaryKeys = listTablePrimaryKeyColumns(table)
   const matchesPrimaryKey = index.columns.length === primaryKeys.length && index.columns.every((column, position) => column === primaryKeys[position])
   if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${tableName}_pkey` || index.name.startsWith(sqliteAutoindexPrefix))) return true
   const [columnName] = index.columns

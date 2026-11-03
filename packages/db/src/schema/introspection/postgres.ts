@@ -7,7 +7,7 @@ import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
-type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, is_computed: boolean, primary_key: boolean }
+type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, is_computed: boolean, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 type CheckRow = { name: string, column_name: string, definition: string }
@@ -28,7 +28,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_value,
   a.attidentity <> '' AS is_identity,
   a.attgenerated <> '' AS is_computed,
-  EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = t.oid AND i.indisprimary AND a.attnum = ANY (i.indkey)) AS primary_key
+  (SELECT array_position(con.conkey, a.attnum) FROM pg_catalog.pg_constraint con WHERE con.conrelid = t.oid AND con.contype = 'p') AS primary_key_position
   ${TABLE_RELATION}
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -41,7 +41,7 @@ const INDEXES_SQL = `SELECT ic.relname AS name,
   i.indisprimary AS is_primary,
   EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u', 'x')) AS is_constraint,
   (i.indexprs IS NULL AND i.indpred IS NULL) AS representable,
-  ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.position) AS columns
+  ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum WHERE k.position <= i.indnkeyatts ORDER BY k.position) AS columns
   FROM pg_catalog.pg_index i
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
@@ -136,11 +136,15 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
             notNull: row.not_null,
             defaultExpression: row.default_value,
             default: autoIncrement ? { kind: 'none' } : parseSqlDefault(row.default_value),
-            primaryKey: row.primary_key,
+            primaryKey: row.primary_key_position !== null,
             autoIncrement,
             computed: row.is_computed,
           }
         }),
+        primaryKeyColumns: columns.rows
+          .filter(row => row.primary_key_position !== null)
+          .sort((left, right) => Number(left.primary_key_position) - Number(right.primary_key_position))
+          .map(row => row.name),
         indexes: indexes.rows.map(row => ({
           name: row.name,
           unique: row.is_unique,
