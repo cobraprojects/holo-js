@@ -5,7 +5,7 @@ import { readEnumChecks, readForeignKeys, readStringLength, type IndexKeyColumn 
 import { parseCreateTableSql, type ForeignKeyConstraint } from './sqliteDefinitionGrammar'
 import { readNamesInSql, sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
-import type { DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
+import type { DatabaseColumnDefault, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
 type TableSqlRow = { name: string, sql: string | null }
@@ -26,7 +26,15 @@ export type SQLiteDependentObject = { schema: string, type: 'view' | 'trigger', 
 type SchemaObjectRow = SQLiteDependentObject & { tbl_name: string }
 
 const MAIN_SCHEMA = 'main'
+const BARE_IDENTIFIER_PATTERN = /^[A-Za-z_][\w$]*$/
 const TEMP_SCHEMA = 'temp'
+
+function readColumnDefault(storedDefault: string | null): DatabaseColumnDefault {
+  const columnDefault = parseSqlDefault(storedDefault)
+  return columnDefault.kind === 'expression' && BARE_IDENTIFIER_PATTERN.test(columnDefault.sql)
+    ? { kind: 'literal', value: columnDefault.sql }
+    : columnDefault
+}
 
 function splitTableName(tableName: string): { schema: string, table: string } {
   const { schema = MAIN_SCHEMA, table } = splitTablePath(tableName)
@@ -248,7 +256,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           length: readStringLength(row.type),
           notNull: row.notnull === 1,
           defaultExpression: row.dflt_value,
-          default: parseSqlDefault(row.dflt_value),
+          default: readColumnDefault(row.dflt_value),
           primaryKey: row.pk > 0,
           autoIncrement: row.name === rowIdAlias,
           computed: row.hidden === 2 || row.hidden === 3,
