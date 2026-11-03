@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, readIntegerKey, storesText } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, normalizeSQLiteDateValue, parseStoredDate, readIntegerKey, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -256,7 +256,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'date':
         case 'datetime':
         case 'timestamp':
-          return value == null || value instanceof Date ? value : new Date(String(value))
+          return parseStoredDate(this.resolveDialect(), value)
         case 'vector':
           return this.parseVectorValue(value, builtInCast.parameter)
       }
@@ -295,6 +295,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'date':
         case 'datetime':
         case 'timestamp':
+          if (this.resolveDialect() === 'sqlite') return normalizeSQLiteDateValue(value)
           return value instanceof Date ? value.toISOString() : value
         case 'vector':
           return this.serializeVectorValue(value, builtInCast.parameter)

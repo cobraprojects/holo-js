@@ -6026,6 +6026,7 @@ await adapter.execute("INSERT INTO \\"users\\" (\\"id\\", \\"name\\") VALUES (1,
 await manager.disconnectAll()
 `)
 
+    await writeProjectFile(projectRoot, 'data.sqlite', '')
     const setup = runNode(projectRoot, join(projectRoot, 'setup.mjs'))
     if (setup.status !== 0) {
       throw new Error(setup.stderr || setup.stdout)
@@ -6275,6 +6276,21 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     const dev = runCliProcess(projectRoot, ['dev'])
     expect(dev.status, dev.stderr || dev.stdout).toBe(0)
     expect(dev.stderr).toContain('[Holo CLI] Starting with the existing Generated schema. Unable to read the database schema of connection "default"')
+
+    expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
+  }, 60000)
+
+  it('fails migrate:rollback and runs seed on a missing SQLite database file without creating it', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+
+    const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
+    expect(rolledBack.status, rolledBack.stdout).toBe(1)
+    expect(rolledBack.stderr).toContain('Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.')
+    const seeded = runCliProcess(projectRoot, ['seed'], { env: { APP_ENV: 'development' } })
+    expect(seeded.status, seeded.stderr).toBe(0)
 
     expect(await stat(join(projectRoot, 'storage/database.sqlite')).then(() => true, () => false)).toBe(false)
   }, 60000)
@@ -7502,6 +7518,7 @@ export default {
   },
 }
 `)
+    await writeProjectFile(projectRoot, 'data.sqlite', '')
     await writeProjectFile(projectRoot, 'server/db/seeders/fixture.txt', 'seeder fixture')
     await writeProjectFile(projectRoot, 'server/fixtures/fixture.txt', 'helper fixture')
     await writeProjectFile(projectRoot, 'server/fixtures/readFixture.ts', `
@@ -11708,6 +11725,7 @@ export default defineQueueConfig({
     tempDirs.push(actualFlushProjectRoot)
     await linkWorkspaceDb(actualFlushProjectRoot)
     const sqlitePath = join(actualFlushProjectRoot, 'queue.sqlite')
+    await writeProjectFile(actualFlushProjectRoot, 'queue.sqlite', '')
     await writeProjectFile(actualFlushProjectRoot, 'config/database.ts', `
 import { defineDatabaseConfig } from '@holo-js/db'
 

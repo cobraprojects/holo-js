@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -24,6 +24,7 @@ async function openCacheDatabaseStore() {
   const directory = await mkdtemp(join(tmpdir(), 'holo-realtime-cache-db-'))
   temporaryDirectories.push(directory)
   const connection = { driver: 'sqlite' as const, filename: join(directory, 'cache.sqlite') }
+  await writeFile(connection.filename, '')
   await cacheDbInternals.prepareCacheDatabaseTables(cacheDbInternals.createDatabaseConnection('cache', connection))
   const driver = createDatabaseCacheDriver({
     name: 'database',

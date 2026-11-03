@@ -3772,7 +3772,7 @@ it('propagates missing durable persistence instead of authenticating with an imp
 it.each(['shutdown', 'rollback'] as const)('restores the actual borrowed durable revocation store after core %s', async ending => {
   const root = await createProject({ auth: true })
   const borrowed = new DatabaseContext({ driver: 'sqlite', dialect: createDialect('sqlite'), adapter: createSQLiteAdapter({ filename: join(root, 'borrowed.sqlite') }) })
-  await borrowed.initialize()
+  await borrowed.getAdapter().ensureDatabaseExists?.()
   await borrowed.executeCompiled({ sql: revocationsSchema, source: 'schema' })
   const nativeStore = createCoreSessionRevocationStore()
   const scope = { connectionName: 'borrowed', connection: borrowed }

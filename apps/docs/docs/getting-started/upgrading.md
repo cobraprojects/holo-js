@@ -23,7 +23,7 @@ A `schema.generated.ts` written by an earlier release can still call `.generated
 
 `holo dev` now writes the generated schema from the database when it starts, so a fresh clone gets its model types without a separate `migrate`. If it can't read the database, it warns and starts with the schema it has. `holo seed` and `holo media:regenerate` write it before they run, too, and continue with the schema they have when they can't read the database.
 
-On SQLite, `holo build` and `holo dev` no longer create a missing database file. `holo build` fails with the error that names the connection instead. `npx holo migrate` creates the file and its directory, so on a fresh clone run it before you build.
+On SQLite, only `npx holo migrate` and `npx holo migrate:fresh` create a missing database file and its directory. `holo build` fails with the error that names the connection instead. Your app no longer opens the SQLite file when it starts, and it never creates it: pages that don't query the database work without it, and a query fails with `Database file at path "./storage/database.sqlite" does not exist. Run "holo migrate" to create it.` On a fresh clone, run `npx holo migrate` before you build.
 
 ### Model types come from the database and casts
 
@@ -69,7 +69,20 @@ export default defineMigration({
 
 Restate `nullable()` and `default()` on each changed column, because `change()` replaces the column's definition. A `json()` column is still `TEXT` on SQLite, so keep its `'json'` cast.
 
-The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as ISO 8601 text, as Holo writes SQLite dates.
+The model's own timestamp columns need no cast. As in Laravel, `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()` are read and typed as `Date` even when the column is `TEXT`. A `Date` written to an old `TEXT` column, or passed to `where()`, is stored and compared as UTC text in the format of SQLite's `CURRENT_TIMESTAMP`, such as `2026-01-02 03:04:05`, as Holo now writes every SQLite date. Earlier releases wrote ISO 8601 text such as `2026-01-02T03:04:05.000Z`. Holo still reads those values as the right `Date`, but they don't compare or order correctly against the new format or against values your `CURRENT_TIMESTAMP` defaults stored. Rewrite them once in a migration, for each date column:
+
+```ts [server/db/migrations/2026_06_01_000000_rewrite_sqlite_dates.ts]
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ db }) {
+    const rows = await db.table('posts').select('id', 'created_at').where('created_at', 'like', '%T%Z').get()
+    for (const row of rows) {
+      await db.table('posts').where('id', row.id).update({ created_at: new Date(String(row.created_at)) })
+    }
+  },
+})
+```
 
 PostgreSQL and MySQL state booleans, JSON, timestamps and enum values themselves, so their models need no new casts. See [SQLite tables created before 0.6](/orm/casts#sqlite-tables-created-before-0-6).
 

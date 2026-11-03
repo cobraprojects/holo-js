@@ -17,6 +17,7 @@ describe('schema default literals', () => {
     expect(compileDialectDefaultLiteral('postgres', null)).toBe('NULL')
     expect(compileDialectDefaultLiteral('mysql', 'O\'Reilly')).toBe('\'O\'\'Reilly\'')
     expect(compileDialectDefaultLiteral('postgres', new Date('2025-01-02T03:04:05.000Z'))).toBe('\'2025-01-02T03:04:05.000+00:00\'')
+    expect(compileDialectDefaultLiteral('sqlite', new Date('2025-01-02T03:04:05.000Z'))).toBe('\'2025-01-02 03:04:05\'')
     expect(compileDialectDefaultLiteral('mysql', { enabled: true, count: 2 })).toBe('\'{"enabled":true,"count":2}\'')
   })
 

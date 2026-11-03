@@ -2,6 +2,7 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import { PooledTransactionClients } from './drivers/PooledTransactionClients'
 import { getApplicationTimezone } from './applicationTimezone'
 import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from './sqliteDateTime'
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
 import { getQueryBounds } from './query/queryBounds'
@@ -412,6 +413,8 @@ export const holoRuntimeInternals = Object.freeze({
   formatWithOffset,
   parseCalendarDate,
   parseWallClockTimestamp,
+  formatSQLiteDateTime,
+  parseSQLiteDateTime,
   driverErrorCodes,
   isDatabaseDeadlockError,
 })

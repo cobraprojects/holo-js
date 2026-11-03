@@ -8,11 +8,13 @@ import { createCoreSessionRevocationStore } from './authSessionRevocations'
 import { connectionAsyncContext, DB, Entity, holoRuntimeInternals, ModelRepository, TableQueryBuilder, TransactionError, type DatabaseContext } from '@holo-js/db'
 
 export function serializeAuthTimestamp(value: Date, driver: string): Date | string {
-  return driver === 'mysql' || driver === 'postgres' ? value : value.toISOString()
+  return driver === 'mysql' || driver === 'postgres' ? value : holoRuntimeInternals.formatSQLiteDateTime(value)
 }
 
 export function normalizeDateValue(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value))
+  if (value instanceof Date) return value
+  const text = String(value)
+  return holoRuntimeInternals.parseSQLiteDateTime(text) ?? new Date(text)
 }
 
 export function normalizeJsonValue(value: unknown): unknown {

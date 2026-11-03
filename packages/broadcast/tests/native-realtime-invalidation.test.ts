@@ -40,6 +40,7 @@ async function openScoresDatabase() {
     await adapter.disconnect()
     await rm(directory, { recursive: true, force: true })
   })
+  await adapter.ensureDatabaseExists()
   await adapter.execute('CREATE TABLE scores (id INTEGER PRIMARY KEY, score INTEGER NOT NULL)')
   await adapter.execute('INSERT INTO scores VALUES (1, 10)')
   const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })

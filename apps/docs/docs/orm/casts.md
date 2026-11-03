@@ -83,7 +83,7 @@ export default defineModel('posts', {
 | `'number'` | `number` | `Number(value)` | `Number(value)` |
 | `'string'` | `string` | `String(value)` | `String(value)` |
 | `'json'` | The type of a `table.json()` column | Parses a JSON string | Serializes to a JSON string |
-| `'date'`, `'datetime'`, `'timestamp'` | `Date` | A `Date` object | An ISO 8601 string |
+| `'date'`, `'datetime'`, `'timestamp'` | `Date` | A `Date` object | An ISO 8601 string. On SQLite, UTC text in the `CURRENT_TIMESTAMP` format, such as `2026-01-02 03:04:05` |
 | `'vector'` | `readonly number[]` | An array of numbers | A `[1,2,3]` string |
 
 `null` and `undefined` pass through every built-in cast unchanged. A `'json'` cast on a column that is already typed as JSON keeps that column's type.

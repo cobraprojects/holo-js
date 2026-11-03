@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, DatabaseError, type Entity, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
+import { DB, DatabaseError, type Entity, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, holoRuntimeInternals, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -54,7 +54,9 @@ function expectRecent(value: unknown): void {
 }
 
 function storedInstant(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value))
+  if (value instanceof Date) return value
+  const text = String(value)
+  return holoRuntimeInternals.parseSQLiteDateTime(text) ?? new Date(text)
 }
 
 describe.each(drivers)('an untyped model on a %s connection', (driver) => {

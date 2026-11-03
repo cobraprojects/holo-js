@@ -1,6 +1,7 @@
 import { CapabilityError, HydrationError } from '../core/errors'
 import { formatWithOffset } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
 import type { SchemaDialectName } from './typeMapping'
 
@@ -96,12 +97,13 @@ function stringifyJson(value: unknown): unknown {
   return typeof value === 'string' ? value : JSON.stringify(value)
 }
 
-function parseDateLike(value: unknown): unknown {
+export function parseStoredDate(dialect: SchemaDialectName, value: unknown): unknown {
   if (value == null || value instanceof Date) {
     return value
   }
 
-  return new Date(String(value))
+  const text = String(value)
+  return (dialect === 'sqlite' ? parseSQLiteDateTime(text) : undefined) ?? new Date(text)
 }
 
 const ISO_INSTANT_TEXT = /^((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)(Z|[+-](\d{2}):?(\d{2}))$/i
@@ -160,9 +162,18 @@ function postgresZonedText(parsed: { instant: Date, fraction: string | undefined
   return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
+export function normalizeSQLiteDateValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return formatSQLiteDateTime(value)
+  }
+
+  const parsed = typeof value === 'string' ? parseIsoInstantText(value) : undefined
+  return parsed ? formatSQLiteDateTime(parsed.instant) : value
+}
+
 export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
   if (dialect === 'sqlite') {
-    return value instanceof Date ? value.toISOString() : value
+    return normalizeSQLiteDateValue(value)
   }
 
   if (value instanceof Date) {
@@ -268,7 +279,7 @@ export function normalizeDialectReadValue(
     case 'date':
     case 'datetime':
     case 'timestamp':
-      return parseDateLike(value)
+      return parseStoredDate(dialect, value)
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)

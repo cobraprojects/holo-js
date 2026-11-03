@@ -3627,7 +3627,7 @@ export function whereColumnNotExpiredByDatabaseClock<
   const dialectName = connection.getDialect().name
   const quoted = dialectName === 'mysql' ? `\`${column}\`` : `"${column}"`
   if (dialectName === 'sqlite') {
-    return append(`${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
+    return append(`${quoted} > strftime('%Y-%m-%d %H:%M:%f', 'now')`, [])
   }
 
   if (dialectName === 'postgres') {
