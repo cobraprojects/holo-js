@@ -164,7 +164,15 @@ npx holo migrate --isolated
 
 The first run takes an atomic [lock](/cache/locks) named `migrations` from your application's default [cache store](/cache/drivers) and applies the pending migrations. A run that starts while the lock is held skips the migrations, prints a message, and exits successfully, so a deploy step on every replica still passes. The lock is released when the run ends. If a runner stops without releasing it, the lock expires after an hour.
 
-`--isolated` needs `@holo-js/cache` installed, and every server must use the same default cache store. Use a `redis` or `database` store when you run more than one server. A `file` store only coordinates processes that share the same cache folder, and a `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). If `@holo-js/cache` isn't installed or the default store can't give a lock, `migrate --isolated` fails with an error that says what to set up.
+`--isolated` needs `@holo-js/cache` installed, and every server must use the same default cache store. Use a `redis` or `database` store when you run more than one server. A `file` store only coordinates processes that share the same cache folder, and a `memory` store only covers the current process. See [Which processes a lock covers](/cache/locks#which-processes-a-lock-covers). When it can't take the lock, `migrate --isolated` fails before it runs any migration, and the error names the cause:
+
+| Cause | The error says |
+| --- | --- |
+| `@holo-js/cache` isn't installed | `@holo-js/cache` isn't installed. |
+| The default store can't be resolved, such as a missing driver package, driver plugin, or database connection | The store and its driver can't be resolved, followed by the reason. |
+| The default store can't give a lock, such as a `database` store without its tables | The store and its driver can't provide a lock, followed by the reason. |
+
+Each error also tells you to use a default cache store that every server shares, such as `database` or `redis`.
 
 A `database` cache store keeps its locks in a table, so create the cache tables before the first isolated run:
 
