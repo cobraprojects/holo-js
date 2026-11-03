@@ -69,7 +69,7 @@ The folder paths come from `paths` in `config/app.ts`, so you can move them. See
 
 ### The generated schema
 
-When you run migrations, Holo records the resulting tables and columns in `.holo-js/generated/schema.generated.ts`. Models read their column types from this file, which is how `Post.where('title', ...)` knows `title` exists without you writing a type.
+After `holo migrate`, `holo migrate:rollback`, `holo migrate:fresh`, and `holo build`, Holo reads the tables and columns of your default connection's database and writes them to `.holo-js/generated/schema.generated.ts`. Your database is the only source of this file: Holo never replays migrations to build it, and it leaves out its own tables, such as `_holo_migrations`. Models read their column types from this file, which is how `Post.where('title', ...)` knows `title` exists without you writing a type.
 
 ## What happens when your app starts
 

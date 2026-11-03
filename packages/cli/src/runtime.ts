@@ -11,9 +11,8 @@ import {
 } from './project'
 import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
-import { fileExists } from './fs-utils'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
-import type { RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
+import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
 
 const runtimeImportMeta = import.meta as ImportMeta & {
@@ -220,52 +219,43 @@ export async function dropAllTablesForFresh(
 }
 
 /* v8 ignore start */
-export async function getRuntimeEnvironment(projectRoot: string): Promise<RuntimeEnvironment> {
+type RuntimeBundle = Awaited<ReturnType<typeof bundleProjectModule>>
+
+async function bundleRuntimeEntries(projectRoot: string, entries: readonly string[], bundled: RuntimeBundle[]): Promise<string[]> {
+  const paths: string[] = []
+  for (const entry of entries) {
+    const bundle = await bundleProjectModule(projectRoot, resolve(projectRoot, entry), { external: ['@holo-js/db'] })
+    bundled.push(bundle)
+    paths.push(bundle.path)
+  }
+  return paths
+}
+
+export async function getRuntimeEnvironment(projectRoot: string, kind: RuntimeCommandKind): Promise<RuntimeEnvironment> {
   let project = await loadProjectConfig(projectRoot, { required: true })
   if (!await loadGeneratedProjectRegistry(projectRoot)) {
     await prepareProjectDiscovery(projectRoot, project.config)
     project = await loadProjectConfig(projectRoot, { required: true })
   }
-  const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, project.config)
-  const hasGeneratedSchema = await fileExists(generatedSchemaPath)
-  const bundleInputs = [
-    ...project.config.models.map(entry => resolve(projectRoot, entry)),
-    ...project.config.migrations.map(entry => resolve(projectRoot, entry)),
-    ...project.config.seeders.map(entry => resolve(projectRoot, entry)),
-    ...(hasGeneratedSchema ? [generatedSchemaPath] : []),
-  ]
-  const bundled: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
-
-  try {
-    for (const entryPath of bundleInputs) {
-      bundled.push(await bundleProjectModule(projectRoot, entryPath, { external: ['@holo-js/db'] }))
-    }
-  } catch (error) {
+  const sources = kind === 'generate-schema'
+    ? { models: [], migrations: [], seeders: [] }
+    : project.config
+  const bundled: RuntimeBundle[] = []
+  const cleanup = async () => {
     await Promise.all(bundled.map(entry => entry.cleanup()))
-    throw error
   }
 
-  const bundledModels = bundled.slice(0, project.config.models.length).map(entry => entry.path)
-  const bundledMigrations = bundled
-    .slice(project.config.models.length, project.config.models.length + project.config.migrations.length)
-    .map(entry => entry.path)
-  const bundledSeeders = bundled
-    .slice(project.config.models.length + project.config.migrations.length)
-    .slice(0, project.config.seeders.length)
-    .map(entry => entry.path)
-  const bundledGeneratedSchema = hasGeneratedSchema
-    ? bundled[project.config.models.length + project.config.migrations.length + project.config.seeders.length]?.path
-    : undefined
-
-  return {
-    project,
-    bundledModels,
-    bundledMigrations,
-    bundledSeeders,
-    ...(bundledGeneratedSchema ? { bundledGeneratedSchema } : {}),
-    async cleanup() {
-      await Promise.all(bundled.map(entry => entry.cleanup()))
-    },
+  try {
+    return {
+      project,
+      bundledModels: await bundleRuntimeEntries(projectRoot, sources.models, bundled),
+      bundledMigrations: await bundleRuntimeEntries(projectRoot, sources.migrations, bundled),
+      bundledSeeders: await bundleRuntimeEntries(projectRoot, sources.seeders, bundled),
+      cleanup,
+    }
+  } catch (error) {
+    await cleanup()
+    throw error
   }
 }
 /* v8 ignore stop */
@@ -398,7 +388,7 @@ function formatRuntimeFailureText(text: string): string {
 /* v8 ignore start */
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
-  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema' | 'media:regenerate',
+  kind: RuntimeCommandKind,
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
@@ -407,7 +397,7 @@ export async function withRuntimeEnvironment<T>(
     await prepareProjectDiscovery(projectRoot, project.config)
   }
 
-  const environment = await getRuntimeEnvironment(projectRoot)
+  const environment = await getRuntimeEnvironment(projectRoot, kind)
 
   try {
     const envRuntimeConfig = createEnvRuntimeConfig()
@@ -415,7 +405,7 @@ export async function withRuntimeEnvironment<T>(
       environment.project.config.database,
       envRuntimeConfig,
     )
-    const migrationPublishers = kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'hydrate-schema'
+    const migrationPublishers = kind === 'migrate' || kind === 'fresh' || kind === 'rollback'
       ? await loadProjectPluginMigrationPublishers(projectRoot)
       : []
     const runtimePayload = JSON.stringify({
@@ -431,7 +421,6 @@ export async function withRuntimeEnvironment<T>(
         url: pathToFileURL(entry.path).href,
       })),
       seeders: environment.bundledSeeders.map(entry => pathToFileURL(entry).href),
-      generatedSchema: environment.bundledGeneratedSchema ? pathToFileURL(environment.bundledGeneratedSchema).href : undefined,
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),
       generatedSchemaRuntimeOutputPath: resolve(projectRoot, GENERATED_SCHEMA_RUNTIME_PATH),
       options,

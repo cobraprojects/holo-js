@@ -5,6 +5,7 @@ import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTim
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
 import { getQueryBounds } from './query/queryBounds'
+import { createSchemaReader } from './schema/introspection'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
@@ -402,6 +403,7 @@ export type {
 } from './query'
 
 export const holoRuntimeInternals = Object.freeze({
+  createSchemaReader,
   getQueryBounds,
   PooledTransactionClients,
   whereColumnNotExpiredByDatabaseClock,

@@ -52,11 +52,11 @@ The generated model starts with `fillable: []`, which blocks every column from `
 
 ## Where the types come from
 
-You don't declare columns in the model. Holo reads them from your [migrations](/database/migrations):
+You don't declare columns in the model. Holo reads them from your database after your [migrations](/database/migrations) run:
 
 1. You write a migration that creates or changes the `posts` table.
 2. You run `npx holo migrate`.
-3. Holo regenerates `.holo-js/generated/schema.generated.ts` with every table's columns. Don't edit this file.
+3. Holo reads the database and regenerates `.holo-js/generated/schema.generated.ts` with every table's columns. Don't edit this file.
 4. `defineModel('posts')` picks up those column types.
 
 After a migration, every model method knows your columns:
@@ -74,7 +74,7 @@ await Post.where('titel', 'Hello')
 Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default.
 
 ::: tip
-If autocomplete shows stale columns, run `npx holo migrate` again. A model whose table isn't in the generated schema throws `Model "posts" is not present in the generated schema registry` at runtime.
+If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo migrate` or `npx holo build` writes the full types. A model whose table isn't in the generated schema throws `Model "posts" is not present in the generated schema registry` at runtime.
 :::
 
 ## Conventions
