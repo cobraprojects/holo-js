@@ -105,6 +105,16 @@ const views = await PageView.where('path', '/pricing').count()
 
 Models without `connectionName` use the default connection.
 
+The generated schema covers only the default connection, so a model on another connection is untyped, as in Laravel. Its attributes are `unknown` in TypeScript, and column names aren't checked. At runtime the model works from the rows the database returns:
+
+- The primary key is `id`, or the column you set with `primaryKey`. A record you create without a key gets the database's auto-increment ID.
+- `created_at` and `updated_at` are filled unless you set `timestamps: false`, and they read as `Date`. `softDeletes` uses `deleted_at` unless you set `deletedAtColumn`.
+- `fillable` and `guarded` alone decide which attributes you can write.
+- Your `casts` apply. Other attributes are the values the driver returns, such as JSON as text on SQLite.
+- Relations to models on the same connection work as usual.
+
+A table with the same name on the default connection doesn't change how the model reads or writes.
+
 ## Transactions on a named connection
 
 Pass the connection name after the callback:

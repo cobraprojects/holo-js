@@ -30,6 +30,10 @@ export interface QueryColumnSelection {
   readonly alias?: string
 }
 
+export function readAllColumnsSelectionTable(column: string): string | undefined {
+  return column.endsWith('.*') ? column.slice(0, -2) : undefined
+}
+
 export interface QueryAggregateSelection {
   readonly kind: 'aggregate'
   readonly aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'

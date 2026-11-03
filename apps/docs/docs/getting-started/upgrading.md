@@ -175,9 +175,9 @@ import { diffSchema } from '@holo-js/db' // [!code ++]
 
 `DB.table('name')`, model tables and pivot tables resolve through the generated schema only, and only on the default connection, the one the generated schema is read from. A table that `createTable()` created earlier in the same process, such as in a script that creates a table and then fills it, uses no definition until the generated schema is written again, so the JSON and boolean values you write to it aren't converted. Pass a table definition to `DB.table()` to use its columns right away. Query-builder reads return the driver's values in both cases. See [Start a query](/database/query-builder/#start-a-query).
 
-A model whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it.
+A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema`. Run `npx holo migrate` or `npx holo build` to write it. A model with `connectionName` set to another connection is untyped, as in Laravel: its attributes are `unknown` in TypeScript, and at runtime it uses the `id` key, the timestamp and soft-delete columns by convention, your casts, and the driver's values. A same-named table on the default connection no longer shapes it. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection).
 
-On PostgreSQL, `insertGetId()` on a table passed as a definition now returns an integer key as a number, as the table's reads and Laravel's `insertGetId()` do. Before, it returned the driver's text, such as `'5'`. Compare the ID with numbers, not strings.
+On PostgreSQL, `insertGetId()` now returns an integer key as a number, as Laravel's `insertGetId()` does, whether you pass a table name or a definition. Before, it returned the driver's text, such as `'5'`. A UUID or other non-numeric key still comes back as a string. Compare the ID with numbers, not strings.
 
 ### Schema operations that now fail instead of doing nothing
 

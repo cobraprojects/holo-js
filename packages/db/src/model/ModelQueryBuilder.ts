@@ -212,7 +212,7 @@ class ModelQueryBuilderBase<
   ): TableQueryPredicates<TTable> {
     const nested = new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes>(
       this.repository,
-      new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
+      this.repository.createTableQuery(this.getConnection()),
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
     const callbackResult = callback(nested)
     const result = callbackResult instanceof ModelQueryBuilderBase ? callbackResult : nested

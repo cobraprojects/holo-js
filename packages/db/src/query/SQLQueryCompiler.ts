@@ -1,7 +1,7 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { NumericAdjustment } from './NumericAdjustment'
 import { CompilerError } from '../core/errors'
-import { isInlineIntegerValue } from './ast'
+import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
@@ -195,6 +195,11 @@ export class SQLQueryCompiler {
 
           if (selection.kind === 'raw') {
             return this.compileRawSql(selection.sql, selection.bindings, bindings)
+          }
+
+          const allColumnsOf = readAllColumnsSelectionTable(selection.column)
+          if (allColumnsOf !== undefined && !selection.alias) {
+            return `${this.compileTableReference(allColumnsOf)}.*`
           }
 
           const column = this.compileColumnReference(selection.column)

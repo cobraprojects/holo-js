@@ -14,10 +14,10 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, insertGetKey } from '../query/TableQueryBuilder'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson } from '../schema/normalization'
-import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
@@ -111,7 +111,7 @@ function findWriteColumn(definition: AnyModelDefinition, key: string) {
   const columnName = key.includes('->') ? key.split('->')[0]! : key
   assertAttributeNameAllowed(columnName)
   const column = ownEntry(definition.table.columns, columnName)
-  if (!column) {
+  if (!column && !definition.untyped) {
     throw new SecurityError(`Column "${columnName}" is not defined on model "${definition.name}".`)
   }
 
@@ -1725,7 +1725,7 @@ export class ModelRepository<
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
-        : { lastInsertId: await query.insertGetId(payload) }
+        : { lastInsertId: await query[insertGetKey](payload, this.definition.primaryKey) }
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
@@ -1821,7 +1821,7 @@ export class ModelRepository<
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
       }
 
-      if (column.generated) {
+      if (column?.generated) {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
@@ -1830,7 +1830,7 @@ export class ModelRepository<
       }
 
       if (key.includes('->')) {
-        if (!storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
+        if (column && !storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
           throw new SecurityError(`Column "${columnName}" must be a JSON column to support nested JSON updates.`)
         }
 
@@ -2141,16 +2141,20 @@ export class ModelRepository<
     }
   }
 
+  createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
+    const table = this.definition.table
+    return this.definition.untyped
+      ? new TableQueryBuilder(table, connection, createSelectQueryPlan(createTableSource(table.tableName)))
+      : new TableQueryBuilder(table, connection)
+  }
+
   private createQuery(
     applySoftDeletes: boolean,
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
   ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
-    let query = new ModelQueryBuilder(
-      this,
-      new TableQueryBuilder(this.definition.table, this.getConnection()),
-    )
+    let query = new ModelQueryBuilder(this, this.createTableQuery())
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
@@ -2782,7 +2786,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    if (!(column in related.definition.table.columns)) {
+    if (!related.definition.untyped && !(column in related.definition.table.columns)) {
       throw new SecurityError(`Column "${column}" is not defined on related model "${related.definition.name}".`)
     }
 
@@ -3288,7 +3292,13 @@ export class ModelRepository<
 
     return projected
       ? joined
-      : joined.select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
+      : joined.select(...this.listRelatedColumnSelections(related, relatedTable))
+  }
+
+  private listRelatedColumnSelections(related: ModelRepository, relatedTable: string): readonly string[] {
+    return related.definition.untyped
+      ? [`${relatedTable}.*`]
+      : Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`)
   }
 
   private async getThroughEntitiesByParentKey(
@@ -3736,7 +3746,7 @@ export class ModelRepository<
     for (const key of Object.keys(values)) {
       const { columnName, column } = findWriteColumn(this.definition, key)
 
-      if (column.generated) {
+      if (column?.generated) {
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 

@@ -173,33 +173,53 @@ type EntityPropertyRepository = {
     table?: {
       columns?: Record<string, unknown>
     }
+    untyped?: boolean
     relations?: Record<string, unknown>
   }
   getRelationNames?(): readonly string[]
   resolveRelationProperty?(entity: unknown, key: string): unknown
 }
 
+function defineAttributeProperties<TRelations extends RelationMap>(
+  entity: EntityPropertyHost<TRelations>,
+  keys: readonly string[],
+): void {
+  for (const key of keys) {
+    if (key in entity) {
+      continue
+    }
+
+    Object.defineProperty(entity, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => entity.get(key),
+      set: (value: unknown) => {
+        entity.set(key, value)
+      },
+    })
+  }
+}
+
+export function exposeUntypedEntityAttributes<TRelations extends RelationMap>(
+  entity: EntityPropertyHost<TRelations>,
+  repo: EntityPropertyRepository | undefined,
+  attributes: Record<string, unknown>,
+): void {
+  if (repo?.definition?.untyped) {
+    defineAttributeProperties(entity, Object.keys(attributes))
+  }
+}
+
 export function initializeEntityModelProperties<TRelations extends RelationMap>(
   entity: EntityPropertyHost<TRelations>,
   repo: EntityPropertyRepository | undefined,
+  attributes: Record<string, unknown>,
 ): void {
   const columns = repo?.definition?.table?.columns
   if (columns && typeof columns === 'object') {
-    for (const key of Object.keys(columns)) {
-      if (key in entity) {
-        continue
-      }
-
-      Object.defineProperty(entity, key, {
-        configurable: true,
-        enumerable: true,
-        get: () => entity.get(key),
-        set: (value: unknown) => {
-          entity.set(key, value)
-        },
-      })
-    }
+    defineAttributeProperties(entity, Object.keys(columns))
   }
+  exposeUntypedEntityAttributes(entity, repo, attributes)
 
   const relationNames = typeof repo?.getRelationNames === 'function'
     ? repo.getRelationNames()

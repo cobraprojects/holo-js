@@ -1,7 +1,7 @@
 import { singularize } from 'inflection'
 import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition, getGeneratedTableDefinition, isGeneratedSchemaConnection } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinition } from '../schema/types'
@@ -57,15 +57,26 @@ export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): 
   return primaryKey.name as Extract<keyof TTable['columns'], string>
 }
 
-export function resolveGeneratedModelTable(tableName: string): TableDefinition {
-  const table = getGeneratedTableDefinition(tableName)
-  if (!table) {
-    throw new SchemaError(
-      `Model "${tableName}" is not present in the Generated schema. Run "holo migrate" to regenerate it.`,
-    )
+export function resolveGeneratedModelTable(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
+  const table = connectionName === undefined
+    ? getGeneratedTableDefinition(tableName)
+    : getConnectionGeneratedTableDefinition(tableName, connectionName)
+  if (table || (connectionName !== undefined && !isGeneratedSchemaConnection(connectionName))) {
+    return table
   }
 
-  return table
+  throw new SchemaError(
+    `Model "${tableName}" is not present in the Generated schema. Run "holo migrate" to regenerate it.`,
+  )
+}
+
+export function createUntypedModelTable<TName extends string>(tableName: TName): TableDefinition<TName> {
+  return Object.freeze({
+    kind: 'table',
+    tableName,
+    columns: Object.freeze({}),
+    indexes: Object.freeze([]),
+  })
 }
 
 export function resolveDeletedAtColumn<TTable extends TableDefinition>(

@@ -8,6 +8,7 @@ import { setAutomaticEagerLoading, setPreventAccessingMissingAttributes, setPrev
 import { resolveUniqueIdConfig, validateUniqueIdConfig } from './uniqueIds'
 import {
   buildModelTable,
+  createUntypedModelTable,
   inferModelName,
   inferPrimaryKey,
   normalizeEventHandlers,
@@ -36,6 +37,7 @@ import type {
   GeneratedSchemaTable,
   ModelAttributeKey,
   ModelCastedTable,
+  ModelCastDefinition,
   ModelCastMap,
   ModelColumnName,
   ModelDefinition,
@@ -69,7 +71,7 @@ type SharedModelDefinitionFields<
   TRelations extends RelationMap,
 > = Omit<
   ModelDefinition<TTable, TScopes, TRelations>,
-  'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
+  'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
 >
 
 function snapshotModelScopes<TScopes extends ModelScopesDefinition>(scopes: TScopes): TScopes {
@@ -215,16 +217,16 @@ function defineModelFromGeneratedTableName<
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
-  const resolveTableDefinition = (): GeneratedSchemaTable<TName> => (
-    resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
+  type ColumnName = Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  const untypedTable = createUntypedModelTable(tableName) as GeneratedSchemaTable<TName>
+  const resolveSchemaTable = (): GeneratedSchemaTable<TName> | undefined => (
+    resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName> | undefined
   )
-  const resolvePrimaryKeyFromTable = (
-    table: GeneratedSchemaTable<TName>,
-  ): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
-    (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  const resolvePrimaryKeyFromTable = (table: GeneratedSchemaTable<TName> | undefined): ColumnName => (
+    (options.primaryKey ?? (table ? inferPrimaryKey(table) : 'id')) as ColumnName
   )
   const resolveUniqueIdFromTable = (
-    table: GeneratedSchemaTable<TName>,
+    table: GeneratedSchemaTable<TName> | undefined,
   ): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
     return resolveUniqueIdConfig(
       options.traits,
@@ -233,54 +235,68 @@ function defineModelFromGeneratedTableName<
       options.newUniqueId,
     )
   }
-  const resolveTable = (): GeneratedSchemaTable<TName> => {
-    const table = resolveTableDefinition()
-    validateUniqueIdConfig(table, inferredName, resolveUniqueIdFromTable(table))
+  const resolveValidatedSchemaTable = (): GeneratedSchemaTable<TName> | undefined => {
+    const table = resolveSchemaTable()
+    if (table) {
+      validateUniqueIdConfig(table, inferredName, resolveUniqueIdFromTable(table))
+    }
     return table
   }
-  const resolvePrimaryKey = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
-    resolvePrimaryKeyFromTable(resolveTable())
-  )
-  const resolveCreatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
-    const timestamps = options.timestamps ?? true
-    return timestamps
-      ? resolveTimestampColumn(resolveTable(), options.createdAtColumn, 'created_at')
-      : undefined
+  const resolveTimestamp = (explicit: string | undefined, fallback: string): ColumnName | undefined => {
+    if (!(options.timestamps ?? true)) {
+      return undefined
+    }
+
+    const table = resolveValidatedSchemaTable()
+    return table ? resolveTimestampColumn(table, explicit, fallback) : (explicit ?? fallback) as ColumnName
   }
-  const resolveUpdatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
-    const timestamps = options.timestamps ?? true
-    return timestamps
-      ? resolveTimestampColumn(resolveTable(), options.updatedAtColumn, 'updated_at')
-      : undefined
+  const resolveDeletedAt = (): ColumnName | undefined => {
+    const table = resolveValidatedSchemaTable()
+    if (table) {
+      return resolveDeletedAtColumn(table, options)
+    }
+
+    return options.softDeletes ? (options.deletedAtColumn ?? 'deleted_at') as ColumnName : undefined
   }
-  const resolveDeletedAt = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => (
-    resolveDeletedAtColumn(resolveTable(), options)
-  )
-  const resolveUniqueId = (): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
-    return resolveUniqueIdFromTable(resolveTable())
+  const declaredCasts = { ...(options.casts ?? {}) }
+  const resolveCasts = (): Record<string, ModelCastDefinition> => {
+    if (resolveSchemaTable()) {
+      return declaredCasts
+    }
+
+    const dateColumns = [
+      resolveTimestamp(options.createdAtColumn, 'created_at'),
+      resolveTimestamp(options.updatedAtColumn, 'updated_at'),
+      resolveDeletedAt(),
+    ].filter(column => column !== undefined)
+    return { ...Object.fromEntries(dateColumns.map(column => [column, 'datetime'])), ...declaredCasts }
   }
 
   const definition = {
     ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
-  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
-    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
+  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig' | 'casts'>
+    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig' | 'casts'>
 
   Object.defineProperties(definition, {
     table: {
       enumerable: true,
-      get: resolveTable,
+      get: () => resolveValidatedSchemaTable() ?? untypedTable,
+    },
+    untyped: {
+      enumerable: true,
+      get: () => resolveSchemaTable() === undefined,
     },
     primaryKey: {
       enumerable: true,
-      get: resolvePrimaryKey,
+      get: () => resolvePrimaryKeyFromTable(resolveValidatedSchemaTable()),
     },
     createdAtColumn: {
       enumerable: true,
-      get: resolveCreatedAtColumn,
+      get: () => resolveTimestamp(options.createdAtColumn, 'created_at'),
     },
     updatedAtColumn: {
       enumerable: true,
-      get: resolveUpdatedAtColumn,
+      get: () => resolveTimestamp(options.updatedAtColumn, 'updated_at'),
     },
     deletedAtColumn: {
       enumerable: true,
@@ -288,7 +304,11 @@ function defineModelFromGeneratedTableName<
     },
     uniqueIdConfig: {
       enumerable: true,
-      get: resolveUniqueId,
+      get: () => resolveUniqueIdFromTable(resolveValidatedSchemaTable()),
+    },
+    casts: {
+      enumerable: true,
+      get: resolveCasts,
     },
   })
 
@@ -326,6 +346,7 @@ function defineModelFromResolvedTable<
   const definition: ModelDefinition<TTable, TScopes, TRelations> = Object.freeze({
     ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
     table,
+    untyped: false,
     primaryKey,
     createdAtColumn,
     updatedAtColumn,
