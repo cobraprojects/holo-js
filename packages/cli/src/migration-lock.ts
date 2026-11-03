@@ -1,4 +1,5 @@
 import { initializeCacheMaintenanceEnvironment } from './cache'
+import { errorMessage } from './error-message'
 
 const MIGRATION_LOCK_NAME = 'migrations'
 const MIGRATION_LOCK_SECONDS = 60 * 60
@@ -10,8 +11,7 @@ export type IsolatedMigrationRun<TResult>
   | { readonly kind: 'ran', readonly result: TResult }
 
 function failWithMigrationLockRequirement(error: unknown): never {
-  const reason = error instanceof Error ? error.message : String(error)
-  throw new Error(`${MIGRATION_LOCK_REQUIREMENT} ${reason}`, { cause: error })
+  throw new Error(`${MIGRATION_LOCK_REQUIREMENT} ${errorMessage(error)}`, { cause: error })
 }
 
 async function openMigrationLock(projectRoot: string) {

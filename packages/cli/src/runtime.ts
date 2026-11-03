@@ -11,6 +11,7 @@ import {
 } from './project'
 import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
+import { isSchemaChangingKind } from './runtime-kinds'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
 import type { RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
@@ -316,7 +317,7 @@ export async function withRuntimeEnvironment<T>(
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
-  if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'seed' || kind === 'media:regenerate') {
+  if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
     await prepareProjectDiscovery(projectRoot, project.config)
   }
@@ -329,7 +330,7 @@ export async function withRuntimeEnvironment<T>(
       environment.project.config.database,
       envRuntimeConfig,
     )
-    const migrationPublishers = kind === 'migrate' || kind === 'fresh' || kind === 'rollback'
+    const migrationPublishers = isSchemaChangingKind(kind)
       ? await loadProjectPluginMigrationPublishers(projectRoot)
       : []
     const runtimePayload = JSON.stringify({
@@ -362,7 +363,7 @@ export async function withRuntimeEnvironment<T>(
 
     const output = await callback((result.stdout ?? '').trim())
 
-    if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback') {
+    if (isSchemaChangingKind(kind)) {
       await prepareProjectDiscovery(projectRoot, environment.project.config)
     }
 

@@ -4,6 +4,7 @@ import {
   type NormalizedHoloProjectConfig,
 } from '@holo-js/kernel'
 import type { MigrationDefinition, SeederDefinition } from '@holo-js/db'
+import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
   createProjectModuleBatch,
@@ -110,10 +111,6 @@ function resolveBroadcastExportEntry(
   }
 
   return undefined
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 async function bundleCommandModules(

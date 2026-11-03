@@ -15,7 +15,9 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
+import { errorMessage } from './error-message'
 import { runWithMigrationLock } from './migration-lock'
+import { isSchemaChangingKind } from './runtime-kinds'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
 import type * as MediaModule from '@holo-js/media'
@@ -195,16 +197,12 @@ async function dropAllTablesForFresh(
   })
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 async function readDatabaseSchema(connection: DatabaseContext): Promise<TableDefinition[]> {
   try {
     await connection.initialize()
     return await holoRuntimeInternals.createSchemaReader(connection).readGeneratedSchema()
   } catch (error) {
-    throw new Error(`Unable to read the database schema of connection "${connection.getConnectionName()}": ${describeError(error)}`, { cause: error })
+    throw new Error(`Unable to read the database schema of connection "${connection.getConnectionName()}": ${errorMessage(error)}`, { cause: error })
   }
 }
 
@@ -334,7 +332,8 @@ if (!applicationRuntime) {
   await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db)
   configureDB(manager)
 }
-const migrations = payload.kind === 'migrate' || payload.kind === 'fresh' || payload.kind === 'rollback'
+const writeProjectGeneratedSchema = () => writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+const migrations = isSchemaChangingKind(payload.kind)
   ? await loadAllMigrations()
   : []
 
@@ -346,7 +345,7 @@ try {
   if (payload.kind === 'migrate') {
     const migrate = async () => {
       const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
-      await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+      await writeProjectGeneratedSchema()
       return executed
     }
     const run = payload.options?.isolated === true
@@ -358,18 +357,18 @@ try {
       printExecutedItems(run.result, 'No migrations were executed.', 'Migrations executed:')
     }
   } else if (payload.kind === 'generate-schema') {
-    await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+    await writeProjectGeneratedSchema()
     writeOutput('Generated schema written from the database.')
   } else if (payload.kind === 'fresh') {
     const schema = createSchemaService(manager.connection())
     await dropAllTablesForFresh(manager.connection(), schema)
 
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
-    await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+    await writeProjectGeneratedSchema()
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
   } else if (payload.kind === 'rollback') {
     const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
-    await writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+    await writeProjectGeneratedSchema()
     printExecutedItems(rolledBack, 'No migrations were rolled back.', 'Migrations rolled back:')
   } else if (payload.kind === 'seed') {
     const executed = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed(payload.options ?? {})
