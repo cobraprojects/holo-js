@@ -6296,7 +6296,7 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }
 
-  it('tells the user to run migrate or build when holo prepare cannot load a 0.5 Generated schema', async () => {
+  it('discards a 0.5 Generated schema that fails to load and finishes holo prepare with a notice', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
@@ -6304,9 +6304,13 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
 
     const prepared = runCliProcess(projectRoot, ['prepare'])
 
-    expect(prepared.status).toBe(1)
-    expect(prepared.stderr).toContain('Unable to load the Generated schema ".holo-js/generated/schema.generated.ts"')
-    expect(prepared.stderr).toContain('Run "holo migrate" or "holo build" to write it again from the database.')
+    expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+    expect(prepared.stderr.trim().split('\n')).toEqual([
+      expect.stringMatching(/^\[Holo CLI\] Discarded the Generated schema "\.holo-js\/generated\/schema\.generated\.ts" because it failed to load: .*generated is not a function/),
+    ])
+    for (const generated of await readGeneratedSchemaFiles(projectRoot)) {
+      expect(generatedTableNames(generated)).toEqual([])
+    }
   }, 30000)
 
   for (const database of schemaSourceDatabases) {
@@ -6430,7 +6434,7 @@ process.stdout.write('framework build ran\\n')
       }
     }, 90000)
 
-    it.skipIf(!database.enabled)(`rewrites a 0.5 Generated schema that calls generated() from the ${database.driver} database on migrate, build, fresh and rollback`, async () => {
+    it.skipIf(!database.enabled)(`rewrites a 0.5 Generated schema that calls generated() from the ${database.driver} database on prepare, seed, migrate, build, fresh and rollback`, async () => {
       const projectRoot = await createTempProject()
       tempDirs.push(projectRoot)
       const databaseName = `holo_legacy_${randomUUID().replaceAll('-', '')}`
@@ -6439,6 +6443,17 @@ process.stdout.write('framework build ran\\n')
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('users', { name: 'User', fillable: ['name'] })
+`)
+      await writeProjectFile(projectRoot, 'server/db/seeders/UserSeeder.ts', `
+import { defineSeeder } from '@holo-js/db'
+import User from '../../models/User'
+
+export default defineSeeder({
+  name: 'UserSeeder',
+  async run() {
+    await User.create({ name: 'Seeded' })
+  },
+})
 `)
       await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', `
 process.stdout.write('framework build ran\\n')
@@ -6449,6 +6464,8 @@ process.stdout.write('framework build ran\\n')
         expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
         const upgrades = [
+          { command: ['prepare'], tables: [] },
+          { command: ['seed'], tables: ['profiles', 'users'] },
           { command: ['migrate'], tables: ['profiles', 'users'] },
           { command: ['build'], tables: ['profiles', 'users'] },
           { command: ['migrate:fresh'], tables: ['profiles', 'users'] },

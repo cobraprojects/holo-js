@@ -330,9 +330,12 @@ export async function withRuntimeEnvironment<T>(
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
+  if (kind === 'seed' || kind === 'media:regenerate') {
+    await withRuntimeEnvironment(projectRoot, 'generate-schema', {}, async () => undefined)
+  }
   if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
-    await prepareProjectDiscovery(projectRoot, project.config, true, isSchemaChangingKind(kind) ? 'regenerating' : 'current')
+    await prepareProjectDiscovery(projectRoot, project.config)
   }
 
   const environment = await getRuntimeEnvironment(projectRoot, kind)
