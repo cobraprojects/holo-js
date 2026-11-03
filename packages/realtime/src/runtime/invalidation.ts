@@ -334,14 +334,19 @@ function releaseRemoteRefreshSlot(generation: number): void {
 }
 
 async function refreshRemoteEntry(refreshKey: string): Promise<void> {
-  const running = getRuntimeState().refreshes.get(refreshKey)
-  if (running?.running) {
-    running.pending = true
+  const generation = remoteRefreshGeneration
+  const running = getRuntimeState().refreshes.get(refreshKey)?.running
+  if (running) {
+    await Promise.allSettled([running])
+    if (generation !== remoteRefreshGeneration) {
+      return
+    }
+
     queuedRemoteRefreshKeys.delete(refreshKey)
+    await requestRemoteRefresh(refreshKey)
     return
   }
 
-  const generation = remoteRefreshGeneration
   const acquired = await acquireRemoteRefreshSlot()
   if (!acquired || generation !== remoteRefreshGeneration) {
     return
@@ -399,28 +404,27 @@ async function refreshSubscriptionsForRemoteTables(tableDependencies: readonly s
     }
   }
 
-  const refreshes: Promise<void>[] = []
-  for (const refreshKey of refreshKeys) {
-    if (remoteRefreshTimers.has(refreshKey)) {
-      continue
-    }
+  await Promise.all([...refreshKeys].map(requestRemoteRefresh))
+}
 
-    const now = Date.now()
-    const lastRunAt = remoteRefreshLastRunAt.get(refreshKey)
-    if (lastRunAt !== undefined && now - lastRunAt < REMOTE_REFRESH_MIN_INTERVAL_MS) {
-      scheduleDeferredRemoteRefresh(refreshKey, lastRunAt + REMOTE_REFRESH_MIN_INTERVAL_MS - now)
-      continue
-    }
-
-    if (queuedRemoteRefreshKeys.has(refreshKey)) {
-      continue
-    }
-
-    queuedRemoteRefreshKeys.add(refreshKey)
-    refreshes.push(refreshRemoteEntry(refreshKey))
+async function requestRemoteRefresh(refreshKey: string): Promise<void> {
+  if (remoteRefreshTimers.has(refreshKey)) {
+    return
   }
 
-  await Promise.all(refreshes)
+  const now = Date.now()
+  const lastRunAt = remoteRefreshLastRunAt.get(refreshKey)
+  if (lastRunAt !== undefined && now - lastRunAt < REMOTE_REFRESH_MIN_INTERVAL_MS) {
+    scheduleDeferredRemoteRefresh(refreshKey, lastRunAt + REMOTE_REFRESH_MIN_INTERVAL_MS - now)
+    return
+  }
+
+  if (queuedRemoteRefreshKeys.has(refreshKey)) {
+    return
+  }
+
+  queuedRemoteRefreshKeys.add(refreshKey)
+  await refreshRemoteEntry(refreshKey)
 }
 
 export async function handleDatabaseInvalidation(
