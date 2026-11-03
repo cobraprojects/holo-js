@@ -3723,12 +3723,9 @@ export class ModelRepository<
     return Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
         const definition = typeof table === 'string' ? undefined : table.columns[column]
-        if (!definition) {
-          return [column, value]
-        }
-
-        const normalized = normalizeDialectReadValue(dialect, definition, value)
-        return [column, timestampColumns.includes(column) && storesText(definition) ? this.applyCastGet('datetime', normalized) : normalized]
+        const normalized = definition ? normalizeDialectReadValue(dialect, definition, value) : value
+        const readsAsDate = timestampColumns.includes(column) && (!definition || storesText(definition))
+        return [column, readsAsDate ? this.applyCastGet('datetime', normalized) : normalized]
       }),
     )
   }

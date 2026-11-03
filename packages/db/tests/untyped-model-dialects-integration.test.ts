@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
+import { DB, type Entity, belongsTo, belongsToMany, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -147,6 +147,44 @@ describe.each(drivers)('an untyped model on a %s connection', (driver) => {
 
     expectRecent(storedInstant(stored?.created_at))
     expectRecent(storedInstant(stored?.updated_at))
+  })
+
+  it('reads withTimestamps() pivot columns as Date', async () => {
+    const { createTable } = await openAnalyticsConnection(driver)
+    const users = await createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+    const roles = await createTable('roles', (table) => {
+      table.id()
+      table.string('name')
+    })
+    const memberships = await createTable('memberships', (table) => {
+      table.integer('user_id')
+      table.integer('role_id')
+      table.timestamps()
+    })
+    const Role = defineModel(roles, { connectionName: 'analytics', name: 'Role', fillable: ['name'], timestamps: false })
+    const User = defineModel(users, {
+      connectionName: 'analytics',
+      name: 'User',
+      fillable: ['name'],
+      timestamps: false,
+      relations: { roles: belongsToMany(() => Role, memberships, 'user_id', 'role_id').withTimestamps() },
+    })
+    const user = await User.create({ name: 'Ada' })
+    await user.attach('roles', (await Role.create({ name: 'admin' })).get('id'))
+
+    const eager = await User.with('roles').findOrFail(user.get('id'))
+    const lazy = await User.findOrFail(user.get('id'))
+    await lazy.load('roles')
+
+    for (const loaded of [eager, lazy]) {
+      const [role] = loaded.getRelation<Entity[]>('roles')
+      const pivot = role?.getRelation<Record<string, unknown>>('pivot')
+      expectRecent(pivot?.created_at)
+      expectRecent(pivot?.updated_at)
+    }
   })
   it('reads an incrementing key as the number create() returns', async () => {
     const { createTable } = await openAnalyticsConnection(driver)

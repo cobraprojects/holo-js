@@ -108,7 +108,7 @@ Models without `connectionName` use the default connection.
 The generated schema covers only the default connection, so a model on another connection is untyped, as in Laravel. Its attributes are `unknown` in TypeScript, and column names aren't checked. At runtime the model works from the rows the database returns:
 
 - The primary key is `id`, or the column you set with `primaryKey`. A record you create without a key gets the database's auto-increment ID. An integer key reads as a number, as Eloquent casts an incrementing key, including PostgreSQL `bigint` keys that the driver returns as text. A key beyond `Number.MAX_SAFE_INTEGER` stays a string, so it never loses digits.
-- `created_at` and `updated_at` are filled unless you set `timestamps: false`, and they read as `Date`. `softDeletes` uses `deleted_at` unless you set `deletedAtColumn`.
+- `created_at` and `updated_at` are filled unless you set `timestamps: false`, and they read as `Date`, as do the pivot columns of a `withTimestamps()` relation. `softDeletes` uses `deleted_at` unless you set `deletedAtColumn`.
 - `fillable` decides which attributes you can write. A model that sets only `guarded` can also write the table's other real columns, as in Laravel: Holo reads the table's columns from that connection once, caches them, and rereads them after a schema change in the same process. Any other attribute, including a JSON path such as `meta->role`, throws `SecurityError`.
 - Your `casts` apply. Other attributes are the values the driver returns, such as JSON as text on SQLite.
 - Relations to models on the same connection work as usual.
