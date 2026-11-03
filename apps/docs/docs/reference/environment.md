@@ -81,7 +81,7 @@ Used in `config/database.ts`. See [database.ts](/reference/config#database-ts). 
 | `DB_IDLE_TIMEOUT_MS` | `30000` | Postgres: idle connection timeout. |
 | `DB_MAX_CONCURRENT_QUERIES` | `4` | Postgres: queries running at once. |
 | `DB_QUERY_QUEUE_LIMIT` | `32` | Postgres: queries allowed to wait. |
-| `DB_SSL` | `false` | `true` or `false`. Turns on TLS for PostgreSQL and MySQL connections. |
+| `DB_SSL` | `false` | `true` or `false`. Turns on TLS for MySQL connections whose config reads it, as new MySQL projects do. PostgreSQL TLS comes from `sslmode` in `DB_URL` or from `PGSSLMODE`. |
 | `DB_LOGGING` | `false` | `true` or `false`. Turns on the connection's built-in query logging. |
 
 ## Redis

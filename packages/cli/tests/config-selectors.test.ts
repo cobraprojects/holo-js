@@ -199,17 +199,29 @@ connections: { ...config.connections, alternate: { driver: 'sqlite', url: ':memo
     expect(overridden.database.connections.main).toMatchObject({ driver: 'postgres' })
   })
 
-  it.each([
-    { databaseDriver: 'sqlite' as const, unset: { logging: false }, set: { logging: true } },
-    { databaseDriver: 'mysql' as const, unset: { ssl: false, logging: false }, set: { ssl: true, logging: true } },
-    { databaseDriver: 'postgres' as const, unset: { ssl: false, logging: false }, set: { ssl: true, logging: true } },
-  ])('reads DB_SSL and DB_LOGGING for a $databaseDriver scaffold', async ({ databaseDriver, unset, set }) => {
+  it.each(['sqlite', 'mysql', 'postgres'] as const)('reads DB_LOGGING for a %s scaffold', async (databaseDriver) => {
     const root = await createProject()
     await writeConfig(root, 'database', renderScaffoldDatabaseConfig({ databaseDriver, projectName: 'Fixture' }))
     const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
-    expect(defaults.database.connections.main).toMatchObject(unset)
-    const configured = await loadConfigDirectory(root, { processEnv: { DB_SSL: 'true', DB_LOGGING: 'true' }, preferCache: false })
-    expect(configured.database.connections.main).toMatchObject(set)
+    expect(defaults.database.connections.main).toMatchObject({ logging: false })
+    const configured = await loadConfigDirectory(root, { processEnv: { DB_LOGGING: 'true' }, preferCache: false })
+    expect(configured.database.connections.main).toMatchObject({ logging: true })
+  })
+
+  it('reads DB_SSL for a MySQL scaffold', async () => {
+    const root = await createProject()
+    await writeConfig(root, 'database', renderScaffoldDatabaseConfig({ databaseDriver: 'mysql', projectName: 'Fixture' }))
+    const defaults = await loadConfigDirectory(root, { processEnv: {}, preferCache: false })
+    expect(defaults.database.connections.main).toMatchObject({ ssl: false })
+    const configured = await loadConfigDirectory(root, { processEnv: { DB_SSL: 'true' }, preferCache: false })
+    expect(configured.database.connections.main).toMatchObject({ ssl: true })
+  })
+
+  it('leaves PostgreSQL TLS to PGSSLMODE in a PostgreSQL scaffold', async () => {
+    const root = await createProject()
+    await writeConfig(root, 'database', renderScaffoldDatabaseConfig({ databaseDriver: 'postgres', projectName: 'Fixture' }))
+    const configured = await loadConfigDirectory(root, { processEnv: { PGSSLMODE: 'require' }, preferCache: false })
+    expect(configured.database.connections.main).not.toHaveProperty('ssl')
   })
 
   it('loads finite PostgreSQL scaffold budgets and numeric environment overrides', async () => {

@@ -242,7 +242,7 @@ import { env } from '@holo-js/config'
 export default defineDatabaseConfig({
   connections: {
     main: {
-      driver: 'postgres',
+      driver: 'mysql',
       database: 'my_app', // [!code --]
       database: env('DB_DATABASE', 'my_app'), // [!code ++]
       ssl: env('DB_SSL', false), // [!code ++]
@@ -252,7 +252,7 @@ export default defineDatabaseConfig({
 })
 ```
 
-New projects read `DB_SSL` and `DB_LOGGING` this way.
+New projects read `DB_LOGGING` this way, and new MySQL projects also read `DB_SSL`. On PostgreSQL, leave `ssl` out and set `sslmode` in `DB_URL` or `PGSSLMODE`, which the driver reads when `ssl` isn't set.
 
 ### PostgreSQL `schema` sets `search_path`
 
