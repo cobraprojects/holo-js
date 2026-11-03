@@ -1976,10 +1976,7 @@ class ModelQueryBuilderBase<
   async delete(): Promise<DriverExecutionResult> {
     const deletedAtColumn = this.repository.getDeletedAtColumn()
     if (deletedAtColumn) {
-      const deletedAt = new Date().toISOString()
-      return this.withoutTrashed().getTableQueryBuilder().update(
-        this.repository.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt),
-      )
+      return this.withoutTrashed().getTableQueryBuilder().update(this.repository.softDeleteWrite(deletedAtColumn))
     }
 
     return this.getTableQueryBuilder().delete()

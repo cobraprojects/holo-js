@@ -128,7 +128,7 @@ function postgresZonedText(parsed: { instant: Date, fraction: string | undefined
   return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
-function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
   if (dialect === 'sqlite') {
     return value instanceof Date ? value.toISOString() : value
   }

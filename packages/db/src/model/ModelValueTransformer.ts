@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { normalizeDialectReadValue, normalizeDialectWriteValue, storesText } from '../schema/normalization'
+import { dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -209,7 +209,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
-      return value
+      return this.isDateLikeCast(this.resolveCast(key)) ? dateLikeWriteValue(this.getSchemaDialectName(), value) : value
     }
 
     if (column.kind === 'json') {
@@ -217,6 +217,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)
+  }
+
+  private isDateLikeCast(cast: ModelCastDefinition | undefined): boolean {
+    const name = this.parseBuiltInCast(cast)?.name
+    return name === 'date' || name === 'datetime' || name === 'timestamp'
   }
 
   private getSchemaDialectName(): SchemaDialectName {
