@@ -26,6 +26,26 @@ describe('native schema diff', () => {
     })
   })
 
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('reports no changes for unique columns with conventional and shortened names on %s', async driver => {
+    const { schema } = await openDatabase(driver)
+    const name = `holo_diff_unique_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`
+    onTestFinished(() => schema.dropTable(name))
+    await schema.createTable(name, table => {
+      table.id()
+      table.string('email').unique()
+      table.string('organizer_primary_contact_email_address').unique()
+    })
+    const expected = defineTable(name, {
+      id: column.id(),
+      email: column.string().unique(),
+      organizer_primary_contact_email_address: column.string().unique(),
+    })
+
+    const diff = await diffSchema(schema, [expected])
+
+    expect(diff.tables[0]).toMatchObject({ missingIndexes: [], extraIndexes: [], mismatchedIndexes: [], hasChanges: false })
+  })
+
   it('compares actual foreign keys, unique indexes, and default reference actions', async () => {
     const { db, schema } = openSQLiteSchema()
     const teams = defineTable('teams', { id: column.id() })

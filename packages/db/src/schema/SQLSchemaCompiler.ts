@@ -1,8 +1,8 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
-import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, TableDefinition, TableIndexDefinition } from './types'
-import type { DDLOperation, DDLStatement } from './ddl'
+import type { DDLOperation, DDLStatement, UniqueBacking } from './ddl'
 
 type IdentifierQuoter = (identifier: string) => string
 
@@ -26,7 +26,10 @@ export abstract class SQLSchemaCompiler {
     }
 
     if (operation.kind === 'addColumn') {
-      return [this.compileAddColumn(operation.tableName, operation.column)]
+      return [
+        this.compileAddColumn(operation.tableName, operation.column),
+        ...this.compileStandaloneUniqueIndexes(operation.tableName, this.resolveColumnUniqueIndexes(operation.tableName, [operation.column])),
+      ]
     }
 
     if (operation.kind === 'dropColumn') {
@@ -62,6 +65,10 @@ export abstract class SQLSchemaCompiler {
       return [this.compileDropIndex(operation.tableName, operation.indexName)]
     }
 
+    if (operation.kind === 'dropUnique') {
+      return [this.compileDropUnique(operation.tableName, operation.indexName, operation.backedBy)]
+    }
+
     if (operation.kind === 'renameTable') {
       return [this.compileRenameTable(operation.fromTableName, operation.toTableName)]
     }
@@ -79,25 +86,54 @@ export abstract class SQLSchemaCompiler {
 
   compileCreateTable(table: TableDefinition): DDLStatement[] {
     assertValidIdentifierPath(table.tableName, 'Table name')
-    assertUniqueResolvedIndexNames(table.tableName, table.indexes)
-    const columnSql = this.compileTableDefinitions(table)
+    const columnUniqueIndexes = this.resolveColumnUniqueIndexes(table.tableName, Object.values(table.columns))
+    const declaredIndexes = table.indexes.filter(index => !columnUniqueIndexes.some(columnUnique => this.isSameIndex(table.tableName, columnUnique, index)))
+    assertUniqueResolvedIndexNames(table.tableName, [...declaredIndexes, ...columnUniqueIndexes])
+    const columnSql = [
+      ...this.compileTableDefinitions(table),
+      ...this.compileUniqueConstraints(table.tableName, columnUniqueIndexes),
+    ]
     const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
     const statements: DDLStatement[] = [{
       sql,
       source: `schema:createTable:${table.tableName}`,
     }]
 
-    for (const index of table.indexes) {
+    for (const index of declaredIndexes) {
       statements.push(this.compileCreateIndex(table.tableName, index))
     }
 
+    statements.push(...this.compileStandaloneUniqueIndexes(table.tableName, columnUniqueIndexes))
     return statements
+  }
+
+  resolveColumnUniqueIndexes(tableName: string, columns: readonly AnyColumnDefinition[]): TableIndexDefinition[] {
+    return columns
+      .filter(column => column.unique && !column.primaryKey)
+      .map(column => ({ columns: [column.name], unique: true, name: resolveGeneratedUniqueIndexName(tableName, [column.name]) }))
+  }
+
+  private isSameIndex(tableName: string, left: TableIndexDefinition, right: TableIndexDefinition): boolean {
+    return left.unique === right.unique
+      && left.columns.join('|') === right.columns.join('|')
+      && this.resolveIndexName(tableName, left) === this.resolveIndexName(tableName, right)
+  }
+
+  protected compileUniqueConstraints(tableName: string, indexes: readonly TableIndexDefinition[]): string[] {
+    return indexes.map(index => `CONSTRAINT ${this.quoteIdentifier(this.resolveIndexName(tableName, index))} UNIQUE (${index.columns.map(column => this.quoteIdentifier(column)).join(', ')})`)
+  }
+
+  compileStandaloneUniqueIndexes(_tableName: string, _indexes: readonly TableIndexDefinition[]): DDLStatement[] {
+    return []
   }
 
   compileAddColumn(tableName: string, column: AnyColumnDefinition): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
+    const uniqueConstraints = this.compileUniqueConstraints(tableName, this.resolveColumnUniqueIndexes(tableName, [column]))
+      .map(constraint => `, ADD ${constraint}`)
+      .join('')
     return {
-      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD COLUMN ${this.compileColumn(tableName, column)}`,
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD COLUMN ${this.compileColumn(tableName, column)}${uniqueConstraints}`,
       source: `schema:addColumn:${tableName}:${column.name}`,
     }
   }
@@ -227,6 +263,19 @@ export abstract class SQLSchemaCompiler {
     }
   }
 
+  compileDropUnique(tableName: string, indexName: string, backedBy: UniqueBacking): DDLStatement {
+    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidIndexName(indexName)
+    const sql = backedBy === 'constraint'
+      ? `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(indexName)}`
+      : `DROP INDEX ${this.compileIdentifierPath([...tableName.split('.').slice(0, -1), indexName].join('.'))}`
+
+    return {
+      sql,
+      source: `schema:dropUnique:${tableName}:${indexName}`,
+    }
+  }
+
   compileRenameTable(fromTableName: string, toTableName: string): DDLStatement {
     assertValidIdentifierPath(fromTableName, 'Table name')
     assertValidIdentifierPath(toTableName, 'Table name')
@@ -272,10 +321,6 @@ export abstract class SQLSchemaCompiler {
 
     if (!column.nullable) {
       parts.push('NOT NULL')
-    }
-
-    if (column.unique && !column.primaryKey) {
-      parts.push('UNIQUE')
     }
 
     if (column.defaultKind === 'value') {

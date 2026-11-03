@@ -24,6 +24,14 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return compileDialectDefaultLiteral('sqlite', value)
   }
 
+  protected override compileUniqueConstraints(): string[] {
+    return []
+  }
+
+  override compileStandaloneUniqueIndexes(tableName: string, indexes: readonly TableIndexDefinition[]): DDLStatement[] {
+    return indexes.map(index => this.compileCreateIndex(tableName, index))
+  }
+
   compileRecreateIndex(tableName: string, fromIndexName: string, index: TableIndexDefinition): DDLStatement[] {
     return [this.compileDropIndex(tableName, fromIndexName), this.compileIndexCreation(tableName, index, '')]
   }
@@ -37,11 +45,16 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     assertValidIdentifierPath(temporaryTableName, 'Table name')
     const compiledDefinitions = definitions.map(definition => typeof definition === 'string'
       ? definition
-      : this.compileColumn(tableName, definition))
+      : this.compileRebuiltColumn(tableName, definition))
     const tableOptions = options ? ` ${options}` : ''
     return {
       sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${compiledDefinitions.join(', ')})${tableOptions}`,
       source: `schema:sqliteRebuild:create:${tableName}`,
     }
+  }
+
+  private compileRebuiltColumn(tableName: string, column: AnyColumnDefinition): string {
+    const definition = this.compileColumn(tableName, column)
+    return column.unique && !column.primaryKey ? `${definition} UNIQUE` : definition
   }
 }

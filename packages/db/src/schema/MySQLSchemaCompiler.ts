@@ -83,6 +83,13 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
+  override compileDropUnique(tableName: string, indexName: string): { sql: string, source: string } {
+    return {
+      ...this.compileDropIndex(tableName, indexName),
+      source: `schema:dropUnique:${tableName}:${indexName}`,
+    }
+  }
+
   override compileDropForeignKey(tableName: string, constraintName: string): { sql: string, source: string } {
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP FOREIGN KEY ${this.quoteIdentifier(constraintName)}`,

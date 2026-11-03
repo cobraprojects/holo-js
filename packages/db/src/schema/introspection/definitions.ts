@@ -1,4 +1,4 @@
-import { createConventionalIndexName } from '../generatedNames'
+import { createGeneratedUniqueIndexName } from '../generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableColumnsShape, TableDefinition, TableIndexDefinition } from '../types'
 import type { DatabaseColumnStructure, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, SchemaReadingDialect } from './types'
 
@@ -84,7 +84,7 @@ function toForeignKeyReference(foreignKey: DatabaseForeignKeyStructure): Foreign
 function conventionalUniqueNames(structure: DatabaseTableStructure, columnName: string): string[] {
   const table = structure.tableName.split('.').at(-1)!
   const tableNames = new Set([structure.tableName, table, ...(structure.schema ? [`${structure.schema}.${table}`] : [])])
-  return [...tableNames].map(tableName => createConventionalIndexName(tableName, [columnName], 'unique'))
+  return [...tableNames].map(tableName => createGeneratedUniqueIndexName(tableName, [columnName]))
 }
 
 function isUniqueColumnIndex(structure: DatabaseTableStructure, index: DatabaseIndexStructure): boolean {
