@@ -71,6 +71,8 @@ export default defineDatabaseConfig({
 })
 ```
 
+SQLite has no date type. A `Date` you write or bind on SQLite, in a model, in `DB.table()` or in `where()`, is stored as ISO 8601 text in UTC, such as `2026-01-02T03:04:05.000Z`. This is the format Holo writes to `date`, `datetime` and `timestamp` columns, so a `Date` compares correctly against them and against `TEXT` date columns created before 0.6.
+
 ### PostgreSQL and MySQL
 
 Use either a connection URL or separate host settings. You can also set `ssl` next to a URL. It adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests.

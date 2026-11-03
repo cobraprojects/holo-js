@@ -6902,6 +6902,67 @@ export const plainColumnIsString: Equal<UserRecord['email'], string> = true
     expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
   }, 90000)
 
+  it('types model timestamps stored in SQLite TEXT columns as dates in the model registry', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './data.sqlite' },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', table => {
+      table.id()
+      table.text('created_at').nullable()
+      table.text('updated_at').nullable()
+      table.text('deleted_at').nullable()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { name: 'User', softDeletes: true })
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8'))
+      .toContain('ModelReference<ModelCastedTable<GeneratedSchemaTable<"users">, Record<never, never>, "created_at" | "updated_at" | "deleted_at">, EmptyScopeMap>')
+    await writeProjectFile(projectRoot, 'check-model-types.ts', `
+import './.holo-js/generated/model-registry'
+import type { InferSelect, ModelReference, RegisteredModelReference } from '@holo-js/db'
+
+type Equal<TLeft, TRight> = (<T>() => T extends TLeft ? 1 : 2) extends (<T>() => T extends TRight ? 1 : 2) ? true : false
+type UserRecord = RegisteredModelReference<'User'> extends ModelReference<infer TTable> ? InferSelect<TTable> : never
+
+export const createdAtIsDate: Equal<UserRecord['created_at'], Date | null> = true
+export const deletedAtIsDate: Equal<UserRecord['deleted_at'], Date | null> = true
+`)
+    const program = ts.createProgram([join(projectRoot, 'check-model-types.ts')], {
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+    })
+    expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([])
+  }, 90000)
+
   it('recovers migration metadata when a discovered model uses a generated table without a primary key', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
