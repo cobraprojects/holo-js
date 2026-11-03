@@ -6,6 +6,7 @@ import type {
 } from './types'
 import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from './SchemaService'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
+import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
 
 export interface SchemaColumnMismatch {
@@ -273,13 +274,13 @@ function isConstraintIndex(table: TableDefinition, index: IntrospectedIndex): bo
   if (!index.unique || table.indexes.some(expected => normalizeExpectedIndex(table, expected).name === index.name)) return false
   const primaryKeys = Object.values(table.columns).filter(column => column.primaryKey).map(column => column.name)
   const matchesPrimaryKey = index.columns.length === primaryKeys.length && index.columns.every((column, position) => column === primaryKeys[position])
-  if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${table.tableName}_pkey` || index.name.startsWith(`sqlite_autoindex_${table.tableName}_`))) return true
+  if (matchesPrimaryKey && (index.name === 'PRIMARY' || index.name === `${table.tableName}_pkey` || index.name.startsWith(`${SQLITE_AUTOINDEX_PREFIX}${table.tableName}_`))) return true
   const column = index.columns.length === 1 ? table.columns[index.columns[0]!] : undefined
   const unqualifiedTableName = table.tableName.split('.').at(-1)!
   return Boolean(column?.unique && (index.name === column.name
     || index.name === `${unqualifiedTableName}_${column.name}_key`
     || index.name === createGeneratedUniqueIndexName(table.tableName, [column.name])
-    || index.name.startsWith(`sqlite_autoindex_${unqualifiedTableName}_`)))
+    || index.name.startsWith(`${SQLITE_AUTOINDEX_PREFIX}${unqualifiedTableName}_`)))
 }
 
 function normalizeExpectedIndex(

@@ -1,3 +1,5 @@
+import { splitTablePath } from '../identifiers'
+import { createIntrospect } from './introspect'
 import { readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
@@ -19,13 +21,6 @@ function readColumnDefault(row: ColumnRow): DatabaseColumnDefault {
     return { kind: 'literal', value: Number(row.column_default) }
   }
   return { kind: 'literal', value: row.column_default }
-}
-
-function splitTableName(tableName: string): { schema: string | null, table: string } {
-  const separator = tableName.lastIndexOf('.')
-  return separator === -1
-    ? { schema: null, table: tableName }
-    : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
 }
 
 function readEnumColumns(columns: readonly ColumnRow[]): DatabaseEnumCheckStructure[] {
@@ -55,8 +50,7 @@ function groupIndexes(rows: readonly IndexRow[]): DatabaseIndexStructure[] {
 
 export function createMySQLSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const configuredSchema = connection.getSchemaName() ?? null
-  const introspect = <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[], source: string) =>
-    connection.introspectCompiled<TRow>({ sql, bindings, source })
+  const introspect = createIntrospect(connection)
 
   return {
     async listTables() {
@@ -65,7 +59,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
     },
 
     async readTableStructure(tableName) {
-      const { schema, table } = splitTableName(tableName)
+      const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
       const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, column_key AS column_key, extra AS extra FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
       const resolvedSchema = columns.rows[0]?.table_schema

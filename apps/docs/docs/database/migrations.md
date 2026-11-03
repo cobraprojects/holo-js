@@ -402,7 +402,7 @@ Each method creates these database column types:
 | `date()` | `date` | `DATE` | `DATE` |
 | `datetime()` | `datetime` | `TIMESTAMP` | `DATETIME` |
 | `timestamp()` | `datetime` | `TIMESTAMP` | `TIMESTAMP` |
-| `json()` | `text` | `JSONB` | `JSON` |
+| `json()` | `TEXT` | `JSONB` | `JSON` |
 | `blob()` | `BLOB` | `BYTEA` | `BLOB` |
 | `vector()` | Not supported | `VECTOR(n)` | Not supported |
 | `uuid()`, `foreignUuid()` | `TEXT` | `UUID` | `CHAR(36)` |
@@ -539,7 +539,7 @@ table.timestamp('published_at').nullable()
 
 ### json()
 
-Adds a JSON column. It becomes `JSONB` on PostgreSQL, `JSON` on MySQL, and `text` on SQLite. On PostgreSQL and MySQL, reads return the parsed value. On SQLite the database only knows the column as text, so add a [`'json'` cast](/orm/casts#json-columns) to the model to read and type it as JSON.
+Adds a JSON column. It becomes `JSONB` on PostgreSQL, `JSON` on MySQL, and `TEXT` on SQLite. On PostgreSQL and MySQL, reads return the parsed value. On SQLite the database only knows the column as text, so add a [`'json'` cast](/orm/casts#json-columns) to the model to read and type it as JSON.
 
 ```ts
 table.json('shipping_address').nullable()

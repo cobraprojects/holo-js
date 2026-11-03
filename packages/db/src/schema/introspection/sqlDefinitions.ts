@@ -19,10 +19,12 @@ export function readStringLiterals(text: string): string[] {
   return [...text.matchAll(new RegExp(STRING_LITERAL_PATTERN, 'g'))].map(match => unquoteStringLiteral(match[0]))
 }
 
-function findClosingParenthesis(sql: string, openIndex: number): number {
+type UnquotedCharacterVisitor = (character: string, index: number, depth: number) => boolean
+
+function findUnquotedCharacter(sql: string, startIndex: number, matches: UnquotedCharacterVisitor): number {
   let depth = 0
-  for (let index = openIndex; index < sql.length; index += 1) {
-    const character = sql[index]!
+  for (let index = startIndex; index < sql.length; index += 1) {
+    const character = sql.charAt(index)
     const closingQuote = QUOTE_PAIRS[character]
     if (closingQuote) {
       index = sql.indexOf(closingQuote, index + 1)
@@ -30,12 +32,24 @@ function findClosingParenthesis(sql: string, openIndex: number): number {
       continue
     }
     if (character === '(') depth += 1
-    if (character === ')') {
-      depth -= 1
-      if (depth === 0) return index
-    }
+    if (character === ')') depth -= 1
+    if (matches(character, index, depth)) return index
   }
   return -1
+}
+
+export function findClosingParenthesis(sql: string, openIndex: number): number {
+  return findUnquotedCharacter(sql, openIndex, (character, _index, depth) => character === ')' && depth === 0)
+}
+
+function splitTopLevelCommas(sql: string): string[] {
+  const separators: number[] = []
+  findUnquotedCharacter(sql, 0, (character, index, depth) => {
+    if (character === ',' && depth === 0) separators.push(index)
+    return false
+  })
+  const starts = [0, ...separators.map(separator => separator + 1)]
+  return starts.map((start, position) => sql.slice(start, separators[position] ?? sql.length).trim())
 }
 
 export interface CreateTableSqlParts {
@@ -48,26 +62,7 @@ export function splitCreateTableSql(createTableSql: string): CreateTableSqlParts
   const closeIndex = openIndex === -1 ? -1 : findClosingParenthesis(createTableSql, openIndex)
   if (closeIndex === -1) return undefined
 
-  const body = createTableSql.slice(openIndex + 1, closeIndex)
-  const definitions: string[] = []
-  let depth = 0
-  let start = 0
-  for (let index = 0; index < body.length; index += 1) {
-    const character = body[index]!
-    const closingQuote = QUOTE_PAIRS[character]
-    if (closingQuote) {
-      index = body.indexOf(closingQuote, index + 1)
-      if (index === -1) break
-      continue
-    }
-    if (character === '(') depth += 1
-    if (character === ')') depth -= 1
-    if (character === ',' && depth === 0) {
-      definitions.push(body.slice(start, index).trim())
-      start = index + 1
-    }
-  }
-  definitions.push(body.slice(start).trim())
+  const definitions = splitTopLevelCommas(createTableSql.slice(openIndex + 1, closeIndex))
   return {
     definitions: definitions.filter(definition => definition.length > 0),
     options: createTableSql.slice(closeIndex + 1).trim(),
@@ -88,8 +83,8 @@ export function isPrimaryKeyConstraintDefinition(definition: string): boolean {
 
 export function readColumnDefinitionName(definition: string): string | undefined {
   if (TABLE_CONSTRAINT_PATTERN.test(definition)) return undefined
-  const match = definition.match(LEADING_IDENTIFIER_PATTERN)
-  return match ? unquoteIdentifier(match[1]!) : undefined
+  const name = definition.match(LEADING_IDENTIFIER_PATTERN)?.[1]
+  return name === undefined ? undefined : unquoteIdentifier(name)
 }
 
 const ENUM_CHECK_PATTERN = new RegExp(
@@ -98,11 +93,13 @@ const ENUM_CHECK_PATTERN = new RegExp(
 )
 
 export function readEnumChecks(definition: string): { name?: string, column: string, values: string[] }[] {
-  return [...definition.matchAll(ENUM_CHECK_PATTERN)].map(match => ({
-    ...(match[1] ? { name: unquoteIdentifier(match[1]) } : {}),
-    column: unquoteIdentifier(match[2]!),
-    values: readStringLiterals(match[3]!),
-  }))
+  return [...definition.matchAll(ENUM_CHECK_PATTERN)].flatMap(([, name, column, values]) => column === undefined || values === undefined
+    ? []
+    : [{
+        ...(name ? { name: unquoteIdentifier(name) } : {}),
+        column: unquoteIdentifier(column),
+        values: readStringLiterals(values),
+      }])
 }
 
 const INLINE_FOREIGN_KEY_NAME_PATTERN = new RegExp(`CONSTRAINT\\s+(${IDENTIFIER_PATTERN})\\s+REFERENCES\\b`, 'i')
@@ -119,14 +116,13 @@ export interface ForeignKeyDefinition {
 export function readForeignKey(definition: string, columnName: string | undefined): ForeignKeyDefinition | undefined {
   if (columnName) {
     if (!readInlineColumnConstraints(definition).references) return undefined
-    const inline = definition.match(INLINE_FOREIGN_KEY_NAME_PATTERN)
-    return inline ? { column: columnName, name: unquoteIdentifier(inline[1]!) } : { column: columnName }
+    const name = definition.match(INLINE_FOREIGN_KEY_NAME_PATTERN)?.[1]
+    return name === undefined ? { column: columnName } : { column: columnName, name: unquoteIdentifier(name) }
   }
 
-  const tableLevel = definition.match(TABLE_FOREIGN_KEY_PATTERN)
-  if (!tableLevel) return undefined
-  const column = unquoteIdentifier(tableLevel[2]!)
-  return tableLevel[1] ? { column, name: unquoteIdentifier(tableLevel[1]) } : { column }
+  const [, name, column] = definition.match(TABLE_FOREIGN_KEY_PATTERN) ?? []
+  if (column === undefined) return undefined
+  return name ? { column: unquoteIdentifier(column), name: unquoteIdentifier(name) } : { column: unquoteIdentifier(column) }
 }
 
 const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i

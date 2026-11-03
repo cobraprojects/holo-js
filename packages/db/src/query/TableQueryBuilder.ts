@@ -94,7 +94,7 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
-import { resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
+import { assertSinglePrimaryKey, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -2761,7 +2761,7 @@ export class TableQueryBuilder<
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
-    this.resolvePrimaryKeyColumn()
+    assertSinglePrimaryKey(this.source.table)
     const result = await this.executeInsert(values, true)
     return result.lastInsertId
   }

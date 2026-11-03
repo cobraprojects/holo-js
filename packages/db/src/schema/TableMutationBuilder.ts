@@ -1,4 +1,5 @@
 import { column, type AnyColumnBuilder } from './columns'
+import { SOFT_DELETE_COLUMN_NAME, softDeleteColumn, TIMESTAMP_COLUMN_NAMES, timestampColumn } from './conventionalColumns'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
 import { resolveConventionalIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
@@ -544,21 +545,22 @@ export class TableMutationBuilder {
   }
 
   timestamps(): this {
-    this.timestamp('created_at').defaultNow()
-    this.timestamp('updated_at').defaultNow()
+    for (const columnName of TIMESTAMP_COLUMN_NAMES) {
+      this.columnMutation(columnName, timestampColumn)
+    }
     return this
   }
 
-  softDeletes(columnName = 'deleted_at'): this {
-    this.timestamp(columnName).nullable()
+  softDeletes(columnName: string = SOFT_DELETE_COLUMN_NAME): this {
+    this.columnMutation(columnName, softDeleteColumn)
     return this
   }
 
   dropTimestamps(): void {
-    this.dropColumn(['created_at', 'updated_at'])
+    this.dropColumn(TIMESTAMP_COLUMN_NAMES)
   }
 
-  dropSoftDeletes(columnName = 'deleted_at'): void {
+  dropSoftDeletes(columnName: string = SOFT_DELETE_COLUMN_NAME): void {
     this.dropColumn(columnName)
   }
 

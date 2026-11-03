@@ -178,6 +178,17 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       }])
     })
 
+    it.runIf(driver === 'sqlite')('reads a parenthesized string default that contains parentheses as its literal value', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = uniqueName('holo_read_paren_default')
+      onTestFinished(() => schema.dropTable(name))
+      await db.executeCompiled({ sql: `CREATE TABLE "${name}" ("id" integer PRIMARY KEY, "face" varchar(10) NOT NULL DEFAULT (((':)'))))`, source: 'schema' })
+
+      const definition = (await createSchemaReader(db).readTable(name))!
+
+      expect(definition.columns.face).toMatchObject({ defaultKind: 'value', defaultValue: ':)' })
+    })
+
     it.runIf(driver === 'sqlite')('reads an INTEGER PRIMARY KEY as an auto-incrementing id', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = uniqueName('holo_read_rowid')

@@ -2,6 +2,7 @@ import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { resolveGeneratedCheckName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
+import type { DDLStatement } from './ddl'
 import type { ColumnDefinition } from './types'
 
 export class PostgresSchemaCompiler extends SQLSchemaCompiler {
@@ -15,6 +16,20 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
 
   protected override compileDefaultValue(value: unknown): string {
     return compileDialectDefaultLiteral('postgres', value)
+  }
+
+  compileDropCheck(tableName: string, checkName: string): DDLStatement {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(checkName)}`,
+      source: `schema:dropCheck:${tableName}:${checkName}`,
+    }
+  }
+
+  compileRenameCheck(tableName: string, fromCheckName: string, toCheckName: string): DDLStatement {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} RENAME CONSTRAINT ${this.quoteIdentifier(fromCheckName)} TO ${this.quoteIdentifier(toCheckName)}`,
+      source: `schema:renameCheck:${tableName}:${fromCheckName}:${toCheckName}`,
+    }
   }
 
   override compileAlterColumn(

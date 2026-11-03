@@ -1,5 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { column, type AnyColumnBuilder, type ColumnInput } from './columns'
+import { SOFT_DELETE_COLUMN_NAME, softDeleteColumn, TIMESTAMP_COLUMN_NAMES, timestampColumn } from './conventionalColumns'
 import { defineTable, type BoundTableDefinition, type DefineTableOptions } from './defineTable'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
 import { resolveConventionalIndexName } from './generatedNames'
@@ -824,15 +825,16 @@ export class TableDefinitionBuilder<
   }
 
   timestamps(): TableDefinitionBuilder<TName, WithTimestamps<TColumns>> {
-    this.timestamp('created_at').defaultNow()
-    this.timestamp('updated_at').defaultNow()
+    for (const columnName of TIMESTAMP_COLUMN_NAMES) {
+      this.column(columnName, timestampColumn())
+    }
     return this as unknown as TableDefinitionBuilder<TName, WithTimestamps<TColumns>>
   }
 
-  softDeletes<TColumnName extends string = 'deleted_at'>(
-    columnName = 'deleted_at' as TColumnName,
+  softDeletes<TColumnName extends string = typeof SOFT_DELETE_COLUMN_NAME>(
+    columnName = SOFT_DELETE_COLUMN_NAME as TColumnName,
   ): TableDefinitionBuilder<TName, WithSoftDeletes<TColumns, TColumnName>> {
-    this.timestamp(columnName).nullable()
+    this.column(columnName, softDeleteColumn())
     return this as unknown as TableDefinitionBuilder<TName, WithSoftDeletes<TColumns, TColumnName>>
   }
 

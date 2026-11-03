@@ -6,13 +6,16 @@ export function resolveTablePrimaryKeyColumns(table: TableDefinition | undefined
   return first === undefined ? ['id'] : [first, ...rest]
 }
 
-export function resolveTablePrimaryKey(table: TableDefinition | undefined): string {
-  const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(table)
-  if (otherPrimaryKeys.length > 0) {
+export function assertSinglePrimaryKey(table: TableDefinition | undefined): void {
+  const primaryKeys = resolveTablePrimaryKeyColumns(table)
+  if (primaryKeys.length > 1) {
     throw new SchemaError(
-      `Table "${table?.tableName}" has a composite primary key (${[primaryKey, ...otherPrimaryKeys].join(', ')}); this operation needs a single primary-key column.`,
+      `Table "${table?.tableName}" has a composite primary key (${primaryKeys.join(', ')}); this operation needs a single primary-key column.`,
     )
   }
+}
 
-  return primaryKey
+export function resolveTablePrimaryKey(table: TableDefinition | undefined): string {
+  assertSinglePrimaryKey(table)
+  return resolveTablePrimaryKeyColumns(table)[0]
 }

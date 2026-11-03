@@ -88,7 +88,7 @@ const SQLITE_LOGICAL_TYPE_MAP: DialectTypeMapping = {
   date: 'date',
   datetime: 'datetime',
   timestamp: 'datetime',
-  json: 'text',
+  json: 'TEXT',
   blob: 'BLOB',
   uuid: DIALECT_ID_STRATEGY_MAP.sqlite.uuid,
   ulid: DIALECT_ID_STRATEGY_MAP.sqlite.ulid,
