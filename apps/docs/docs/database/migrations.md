@@ -814,7 +814,7 @@ As in Laravel, the rebuild runs with foreign key checks off, so rows in other ta
 
 ### timestamps()
 
-Adds `created_at` and `updated_at`, both defaulting to the current time. Available in `createTable()` only.
+Adds `created_at` and `updated_at`, both defaulting to the current time. Available in `createTable()` and `table()`, with the same column definitions in both.
 
 ```ts
 await schema.createTable('posts', (table) => {
@@ -825,20 +825,31 @@ await schema.createTable('posts', (table) => {
 
 ### softDeletes()
 
-Adds a nullable `deleted_at` timestamp, or the column name you pass. Available in `createTable()` only.
+Adds a nullable `deleted_at` timestamp, or the column name you pass. Available in `createTable()` and `table()`.
 
 ```ts
-await schema.createTable('posts', (table) => {
-  table.id()
+await schema.table('posts', (table) => {
   table.softDeletes()
 })
 ```
 
-To add these to an existing table, add the columns yourself:
+### dropTimestamps()
+
+Drops `created_at` and `updated_at`. Available inside `table()`. Use it to undo `timestamps()`.
 
 ```ts
 await schema.table('posts', (table) => {
-  table.timestamp('deleted_at').nullable()
+  table.dropTimestamps()
+})
+```
+
+### dropSoftDeletes()
+
+Drops `deleted_at`, or the column name you pass. Available inside `table()`. Use it to undo `softDeletes()`.
+
+```ts
+await schema.table('posts', (table) => {
+  table.dropSoftDeletes()
 })
 ```
 
@@ -912,6 +923,16 @@ table.nullableSnowflakeMorphs('reactable')
 ```
 
 Every morph helper accepts an index name as its second argument, for example `table.morphs('commentable', 'comments_commentable_lookup')`.
+
+### dropMorphs()
+
+Drops the index `{table}_{name}_type_{name}_id_index`, or the index name you pass, then the `{name}_type` and `{name}_id` columns. Available inside `table()`. Use it to undo any of the morph shortcuts above. When the index doesn't exist, `dropMorphs()` raises an error, as [`dropIndex()`](#dropindex) does.
+
+```ts
+await schema.table('comments', (table) => {
+  table.dropMorphs('commentable')
+})
+```
 
 ## Primary keys
 
@@ -1129,7 +1150,7 @@ await schema.table('posts', (table) => {
 
 ### dropColumn()
 
-Drops a column. Available inside `table()`. On PostgreSQL, dropping a column also drops its indexes and constraints. SQLite and MySQL refuse to drop some columns and raise their own error, which leaves the table unchanged:
+Drops a column, or every column in a list. Available inside `table()`. On PostgreSQL, dropping a column also drops its indexes and constraints. SQLite and MySQL refuse to drop some columns and raise their own error, which leaves the table unchanged:
 
 - SQLite refuses a column that an index, a unique constraint, the primary key or a foreign key uses. Drop the index or unique first, or use [`dropConstrainedForeignId()`](#dropconstrainedforeignid) for a foreign key.
 - MySQL refuses a column that a foreign key uses.
@@ -1137,6 +1158,7 @@ Drops a column. Available inside `table()`. On PostgreSQL, dropping a column als
 ```ts
 await schema.table('users', (table) => {
   table.dropColumn('legacy_flags')
+  table.dropColumn(['legacy_notes', 'legacy_score'])
 })
 ```
 

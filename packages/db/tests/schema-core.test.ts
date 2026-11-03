@@ -672,6 +672,44 @@ describe('native schema core', () => {
     ])
   })
 
+  it('drops the morph index of a schema-qualified table by its conventional name before the morph columns', () => {
+    const builder = new TableMutationBuilder('tenant.posts')
+
+    builder.dropMorphs('taggable')
+    builder.dropMorphs('owner', 'posts_owner_lookup')
+
+    expect(builder.getOperations()).toEqual([
+      { kind: 'dropIndex', indexName: 'tenant_posts_taggable_type_taggable_id_index' },
+      { kind: 'dropColumn', columnName: 'taggable_type' },
+      { kind: 'dropColumn', columnName: 'taggable_id' },
+      { kind: 'dropIndex', indexName: 'posts_owner_lookup' },
+      { kind: 'dropColumn', columnName: 'owner_type' },
+      { kind: 'dropColumn', columnName: 'owner_id' },
+    ])
+  })
+
+  it('adds and drops the timestamp and soft-delete shortcut columns', () => {
+    const builder = new TableMutationBuilder('posts')
+
+    builder.timestamps()
+    builder.softDeletes()
+    builder.softDeletes('archived_at')
+    builder.dropTimestamps()
+    builder.dropSoftDeletes()
+    builder.dropSoftDeletes('archived_at')
+
+    expect(builder.getOperations()).toEqual([
+      expect.objectContaining({ kind: 'addColumn', columnName: 'created_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'updated_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'deleted_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'archived_at' }),
+      { kind: 'dropColumn', columnName: 'created_at' },
+      { kind: 'dropColumn', columnName: 'updated_at' },
+      { kind: 'dropColumn', columnName: 'deleted_at' },
+      { kind: 'dropColumn', columnName: 'archived_at' },
+    ])
+  })
+
   it('drops uniques of a schema-qualified table by their conventional column names', () => {
     const builder = new TableMutationBuilder('tenant.posts')
 
