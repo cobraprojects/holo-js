@@ -1120,6 +1120,141 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await expect(db.table(name).insert({ email: 'same@example.com' })).rejects.toThrow()
     })
 
+    it('creates the same table with every kind of declared index again without failing', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `holo_ix_again_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      onTestFinished(() => schema.dropTable(name))
+      const create = () => schema.createTable(name, table => {
+        table.id()
+        table.string('email')
+        table.string('slug').index()
+        table.integer('rank')
+        table.morphs('taggable')
+        table.unique(['email'])
+        table.index(['rank'])
+      })
+      await create()
+
+      await create()
+
+      await db.table(name).insert({ email: 'same@example.com', slug: 'a', rank: 1, taggable_type: 'post', taggable_id: 1 })
+      await expect(db.table(name).insert({ email: 'same@example.com', slug: 'b', rank: 2, taggable_type: 'post', taggable_id: 2 })).rejects.toThrow()
+      expect((await schema.getIndexes(name)).map(index => [index.columns, index.unique])).toEqual(expect.arrayContaining([
+        [['email'], true],
+        [['slug'], false],
+        [['rank'], false],
+        [['taggable_type', 'taggable_id'], false],
+      ]))
+    })
+
+    it('fails to create an existing table again when its index of the declared name has other columns', async () => {
+      const { schema } = await openDatabase(driver)
+      const name = `holo_ix_shape_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const indexName = `${name}_lookup`
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, table => {
+        table.id()
+        table.integer('rank')
+        table.integer('score')
+        table.index(['rank'], indexName)
+      })
+
+      await expect(schema.createTable(name, table => {
+        table.id()
+        table.integer('rank')
+        table.integer('score')
+        table.unique(['score'], indexName)
+      })).rejects.toThrow(SchemaError)
+
+      expect((await schema.getIndexes(name)).find(index => index.name === indexName)).toMatchObject({ columns: ['rank'], unique: false })
+    })
+
+    it.skipIf(driver === 'mysql')('fails to create a table whose declared index name another table owns, creating nothing', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const original = `holo_ix_own_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const renamed = `${original}_old`
+      onTestFinished(async () => {
+        await schema.dropTable(original)
+        await schema.dropTable(renamed)
+      })
+      const create = () => schema.createTable(original, table => {
+        table.id()
+        table.string('email')
+        table.integer('rank')
+        table.unique(['email'])
+        table.index(['rank'])
+      })
+      await create()
+      await schema.renameTable(original, renamed)
+
+      await expect(create()).rejects.toThrow(/already exists/)
+
+      expect(await schema.hasTable(original)).toBe(false)
+      await db.table(renamed).insert({ email: 'same@example.com', rank: 1 })
+      await expect(db.table(renamed).insert({ email: 'same@example.com', rank: 1 })).rejects.toThrow()
+    })
+
+    it.skipIf(driver === 'mysql')('fails to create a table whose plain index name another table owns, creating nothing', async () => {
+      const { schema } = await openDatabase(driver)
+      const original = `holo_ix_plain_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const renamed = `${original}_old`
+      onTestFinished(async () => {
+        await schema.dropTable(original)
+        await schema.dropTable(renamed)
+      })
+      const create = () => schema.createTable(original, table => {
+        table.id()
+        table.integer('rank').index()
+      })
+      await create()
+      await schema.renameTable(original, renamed)
+
+      await expect(create()).rejects.toThrow(/already exists/)
+
+      expect(await schema.hasTable(original)).toBe(false)
+    })
+
+    it('fails to add an index in schema.table() whose name another table owns', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const prefix = `holo_ix_add_${randomUUID().replaceAll('-', '').slice(0, 16)}`
+      const owner = `${prefix}_owner`
+      const target = `${prefix}_target`
+      const indexName = `${prefix}_email_unique`
+      onTestFinished(async () => {
+        await schema.dropTable(owner)
+        await schema.dropTable(target)
+      })
+      await schema.createTable(owner, table => {
+        table.id()
+        table.string('email')
+        table.unique(['email'], indexName)
+      })
+      await schema.createTable(target, table => {
+        table.id()
+        table.string('email')
+        table.integer('rank')
+      })
+
+      const addIndexes = schema.table(target, table => {
+        table.unique(['email'], indexName)
+      })
+
+      if (driver === 'mysql') {
+        await addIndexes
+        await db.table(target).insert({ email: 'same@example.com', rank: 1 })
+        await expect(db.table(target).insert({ email: 'same@example.com', rank: 2 })).rejects.toThrow()
+        return
+      }
+      await expect(addIndexes).rejects.toThrow()
+      await expect(schema.table(target, table => { table.index(['rank'], indexName) })).rejects.toThrow()
+      await expect(schema.table(target, table => { table.integer('position').nullable().index(indexName) })).rejects.toThrow()
+      await expect(schema.table(target, table => { table.nullableMorphs('taggable', indexName) })).rejects.toThrow()
+      expect((await schema.getIndexes(target)).map(index => index.name)).not.toContain(indexName)
+      await db.table(target).insert({ email: 'same@example.com', rank: 1 })
+      await db.table(target).insert({ email: 'same@example.com', rank: 1 })
+      expect(await db.table(target).count()).toBe(2)
+    })
+
     it('shortens long unique column names and still drops them by columns', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = `holo_unique_long_${randomUUID().replaceAll('-', '').slice(0, 20)}`

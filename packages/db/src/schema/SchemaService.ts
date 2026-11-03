@@ -1,7 +1,7 @@
 import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
-import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
+import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
@@ -548,39 +548,55 @@ export class SchemaService {
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
-    await this.executeWithColumnUniques(table.tableName, Object.values(table.columns), this.createCompiler().compile(createTableOperation(table)))
+    const compiler = this.createCompiler()
+    const indexes = compiler.resolveCreateTableIndexes(table)
+    const tableStatement = compiler.compileTableCreation(table)
+    if (indexes.length === 0) {
+      await this.execute([tableStatement])
+      return
+    }
+
+    await this.runAtomically(async (service) => {
+      await service.execute([tableStatement])
+      const missingIndexes = await service.resolveMissingIndexes(table.tableName, indexes)
+      await service.execute(missingIndexes.map(index => compiler.compileCreateIndex(table.tableName, index)))
+    })
   }
 
-  private async executeWithColumnUniques(
-    tableName: string,
-    columns: readonly AnyColumnDefinition[],
-    statements: DDLStatement[],
-  ): Promise<void> {
-    const expectedIndexes = this.isSqlite() ? this.createCompiler().resolveColumnUniqueIndexes(tableName, columns) : []
-    if (expectedIndexes.length === 0) {
+  private async resolveMissingIndexes(tableName: string, declaredIndexes: readonly TableIndexDefinition[]): Promise<TableIndexDefinition[]> {
+    const existingIndexes = (await createSchemaReader(this.connection).readTableStructure(tableName))?.indexes ?? []
+    return declaredIndexes.filter((declared) => {
+      const existing = existingIndexes.find(index => index.name === declared.name)
+      if (!existing) {
+        return true
+      }
+
+      if (existing.unique !== declared.unique || existing.columns.join('|') !== declared.columns.join('|')) {
+        throw new SchemaError(
+          `Index "${declared.name}" on table "${tableName}" already exists with columns "${existing.columns.join('", "')}"${existing.unique ? ' (unique)' : ''}, not the declared columns "${declared.columns.join('", "')}"${declared.unique ? ' (unique)' : ''}.`,
+        )
+      }
+
+      return false
+    })
+  }
+
+  private async runAtomically(callback: (service: SchemaService) => Promise<void>): Promise<void> {
+    if (this.isMySQL()) {
+      await callback(this)
+      return
+    }
+
+    await this.connection.transaction(tx => callback(new SchemaService(tx)))
+  }
+
+  private async executeAtomically(statements: readonly DDLStatement[]): Promise<void> {
+    if (statements.length < 2) {
       await this.execute(statements)
       return
     }
 
-    await this.connection.transaction(async (tx) => {
-      const service = new SchemaService(tx)
-      await service.execute(statements)
-      await service.assertUniqueIndexesExist(tableName, expectedIndexes)
-    })
-  }
-
-  private async assertUniqueIndexesExist(tableName: string, expectedIndexes: readonly TableIndexDefinition[]): Promise<void> {
-    const actualIndexes = await this.getIndexes(tableName)
-    for (const expected of expectedIndexes) {
-      const exists = actualIndexes.some(actual => actual.name === expected.name
-        && actual.unique
-        && actual.columns.join('|') === expected.columns.join('|'))
-      if (!exists) {
-        throw new SchemaError(
-          `Unique index "${expected.name}" for column "${expected.columns.join('", "')}" could not be created on table "${tableName}" because another index already uses that name.`,
-        )
-      }
-    }
+    await this.runAtomically(service => service.execute(statements))
   }
 
   private async resolveUniqueBacking(tableName: string, indexName: string): Promise<UniqueBacking> {
@@ -631,7 +647,7 @@ export class SchemaService {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        await this.executeWithColumnUniques(tableName, [definition], this.createCompiler().compile(addColumnOperation(tableName, definition)))
+        await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }
       case 'alterColumn': {
