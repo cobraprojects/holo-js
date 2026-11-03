@@ -148,7 +148,13 @@ export class SQLiteSchemaOperations {
     return index.columns
   }
 
-  private async rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+    const adapter = this.connection.getAdapter()
+    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite)
+    return adapter.runWithTransactionScope ? adapter.runWithTransactionScope(rebuild) : rebuild()
+  }
+
+  private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
     if (!(await this.foreignKeysEnabled())) {
       await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite))
       return

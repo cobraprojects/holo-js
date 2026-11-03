@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
-import { column, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
+import { column, createDatabase, createDialect, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
@@ -177,6 +177,59 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await db.table(parents).where('id', 2).delete()
       expect(await db.table(children).pluck('parent_id')).toEqual([1])
     })
+
+    for (const sharing of ['another context on the same adapter', 'the same context'] as const) {
+      it.runIf(driver === 'sqlite')(`keeps every child row when change() rebuilds a parent while ${sharing} has foreign-key checks off`, async () => {
+        let readEnforcement!: () => void
+        const enforcementRead = new Promise<void>(resolve => { readEnforcement = resolve })
+        const { db, schema, adapter } = await openDatabase(driver, {
+          wrapAdapter: adapter => new Proxy(adapter, {
+            get(target, property) {
+              const introspect = target.introspect?.bind(target)
+              if (property !== 'introspect' || !introspect) return Reflect.get(target, property, target)
+              return async (...args: Parameters<typeof introspect>) => {
+                const result = await introspect(...args)
+                if (args[0] === 'PRAGMA foreign_keys') readEnforcement()
+                return result
+              }
+            },
+          }),
+        })
+        const suspending = sharing === 'the same context'
+          ? schema
+          : createSchemaService(createDatabase({ connectionName: 'default', adapter, dialect: createDialect(driver) }))
+        const suffix = randomUUID().replaceAll('-', '').slice(0, 20)
+        const parents = `holo_parents_${suffix}`
+        const children = `holo_children_${suffix}`
+        onTestFinished(async () => {
+          await schema.dropTable(children)
+          await schema.dropTable(parents)
+        })
+        await schema.createTable(parents, (table) => {
+          table.id()
+          table.string('name').nullable()
+        })
+        await schema.createTable(children, (table) => {
+          table.id()
+          table.foreignId('parent_id').constrained(parents).cascadeOnDelete()
+        })
+        await db.table(parents).insert([{ name: 'first' }, { name: 'second' }])
+        await db.table(children).insert([{ parent_id: 1 }, { parent_id: 2 }])
+
+        let suspended!: () => void
+        const change = new Promise<void>(resolve => { suspended = resolve })
+          .then(() => schema.table(parents, (table) => { table.string('name').nullable().default('unnamed').change() }))
+        await suspending.withoutForeignKeyConstraints(async () => {
+          suspended()
+          await Promise.race([enforcementRead, new Promise(resolve => setTimeout(resolve, 50))])
+        })
+        await change
+
+        expect(await db.table(children).orderBy('id').pluck('parent_id')).toEqual([1, 2])
+        await db.table(parents).where('id', 2).delete()
+        expect(await db.table(children).pluck('parent_id')).toEqual([1])
+      }, 5_000)
+    }
 
     it.runIf(driver === 'sqlite')('changes a parent referenced with RESTRICT and NO ACTION and keeps enforcing those keys', async () => {
       const { db, schema } = await openDatabase(driver)
