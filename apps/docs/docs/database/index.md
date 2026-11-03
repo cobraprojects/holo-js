@@ -71,7 +71,7 @@ export default defineDatabaseConfig({
 })
 ```
 
-SQLite has no date type. A `Date` you write or bind on SQLite, in a model, in `DB.table()` or in `where()`, is stored as ISO 8601 text in UTC, such as `2026-01-02T03:04:05.000Z`. This is the format Holo writes to `date`, `datetime` and `timestamp` columns, so a `Date` compares correctly against them and against `TEXT` date columns created before 0.6.
+SQLite has no date type. A `Date` you write or bind on SQLite, in a model, in `DB.table()`, in `where()` or in a raw query, is stored as UTC text in the format SQLite's `CURRENT_TIMESTAMP` uses, such as `2026-01-02 03:04:05`. Milliseconds are kept when they aren't zero, as in `2026-01-02 03:04:05.678`, so a value reads back as the same `Date`. Because `defaultNow()` and `CURRENT_TIMESTAMP` defaults store the same format, a `Date` compares and orders correctly against `date`, `datetime` and `timestamp` columns, and against `TEXT` date columns created before 0.6 once their ISO 8601 values are rewritten as the [upgrade guide](/getting-started/upgrading#model-types-come-from-the-database-and-casts) shows. Holo reads these values as UTC.
 
 ### PostgreSQL and MySQL
 

@@ -95,21 +95,21 @@ describe('SQLite date columns created before 0.6', () => {
     expect(found.created_at).toEqual(created.created_at)
   })
 
-  it('stores a Date written to a TEXT column as ISO text on create and update', async () => {
+  it('stores a Date written to a TEXT column in the CURRENT_TIMESTAMP format on create and update', async () => {
     const { db } = await openLegacyDatabase()
     const { User } = defineLegacyModels()
 
     const created = await User.create({ name: 'Ada', created_at: new Date('2026-01-02T03:04:05.000Z') })
-    expect(await storedText(db, 'created_at', created.id)).toBe('2026-01-02T03:04:05.000Z')
+    expect(await storedText(db, 'created_at', created.id)).toBe('2026-01-02 03:04:05')
     await User.update(created.id, { created_at: new Date('2026-02-03T04:05:06.000Z') })
-    expect(await storedText(db, 'created_at', created.id)).toBe('2026-02-03T04:05:06.000Z')
+    expect(await storedText(db, 'created_at', created.id)).toBe('2026-02-03 04:05:06')
     expect((await User.findOrFail(created.id)).created_at).toEqual(new Date('2026-02-03T04:05:06.000Z'))
 
     const users = db.table('legacy_date_users')
     await users.insert({ name: 'Grace', birthday: new Date('1990-02-03T04:05:06.000Z') })
-    expect(await users.where('name', 'Grace').value('birthday')).toBe('1990-02-03T04:05:06.000Z')
+    expect(await users.where('name', 'Grace').value('birthday')).toBe('1990-02-03 04:05:06')
     await users.where('name', 'Grace').update({ birthday: new Date('1991-03-04T05:06:07.000Z') })
-    expect(await users.where('name', 'Grace').value('birthday')).toBe('1991-03-04T05:06:07.000Z')
+    expect(await users.where('name', 'Grace').value('birthday')).toBe('1991-03-04 05:06:07')
   })
 
   it('filters a TEXT date column by a Date', async () => {

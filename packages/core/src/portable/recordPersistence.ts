@@ -1,4 +1,4 @@
-import { normalizeJsonValue, serializeAuthTimestamp } from './authPersistence'
+import { normalizeDateValue, normalizeJsonValue, serializeAuthTimestamp } from './authPersistence'
 
 export type CoreNotificationJsonPrimitive = string | number | boolean | null
 export type CoreNotificationJsonValue
@@ -15,10 +15,6 @@ export interface CoreNotificationRecord<TData extends CoreNotificationJsonValue 
   readonly readAt?: Date | null
   readonly createdAt: Date
   readonly updatedAt: Date
-}
-
-function normalizeDateLike(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value))
 }
 
 export function normalizeSessionRecordFromRow(row: Record<string, unknown>): {
@@ -48,9 +44,9 @@ export function normalizeSessionRecordFromRow(row: Record<string, unknown>): {
     id: String(row.id),
     store: typeof row.store === 'string' ? row.store : 'database',
     data: Object.freeze(decodedData),
-    createdAt: normalizeDateLike(row.created_at),
-    lastActivityAt: normalizeDateLike(row.last_activity_at),
-    expiresAt: normalizeDateLike(row.expires_at),
+    createdAt: normalizeDateValue(row.created_at),
+    lastActivityAt: normalizeDateValue(row.last_activity_at),
+    expiresAt: normalizeDateValue(row.expires_at),
   })
 }
 
@@ -84,9 +80,9 @@ export function normalizeNotificationRecordFromRow(
     notifiableType: String(row.notifiable_type),
     notifiableId: typeof row.notifiable_id === 'number' ? row.notifiable_id : String(row.notifiable_id),
     data: decodedData as CoreNotificationJsonValue,
-    readAt: row.read_at ? normalizeDateLike(row.read_at) : null,
-    createdAt: normalizeDateLike(row.created_at),
-    updatedAt: normalizeDateLike(row.updated_at),
+    readAt: row.read_at ? normalizeDateValue(row.read_at) : null,
+    createdAt: normalizeDateValue(row.created_at),
+    updatedAt: normalizeDateValue(row.updated_at),
   })
 }
 

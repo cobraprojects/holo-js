@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   DatabaseError,
+  holoRuntimeInternals,
   type DatabaseDriverFactory,
   type DatabaseOperationOptions,
   type DriverAdapter,
@@ -29,7 +30,7 @@ function normalizeBinding(value: unknown): unknown {
     return Number(value)
   }
 
-  return value instanceof Date ? value.toISOString() : value
+  return value instanceof Date ? holoRuntimeInternals.formatSQLiteDateTime(value) : value
 }
 
 type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'

@@ -1,5 +1,6 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { formatWallClock, formatWithOffset } from '../applicationTime'
+import { formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
@@ -43,7 +44,7 @@ export function compileDialectDefaultLiteral(
 
     return dialect === 'postgres'
       ? `'${formatWithOffset(value, getApplicationTimezone())}'`
-      : `'${value.toISOString()}'`
+      : `'${formatSQLiteDateTime(value)}'`
   }
 
   if (typeof value === 'object') {
