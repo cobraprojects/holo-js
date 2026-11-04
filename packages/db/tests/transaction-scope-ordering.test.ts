@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { createDatabase, createDialect, createMigrationService, createSchemaService, DB, defineMigration, type DatabaseLogger, type DriverAdapter } from '../src'
+import { createDatabase, createDialect, createMigrationService, createQueryScheduler, createSchemaService, DB, defineMigration, type DatabaseLogger, type DriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 
 function deferred(): { promise: Promise<void>, resolve: () => void } {
@@ -263,6 +263,38 @@ describe('transaction scope ordering across contexts sharing one SQLite adapter'
 
     expect(await other.table(table).orderBy('id').pluck('id')).toEqual([1, 2])
     expect(await readForeignKeys(adapter)).toBe(1)
+  }, 5_000)
+})
+
+describe('query scheduler exclusive gate', () => {
+  it('never runs two exclusive sections at once when one starts while the gate hands over to a waiter', async () => {
+    const scheduler = createQueryScheduler({ connectionName: 'default', supportsConcurrentQueries: false, supportsWorkerThreads: false })
+    let running = 0
+    let overlapped = false
+    const section = async (): Promise<void> => {
+      running += 1
+      if (running > 1) overlapped = true
+      await nextMacrotask()
+      running -= 1
+    }
+    const holderReleased = deferred()
+    const holder = scheduler.exclusive(async () => {
+      await section()
+      await holderReleased.promise
+    })
+    await nextMacrotask()
+    const waiter = scheduler.exclusive(section)
+    const latecomers: Promise<void>[] = []
+    let chain = holderReleased.promise
+    for (let depth = 0; depth < 20; depth += 1) {
+      chain = chain.then(() => undefined)
+      latecomers.push(chain.then(() => scheduler.exclusive(section)))
+    }
+
+    holderReleased.resolve()
+    await Promise.all([holder, waiter, ...latecomers])
+
+    expect(overlapped).toBe(false)
   }, 5_000)
 })
 

@@ -70,6 +70,7 @@ class ExclusiveGate {
     if (this.exclusiveActive || this.activeOperations > 0) return
     const exclusive = this.exclusiveWaiters.shift()
     if (exclusive) {
+      this.exclusiveActive = true
       exclusive()
       return
     }
