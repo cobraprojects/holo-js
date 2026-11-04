@@ -253,7 +253,26 @@ it('exposes computed columns as readonly entity attributes', () => {
     // @ts-expect-error computed columns are readonly
     product.total = 100
   }
+  const writePostgres = (product: Entity<typeof computedBuilderPostgres>) => {
+    product.set('price', 2)
+    expectTypeOf(product.total).toEqualTypeOf<number>()
+    expectTypeOf(product.get('label')).toEqualTypeOf<string>()
+    // @ts-expect-error computed columns cannot be set
+    product.set('label', 'Pen')
+    // @ts-expect-error computed columns are readonly
+    product.total = 100
+  }
+  const writeMysql = (product: Entity<typeof computedBuilderMysql>) => {
+    product.price = 3
+    expectTypeOf(product.total).toEqualTypeOf<number | null>()
+    // @ts-expect-error computed columns cannot be set
+    product.set('total', 100)
+    // @ts-expect-error computed columns are readonly
+    product.label = 'Pen'
+  }
   expectTypeOf(write).toBeFunction()
+  expectTypeOf(writePostgres).toBeFunction()
+  expectTypeOf(writeMysql).toBeFunction()
 })
 
 it('leaves Entity.set() unrestricted on untyped models', () => {

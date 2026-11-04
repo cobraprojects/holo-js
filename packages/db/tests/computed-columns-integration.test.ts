@@ -5,6 +5,9 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { belongsToMany, clearGeneratedTables, defineModel, holoRuntimeInternals, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, type DatabaseContext, type SchemaService, type TableDefinition } from '../src'
 import { openDatabase } from './support/database'
+import { computedBuilderMysql } from './fixtures/computed-columns/mysql.generated'
+import { computedBuilderPostgres } from './fixtures/computed-columns/postgres.generated'
+import { computedBuilderSqlite } from './fixtures/computed-columns/sqlite.generated'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -15,6 +18,12 @@ const drivers = [
 ] as const
 
 type Driver = typeof drivers[number]
+
+const productTables = {
+  sqlite: computedBuilderSqlite,
+  postgres: computedBuilderPostgres,
+  mysql: computedBuilderMysql,
+} as const
 
 const labelExpressions = {
   sqlite: 'name || \' (it\'\'s)\'',
@@ -151,6 +160,23 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     await expect(Product.create({ price: 1, quantity: 1, name: 'Mug', total: 5 })).rejects.toThrow('Column "total" is generated and cannot be written directly.')
     await expect(Product.update(product.get('id'), { total: 5 })).rejects.toThrow('Column "total" is generated and cannot be written directly.')
     await expect(Product.where('id', product.get('id')).updateJson('total' as never, 5)).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+  })
+
+  it('rejects setting or assigning a computed column on a typed entity and writes nothing on the next save', async () => {
+    await openComputedDatabase(driver)
+    const Product = defineModel(productTables[driver], { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    const product = await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    const error = 'Column "total" is generated and cannot be written directly.'
+
+    expect(() => product.set('total' as never, 1 as never)).toThrow(error)
+    expect(() => {
+      (product as never as { total: number }).total = 1
+    }).toThrow(error)
+    expect(product.isDirty()).toBe(false)
+    await product.save()
+
+    const stored = await Product.findOrFail(product.get('id'))
+    expect([stored.get('price'), Number(stored.get('total'))]).toEqual([2, 6])
   })
 
   it('rejects incrementing or decrementing a computed column through a model with the generated column error', async () => {
