@@ -11,7 +11,7 @@ import type { DatabaseDriverFactory, DriverAdapter, DriverExecutionResult, Drive
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
-const { formatWallClock, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
+const { SERVER_WALL_CLOCK_AMBIGUITY, formatWallClock, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
 
 class TransactionError extends Error {}
 
@@ -96,7 +96,7 @@ function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
     if (stringTypes.has(field.type.toLowerCase()) || ZERO_DATE_PART.test(value)) return value
     const timeZone = holoRuntimeInternals.getApplicationTimezone()
     if (field.type === 'DATE') return parseCalendarDate(value, timeZone) ?? value
-    return parseWallClockTimestamp(value, timeZone, 'earlier') ?? value
+    return parseWallClockTimestamp(value, timeZone, SERVER_WALL_CLOCK_AMBIGUITY.mysql) ?? value
   }
 }
 

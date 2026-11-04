@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { formatWithOffset } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatWithOffset, parseWallClockTimestamp } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -103,7 +103,12 @@ export function parseStoredDate(dialect: SchemaDialectName, value: unknown): unk
   }
 
   const text = String(value)
-  return (dialect === 'sqlite' ? parseSQLiteDateTime(text) : undefined) ?? new Date(text)
+  return parseOffsetFreeDateTime(dialect, text) ?? new Date(text)
+}
+
+function parseOffsetFreeDateTime(dialect: SchemaDialectName, text: string): Date | undefined {
+  if (dialect === 'sqlite') return parseSQLiteDateTime(text)
+  return parseWallClockTimestamp(text, getApplicationTimezone(), SERVER_WALL_CLOCK_AMBIGUITY[dialect])
 }
 
 const ISO_INSTANT_TEXT = /^((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)(Z|[+-](\d{2}):?(\d{2}))$/i
@@ -153,16 +158,18 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
   return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[8] }
 }
 
+const MILLISECOND_DIGITS = 3
+
 function postgresZonedText(parsed: { instant: Date, fraction: string | undefined }): string {
   const formatted = formatWithOffset(parsed.instant, getApplicationTimezone())
-  if (parsed.fraction === undefined) {
+  if (parsed.fraction === undefined || parsed.fraction.length <= MILLISECOND_DIGITS) {
     return formatted
   }
 
   return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
-export function normalizeSQLiteDateValue(value: unknown): unknown {
+function normalizeSQLiteDateValue(value: unknown): unknown {
   if (value instanceof Date) {
     return formatSQLiteDateTime(value)
   }
