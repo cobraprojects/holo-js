@@ -7,7 +7,7 @@ import {
   createDatabase, defineModel, latestOfMany, resetDB,
   type Entity, type TableDefinition,
 } from '@holo-js/db'
-import { createPostgresAdapter } from '../src'
+import { createPostgresAdapter, postgresDatabaseDriverFactory } from '../src'
 
 const livePostgresConfig = {
   host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
@@ -117,6 +117,43 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     } finally {
       await adapter.disconnect()
       await admin.execute(`DROP DATABASE IF EXISTS "${database.replaceAll('"', '""')}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates and connects to the URL database when the database setting names another one', async () => {
+    const urlDatabase = `holo_url_${randomUUID().replaceAll('-', '')}`
+    const optionDatabase = `holo_option_${randomUUID().replaceAll('-', '')}`
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${urlDatabase}`,
+      database: optionDatabase,
+    })
+    try {
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database: urlDatabase }])
+      expect((await admin.query('SELECT datname FROM pg_database WHERE datname = $1', [optionDatabase])).rows).toEqual([])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${urlDatabase}"`)
+      await admin.execute(`DROP DATABASE IF EXISTS "${optionDatabase}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates the database the URL connects to when its path keeps a reserved escape', async () => {
+    const database = `holo_escape_${randomUUID().replaceAll('-', '')}%2Ftenant`
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter({
+      connectionString: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+    })
+    try {
+      await adapter.ensureDatabaseExists()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.execute(`DROP DATABASE IF EXISTS "${decodeURIComponent(database)}"`)
       await admin.disconnect()
     }
   }, 30_000)

@@ -122,7 +122,7 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
   parsed.pathname = '/postgres'
 
   return {
-    database: database ? decodeURIComponent(database) : undefined,
+    database: database ? decodeURI(database) : undefined,
     connectionString: parsed.toString(),
   }
 }
@@ -158,6 +158,22 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
     return undefined
   }
 
+  if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
+    const stripped = stripDatabaseFromConnectionString(config.connectionString)
+    if (!stripped.database || stripped.database === 'postgres') {
+      return undefined
+    }
+
+    const { database: _database, ...bootstrapConfig } = config
+    return {
+      database: stripped.database,
+      config: {
+        ...bootstrapConfig,
+        connectionString: stripped.connectionString,
+      },
+    }
+  }
+
   if (typeof config.database === 'string' && config.database.trim().length > 0) {
     const { database, ...bootstrapConfig } = config
     if (database === 'postgres') {
@@ -169,21 +185,6 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
       config: {
         ...bootstrapConfig,
         database: 'postgres',
-      },
-    }
-  }
-
-  if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
-    const stripped = stripDatabaseFromConnectionString(config.connectionString)
-    if (!stripped.database || stripped.database === 'postgres') {
-      return undefined
-    }
-
-    return {
-      database: stripped.database,
-      config: {
-        ...config,
-        connectionString: stripped.connectionString,
       },
     }
   }
