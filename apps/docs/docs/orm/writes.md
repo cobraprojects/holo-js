@@ -195,6 +195,8 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
+The update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
+
 ## Track changes
 
 Before you save, `isDirty()` tells you whether anything changed. After you save, `wasChanged()` tells you what the last save wrote. A save that creates a record reports no changes, as in Laravel, and after any save the model is clean: an attribute that a `saved` handler changes is not written and isn't reported as a change.

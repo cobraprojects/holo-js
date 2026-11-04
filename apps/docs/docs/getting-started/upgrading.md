@@ -217,7 +217,7 @@ table.timestamp('synced_at').generated() // [!code --]
 table.timestamp('synced_at').defaultNow() // [!code ++]
 ```
 
-A column the database fills in through a trigger, without a default, is now required in `create()`. A computed column, declared with [`storedAs()` or `virtualAs()`](/database/migrations#storedas) or by raw SQL, stays out of the insert and update types, and models never write it.
+A column the database fills in through a trigger, without a default, is now required in `create()`. A computed column, declared with [`storedAs()` or `virtualAs()`](/database/migrations#storedas) or by raw SQL, stays out of the insert and update types, and models never write it. A model throws `Column "total" is generated and cannot be written directly.` before any SQL runs when one is named as an `increment()` target, an `insertUsing()` destination, an `upsert()` update column, a pivot attribute, or a timestamp column it fills itself: `created_at`, `updated_at`, the soft-delete `deleted_at` and the pivot columns of `withTimestamps()`.
 
 Read `status()` to see whether a migration ran:
 
