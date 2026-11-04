@@ -125,17 +125,17 @@ function runSerialized<T>(queue: SerialQueue, callback: () => Promise<T>): Promi
 
 let nextDatabaseContextId = 0
 
-let runInContextTransactionScope: <T>(context: DatabaseContext, callback: () => Promise<T>) => Promise<T>
+let transactionScopeEntry: <T>(context: DatabaseContext, callback: () => Promise<T>) => Promise<T>
 
 export function runInTransactionScope<T>(context: DatabaseContext, callback: () => Promise<T>): Promise<T> {
-  return runInContextTransactionScope(context, callback)
+  return transactionScopeEntry(context, callback)
 }
 
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
 export class DatabaseContext {
   static {
-    runInContextTransactionScope = (context, callback) => context._runInTransactionScope(callback)
+    transactionScopeEntry = (context, callback) => context._runInTransactionScope(callback)
   }
 
   private readonly _contextId: number
@@ -542,7 +542,9 @@ export class DatabaseContext {
     let committed: CommittedRootTransaction<T>
     try {
       await this._logger?.onTransactionStart?.(entry)
-      const attempt = (): Promise<CommittedRootTransaction<T>> => this._runInTransactionScope(runTransaction)
+      const attempt = (): Promise<CommittedRootTransaction<T>> => this._adapter.supportsConcurrentTransactionScopes === true
+        ? this._runtime.scheduler.transaction(() => this._runInTransactionScope(runTransaction))
+        : this._runInTransactionScope(runTransaction)
       const pinned = currentPinnedConnection(this._adapter)
       committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
@@ -568,7 +570,7 @@ export class DatabaseContext {
     const scheduler = this._runtime.scheduler
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
     const scoped = runWithinScope ? () => runWithinScope(callback) : callback
-    if (this._adapter.supportsConcurrentTransactionScopes === true) return scheduler.transaction(scoped)
+    if (this._adapter.supportsConcurrentTransactionScopes === true) return scoped()
     if (runWithinScope || scheduler.isWithinExclusive()) return scheduler.exclusive(scoped)
     return runSerialized(this._runtime.rootTransactionQueue, () => scheduler.exclusive(scoped))
   }

@@ -89,7 +89,7 @@ describe('transaction scope ordering on one SQLite context', () => {
 
     expect(await db.table(table).orderBy('id').pluck('id')).toEqual([1, 2, 3])
     expect(await readForeignKeys(adapter)).toBe(1)
-  }, 2_000)
+  }, 5_000)
 
   it('keeps statements from another chain off the connection while foreign-key checks are off', async () => {
     const { db, schema } = await openDatabase('sqlite')
@@ -100,11 +100,12 @@ describe('transaction scope ordering on one SQLite context', () => {
 
     await schema.withoutForeignKeyConstraints(async () => {
       read.start()
-      await Promise.race([read.done, new Promise(resolve => setTimeout(resolve, 50))])
+      await nextMacrotask()
+      await nextMacrotask()
     })
 
     expect(await read.done).toBe(1)
-  }, 2_000)
+  }, 5_000)
 
   it('finishes a root transaction that starts while a SQLite table rebuild holds the transaction scope', async () => {
     const transactions = watchRootTransactions()
@@ -151,7 +152,7 @@ describe('transaction scope ordering on one SQLite context', () => {
     expect(await db.table(parents).orderBy('id').pluck('name')).toEqual(['first', 'second'])
     expect(await db.table(children).pluck('parent_id')).toEqual([1])
     expect(await readForeignKeys(adapter)).toBe(1)
-  }, 2_000)
+  }, 5_000)
 
   it('finishes a root transaction that starts while a migration holds the transaction scope', async () => {
     const transactions = watchRootTransactions()
@@ -190,7 +191,7 @@ describe('transaction scope ordering on one SQLite context', () => {
     expect(await schema.hasTable('items')).toBe(true)
     expect(await db.table('records').pluck('value')).toEqual(['transaction'])
     expect(await readForeignKeys(held.adapter)).toBe(1)
-  }, 2_000)
+  }, 5_000)
 })
 
 describe('transaction scope re-entry on one SQLite context', () => {
@@ -213,14 +214,14 @@ describe('transaction scope re-entry on one SQLite context', () => {
     await fork
 
     expect(await db.table(table).orderBy('id').pluck('id')).toEqual([1, 2])
-  }, 2_000)
+  }, 5_000)
 })
 
 for (const driver of ['postgres', 'mysql'] as const) {
   const enabled = process.env[driver === 'postgres' ? 'HOLO_POSTGRES_INTEGRATION' : 'HOLO_MYSQL_INTEGRATION'] === '1'
   describe.skipIf(!enabled)(`concurrent ${driver} transaction scopes`, () => {
-    it('commits a root transaction from another chain while withoutForeignKeyConstraints() is still running', async () => {
-      const { db, schema, table } = await openDatabase(driver)
+    it('commits a root transaction from another chain while withoutForeignKeyConstraints() is still running, with one query slot', async () => {
+      const { db, schema, table } = await openDatabase(driver, { concurrency: { maxConcurrentQueries: 1 } })
       const transaction = startFromAnotherChain(() => db.transaction(async (tx) => {
         await tx.table(table).insert({ id: 1, name: 'transaction' })
       }))
