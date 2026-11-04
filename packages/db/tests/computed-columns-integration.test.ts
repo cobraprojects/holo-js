@@ -303,6 +303,20 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await Product.query().get()).toJSON().map(row => Number(row.total))).toEqual([6, 6])
   })
 
+  it('writes the auto-increment id as an insertUsing and insertOrIgnoreUsing destination', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products, names.shapes]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    const Shape = defineModel(names.shapes, { fillable: ['width', 'height'], timestamps: false })
+    await Product.create({ price: 2, quantity: 30, name: 'Ink' })
+    await Product.create({ price: 4, quantity: 40, name: 'Pad' })
+
+    await Shape.insertUsing(['id', 'width', 'height'], Product.select('quantity', 'price', 'price').where('name', 'Ink'))
+    await Shape.query().insertOrIgnoreUsing(['id', 'width', 'height'], Product.select('quantity', 'price', 'price'))
+
+    expect((await Shape.query().orderBy('id').get()).toJSON().map(row => [row.id, Number(row.area)])).toEqual([[30, 4], [40, 16]])
+  })
+
   it('keeps computed columns computing after change() alters another column', async () => {
     const { db, schema, names } = await openComputedDatabase(driver)
     await db.table(names.products).insert({ price: 2, quantity: 3, name: 'Ink' })
