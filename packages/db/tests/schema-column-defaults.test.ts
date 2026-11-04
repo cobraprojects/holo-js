@@ -100,6 +100,8 @@ const jsonDefaults: Record<string, { declared: unknown, value: unknown, readBack
   json_text_nested_unsafe_integer: { declared: '{"big":9007199254740993}', value: JSON.parse('{"big":9007199254740993}') as unknown, readBack: '{"big":9007199254740993}', postgresReadBack: '{"big": 9007199254740993}' },
   json_number: { declared: 42, value: 42, readBack: 42 },
   json_negative: { declared: -1.5, value: -1.5, readBack: -1.5 },
+  json_small: { declared: 1e-7, value: 1e-7, readBack: 1e-7 },
+  json_nested_small: { declared: { large: 1e21, small: 1e-7 }, value: { large: 1e21, small: 1e-7 }, readBack: { large: 1e21, small: 1e-7 } },
   json_true: { declared: true, value: true, readBack: true },
   json_false: { declared: false, value: false, readBack: false },
   json_object: { declared: { a: 1, nested: { b: [true, null], label: 'it\'s' } }, value: { a: 1, nested: { b: [true, null], label: 'it\'s' } }, readBack: { a: 1, nested: { b: [true, null], label: 'it\'s' } } },
