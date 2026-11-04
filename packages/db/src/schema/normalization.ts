@@ -160,13 +160,32 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
 
 const MILLISECOND_DIGITS = 3
 
-function postgresZonedText(parsed: { instant: Date, fraction: string | undefined }): string {
-  const formatted = formatWithOffset(parsed.instant, getApplicationTimezone())
-  if (parsed.fraction === undefined || parsed.fraction.length <= MILLISECOND_DIGITS) {
+type ParsedInstant = { instant: Date, fraction: string | undefined }
+
+export type DateStorage = 'native' | 'text'
+
+function withPreciseFraction(formatted: string, fraction: string | undefined): string {
+  if (fraction === undefined || fraction.length <= MILLISECOND_DIGITS) {
     return formatted
   }
 
-  return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
+  return formatted.replace(/\.\d{3}(?=[+-]|$)/, `.${fraction.padEnd(6, '0').slice(0, 6)}`)
+}
+
+function postgresZonedText(parsed: ParsedInstant): string {
+  return withPreciseFraction(formatWithOffset(parsed.instant, getApplicationTimezone()), parsed.fraction)
+}
+
+function postgresUtcText(parsed: ParsedInstant): string {
+  return `${withPreciseFraction(parsed.instant.toISOString().replace('T', ' ').slice(0, -1), parsed.fraction)}+00:00`
+}
+
+function parseInstant(value: unknown): ParsedInstant | undefined {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : { instant: value, fraction: undefined }
+  }
+
+  return typeof value === 'string' ? parseIsoInstantText(value) : undefined
 }
 
 function normalizeSQLiteDateValue(value: unknown): unknown {
@@ -178,25 +197,25 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
-export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, storage: DateStorage = 'native'): unknown {
   if (dialect === 'sqlite') {
     return normalizeSQLiteDateValue(value)
   }
 
-  if (value instanceof Date) {
-    return value
-  }
-
-  if (typeof value !== 'string') {
-    return value
-  }
-
-  const parsed = parseIsoInstantText(value)
+  const parsed = parseInstant(value)
   if (!parsed) {
     return value
   }
 
-  return dialect === 'postgres' ? postgresZonedText(parsed) : parsed.instant
+  if (dialect === 'mysql') {
+    return parsed.instant
+  }
+
+  if (storage === 'text') {
+    return postgresUtcText(parsed)
+  }
+
+  return value instanceof Date ? value : postgresZonedText(parsed)
 }
 
 function parseVectorString(value: string): number[] {
@@ -314,6 +333,9 @@ export function normalizeDialectWriteValue(
     case 'datetime':
     case 'timestamp':
       return dateLikeWriteValue(dialect, value)
+    case 'string':
+    case 'text':
+      return value instanceof Date ? dateLikeWriteValue(dialect, value, 'text') : value
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)
