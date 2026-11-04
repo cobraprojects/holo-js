@@ -191,6 +191,7 @@ const expectedRawDefaults = {
 
 for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   describe(`${driver} column defaults in the Generated schema`, () => {
+    const nativeJson = builderKinds[driver].settings === 'json'
     const builderTable = `column_defaults_builder_${driver}`
     const rawTable = `column_defaults_raw_${driver}`
 
@@ -340,19 +341,19 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       const [row] = await db.table(name).get() as Array<Record<string, unknown>>
       const definition = (await createSchemaReader(db).readTable(name))!
-      const read = readDefaults(definition)
+      const readBack = readDefaults(definition)
       const rendered = await renderGeneratedSchemaModule([definition])
       for (const [columnName, value] of Object.entries(jsonDefaults)) {
         expect(decodeJson(driver, row![columnName])).toEqual(value)
-        expect(rendered).toContain(builderKinds[driver].settings === 'json'
+        expect(rendered).toContain(nativeJson
           ? `"${columnName}": column.json().default(${JSON.stringify(value)}),`
           : `"${columnName}": column.text().default(${JSON.stringify(JSON.stringify(value))}),`)
-        expect(read[columnName]).toEqual(builderKinds[driver].settings === 'json'
+        expect(readBack[columnName]).toEqual(nativeJson
           ? { kind: 'json', default: { value } }
           : { kind: 'text', default: { value: JSON.stringify(value) } })
       }
       expect(row!.json_null).toBeNull()
-      expect(read.json_null).toEqual({ kind: builderKinds[driver].settings, default: driver === 'sqlite' ? { value: null } : 'none' })
+      expect(readBack.json_null).toEqual({ kind: builderKinds[driver].settings, default: driver === 'sqlite' ? { value: null } : 'none' })
     })
 
     it('changes a JSON column default to a JSON literal', async () => {
@@ -373,7 +374,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
 
       const [row] = await db.table(name).select('meta').get() as Array<{ meta: unknown }>
       expect(decodeJson(driver, row!.meta)).toBe('hello')
-      expect(readDefaults((await createSchemaReader(db).readTable(name))!).meta).toEqual(builderKinds[driver].settings === 'json'
+      expect(readDefaults((await createSchemaReader(db).readTable(name))!).meta).toEqual(nativeJson
         ? { kind: 'json', default: { value: 'hello' } }
         : { kind: 'text', default: { value: '"hello"' } })
     })
