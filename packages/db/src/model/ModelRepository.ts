@@ -1800,7 +1800,7 @@ export class ModelRepository<
   withWriteTimestamps(
     payload: Readonly<Record<string, unknown>>,
     mode: WriteMode,
-    timestamp = new Date().toISOString(),
+    timestamp = this.valueTransformer.freshTimestamp(),
   ): Record<string, unknown> {
     const { createdAtColumn, updatedAtColumn } = this.definition
     const timestamped: Record<string, unknown> = { ...payload }
@@ -1817,7 +1817,7 @@ export class ModelRepository<
     return timestamped
   }
 
-  softDeleteWrite(deletedAtColumn: string, deletedAt = new Date().toISOString()): Record<string, unknown> {
+  softDeleteWrite(deletedAtColumn: string, deletedAt = this.valueTransformer.freshTimestamp()): Record<string, unknown> {
     this.assertConfiguredColumnWritable(deletedAtColumn)
     return this.withWriteTimestamps({ [deletedAtColumn]: this.castForStorage(deletedAtColumn, deletedAt) }, 'update', deletedAt)
   }
@@ -1988,7 +1988,7 @@ export class ModelRepository<
       await this.dispatchCancelableEvent('deleting', entity)
       const deletedAtColumn = this.getDeletedAtColumn()
       if (deletedAtColumn) {
-        const deletedAt = new Date().toISOString()
+        const deletedAt = this.valueTransformer.freshTimestamp()
         const written = this.softDeleteWrite(deletedAtColumn, deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))

@@ -1,5 +1,5 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
-import { formatWallClock, formatWithOffset } from '../applicationTime'
+import { formatWallClockSeconds, formatWithOffset } from '../applicationTime'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { SchemaError } from '../core/errors'
@@ -41,7 +41,7 @@ export function compileDialectDefaultLiteral(
 
   if (value instanceof Date) {
     if (dialect === 'mysql') {
-      return `'${formatWallClock(value, getApplicationTimezone())}'`
+      return `'${formatWallClockSeconds(value, getApplicationTimezone())}'`
     }
 
     return dialect === 'postgres'
