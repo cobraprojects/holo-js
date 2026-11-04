@@ -321,6 +321,31 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     await expect(Doubled.create({ price: 1, doubled: 5 })).rejects.toThrow('Column "doubled" is generated and cannot be written directly.')
   })
 
+  it.runIf(driver === 'postgres')('rejects a virtualAs column when the postgres server version cannot be read', async () => {
+    const { schema } = await openDatabase(driver, {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          const introspect = target.introspect?.bind(target)
+          if (property !== 'introspect' || !introspect) return Reflect.get(target, property, target)
+          return async (...args: Parameters<typeof introspect>) => {
+            const result = await introspect(...args)
+            return args[0].includes('server_version_num') ? { ...result, rows: [] } : result
+          }
+        },
+      }),
+    })
+    const name = 'computed_virtual_unknown_version'
+    onTestFinished(async () => {
+      if (await schema.hasTable(name)) await schema.dropTable(name)
+    })
+
+    await expect(schema.createTable(name, (table) => {
+      table.integer('price')
+      table.integer('doubled').virtualAs('price * 2')
+    })).rejects.toThrow('PostgreSQL cannot report its server version, so the virtualAs() column "doubled" cannot be checked.')
+    expect(await schema.hasTable(name)).toBe(false)
+  })
+
   it.runIf(driver === 'postgres')('applies no operation of a table() call whose virtualAs column the postgres server cannot create', async () => {
     const { db, schema, names } = await openComputedDatabase(driver)
 

@@ -14,7 +14,11 @@ export class PostgresVirtualColumns {
       sql: 'SELECT current_setting(\'server_version_num\') AS version',
       source: 'schema:postgresServerVersion',
     })
-    if (Number(result.rows[0]?.version) < VIRTUAL_COLUMN_SERVER_VERSION) {
+    const version = Number(result.rows[0]?.version)
+    if (Number.isNaN(version)) {
+      throw new SchemaError(`PostgreSQL cannot report its server version, so the virtualAs() column "${virtualColumn.name}" cannot be checked.`)
+    }
+    if (version < VIRTUAL_COLUMN_SERVER_VERSION) {
       throw new SchemaError(`PostgreSQL 18 or newer is required for the virtualAs() column "${virtualColumn.name}". Use storedAs() instead.`)
     }
   }
