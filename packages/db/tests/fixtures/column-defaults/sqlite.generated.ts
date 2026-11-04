@@ -1,4 +1,4 @@
-import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+import { DB, column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 export const columnDefaultsBuilderSqlite = defineGeneratedTable("column_defaults_builder_sqlite", {
   "id": column.id(),
@@ -20,6 +20,7 @@ export const columnDefaultsBuilderSqlite = defineGeneratedTable("column_defaults
   "public_id": column.text().default("00000000-0000-0000-0000-000000000000"),
   "seen_at": column.datetime().defaultNow(),
   "nickname": column.string().nullable(),
+  "token": column.text().default(DB.raw("lower(hex(randomblob(16)))")),
 })
 
 export const columnDefaultsRawSqlite = defineGeneratedTable("column_defaults_raw_sqlite", {
@@ -38,7 +39,7 @@ export const columnDefaultsRawSqlite = defineGeneratedTable("column_defaults_raw
   "settings": column.text().default("{\"a\":1}"),
   "status": column.enum(["draft","live"]).default("live"),
   "seen_at": column.datetime().defaultNow(),
-  "token": column.text().default("lower(hex(randomblob(4)))"),
+  "token": column.text().default(DB.raw("lower(hex(randomblob(4)))")),
   "missing": column.text().nullable().default(null),
 })
 

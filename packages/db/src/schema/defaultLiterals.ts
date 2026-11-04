@@ -2,6 +2,8 @@ import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { formatWallClock, formatWithOffset } from '../applicationTime'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { SchemaError } from '../core/errors'
+import type { LogicalColumnKind } from './types'
 
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
 
@@ -52,4 +54,76 @@ export function compileDialectDefaultLiteral(
   }
 
   return compileDialectStringLiteral(dialect, String(value))
+}
+
+export function compileColumnDefaultLiteral(
+  dialect: SchemaDefaultDialectName,
+  value: unknown,
+  kind: LogicalColumnKind,
+): string {
+  if (kind !== 'json' || value === null) {
+    return compileDialectDefaultLiteral(dialect, value)
+  }
+
+  return compileDialectStringLiteral(dialect, typeof value === 'string' ? value : JSON.stringify(value))
+}
+
+function isJsonText(value: string): boolean {
+  try {
+    JSON.parse(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isSupportedDefaultValue(value: unknown): boolean {
+  if (value === null) {
+    return true
+  }
+
+  if (typeof value === 'boolean' || typeof value === 'string') {
+    return true
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value)
+  }
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime())
+  }
+
+  if (value instanceof Uint8Array) {
+    return false
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(entry => isSupportedDefaultValue(entry))
+  }
+
+  if (typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      return false
+    }
+
+    return Object.values(value as Record<string, unknown>).every(entry => isSupportedDefaultValue(entry))
+  }
+
+  return false
+}
+
+export function assertSupportedColumnDefaultValue(columnName: string, kind: LogicalColumnKind, value: unknown, dialectLabel: string): void {
+  if (!isSupportedDefaultValue(value)) {
+    throw new SchemaError(
+      `Column "${columnName}" has a default value that cannot be compiled safely for ${dialectLabel}.`,
+    )
+  }
+
+  if (kind === 'json' && typeof value === 'string' && !isJsonText(value)) {
+    throw new SchemaError(
+      `Column "${columnName}" has a json default that is not JSON text. Pass JSON text, such as JSON.stringify('hello'), or a value.`,
+    )
+  }
 }

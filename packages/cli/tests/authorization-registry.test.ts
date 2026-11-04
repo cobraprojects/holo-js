@@ -211,6 +211,13 @@ export default defineAuthConfig({
     expect(renderGeneratedAuthTypes(undefined)).toContain('guards: Readonly<Record<string, \'session\'>>')
   })
 
+  it('renders the auth namespace augmentation without lint directives', () => {
+    const output = renderGeneratedAuthTypes(undefined)
+
+    expect(output).toContain('namespace HoloAuth {')
+    expect(output).not.toContain('eslint-disable')
+  })
+
   it('renders auth user types from configured provider models', () => {
     const output = renderGeneratedAuthTypes({
       guards: {
