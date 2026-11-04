@@ -115,12 +115,15 @@ export class MigrationService {
       .filter(migration => !ranNames.has(migration.name))
       .slice(0, step)
 
+    if (pending.length > 0) {
+      await this.registerDatabaseSchema()
+    }
     const executed: RegisteredMigrationDefinition[] = []
     for (const migration of pending) {
       const log = this.createMigrationLog(migration.name, 'up', nextBatch)
       await this.runMigrationLifecycle(log, async () => {
         await this.runMigrationTransaction(async (tx) => {
-          await migration.up(await this.createContext(tx))
+          await migration.up(this.createContext(tx))
           await new TableQueryBuilder(migrationsTable, tx).insert({
             name: migration.name,
             batch: nextBatch,
@@ -168,6 +171,9 @@ export class MigrationService {
         .sort((left, right) => right.id - left.id)
         .slice(0, step)
 
+      if (toRollback.length > 0) {
+        await this.registerDatabaseSchema()
+      }
       const rolledBack: RegisteredMigrationDefinition[] = []
       for (const record of toRollback) {
         const migration = this.migrations.get(record.name)
@@ -179,7 +185,7 @@ export class MigrationService {
         await this.runMigrationLifecycle(log, async () => {
           await this.runMigrationTransaction(async (tx) => {
             if (migration.down) {
-              await migration.down(await this.createContext(tx))
+              await migration.down(this.createContext(tx))
             }
 
             await new TableQueryBuilder(migrationsTable, tx)
@@ -239,12 +245,14 @@ export class MigrationService {
     return rows
   }
 
-  private async createContext(connection: DatabaseContext): Promise<MigrationContext> {
-    const generatedSchema = createGeneratedSchemaRefresh(connection)
-    await generatedSchema.refreshAll()
+  private async registerDatabaseSchema(): Promise<void> {
+    await createGeneratedSchemaRefresh(this.connection).refreshAll()
+  }
+
+  private createContext(connection: DatabaseContext): MigrationContext {
     return {
       db: connection,
-      schema: new MigrationSchemaService(connection, generatedSchema),
+      schema: new MigrationSchemaService(connection, createGeneratedSchemaRefresh(connection)),
     }
   }
 
