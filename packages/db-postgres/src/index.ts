@@ -102,7 +102,7 @@ function sessionStartupOptions(schema: string | undefined): string {
 
 type ConnectionParametersClient = new (config?: ClientConfig) => { connectionParameters?: { options?: string } }
 
-function withSessionStartupOptions(base: NonNullable<PoolConfig['Client']>, schema: string | undefined): NonNullable<PoolConfig['Client']> {
+function withSessionStartupClient(base: NonNullable<PoolConfig['Client']>, schema: string | undefined): NonNullable<PoolConfig['Client']> {
   class HoloClient extends (base as unknown as ConnectionParametersClient) {
     constructor(config?: ClientConfig) {
       super(config)
@@ -130,7 +130,7 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
 function createHoloPool(config?: PoolConfig, schema?: string): Pool {
-  const pool = new Pool({ ...config, Client: withSessionStartupOptions(config?.Client ?? Client, schema) })
+  const pool = new Pool({ ...config, Client: withSessionStartupClient(config?.Client ?? Client, schema) })
   const sessions = new Set<PoolClient>()
   openPoolSessions.set(pool, sessions)
   pool.on('connect', (client) => {

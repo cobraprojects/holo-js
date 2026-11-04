@@ -111,7 +111,7 @@ main: {
 
 On PostgreSQL, `schema` sets the connection's `search_path`, as Laravel's `search_path` setting does. Every pooled connection starts with it, so migrations, the schema builder, queries, models and the CLI create and read unqualified tables in that schema, and the generated schema is read from it. With `schema: 'tenant'`, `holo migrate` creates its tables in `tenant`, and a `public` table with the same name is ignored. Leave `schema` out to keep the server's default `search_path`.
 
-A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no `options`, wins over `schema`:
+A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no or an empty `options`, wins over `schema`:
 
 ```ts
 main: {
