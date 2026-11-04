@@ -1,6 +1,6 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import { formatMySQLDateTime } from '../applicationTime'
+import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
@@ -62,7 +62,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override createDateLiteral(value: Date): string {
-    return this.createSqlStringLiteral(formatMySQLDateTime(value, getApplicationTimezone()))
+    return this.createSqlStringLiteral(formatWallClockSeconds(value, getApplicationTimezone()))
   }
 
   override truncateCommitsOpenTransaction(): boolean {

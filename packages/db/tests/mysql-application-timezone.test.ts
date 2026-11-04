@@ -141,6 +141,8 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
         await Model.create({ id: 1 })
         await Model.create({ id: 2, at: '2026-11-15T17:00:00.900Z' } as never)
         await DB.table(table).insert({ id: 3, at: now })
+        await Model.create({ id: 4, at: '2026-11-15T12:00:00.900' } as never)
+        await Model.create({ id: 5, at: '2026-11-15 12:00:00.900' } as never)
 
         expect((await adapter.query<{ id: number, at: string | null, created_at: string | null }>(
           `SELECT id, DATE_FORMAT(at, '%Y-%m-%d %H:%i:%s') AS at, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM ${table} ORDER BY id`,
@@ -148,9 +150,11 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
           { id: 1, at: null, created_at: '2026-11-15 12:00:00' },
           { id: 2, at: '2026-11-15 12:00:00', created_at: '2026-11-15 12:00:00' },
           { id: 3, at: '2026-11-15 12:00:00', created_at: null },
+          { id: 4, at: '2026-11-15 12:00:00', created_at: '2026-11-15 12:00:00' },
+          { id: 5, at: '2026-11-15 12:00:00', created_at: '2026-11-15 12:00:00' },
         ])
-        expect(await DB.table(table).where('created_at', '<=', now).orderBy('id').pluck('id')).toEqual([1, 2])
-        expect(await DB.table(table).where('at', '<=', now).orderBy('id').pluck('id')).toEqual([2, 3])
+        expect(await DB.table(table).where('created_at', '<=', now).orderBy('id').pluck('id')).toEqual([1, 2, 4, 5])
+        expect(await DB.table(table).where('at', '<=', now).orderBy('id').pluck('id')).toEqual([2, 3, 4, 5])
       } finally {
         vi.useRealTimers()
         resetDB()

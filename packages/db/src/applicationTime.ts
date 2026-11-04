@@ -131,7 +131,7 @@ export function formatCalendarDate(instant: Date, timeZone: string): string {
   return `${pad(wall.year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)}`
 }
 
-export function formatMySQLDateTime(instant: Date, timeZone: string): string {
+export function formatWallClockSeconds(instant: Date, timeZone: string): string {
   const wall = wallClockAt(instant, timeZone)
   return `${pad(wall.year, 4)}-${pad(wall.month, 2)}-${pad(wall.day, 2)} ${pad(wall.hour, 2)}:${pad(wall.minute, 2)}:${pad(wall.second, 2)}`
 }
