@@ -133,6 +133,15 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
       .toEqual([{ zone: 'America/New_York', timeout: '7s' }])
   })
 
+  it('uses app.timezone for a connection URL whose host is a query parameter', async () => {
+    useAppTimezone('Asia/Tokyo')
+    const query = new URLSearchParams({ host, port: String(port), options: '-c statement_timeout=5000' })
+    const credentials = password ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}` : encodeURIComponent(username)
+    const db = connectTo({ url: `postgresql://${credentials}@/${database}?${query.toString()}` })
+    expect((await db.queryCompiled({ sql: 'SELECT current_setting(\'TimeZone\') AS zone, current_setting(\'statement_timeout\') AS timeout', source: 'query' })).rows)
+      .toEqual([{ zone: 'Asia/Tokyo', timeout: '5s' }])
+  })
+
   it('lets a TimeZone in the connection URL options win over app.timezone', async () => {
     useAppTimezone('UTC')
     const db = connectTo({ url: connectionUrl('-c statement_timeout=5000 -c TimeZone=America/New_York'), schema: 'public' })

@@ -1,5 +1,6 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
+import { parse as parseConnectionString } from 'pg-connection-string'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -91,21 +92,16 @@ function escapeStartupOptionValue(value: string): string {
   return value.replace(/[\\\s]/g, character => `\\${character}`)
 }
 
-function parseAbsoluteUrl(connectionString: string): URL | undefined {
-  return URL.canParse(connectionString) ? new URL(connectionString) : undefined
+function resolveConnectionString(config: PoolConfig): PoolConfig {
+  const { connectionString, ...rest } = config
+  return connectionString ? { ...rest, ...parseConnectionString(connectionString) as PoolConfig } : config
 }
 
 function withStartupOption(config: PoolConfig, name: string, value: string): PoolConfig {
-  const option = `-c ${name}=${escapeStartupOptionValue(value)}`
-  const url = config.connectionString ? parseAbsoluteUrl(config.connectionString) : undefined
-  const urlOptions = url?.searchParams.getAll('options') ?? []
-  url?.searchParams.delete('options')
-  const configured = urlOptions.length > 0 ? urlOptions.at(-1) : config.options
-
+  const resolved = resolveConnectionString(config)
   return {
-    ...config,
-    ...(url && urlOptions.length > 0 ? { connectionString: url.toString() } : {}),
-    options: [option, configured || process.env.PGOPTIONS].filter(Boolean).join(' '),
+    ...resolved,
+    options: [`-c ${name}=${escapeStartupOptionValue(value)}`, resolved.options || process.env.PGOPTIONS].filter(Boolean).join(' '),
   }
 }
 
