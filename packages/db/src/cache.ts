@@ -8,6 +8,7 @@ import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
+import { NumericAdjustment } from './query/NumericAdjustment'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -1328,6 +1329,35 @@ function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionNam
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
 }
 
+function createMutationRowDependencies(
+  plan: SelectQueryPlan,
+  connectionName: string,
+  values: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const wildcard = createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
+  const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
+  if (primaryKey === undefined) {
+    return [wildcard]
+  }
+
+  const current = createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
+  const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
+  if (assignedKeys.length === 0) {
+    return [current ?? wildcard]
+  }
+
+  if (current === undefined || assignedKeys.some(([, value]) => value instanceof NumericAdjustment)) {
+    return [wildcard]
+  }
+
+  const dependencies = new Set([current])
+  for (const [, value] of assignedKeys) {
+    dependencies.add(createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value) ?? wildcard)
+  }
+
+  return [...dependencies]
+}
+
 function hasDisjunctivePredicate(predicates: readonly QueryPredicateNode[]): boolean {
   return predicates.some((predicate) => {
     if (predicate.boolean === 'or') {
@@ -2036,9 +2066,9 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   const mutationDependency = createTableMutationCacheDependency(connectionName, plan.source.tableName)
   dependencies.push(mutationDependency)
   directDependencies.push(mutationDependency)
-  const rowDependency = createExactPrimaryKeyRowDependency(plan, connectionName) ?? createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
-  dependencies.push(rowDependency)
-  directDependencies.push(rowDependency)
+  const rowDependencies = createMutationRowDependencies(plan, connectionName, values)
+  dependencies.push(...rowDependencies)
+  directDependencies.push(...rowDependencies)
 
   if (includeMetadata) {
     const predicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
