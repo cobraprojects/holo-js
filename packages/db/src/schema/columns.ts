@@ -1,6 +1,8 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { inferConstrainedTableName } from './pluralize'
+import { isUnsafeSqlStatement } from '../core/unsafe'
+import type { UnsafeStatement } from '../core/types'
 import type {
   AnyColumnDefinition,
   ColumnDefaultKind,
@@ -11,6 +13,18 @@ import type {
   LogicalColumnKind,
   VectorValue,
 } from './types'
+
+function resolveExpressionDefault(statement: UnsafeStatement): string {
+  if ((statement.bindings?.length ?? 0) > 0) {
+    throw new SchemaError('A DB.raw() column default cannot have bindings. Write the expression as SQL text.')
+  }
+
+  if (typeof statement.sql !== 'string' || statement.sql.trim() === '') {
+    throw new SchemaError('A DB.raw() column default requires a non-empty SQL expression.')
+  }
+
+  return statement.sql
+}
 
 type ColumnMetadata = {
   kind: LogicalColumnKind
@@ -76,6 +90,14 @@ export class ColumnBuilder<
   }
 
   default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
+    if (isUnsafeSqlStatement(value)) {
+      return this.clone({
+        hasDefault: true,
+        defaultKind: 'expression',
+        defaultValue: resolveExpressionDefault(value),
+      })
+    }
+
     return this.clone({
       hasDefault: true,
       defaultKind: 'value',
