@@ -62,7 +62,7 @@ Holo picks a starting template from the name:
 | --- | --- |
 | `create_posts` or `create_posts_table` | `schema.createTable('posts', ...)` with `id()` and `timestamps()` |
 | `add_..._to_posts`, `remove_..._from_posts`, `rename_..._on_posts`, `alter_posts` | `schema.table('posts', ...)` |
-| `drop_posts` or `drop_posts_table` | `schema.dropTable('posts')` |
+| `drop_posts` or `drop_posts_table` | `schema.dropTable('posts')`, with a `down` that recreates `posts` with `id()` and `timestamps()` for you to fill in |
 | anything else | an empty `up` and `down` |
 
 Pass a flag to choose the template yourself:
