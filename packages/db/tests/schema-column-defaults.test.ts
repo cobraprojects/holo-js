@@ -89,6 +89,23 @@ const uuidExpressions = {
   mysql: 'uuid()',
 } as const
 
+const jsonDefaults: Record<string, unknown> = {
+  json_string: 'hello',
+  json_numeric_string: '123',
+  json_quoted: 'it\'s \\ "q"',
+  json_number: 42,
+  json_negative: -1.5,
+  json_true: true,
+  json_false: false,
+  json_object: { a: 1, nested: { b: [true, null], label: 'it\'s' } },
+  json_array: [1, 'two', { three: 3 }],
+  json_empty_object: {},
+}
+
+function decodeJson(driver: 'sqlite' | 'postgres' | 'mysql', value: unknown): unknown {
+  return driver === 'sqlite' && typeof value === 'string' ? JSON.parse(value) as unknown : value
+}
+
 const UUID_LIKE = /^[0-9a-f-]{32,36}$/
 
 describe('expression column defaults', () => {
@@ -304,6 +321,61 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const { tables: [, raw] } = await openDefaultsDatabase()
 
       expect(readDefaults(raw!)).toEqual(expectedRawDefaults[driver])
+    })
+
+    it('migrates JSON literal defaults and reads each back as the same JSON value', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `column_defaults_json_${driver}`
+      await schema.dropTable(name)
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.string('label')
+        for (const [columnName, value] of Object.entries(jsonDefaults)) {
+          table.json(columnName).default(value)
+        }
+        table.json('json_null').nullable().default(null)
+      })
+      await db.table(name).insert({ label: 'a' })
+
+      const [row] = await db.table(name).get() as Array<Record<string, unknown>>
+      const definition = (await createSchemaReader(db).readTable(name))!
+      const read = readDefaults(definition)
+      const rendered = await renderGeneratedSchemaModule([definition])
+      for (const [columnName, value] of Object.entries(jsonDefaults)) {
+        expect(decodeJson(driver, row![columnName])).toEqual(value)
+        expect(rendered).toContain(builderKinds[driver].settings === 'json'
+          ? `"${columnName}": column.json().default(${JSON.stringify(value)}),`
+          : `"${columnName}": column.text().default(${JSON.stringify(JSON.stringify(value))}),`)
+        expect(read[columnName]).toEqual(builderKinds[driver].settings === 'json'
+          ? { kind: 'json', default: { value } }
+          : { kind: 'text', default: { value: JSON.stringify(value) } })
+      }
+      expect(row!.json_null).toBeNull()
+      expect(read.json_null).toEqual({ kind: builderKinds[driver].settings, default: driver === 'sqlite' ? { value: null } : 'none' })
+    })
+
+    it('changes a JSON column default to a JSON literal', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `column_defaults_json_change_${driver}`
+      await schema.dropTable(name)
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.string('label')
+        table.json('meta').nullable()
+      })
+
+      await schema.table(name, (table) => {
+        table.json('meta').default('hello').change()
+      })
+      await db.table(name).insert({ label: 'a' })
+
+      const [row] = await db.table(name).select('meta').get() as Array<{ meta: unknown }>
+      expect(decodeJson(driver, row!.meta)).toBe('hello')
+      expect(readDefaults((await createSchemaReader(db).readTable(name))!).meta).toEqual(builderKinds[driver].settings === 'json'
+        ? { kind: 'json', default: { value: 'hello' } }
+        : { kind: 'text', default: { value: '"hello"' } })
     })
 
     it('writes a Generated schema module with those defaults that the type tests compile', async () => {

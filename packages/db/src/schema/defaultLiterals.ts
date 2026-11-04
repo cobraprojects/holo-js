@@ -2,6 +2,7 @@ import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { formatWallClock, formatWithOffset } from '../applicationTime'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
+import type { LogicalColumnKind } from './types'
 
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
 
@@ -52,4 +53,14 @@ export function compileDialectDefaultLiteral(
   }
 
   return compileDialectStringLiteral(dialect, String(value))
+}
+
+export function compileColumnDefaultLiteral(
+  dialect: SchemaDefaultDialectName,
+  value: unknown,
+  kind: LogicalColumnKind,
+): string {
+  return kind === 'json' && value !== null
+    ? compileDialectStringLiteral(dialect, JSON.stringify(value))
+    : compileDialectDefaultLiteral(dialect, value)
 }

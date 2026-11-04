@@ -1,5 +1,5 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
-import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { compileColumnDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
 import { SchemaError } from '../core/errors'
 import { withIndexName, withSchemaQualifiedName } from './introspection/sqlDefinitions'
@@ -27,8 +27,8 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return resolveDialectColumnType('sqlite', column)
   }
 
-  protected override compileDefaultValue(value: unknown): string {
-    return compileDialectDefaultLiteral('sqlite', value)
+  protected override compileDefaultValue(value: unknown, column: AnyColumnDefinition): string {
+    return compileColumnDefaultLiteral('sqlite', value, column.kind)
   }
 
   protected override compileDefaultExpression(column: AnyColumnDefinition): string {

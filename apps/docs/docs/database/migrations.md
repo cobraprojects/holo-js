@@ -671,6 +671,8 @@ table.string('role').default('member')
 table.json('preferences').default({ theme: 'light' })
 ```
 
+On a `json()` column, the default is the JSON value itself on every database: `default('hello')` defaults to the JSON string `"hello"`, and `default(42)`, `default(true)`, objects and arrays default to that JSON value. Pass the value, not `JSON.stringify()` output. `default(null)` defaults to SQL `NULL`.
+
 To default to an SQL expression the database evaluates for each row, pass `DB.raw()`, as with Laravel's `default(DB::raw(...))`:
 
 ```ts

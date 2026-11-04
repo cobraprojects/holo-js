@@ -1,6 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
-import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { compileColumnDefaultLiteral } from './defaultLiterals'
 import { resolveGeneratedCheckName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
@@ -15,8 +15,8 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
     return resolveDialectColumnType('postgres', column)
   }
 
-  protected override compileDefaultValue(value: unknown): string {
-    return compileDialectDefaultLiteral('postgres', value)
+  protected override compileDefaultValue(value: unknown, column: AnyColumnDefinition): string {
+    return compileColumnDefaultLiteral('postgres', value, column.kind)
   }
 
   compileDropCheck(tableName: string, checkName: string): DDLStatement {
@@ -68,7 +68,7 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
     if (column.defaultKind === 'value') {
       this.assertSupportedDefaultValue(column.defaultValue, column)
       statements.push({
-        sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} SET DEFAULT ${this.compileDefaultValue(column.defaultValue)}`,
+        sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} SET DEFAULT ${this.compileDefaultValue(column.defaultValue, column)}`,
         source: `schema:alterColumn:${tableName}:${column.name}:default`,
       })
     } else if (column.defaultKind === 'now') {
