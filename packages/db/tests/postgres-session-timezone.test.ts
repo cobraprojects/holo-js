@@ -113,6 +113,26 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
     expect((await db.queryCompiled({ sql: 'SHOW TimeZone', source: 'query' })).rows).toEqual([{ TimeZone: 'Asia/Tokyo' }])
   })
 
+  it('lets the last options parameter of the connection URL win, as pg does', async () => {
+    useAppTimezone('UTC')
+    const url = new URL(connectionUrl('-c TimeZone=Europe/Paris'))
+    url.searchParams.append('options', '-c TimeZone=Asia/Tokyo')
+    const db = connectTo({ url: url.toString(), schema: 'public' })
+    expect((await db.queryCompiled({ sql: 'SELECT current_setting(\'TimeZone\') AS zone, current_setting(\'search_path\') AS path', source: 'query' })).rows)
+      .toEqual([{ zone: 'Asia/Tokyo', path: '"public"' }])
+  })
+
+  it('keeps PGOPTIONS when the connection URL has an empty options parameter', async () => {
+    useAppTimezone('UTC')
+    vi.stubEnv('PGOPTIONS', '-c statement_timeout=7000 -c TimeZone=America/New_York')
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    const url = new URL(connectionUrl())
+    url.searchParams.set('options', '')
+    const db = connectTo({ url: url.toString() })
+    expect((await db.queryCompiled({ sql: 'SELECT current_setting(\'TimeZone\') AS zone, current_setting(\'statement_timeout\') AS timeout', source: 'query' })).rows)
+      .toEqual([{ zone: 'America/New_York', timeout: '7s' }])
+  })
+
   it('lets a TimeZone in the connection URL options win over app.timezone', async () => {
     useAppTimezone('UTC')
     const db = connectTo({ url: connectionUrl('-c statement_timeout=5000 -c TimeZone=America/New_York'), schema: 'public' })
