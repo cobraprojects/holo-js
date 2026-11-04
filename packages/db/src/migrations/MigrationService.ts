@@ -4,11 +4,13 @@ import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
 import { createGeneratedSchemaRefresh } from '../schema/generatedSchemaRefresh'
+import { parseStoredDate } from '../schema/normalization'
 import { assertMigrationName, defineMigration } from './defineMigration'
 import { MigrationSchemaService } from './MigrationSchemaService'
 import { ensureMigrationTable } from './ensureMigrationTable'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   MigrateOptions,
   MigrationContext,
@@ -295,8 +297,8 @@ export class MigrationService {
   }
 
   private normalizeMigratedAt(value: string | Date): Date {
-    const normalized = value instanceof Date ? value : new Date(value)
-    if (Number.isNaN(normalized.getTime())) {
+    const normalized = parseStoredDate(this.connection.getDriver() as SchemaDialectName, value)
+    if (!(normalized instanceof Date) || Number.isNaN(normalized.getTime())) {
       throw new HydrationError('Migration tracking contains an invalid migrated-at timestamp.')
     }
 
