@@ -95,6 +95,7 @@ const jsonDefaults: Record<string, { declared: unknown, value: unknown, readBack
   json_text_object: { declared: '{"a":1}', value: { a: 1 }, readBack: { a: 1 } },
   json_text_array: { declared: '[1,2]', value: [1, 2], readBack: [1, 2] },
   json_text_number: { declared: '7', value: 7, readBack: 7 },
+  json_text_null: { declared: 'null', value: null, readBack: 'null' },
   json_number: { declared: 42, value: 42, readBack: 42 },
   json_negative: { declared: -1.5, value: -1.5, readBack: -1.5 },
   json_true: { declared: true, value: true, readBack: true },
