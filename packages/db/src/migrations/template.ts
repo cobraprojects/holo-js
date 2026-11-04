@@ -142,8 +142,11 @@ function renderMigrationBody(options: {
         '  async up({ schema }: MigrationContext) {',
         `    await schema.dropTable('${options.tableName}')`,
         '  },',
-        '  async down() {',
-        `    throw new Error('Recreate "${options.tableName}" manually in this migration if rollback support is required.')`,
+        '  async down({ schema }: MigrationContext) {',
+        `    await schema.createTable('${options.tableName}', (table) => {`,
+        '      table.id()',
+        '      table.timestamps()',
+        '    })',
         '  },',
       ]
     case 'blank':
