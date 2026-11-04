@@ -105,6 +105,14 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
       .toEqual([{ zone: 'Asia/Tokyo', path: '"public"' }])
   })
 
+  it('uses app.timezone when the connection URL has an empty options parameter', async () => {
+    useAppTimezone('Asia/Tokyo')
+    const url = new URL(connectionUrl())
+    url.searchParams.set('options', '')
+    const db = connectTo({ url: url.toString() })
+    expect((await db.queryCompiled({ sql: 'SHOW TimeZone', source: 'query' })).rows).toEqual([{ TimeZone: 'Asia/Tokyo' }])
+  })
+
   it('lets a TimeZone in the connection URL options win over app.timezone', async () => {
     useAppTimezone('UTC')
     const db = connectTo({ url: connectionUrl('-c statement_timeout=5000 -c TimeZone=America/New_York'), schema: 'public' })

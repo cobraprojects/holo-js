@@ -98,9 +98,8 @@ function parseAbsoluteUrl(connectionString: string): URL | undefined {
 function withStartupOption(config: PoolConfig, name: string, value: string): PoolConfig {
   const option = `-c ${name}=${escapeStartupOptionValue(value)}`
   const url = config.connectionString ? parseAbsoluteUrl(config.connectionString) : undefined
-  const urlOptions = url?.searchParams.get('options')
-  if (url && urlOptions) {
-    url.searchParams.set('options', `${option} ${urlOptions}`)
+  if (url?.searchParams.has('options')) {
+    url.searchParams.set('options', [option, url.searchParams.get('options')].filter(Boolean).join(' '))
     return { ...config, connectionString: url.toString() }
   }
 
