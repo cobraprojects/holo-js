@@ -13,7 +13,6 @@ export interface SchemaReader {
   listTables(): Promise<string[]>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
   readTable(tableName: string): Promise<TableDefinition | undefined>
-  readGeneratedTable(tableName: string): Promise<TableDefinition | undefined>
   readGeneratedSchema(): Promise<TableDefinition[]>
 }
 
@@ -34,19 +33,15 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
     return structure ? toTableDefinition(structure) : undefined
   }
 
-  async function readGeneratedTable(tableName: string): Promise<TableDefinition | undefined> {
-    return HOLO_OWNED_TABLE_PATTERN.test(tableName) ? undefined : readTable(tableName)
-  }
-
   return {
     listTables: () => reader.listTables(),
     readTableStructure: tableName => reader.readTableStructure(tableName),
     readTable,
-    readGeneratedTable,
     async readGeneratedSchema() {
       const tables: TableDefinition[] = []
       for (const tableName of await reader.listTables()) {
-        const table = await readGeneratedTable(tableName)
+        if (HOLO_OWNED_TABLE_PATTERN.test(tableName)) continue
+        const table = await readTable(tableName)
         if (table) tables.push(table)
       }
       return tables
