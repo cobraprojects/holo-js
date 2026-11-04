@@ -158,6 +158,24 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     }
   }, 30_000)
 
+  it('creates the database the URL connects to when its path has a literal percent sign', async () => {
+    const database = `holo_percent_${randomUUID().replaceAll('-', '')}%prod`
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+      database,
+    })
+    try {
+      await adapter.ensureDatabaseExists?.()
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
   it('reports real database creation permission failures', async () => {
     const role = `holo_denied_${randomUUID().replaceAll('-', '')}`
     const password = randomUUID()

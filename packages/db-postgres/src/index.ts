@@ -1,5 +1,6 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Client, Pool, types, type ClientConfig, type PoolClient, type PoolConfig } from 'pg'
+import { parse as parseConnectionString } from 'pg-connection-string'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -117,12 +118,10 @@ function withSessionStartupClient(base: NonNullable<PoolConfig['Client']>, schem
 
 function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
   const parsed = new URL(connectionString)
-  const database = parsed.pathname.replace(/^\/+/, '')
-
   parsed.pathname = '/postgres'
 
   return {
-    database: database ? decodeURI(database) : undefined,
+    database: parseConnectionString(connectionString).database ?? undefined,
     connectionString: parsed.toString(),
   }
 }
