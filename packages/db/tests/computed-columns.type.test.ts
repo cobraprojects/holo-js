@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from 'vitest'
-import { defineModel, type InferInsert, type InferSelect, type InferUpdate } from '../src'
+import { defineModel, type Entity, type InferInsert, type InferSelect, type InferUpdate } from '../src'
 import type { computedBuilderSqlite, computedRawSqlite } from './fixtures/computed-columns/sqlite.generated'
 import type { computedBuilderPostgres, computedRawPostgres } from './fixtures/computed-columns/postgres.generated'
 import type { computedBuilderMysql, computedRawMysql } from './fixtures/computed-columns/mysql.generated'
@@ -28,4 +28,15 @@ it('types computed columns as nullable exactly when the database made them nulla
 
 it('lets Model.create() omit computed columns', () => {
   expectTypeOf(products.create).toBeCallableWith({ price: 1, quantity: 2, name: 'Pen' })
+})
+
+it('rejects computed columns in Entity.fill() and Entity.update()', () => {
+  const fill = (product: Entity<typeof computedBuilderSqlite>) => {
+    product.fill({ price: 2 })
+    // @ts-expect-error computed columns cannot be filled
+    product.fill({ total: 1 })
+    // @ts-expect-error computed columns cannot be updated
+    void product.update({ total: 1 })
+  }
+  expectTypeOf(fill).toBeFunction()
 })

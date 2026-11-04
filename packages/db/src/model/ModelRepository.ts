@@ -1739,7 +1739,7 @@ export class ModelRepository<
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
           ? { [this.definition.primaryKey]: result.lastInsertId }
           : {}),
-      } as Partial<ModelRecord<TTable>>
+      } as ModelUpdatePayload<TTable>
       marks.sqlCompleted()
       this.applyStoredValues(entity, attributes, {}, marks)
       await this.dispatchEvent('created', entity)
@@ -1819,7 +1819,7 @@ export class ModelRepository<
     mode: WriteMode,
     enforceGuards = true,
     applyMutators = true,
-  ): Partial<ModelRecord<TTable>> {
+  ): ModelUpdatePayload<TTable> {
     const entries = Object.entries(values)
 
     if (entries.length === 0) {
@@ -1852,7 +1852,7 @@ export class ModelRepository<
       return [key, applyMutators ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
     }))
 
-    return sanitized as Partial<ModelRecord<TTable>>
+    return sanitized as ModelUpdatePayload<TTable>
   }
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
@@ -1928,15 +1928,16 @@ export class ModelRepository<
 
   private applyStoredValues(
     entity: Entity<TTable>,
-    stored: Partial<ModelRecord<TTable>>,
+    stored: ModelUpdatePayload<TTable>,
     changes: Record<string, unknown>,
     marks: WriteMarks | undefined,
   ): void {
+    const storedValues = stored as Partial<ModelRecord<TTable>>
     entity.recordChanges(changes)
     try {
-      entity.forceFill(this.normalizeFromStorage(stored))
+      entity.forceFill(this.normalizeFromStorage(storedValues))
     } catch (error) {
-      entity.forceFill(stored)
+      entity.forceFill(storedValues)
       entity.finishSave()
       marks?.normalized()
       throw error

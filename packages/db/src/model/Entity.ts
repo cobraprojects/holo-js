@@ -195,7 +195,7 @@ class EntityBase<
     return this
   }
 
-  fill(values: Partial<ModelRecord<TTable>> | ModelUpdatePayload<TTable>): this {
+  fill(values: ModelUpdatePayload<TTable>): this {
     this.getRepositoryRuntime().assertMassAssignable?.(values)
     Object.assign(this.#attributes, values)
     this.#exposeUntypedAttributes()
