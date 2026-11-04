@@ -1,6 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   ConfigurationError,
+  createDatabase,
+  createDialect,
+  createMigrationService,
+  createSchemaService,
+  defineMigration,
+  type MigrationDefinition,
   createMigrationFileName,
   createMigrationTimestamp,
   generateMigrationTemplate,
@@ -83,7 +94,15 @@ describe('migration template generation', () => {
     expect(dropTemplate.kind).toBe('drop_table')
     expect(dropTemplate.contents).not.toContain('name:')
     expect(dropTemplate.contents).toContain('await schema.dropTable(\'posts\')')
-    expect(dropTemplate.contents).toContain('Recreate "posts" manually')
+    expect(dropTemplate.contents).toContain([
+      '  async down({ schema }: MigrationContext) {',
+      '    await schema.createTable(\'posts\', (table) => {',
+      '      table.id()',
+      '      table.timestamps()',
+      '    })',
+      '  },',
+    ].join('\n'))
+    expect(dropTemplate.contents).not.toContain('throw')
 
     const blankTemplate = generateMigrationTemplate('Backfill User Status', {
       date: new Date('2026-03-25T10:11:12.000Z'),
@@ -98,5 +117,42 @@ describe('migration template generation', () => {
     expect(() => generateMigrationTemplate('!!!')).toThrow(ConfigurationError)
     expect(() => generateMigrationTemplate('create', { kind: 'create_table' })).toThrow(ConfigurationError)
     expect(() => generateMigrationTemplate('whatever', { kind: 'alter_table' })).toThrow(ConfigurationError)
+  })
+
+  it('rolls back a batch containing a generated drop-table migration', async () => {
+    const template = generateMigrationTemplate('drop_posts_table', {
+      date: new Date('2026-03-25T10:11:12.000Z') })
+    const directory = await mkdtemp(join(tmpdir(), 'holo-drop-template-'))
+    onTestFinished(() => rm(directory, { recursive: true, force: true }))
+    const path = join(directory, template.fileName)
+    await writeFile(path, template.contents)
+    const dropMigration = (await import(pathToFileURL(path).href)).default as MigrationDefinition
+
+    const db = createDatabase({ adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+    onTestFinished(() => db.disconnect())
+    const schema = createSchemaService(db)
+    const createMigration = defineMigration({
+      name: '2026_03_25_000000_create_posts_table',
+      async up({ schema }) {
+        await schema.createTable('posts', table => {
+          table.id()
+        })
+      },
+      async down({ schema }) {
+        await schema.dropTable('posts')
+      },
+    })
+    const migrator = createMigrationService(db, [
+      createMigration,
+      { ...dropMigration, name: template.migrationName },
+    ])
+
+    await migrator.migrate({ step: 1 })
+    await migrator.migrate()
+    expect(await schema.hasTable('posts')).toBe(false)
+
+    expect((await migrator.rollback()).map(migration => migration.name)).toEqual([template.migrationName])
+    expect(await schema.hasTable('posts')).toBe(true)
+    expect((await schema.getColumns('posts')).map(column => column.name)).toEqual(['id', 'created_at', 'updated_at'])
   })
 })
