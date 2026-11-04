@@ -19,6 +19,7 @@ import type {
   DynamicRelationResolver,
   EntityWithLoaded,
   ModelAttributeKey,
+  ModelArithmeticColumnName,
   ModelColumnName,
   ModelRecord,
   ModelDefinition,
@@ -311,8 +312,8 @@ export type StaticModelApi<
   createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   update(id: ModelPrimaryKeyValue<TTable>, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
   prune(): Promise<number>
-  increment(column: ModelColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
-  decrement(column: ModelColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
+  increment(column: ModelArithmeticColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
+  decrement(column: ModelArithmeticColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
   delete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
   destroy(ids: readonly ModelPrimaryKeyValue<TTable>[]): Promise<number>
   restore(id: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>

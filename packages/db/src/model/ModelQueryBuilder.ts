@@ -49,6 +49,7 @@ import type {
   EntityWithLoaded,
   ModelAttributeKey,
   ModelCastDefinition,
+  ModelArithmeticColumnName,
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
@@ -1894,10 +1895,11 @@ class ModelQueryBuilderBase<
   }
 
   async increment(
-    column: ModelColumnName<TTable>,
+    column: ModelArithmeticColumnName<TTable>,
     amount = 1,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
+    this.repository.assertArithmeticColumns([column])
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().increment(
       column,
@@ -1907,10 +1909,11 @@ class ModelQueryBuilderBase<
   }
 
   async decrement(
-    column: ModelColumnName<TTable>,
+    column: ModelArithmeticColumnName<TTable>,
     amount = 1,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
+    this.repository.assertArithmeticColumns([column])
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrement(
       column,
@@ -1920,9 +1923,10 @@ class ModelQueryBuilderBase<
   }
 
   async incrementEach(
-    columns: Partial<Record<ModelColumnName<TTable>, number>>,
+    columns: Partial<Record<ModelArithmeticColumnName<TTable>, number>>,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
+    this.repository.assertArithmeticColumns(Object.keys(columns))
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().incrementEach(
       columns as Readonly<Record<string, number>>,
@@ -1931,9 +1935,10 @@ class ModelQueryBuilderBase<
   }
 
   async decrementEach(
-    columns: Partial<Record<ModelColumnName<TTable>, number>>,
+    columns: Partial<Record<ModelArithmeticColumnName<TTable>, number>>,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
+    this.repository.assertArithmeticColumns(Object.keys(columns))
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrementEach(
       columns as Readonly<Record<string, number>>,

@@ -13,6 +13,12 @@ export type ModelRecord<TTable extends TableDefinition> = InferSelect<TTable>
 export type { GeneratedSchemaTable }
 export type ModelAttributeKey<TTable extends TableDefinition> = Extract<keyof InferSelect<TTable>, string>
 export type ModelColumnName<TTable extends TableDefinition> = ModelAttributeKey<TTable> | `${string}.${ModelAttributeKey<TTable>}`
+type ModelArithmeticAttributeKey<TTable extends TableDefinition> = Extract<{
+  [K in keyof InferUpdate<TTable>]-?: unknown extends InferUpdate<TTable>[K]
+    ? K
+    : NonNullable<InferUpdate<TTable>[K]> extends number | bigint | string ? K : never
+}[keyof InferUpdate<TTable>], string>
+export type ModelArithmeticColumnName<TTable extends TableDefinition> = ModelArithmeticAttributeKey<TTable> | `${string}.${ModelArithmeticAttributeKey<TTable>}`
 export type ModelColumnReference<TTable extends TableDefinition> = ModelColumnName<TTable> | `${string}.${string}`
 export type ModelJsonColumnPath<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>}->${string}`
 export type ModelSelectableColumn<TTable extends TableDefinition, TJoinedTables extends string = never> = ModelColumnName<TTable>

@@ -152,6 +152,22 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     await expect(Product.update(product.get('id'), { total: 5 })).rejects.toThrow('Column "total" is generated and cannot be written directly.')
   })
 
+  it('rejects incrementing or decrementing a computed column through a model with the generated column error', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    const error = 'Column "total" is generated and cannot be written directly.'
+
+    await expect(Product.increment('total')).rejects.toThrow(error)
+    await expect(Product.decrement(`${names.products}.total`, 2)).rejects.toThrow(error)
+    await expect(Product.where('price', 2).increment('total')).rejects.toThrow(error)
+    await expect(Product.where('price', 2).decrement('total')).rejects.toThrow(error)
+    await expect(Product.incrementEach({ price: 1, total: 1 })).rejects.toThrow(error)
+    await expect(Product.where('price', 2).decrementEach({ price: 1, total: 1 })).rejects.toThrow(error)
+    expect((await Product.query().get()).toJSON().map(row => [row.price, Number(row.total)])).toEqual([[2, 6]])
+  })
+
   it('keeps computed columns computing after change() alters another column', async () => {
     const { db, schema, names } = await openComputedDatabase(driver)
     await db.table(names.products).insert({ price: 2, quantity: 3, name: 'Ink' })

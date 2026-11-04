@@ -1815,6 +1815,15 @@ export class ModelRepository<
     return this.withWriteTimestamps({ [deletedAtColumn]: this.castForStorage(deletedAtColumn, deletedAt) }, 'update', deletedAt)
   }
 
+  assertArithmeticColumns(columns: readonly string[]): void {
+    for (const column of columns) {
+      const columnName = column.slice(column.lastIndexOf('.') + 1)
+      if (ownEntry(this.definition.table.columns, columnName)?.computed) {
+        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
+      }
+    }
+  }
+
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,

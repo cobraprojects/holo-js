@@ -39,6 +39,7 @@ import type {
   ModelAttributeKey,
   ModelCastedTable,
   ModelCastMap,
+  ModelArithmeticColumnName,
   ModelColumnName,
   ModelDateColumns,
   ModelDateOptions,
@@ -524,10 +525,10 @@ function createStaticModelApi<
     prune() {
       return this.getRepository().prune()
     },
-    increment(column: ModelColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
+    increment(column: ModelArithmeticColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().increment(column, amount, extraValues)
     },
-    decrement(column: ModelColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
+    decrement(column: ModelArithmeticColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().decrement(column, amount, extraValues)
     },
     delete(id: unknown) {

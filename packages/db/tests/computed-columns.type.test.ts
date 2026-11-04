@@ -16,6 +16,8 @@ const shelves = defineModel(defineGeneratedTable('computed_shelves', { id: colum
   },
 })
 
+const flags = defineModel(defineGeneratedTable('computed_flags', { id: column.id(), active: column.boolean() }), { timestamps: false })
+
 it('leaves computed columns out of the insert and update types of every dialect', () => {
   expectTypeOf<keyof InferInsert<typeof computedBuilderSqlite>>().toEqualTypeOf<ProductColumn>()
   expectTypeOf<keyof InferInsert<typeof computedBuilderPostgres>>().toEqualTypeOf<ProductColumn>()
@@ -146,4 +148,31 @@ it('rejects computed columns in factory overrides', () => {
     await productFactory.make({ label: 'Pen' })
   }
   expectTypeOf(write).toBeFunction()
+})
+
+it('limits increment and decrement to writable numeric columns', () => {
+  const arithmetic = async () => {
+    await products.increment('price')
+    await products.where('price', 1).decrement('quantity', 2)
+    await products.incrementEach({ price: 1 })
+    // @ts-expect-error computed columns cannot be incremented
+    await products.increment('total')
+    // @ts-expect-error computed columns cannot be decremented
+    await products.decrement('total')
+    // @ts-expect-error computed columns cannot be incremented
+    await products.where('price', 1).increment('total')
+    // @ts-expect-error computed columns cannot be decremented
+    await products.where('price', 1).decrement('total')
+    // @ts-expect-error computed columns cannot be incremented
+    await products.incrementEach({ total: 1 })
+    // @ts-expect-error computed columns cannot be decremented
+    await products.decrementEach({ total: 1 })
+    // @ts-expect-error computed columns cannot be incremented
+    await products.where('price', 1).incrementEach({ total: 1 })
+    // @ts-expect-error computed columns cannot be decremented
+    await products.where('price', 1).decrementEach({ total: 1 })
+    // @ts-expect-error boolean columns are not numeric
+    await flags.increment('active')
+  }
+  expectTypeOf(arithmetic).toBeFunction()
 })
