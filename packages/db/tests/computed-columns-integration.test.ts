@@ -172,6 +172,18 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await db.table(names.products).orderBy('id').pluck('total')).map(Number)).toEqual([7, 26])
   })
 
+  it.runIf(driver !== 'postgres')('turns an ordinary column into a computed one through change() and computes it for existing rows', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+    await db.table(names.products).insert({ price: 2, quantity: 3, name: 'Ink', note: 'manual' })
+
+    await schema.table(names.products, (table) => {
+      table.string('note').storedAs(labelExpressions[driver]).change()
+    })
+
+    await db.table(names.products).insert({ price: 5, quantity: 5, name: 'Pad' })
+    expect(await db.table(names.products).orderBy('id').pluck('note')).toEqual(['Ink (it\'s)', 'Pad (it\'s)'])
+  })
+
   it.runIf(driver === 'postgres')('rejects redeclaring a computed column expression through change() on postgres', async () => {
     const { schema, names } = await openComputedDatabase(driver)
 
