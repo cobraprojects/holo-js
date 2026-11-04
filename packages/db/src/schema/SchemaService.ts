@@ -3,6 +3,7 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
+import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
@@ -95,10 +96,12 @@ export class SchemaService {
     await callback(builder)
     const operations = builder.getOperations()
     this.assertTableMutationIndexNames(tableName, operations)
-    this.assertCompilableColumnChanges(tableName, operations)
-    await this.assertSupportedColumns(operations.flatMap(operation => operation.kind === 'addColumn' || operation.kind === 'alterColumn'
+    const columns = operations.flatMap(operation => operation.kind === 'addColumn' || operation.kind === 'alterColumn'
       ? [this.resolveColumnDefinition(operation.columnName, operation.column)]
-      : []))
+      : [])
+    this.assertSupportedColumnDefaults(columns)
+    this.assertCompilableColumnChanges(tableName, operations)
+    await this.assertSupportedColumns(columns)
 
     for (const operation of operations) {
       await this.executeTableMutation(tableName, operation)
@@ -251,11 +254,19 @@ export class SchemaService {
     }
   }
 
+  private assertSupportedColumnDefaults(columns: readonly AnyColumnDefinition[]): void {
+    const dialectLabel = this.createCompiler().getDialectLabel()
+    for (const column of columns) {
+      if (column.defaultKind === 'value') assertSupportedColumnDefaultValue(column.name, column.kind, column.defaultValue, dialectLabel)
+    }
+  }
+
   private async assertSupportedColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
     if (this.isPostgres()) await this.postgresVirtualColumns.assertSupported(columns)
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
+    this.assertSupportedColumnDefaults(Object.values(table.columns))
     await this.assertSupportedColumns(Object.values(table.columns))
     const compiler = this.createCompiler()
     const indexes = compiler.resolveCreateTableIndexes(table)
