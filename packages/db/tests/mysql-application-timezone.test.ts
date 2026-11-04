@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
-import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
 
 const liveMySQLConfig = {
   host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
@@ -120,6 +120,39 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
           `SELECT DATE_FORMAT(at, '%Y-%m-%d %H:%i:%s') AS at, CAST(UNIX_TIMESTAMP(instant) AS SIGNED) AS seconds FROM ${table} WHERE id = 1`,
         )).rows).toEqual([{ at: '2026-11-15 07:00:00', seconds: value.getTime() / 1000 }])
       } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
+  it('truncates sub-second timestamps instead of rounding them into the future', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const table = `holo_subsecond_${randomUUID().replaceAll('-', '')}`
+      const now = new Date('2026-11-15T17:00:00.900Z')
+      vi.useFakeTimers({ toFake: ['Date'], now })
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME NULL, created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('mysql') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.datetime().nullable(), created_at: column.timestamp().nullable(), updated_at: column.timestamp().nullable() })
+        const Model = defineModel(typed, { primaryKey: 'id', fillable: ['id', 'at'] })
+        await Model.create({ id: 1 })
+        await Model.create({ id: 2, at: '2026-11-15T17:00:00.900Z' } as never)
+        await DB.table(table).insert({ id: 3, at: now })
+
+        expect((await adapter.query<{ id: number, at: string | null, created_at: string | null }>(
+          `SELECT id, DATE_FORMAT(at, '%Y-%m-%d %H:%i:%s') AS at, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM ${table} ORDER BY id`,
+        )).rows).toEqual([
+          { id: 1, at: null, created_at: '2026-11-15 12:00:00' },
+          { id: 2, at: '2026-11-15 12:00:00', created_at: '2026-11-15 12:00:00' },
+          { id: 3, at: '2026-11-15 12:00:00', created_at: null },
+        ])
+        expect(await DB.table(table).where('created_at', '<=', now).orderBy('id').pluck('id')).toEqual([1, 2])
+        expect(await DB.table(table).where('at', '<=', now).orderBy('id').pluck('id')).toEqual([2, 3])
+      } finally {
+        vi.useRealTimers()
         resetDB()
         await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
         await adapter.disconnect()

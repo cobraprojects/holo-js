@@ -11,7 +11,7 @@ import type { DatabaseDriverFactory, DriverAdapter, DriverExecutionResult, Drive
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
-const { SERVER_WALL_CLOCK_AMBIGUITY, formatWallClock, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
+const { SERVER_WALL_CLOCK_AMBIGUITY, formatMySQLDateTime, parseCalendarDate, parseWallClockTimestamp } = holoRuntimeInternals
 
 class TransactionError extends Error {}
 
@@ -63,7 +63,7 @@ const ZERO_DATE_PART = /-00(?:-|\s|$)/
 
 function toDriverBinding(value: unknown, timeZone: string): unknown {
   if (!(value instanceof Date)) return value
-  return Number.isNaN(value.getTime()) ? null : formatWallClock(value, timeZone)
+  return Number.isNaN(value.getTime()) ? null : formatMySQLDateTime(value, timeZone)
 }
 
 function toDriverBindings(bindings: readonly unknown[]): unknown[] {
