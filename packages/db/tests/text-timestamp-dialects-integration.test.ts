@@ -143,15 +143,18 @@ describe.runIf(drivers.includes('postgres' as never))('Postgres TEXT timestamps 
     expect((await User.findOrFail(existing.id)).at).toEqual(beforeFallBack)
   })
 
-  it('keeps sub-millisecond digits of a date-cast string in ISO text', async () => {
+  it('stores sub-millisecond strings at the width Date writes use so they sort and compare together', async () => {
     useAppTimezone('America/New_York', 'Asia/Tokyo', afterFallBack)
     const { names, users } = await createTextTimestampTables('postgres')
     registerGeneratedTables({ [names.users]: users })
     const NamedUser = defineModel(names.users, { fillable: ['name', 'at'], casts: { at: 'datetime' } })
 
-    const user = await NamedUser.create({ name: 'Ada', at: '2024-11-03T01:45:00.123456-04:00' })
+    const precise = await NamedUser.create({ name: 'precise', at: '2024-11-03T01:45:00.124456-04:00' })
+    const written = await NamedUser.create({ name: 'written', at: new Date('2024-11-03T05:45:00.123Z') })
 
-    expect(await DB.table(names.users).where('id', user.get('id')).value('at')).toBe('2024-11-03T05:45:00.123456Z')
+    expect(await DB.table(names.users).where('id', precise.get('id')).value('at')).toBe('2024-11-03T05:45:00.124Z')
+    expect((await NamedUser.orderBy('at').get()).map(user => user.get('id'))).toEqual([written.get('id'), precise.get('id')])
+    expect((await NamedUser.where('at', '>', new Date('2024-11-03T05:45:00.123Z')).get()).map(user => user.get('id'))).toEqual([precise.get('id')])
   })
 
   it('compares a TEXT column with Date predicates as instants', async () => {

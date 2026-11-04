@@ -176,9 +176,6 @@ function postgresZonedText(parsed: ParsedInstant): string {
   return withPreciseFraction(formatWithOffset(parsed.instant, getApplicationTimezone()), parsed.fraction)
 }
 
-function postgresUtcText(parsed: ParsedInstant): string {
-  return withPreciseFraction(parsed.instant.toISOString(), parsed.fraction)
-}
 
 function parseInstant(value: unknown): ParsedInstant | undefined {
   if (value instanceof Date) {
@@ -212,7 +209,7 @@ export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, s
   }
 
   if (storage === 'text') {
-    return postgresUtcText(parsed)
+    return parsed.instant.toISOString()
   }
 
   return value instanceof Date ? value : postgresZonedText(parsed)
