@@ -385,7 +385,7 @@ export abstract class SQLSchemaCompiler {
       this.appendPrimaryKeyExtras(parts, column)
     }
 
-    if (!column.nullable) {
+    if (this.compilesNotNull(column)) {
       parts.push('NOT NULL')
     }
 
@@ -402,6 +402,10 @@ export abstract class SQLSchemaCompiler {
     }
 
     return parts.join(' ')
+  }
+
+  protected compilesNotNull(column: AnyColumnDefinition): boolean {
+    return !column.nullable && (!column.computed || column.explicitNotNull === true)
   }
 
   protected compileEnumCheckConstraint(tableName: string, column: AnyColumnDefinition): string | undefined {

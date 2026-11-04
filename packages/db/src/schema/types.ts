@@ -58,6 +58,7 @@ export interface ColumnDefinition<
   readonly enumValues?: readonly string[]
   readonly vectorDimensions?: number
   readonly computed?: TComputed extends true ? ComputedColumn : never
+  readonly explicitNotNull?: true
 }
 
 export type AnyColumnDefinition = ColumnDefinition<unknown, boolean, boolean, boolean, boolean, boolean>

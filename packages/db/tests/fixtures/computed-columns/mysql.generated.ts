@@ -6,15 +6,15 @@ export const computedBuilderMysql = defineGeneratedTable("computed_builder_mysql
   "quantity": column.integer(),
   "name": column.string(),
   "note": column.string().nullable(),
-  "total": column.integer().storedAs("(`price` * `quantity`)"),
-  "label": column.string().virtualAs("concat(`name`,_utf8mb4' (it\\'s)')"),
+  "total": column.integer().storedAs("(`price` * `quantity`)").nullable(),
+  "label": column.string().virtualAs("concat(`name`,_utf8mb4' (it\\'s)')").nullable(),
 })
 
 export const computedRawMysql = defineGeneratedTable("computed_raw_mysql", {
   "id": column.id(),
   "width": column.integer(),
   "height": column.integer(),
-  "area": column.integer().storedAs("(`width` * `height`)"),
+  "area": column.integer().storedAs("(`width` * `height`)").notNull(),
   "perimeter": column.integer().virtualAs("(2 * (`width` + `height`))").nullable(),
 })
 

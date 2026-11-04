@@ -6,15 +6,15 @@ export const computedBuilderPostgres = defineGeneratedTable("computed_builder_po
   "quantity": column.integer(),
   "name": column.string(),
   "note": column.string().nullable(),
-  "total": column.integer().storedAs("(price * quantity)"),
-  "label": column.string().storedAs("((name)::text || ' (it''s)'::text)"),
+  "total": column.integer().storedAs("(price * quantity)").notNull(),
+  "label": column.string().storedAs("((name)::text || ' (it''s)'::text)").notNull(),
 })
 
 export const computedRawPostgres = defineGeneratedTable("computed_raw_postgres", {
   "id": column.id(),
   "width": column.integer(),
   "height": column.integer(),
-  "area": column.integer().storedAs("(width * height)"),
+  "area": column.integer().storedAs("(width * height)").notNull(),
 })
 
 declare module '@holo-js/db' {

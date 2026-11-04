@@ -101,6 +101,26 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     await expect(renderGeneratedSchemaModule(tables)).toMatchFileSnapshot(`./fixtures/computed-columns/${driver}.generated.ts`)
   })
 
+  it('makes storedAs and virtualAs columns nullable on sqlite and mysql unless notNull() declares them, and not null on postgres', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `computed_nullability_${driver}`
+    const computedAs = driver === 'postgres' ? 'storedAs' : 'virtualAs'
+    onTestFinished(async () => {
+      if (await schema.hasTable(name)) await schema.dropTable(name)
+    })
+
+    await schema.createTable(name, (table) => {
+      table.integer('price')
+      table.integer('implicit').storedAs('price * 2')
+      table.integer('declared_after')[computedAs]('price * 3').notNull()
+      table.integer('declared_before').notNull().storedAs('price * 4')
+    })
+
+    const [computed] = await readTables(db, [name])
+    expect([computed!.columns.implicit?.nullable, computed!.columns.declared_after?.nullable, computed!.columns.declared_before?.nullable])
+      .toEqual([driver !== 'postgres', false, false])
+  })
+
   it('creates a model row without its computed columns and reads back the values the database computed', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products, names.shapes]))

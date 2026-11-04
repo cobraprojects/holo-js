@@ -6,8 +6,8 @@ export const computedBuilderSqlite = defineGeneratedTable("computed_builder_sqli
   "quantity": column.integer(),
   "name": column.string(),
   "note": column.string().nullable(),
-  "total": column.integer().storedAs("price * quantity"),
-  "label": column.string().virtualAs("name || ' (it''s)'"),
+  "total": column.integer().storedAs("price * quantity").nullable(),
+  "label": column.string().virtualAs("name || ' (it''s)'").nullable(),
 })
 
 export const computedRawSqlite = defineGeneratedTable("computed_raw_sqlite", {

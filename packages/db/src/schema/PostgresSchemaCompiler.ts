@@ -4,7 +4,7 @@ import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { resolveGeneratedCheckName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
-import type { ColumnDefinition } from './types'
+import type { AnyColumnDefinition, ColumnDefinition } from './types'
 
 export class PostgresSchemaCompiler extends SQLSchemaCompiler {
   protected override getDialectLabel(): string {
@@ -31,6 +31,10 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} RENAME CONSTRAINT ${this.quoteIdentifier(fromCheckName)} TO ${this.quoteIdentifier(toCheckName)}`,
       source: `schema:renameCheck:${tableName}:${fromCheckName}:${toCheckName}`,
     }
+  }
+
+  protected override compilesNotNull(column: AnyColumnDefinition): boolean {
+    return !column.nullable
   }
 
   override compileAlterColumn(

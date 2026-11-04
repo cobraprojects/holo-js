@@ -238,6 +238,8 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
 
   if (columnDefinition.nullable) {
     chains.push('.nullable()')
+  } else if (columnDefinition.computed) {
+    chains.push('.notNull()')
   }
 
   if (columnDefinition.hasDefault) {

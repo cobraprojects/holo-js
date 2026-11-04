@@ -33,6 +33,7 @@ type ColumnMetadata = {
   enumValues?: readonly string[]
   vectorDimensions?: number
   computed?: ComputedColumn
+  explicitNotNull?: true
 }
 
 type VectorOptions = {
@@ -67,11 +68,11 @@ export class ColumnBuilder<
   }
 
   notNull(): ColumnBuilder<TType, false, THasDefault, TGenerated, TPrimaryKey, TComputed> {
-    return this.clone({ nullable: false })
+    return this.clone({ nullable: false, explicitNotNull: true })
   }
 
   nullable(): ColumnBuilder<TType, true, THasDefault, TGenerated, TPrimaryKey, TComputed> {
-    return this.clone({ nullable: true })
+    return this.clone({ nullable: true, explicitNotNull: undefined })
   }
 
   default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
@@ -233,6 +234,7 @@ export class ColumnBuilder<
       idStrategy: this.metadata.idStrategy,
       enumValues: this.metadata.enumValues,
       vectorDimensions: this.metadata.vectorDimensions,
+      explicitNotNull: this.metadata.explicitNotNull,
       computed: this.metadata.computed as ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>['computed'],
     })
   }

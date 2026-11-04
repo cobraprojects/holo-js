@@ -138,6 +138,7 @@ function toColumnDefinition(
     ...(enumValues ? { enumValues } : {}),
     ...(vectorDimensions ? { vectorDimensions } : {}),
     ...(column.computed ? { computed: column.computed } : {}),
+    ...(column.computed && column.notNull ? { explicitNotNull: true as const } : {}),
   }
 }
 
