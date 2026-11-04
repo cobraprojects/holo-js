@@ -129,7 +129,7 @@ PostgreSQL reads and writes `date` and `timestamp` values in `app.timezone`, whi
 
 In the hour that repeats when clocks fall back, a `timestamp` column can't tell the two instants apart, so a value written at the earlier instant reads back an hour later. With a non-UTC `app.timezone` that observes daylight saving time, an expiry in that hour can be honored up to one hour late. Holo recommends `APP_TIMEZONE=UTC` for PostgreSQL apps, which avoids this.
 
-Holo sets each pooled connection's session `TimeZone` to `app.timezone` when it connects, as it does on MySQL, so `defaultNow()`, `timestamps()` and `CURRENT_TIMESTAMP` defaults on `timestamp` columns hold the wall-clock time in `app.timezone`, whatever the server's own time zone is. A `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in the `PGOPTIONS` environment variable wins over `app.timezone`:
+Holo sets each pooled connection's session `TimeZone` to `app.timezone` when it connects, as it does on MySQL, so `defaultNow()`, `timestamps()` and `CURRENT_TIMESTAMP` defaults on `timestamp` columns hold the wall-clock time in `app.timezone`, whatever the server's own time zone is. A `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in the `PGOPTIONS` environment variable when neither is set wins over `app.timezone`:
 
 ```ts
 main: {

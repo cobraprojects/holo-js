@@ -95,7 +95,8 @@ function parseAbsoluteUrl(connectionString: string): URL | undefined {
   return URL.canParse(connectionString) ? new URL(connectionString) : undefined
 }
 
-function withStartupOption(config: PoolConfig, option: string): PoolConfig {
+function withStartupOption(config: PoolConfig, name: string, value: string): PoolConfig {
+  const option = `-c ${name}=${escapeStartupOptionValue(value)}`
   const url = config.connectionString ? parseAbsoluteUrl(config.connectionString) : undefined
   const urlOptions = url?.searchParams.get('options')
   if (url && urlOptions) {
@@ -111,12 +112,12 @@ function withStartupOption(config: PoolConfig, option: string): PoolConfig {
 
 function withConfiguredSearchPath(config: PoolConfig, schema: string | undefined): PoolConfig {
   return schema
-    ? withStartupOption(config, `-c search_path=${escapeStartupOptionValue(quoteDatabaseIdentifier(schema))}`)
+    ? withStartupOption(config, 'search_path', quoteDatabaseIdentifier(schema))
     : config
 }
 
 function withApplicationTimeZone(config: PoolConfig): PoolConfig {
-  return withStartupOption(config, `-c TimeZone=${escapeStartupOptionValue(holoRuntimeInternals.getApplicationTimezone())}`)
+  return withStartupOption(config, 'TimeZone', holoRuntimeInternals.getApplicationTimezone())
 }
 
 function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {

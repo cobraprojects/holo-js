@@ -304,7 +304,7 @@ On PostgreSQL, `schema.getTables()`, `getColumns()`, `getIndexes()` and `getFore
 
 ### PostgreSQL connections use `app.timezone` as their session time zone
 
-Holo now sets each PostgreSQL connection's session `TimeZone` to `app.timezone`, as it already did on MySQL. Before, the server's time zone applied, so on a server whose time zone isn't `app.timezone`, `defaultNow()` and `timestamps()` defaults on `timestamp` columns were written in the server's wall-clock time and read back off by the difference. Rows written that way keep their values; Holo doesn't rewrite them. To keep the server's time zone, set `TimeZone` in the URL's `options` parameter or in `PGOPTIONS`. See [PostgreSQL dates and time zones](/database/#postgresql-dates-and-time-zones).
+Holo now sets each PostgreSQL connection's session `TimeZone` to `app.timezone`, as it already did on MySQL. Before, the server's time zone applied, so on a server whose time zone isn't `app.timezone`, `defaultNow()` and `timestamps()` defaults on `timestamp` columns were written in the server's wall-clock time and read back off by the difference. Rows written that way keep their values; Holo doesn't rewrite them. To keep the server's time zone, set `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in `PGOPTIONS`. See [PostgreSQL dates and time zones](/database/#postgresql-dates-and-time-zones).
 
 ## Upgrading from 0.5.5 to 0.5.6
 
