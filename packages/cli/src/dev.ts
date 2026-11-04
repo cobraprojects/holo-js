@@ -209,9 +209,9 @@ export async function runProjectDevServer(
       writeWarning: message => io.stderr.write(message),
     })
 
-    const initialArgs = await prepareDiscovery(true)
     await discoveryWatch.ready
     session.signal.throwIfAborted()
+    const initialArgs = await prepareDiscovery(true)
     restart = createFrameworkRestart({
       session,
       initialArgs,

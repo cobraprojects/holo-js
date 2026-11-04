@@ -25,18 +25,20 @@ async function createProject(): Promise<string> {
   return root
 }
 
-function createFakeWatcher() {
+function createFakeWatcher(calls: string[]) {
   const listeners: WatchListener[] = []
+  const emit = (eventType: string, path: string) => {
+    for (const listener of listeners) listener(eventType, path)
+  }
   const createWatcher = ((_path: string, _options: unknown, listener: WatchListener) => {
     listeners.push(listener)
+    void delay(0).then(() => {
+      calls.push('live')
+      emit('rename', DISCOVERY_WATCH_PROBE_PATH)
+    })
     return { close() {} } as unknown as WatchHandle
   }) as unknown as WatchFactory
-  return {
-    createWatcher,
-    emit(eventType: string, path: string) {
-      for (const listener of listeners) listener(eventType, path)
-    },
-  }
+  return { createWatcher, emit }
 }
 
 function createFakeSpawn(calls: string[]) {
@@ -68,40 +70,31 @@ async function runDev(
   )
 }
 
-it('re-prepares before launching the server when a source edit lands during the initial prepare', async () => {
+it('runs the initial prepare only after the watcher confirms it is live', async () => {
   const root = await createProject()
-  const watcher = createFakeWatcher()
   const calls: string[] = []
 
-  await runDev(root, watcher, calls, (call) => {
-    if (call !== 1) return
-    watcher.emit('change', 'server/models/User.ts')
-    watcher.emit('rename', DISCOVERY_WATCH_PROBE_PATH)
-  })
+  await runDev(root, createFakeWatcher(calls), calls, () => {})
 
-  expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
+  expect(calls).toEqual(['live', 'prepare', 'spawn'])
 })
 
-it('launches the server only after the watcher confirms it is live', async () => {
+it('re-prepares before launching the server when a source edit lands during the initial prepare', async () => {
   const root = await createProject()
-  const watcher = createFakeWatcher()
   const calls: string[] = []
+  const watcher = createFakeWatcher(calls)
 
-  await runDev(root, watcher, calls, () => {
-    void delay(0).then(() => {
-      calls.push('live')
-      watcher.emit('rename', DISCOVERY_WATCH_PROBE_PATH)
-    })
+  await runDev(root, watcher, calls, (call) => {
+    if (call === 1) watcher.emit('change', 'server/models/User.ts')
   })
 
-  expect(calls).toEqual(['prepare', 'live', 'spawn'])
+  expect(calls).toEqual(['live', 'prepare', 'prepare', 'spawn'])
 })
 
 it('removes its liveness probe when the initial prepare fails', async () => {
   const root = await createProject()
-  const watcher = createFakeWatcher()
 
-  await expect(runDev(root, watcher, [], () => {
+  await expect(runDev(root, createFakeWatcher([]), [], () => {
     throw new Error('prepare failed')
   })).rejects.toThrow('prepare failed')
 
@@ -110,15 +103,14 @@ it('removes its liveness probe when the initial prepare fails', async () => {
 
 it('does no extra prepare at startup when no discovery source changed', async () => {
   const root = await createProject()
-  const watcher = createFakeWatcher()
   const calls: string[] = []
+  const watcher = createFakeWatcher(calls)
 
   await runDev(root, watcher, calls, (call) => {
     if (call !== 1) return
     watcher.emit('change', 'README.md')
     watcher.emit('change', '.holo-js/generated/index.ts')
-    watcher.emit('rename', DISCOVERY_WATCH_PROBE_PATH)
   })
 
-  expect(calls).toEqual(['prepare', 'spawn'])
+  expect(calls).toEqual(['live', 'prepare', 'spawn'])
 })
