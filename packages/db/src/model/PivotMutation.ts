@@ -2,6 +2,8 @@ import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { TableDefinition } from '../schema/types'
+import { assertColumnWritable, ownEntry } from './entityRuntime'
+import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -162,6 +164,11 @@ export class PivotMutation {
       if (!this.context.allowedColumns.includes(column)) {
         throw new SecurityError(`Pivot attribute "${column}" on relation "${this.context.relationName}" must be declared with withPivot(...) before it can be written.`)
       }
+    }
+    const table = this.context.table
+    if (typeof table === 'string') return
+    for (const column of [...Object.keys(attributes), ...(this.context.timestamps ? PIVOT_TIMESTAMP_COLUMNS : [])]) {
+      assertColumnWritable(column, ownEntry(table.columns, column))
     }
   }
 

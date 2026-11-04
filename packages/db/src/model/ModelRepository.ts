@@ -21,7 +21,7 @@ import { normalizeDialectReadValue, storesJson, storesText } from '../schema/nor
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
-import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type GeneratedKeyPolicy, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
@@ -110,13 +110,17 @@ function serializedFlag(serialized: boolean): { readonly serialized?: true } {
 const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
 const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
 
-function findWriteColumn(definition: AnyModelDefinition, key: string) {
-  const columnName = key.includes('->') ? key.split('->')[0]! : key
+function findWriteColumn(definition: AnyModelDefinition, key: string, generatedKeys: GeneratedKeyPolicy) {
+  const attribute = key.includes('->') ? key.split('->')[0]! : key
+  const ownTablePrefix = `${definition.table.tableName}.`
+  const columnName = attribute.startsWith(ownTablePrefix) ? attribute.slice(ownTablePrefix.length) : attribute
   assertAttributeNameAllowed(columnName)
   const column = ownEntry(definition.table.columns, columnName)
   if (!column && !definition.untyped) {
     throw new SecurityError(`Column "${columnName}" is not defined on model "${definition.name}".`)
   }
+
+  assertColumnWritable(columnName, column, generatedKeys)
 
   return { columnName, column }
 }
@@ -1801,10 +1805,12 @@ export class ModelRepository<
     const { createdAtColumn, updatedAtColumn } = this.definition
     const timestamped: Record<string, unknown> = { ...payload }
     if (mode === 'create' && createdAtColumn && !(createdAtColumn in payload)) {
+      this.assertConfiguredColumnWritable(createdAtColumn)
       timestamped[createdAtColumn] = this.normalizeForStorage(createdAtColumn, timestamp)
     }
 
     if (updatedAtColumn && !(updatedAtColumn in payload)) {
+      this.assertConfiguredColumnWritable(updatedAtColumn)
       timestamped[updatedAtColumn] = this.normalizeForStorage(updatedAtColumn, timestamp)
     }
 
@@ -1812,15 +1818,17 @@ export class ModelRepository<
   }
 
   softDeleteWrite(deletedAtColumn: string, deletedAt = new Date().toISOString()): Record<string, unknown> {
+    this.assertConfiguredColumnWritable(deletedAtColumn)
     return this.withWriteTimestamps({ [deletedAtColumn]: this.castForStorage(deletedAtColumn, deletedAt) }, 'update', deletedAt)
   }
 
-  assertArithmeticColumns(columns: readonly string[]): void {
+  private assertConfiguredColumnWritable(columnName: string): void {
+    assertColumnWritable(columnName, ownEntry(this.definition.table.columns, columnName))
+  }
+
+  assertWriteTargets(columns: readonly string[]): void {
     for (const column of columns) {
-      const columnName = column.slice(column.lastIndexOf('.') + 1)
-      if (ownEntry(this.definition.table.columns, columnName)?.computed) {
-        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
-      }
+      findWriteColumn(this.definition, column, 'allow')
     }
   }
 
@@ -1847,14 +1855,10 @@ export class ModelRepository<
     }
 
     return Object.fromEntries(entries.map(([key, value]) => {
-      const { columnName, column } = findWriteColumn(this.definition, key)
+      const { columnName, column } = findWriteColumn(this.definition, key, 'reject')
 
       if (typeof value === 'undefined') {
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
-      }
-
-      if (column?.generated) {
-        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
       if (applyWriteRules) {
@@ -1869,7 +1873,7 @@ export class ModelRepository<
         return [key, value]
       }
 
-      return [key, applyWriteRules ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
+      return [columnName, applyWriteRules ? this.normalizeForStorage(columnName, value) : this.castForStorage(columnName, value)]
     }))
   }
 
@@ -3778,11 +3782,7 @@ export class ModelRepository<
 
   assertMassAssignable<TValues extends Partial<ModelRecord<TTable>> | Record<string, unknown>>(values: TValues): TValues {
     for (const key of Object.keys(values)) {
-      const { columnName, column } = findWriteColumn(this.definition, key)
-
-      if (column?.generated) {
-        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
-      }
+      const { columnName } = findWriteColumn(this.definition, key, 'reject')
 
       this.assertWritableColumn(columnName, key)
     }

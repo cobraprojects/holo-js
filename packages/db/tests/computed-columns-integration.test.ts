@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { clearGeneratedTables, defineModel, holoRuntimeInternals, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, type DatabaseContext, type SchemaService, type TableDefinition } from '../src'
+import { belongsToMany, clearGeneratedTables, defineModel, holoRuntimeInternals, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, type DatabaseContext, type SchemaService, type TableDefinition } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -150,6 +150,7 @@ describe.each(drivers)('computed columns on %s', (driver) => {
 
     await expect(Product.create({ price: 1, quantity: 1, name: 'Mug', total: 5 })).rejects.toThrow('Column "total" is generated and cannot be written directly.')
     await expect(Product.update(product.get('id'), { total: 5 })).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+    await expect(Product.where('id', product.get('id')).updateJson('total' as never, 5)).rejects.toThrow('Column "total" is generated and cannot be written directly.')
   })
 
   it('rejects incrementing or decrementing a computed column through a model with the generated column error', async () => {
@@ -166,6 +167,105 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     await expect(Product.incrementEach({ price: 1, total: 1 })).rejects.toThrow(error)
     await expect(Product.where('price', 2).decrementEach({ price: 1, total: 1 })).rejects.toThrow(error)
     expect((await Product.query().get()).toJSON().map(row => [row.price, Number(row.total)])).toEqual([[2, 6]])
+  })
+
+  it('resolves a qualified write target against the model table only', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name', 'note'], timestamps: false })
+    await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+
+    await Product.where('price', 2).update({ [`${names.products}.note`]: 'kept' } as never)
+    await expect(Product.where('price', 2).update({ [`${names.products}.total`]: 1 } as never)).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+    await expect(Product.where('price', 2).update({ 'joined.total': 1 } as never)).rejects.toThrow(`Column "joined.total" is not defined on model "${Product.definition.name}".`)
+    expect((await Product.query().get()).toJSON().map(row => [row.note, Number(row.total)])).toEqual([['kept', 6]])
+  })
+
+  it('rejects a computed column among the upsert update columns before any SQL runs', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['id', 'price', 'quantity', 'name'], timestamps: false })
+    const product = await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+
+    await expect(Product.query().upsert({ price: 5, quantity: 3, name: 'Ink' }, ['name'], ['price', 'total'] as never)).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+    expect((await Product.findOrFail(product.get('id'))).get('price')).toBe(2)
+  })
+
+  it('rejects computed pivot columns among pivot attributes and timestamps before any SQL runs', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+    const pivotName = `computed_product_tags_${driver}`
+    const dropPivot = async () => {
+      if (await schema.hasTable(pivotName)) await schema.dropTable(pivotName)
+    }
+    await dropPivot()
+    onTestFinished(dropPivot)
+    await schema.createTable(pivotName, (table) => {
+      table.integer('product_id')
+      table.integer('tag_id')
+      table.integer('quantity')
+      table.integer('doubled').storedAs('quantity * 2')
+      table.timestamp('created_at').nullable()
+      table.timestamp('updated_at').nullable().storedAs('created_at')
+    })
+    const [products, pivot] = await readTables(db, [names.products, pivotName])
+    await reloadGeneratedSchema([products!])
+    const Tag = defineModel(names.products, { timestamps: false })
+    const Product = defineModel(names.products, {
+      fillable: ['price', 'quantity', 'name'],
+      timestamps: false,
+      relations: {
+        tags: belongsToMany(() => Tag, pivot!, 'product_id', 'tag_id').withPivot('quantity', 'doubled'),
+        stampedTags: belongsToMany(() => Tag, pivot!, 'product_id', 'tag_id').withPivot('quantity').withTimestamps(),
+      },
+    })
+    const product = await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    const error = 'Column "doubled" is generated and cannot be written directly.'
+
+    await expect(product.attach('tags', product.get('id'), { quantity: 4, doubled: 1 })).rejects.toThrow(error)
+    await expect(product.sync('tags', { [String(product.get('id'))]: { quantity: 4, doubled: 1 } })).rejects.toThrow(error)
+    await expect(product.attach('stampedTags', product.get('id'), { quantity: 4 })).rejects.toThrow('Column "updated_at" is generated and cannot be written directly.')
+    await product.attach('tags', product.get('id'), { quantity: 4 })
+    await expect(product.updateExistingPivot('tags', product.get('id'), { doubled: 1 })).rejects.toThrow(error)
+    expect((await db.table(pivotName).get()).map(row => [Number(row.quantity), Number(row.doubled)])).toEqual([[4, 8]])
+  })
+
+  it('rejects computed timestamp and soft delete columns before any SQL runs', async () => {
+    const { db, schema } = await openDatabase(driver)
+    const name = `computed_stamps_${driver}`
+    const drop = async () => {
+      if (await schema.hasTable(name)) await schema.dropTable(name)
+    }
+    await drop()
+    onTestFinished(drop)
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('name')
+      table.timestamp('created_at').nullable()
+      table.timestamp('updated_at').nullable().storedAs('created_at')
+      table.timestamp('deleted_at').nullable().storedAs('created_at')
+    })
+    await reloadGeneratedSchema(await readTables(db, [name]))
+    await db.table(name).insert({ name: 'Ink' })
+    const Stamped = defineModel(name, { fillable: ['name'] })
+    const Trashed = defineModel(name, { fillable: ['name'], timestamps: false, softDeletes: true })
+
+    await expect(Stamped.where('name', 'Ink').update({ name: 'Pad' })).rejects.toThrow('Column "updated_at" is generated and cannot be written directly.')
+    await expect(Trashed.where('name', 'Ink').delete()).rejects.toThrow('Column "deleted_at" is generated and cannot be written directly.')
+    await expect((await Trashed.firstOrFail()).delete()).rejects.toThrow('Column "deleted_at" is generated and cannot be written directly.')
+    expect((await db.table(name).get()).map(row => row.name)).toEqual(['Ink'])
+  })
+
+  it('rejects a computed column as an insertUsing destination before any SQL runs', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    const error = 'Column "total" is generated and cannot be written directly.'
+
+    await expect(Product.insertUsing(['price', 'quantity', 'name', 'total'] as never, Product.select('price', 'quantity', 'name', 'total'))).rejects.toThrow(error)
+    await expect(Product.query().insertOrIgnoreUsing([`${names.products}.total`] as never, Product.select('total'))).rejects.toThrow(error)
+    await Product.insertUsing(['price', 'quantity', 'name'], Product.select('price', 'quantity', 'name'))
+    expect((await Product.query().get()).toJSON().map(row => Number(row.total))).toEqual([6, 6])
   })
 
   it('keeps computed columns computing after change() alters another column', async () => {

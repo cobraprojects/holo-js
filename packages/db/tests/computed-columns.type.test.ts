@@ -16,7 +16,8 @@ const shelves = defineModel(defineGeneratedTable('computed_shelves', { id: colum
   },
 })
 
-const flags = defineModel(defineGeneratedTable('computed_flags', { id: column.id(), active: column.boolean() }), { timestamps: false })
+const flags = defineModel(defineGeneratedTable('computed_flags', { id: column.id(), active: column.boolean(), payload: column.json() }), { timestamps: false })
+const untypedCounters = defineModel('computed_untyped_counters', { timestamps: false })
 
 it('leaves computed columns out of the insert and update types of every dialect', () => {
   expectTypeOf<keyof InferInsert<typeof computedBuilderSqlite>>().toEqualTypeOf<ProductColumn>()
@@ -97,6 +98,12 @@ it('rejects computed columns in the values written by model query writes', () =>
     await query.decrementEach({ price: 1 }, { total: 2 })
     // @ts-expect-error computed columns cannot be written
     await query.upsert({ price: 1, quantity: 2, name: 'Pen', total: 2 }, ['name'])
+    // @ts-expect-error computed columns cannot be updated as json
+    await query.updateJson('total', 2)
+    // @ts-expect-error computed columns cannot be updated as json
+    await query.updateJson('label->first', 'Pen')
+    // @ts-expect-error computed columns cannot be upsert update columns
+    await query.upsert({ price: 1, quantity: 2, name: 'Pen' }, ['name'], ['total'])
   }
   expectTypeOf(write).toBeFunction()
 })
@@ -132,6 +139,8 @@ it('keeps lookups on computed columns and infers the written entity', () => {
     await products.createOrFirst({ total: 2 }, { name: 'Pen' })
     await products.increment('price', 1, { note: 'more' })
     await products.where('total', '>', 1).update({ note: null })
+    await products.query().upsert({ price: 1, quantity: 2, name: 'Pen' }, ['total'], ['price'])
+    await products.where('total', 2).updateJson('note', null)
     expectTypeOf(products.make({ name: 'Pen' }).get('total')).toEqualTypeOf<number | null>()
     expectTypeOf(await shelf.products().create({ price: 1, name: 'Pen' })).toHaveProperty('total').toEqualTypeOf<number | null>()
   }
@@ -173,6 +182,30 @@ it('limits increment and decrement to writable numeric columns', () => {
     await products.where('price', 1).decrementEach({ total: 1 })
     // @ts-expect-error boolean columns are not numeric
     await flags.increment('active')
+    // @ts-expect-error json columns are not numeric
+    await flags.increment('payload')
+    // @ts-expect-error json columns are not numeric
+    await flags.where('id', 1).decrementEach({ payload: 1 })
   }
   expectTypeOf(arithmetic).toBeFunction()
+})
+
+it('leaves increment and decrement unrestricted on untyped models', () => {
+  const arithmetic = async () => {
+    await untypedCounters.increment('visits')
+    await untypedCounters.where('id', 1).decrementEach({ stock: 2 })
+  }
+  expectTypeOf(arithmetic).toBeFunction()
+})
+
+it('limits insertUsing destinations to writable columns', () => {
+  const copy = async () => {
+    await products.insertUsing(['price', 'quantity', 'name'], products.select('price', 'quantity', 'name'))
+    await products.where('price', 1).insertOrIgnoreUsing(['price', 'quantity', 'name'], products.select('price', 'quantity', 'name'))
+    // @ts-expect-error computed columns cannot be insertUsing destinations
+    await products.insertUsing(['price', 'total'], products.select('price', 'total'))
+    // @ts-expect-error computed columns cannot be insertOrIgnoreUsing destinations
+    await products.where('price', 1).insertOrIgnoreUsing(['label'], products.select('label'))
+  }
+  expectTypeOf(copy).toBeFunction()
 })

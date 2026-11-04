@@ -50,6 +50,8 @@ import type {
   ModelAttributeKey,
   ModelCastDefinition,
   ModelArithmeticColumnName,
+  ModelWritableColumnName,
+  ModelWritableJsonColumnPath,
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
@@ -1887,7 +1889,7 @@ class ModelQueryBuilderBase<
   }
 
   async updateJson(
-    columnPath: ModelJsonColumnPath<TTable>,
+    columnPath: ModelWritableJsonColumnPath<TTable>,
     value: unknown,
   ): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
@@ -1899,7 +1901,7 @@ class ModelQueryBuilderBase<
     amount = 1,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
-    this.repository.assertArithmeticColumns([column])
+    this.repository.assertWriteTargets([column])
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().increment(
       column,
@@ -1913,7 +1915,7 @@ class ModelQueryBuilderBase<
     amount = 1,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
-    this.repository.assertArithmeticColumns([column])
+    this.repository.assertWriteTargets([column])
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrement(
       column,
@@ -1926,7 +1928,7 @@ class ModelQueryBuilderBase<
     columns: Partial<Record<ModelArithmeticColumnName<TTable>, number>>,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
-    this.repository.assertArithmeticColumns(Object.keys(columns))
+    this.repository.assertWriteTargets(Object.keys(columns))
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().incrementEach(
       columns as Readonly<Record<string, number>>,
@@ -1938,7 +1940,7 @@ class ModelQueryBuilderBase<
     columns: Partial<Record<ModelArithmeticColumnName<TTable>, number>>,
     extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
-    this.repository.assertArithmeticColumns(Object.keys(columns))
+    this.repository.assertWriteTargets(Object.keys(columns))
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrementEach(
       columns as Readonly<Record<string, number>>,
@@ -1947,16 +1949,18 @@ class ModelQueryBuilderBase<
   }
 
   async insertUsing<TSubTable extends TableDefinition>(
-    columns: readonly ModelColumnName<TTable>[],
+    columns: readonly ModelWritableColumnName<TTable>[],
     query: SubqueryBuilder<TSubTable>,
   ): Promise<DriverExecutionResult> {
+    this.repository.assertWriteTargets(columns)
     return this.getTableQueryBuilder().insertUsing(columns as never, this.normalizeExistsSubquery(query))
   }
 
   async insertOrIgnoreUsing<TSubTable extends TableDefinition>(
-    columns: readonly ModelColumnName<TTable>[],
+    columns: readonly ModelWritableColumnName<TTable>[],
     query: SubqueryBuilder<TSubTable>,
   ): Promise<DriverExecutionResult> {
+    this.repository.assertWriteTargets(columns)
     return this.getTableQueryBuilder().insertOrIgnoreUsing(columns as never, this.normalizeExistsSubquery(query))
   }
 
@@ -1967,16 +1971,17 @@ class ModelQueryBuilderBase<
   async upsert(
     values: ModelInsertPayload<TTable> | readonly ModelInsertPayload<TTable>[],
     uniqueBy: readonly ModelColumnName<TTable>[],
-    updateColumns: readonly ModelColumnName<TTable>[] = [],
+    updateColumns: readonly ModelWritableColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {
+    this.repository.assertWriteTargets(updateColumns)
     await this.repository.loadGuardableColumns()
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
       this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(value, 'create'), 'create', timestamp)
     ))
     const { updatedAtColumn } = this.repository.definition
-    const timestampedUpdateColumns = updatedAtColumn && updateColumns.length > 0 && !updateColumns.includes(updatedAtColumn as ModelColumnName<TTable>)
-      ? [...updateColumns, updatedAtColumn as ModelColumnName<TTable>]
+    const timestampedUpdateColumns = updatedAtColumn && updateColumns.length > 0 && !updateColumns.includes(updatedAtColumn as ModelWritableColumnName<TTable>)
+      ? [...updateColumns, updatedAtColumn as ModelWritableColumnName<TTable>]
       : updateColumns
     return this.tableQuery.upsert(rows, uniqueBy, timestampedUpdateColumns)
   }

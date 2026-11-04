@@ -1,5 +1,5 @@
 import { SecurityError } from '../core/errors'
-import type { TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { ModelInsertPayload, ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
 import type { Entity } from './Entity'
 
@@ -8,6 +8,14 @@ const reservedAttributeNames: ReadonlySet<string> = new Set(['__proto__', 'const
 export function assertAttributeNameAllowed(name: string): void {
   if (reservedAttributeNames.has(name)) {
     throw new SecurityError(`Attribute "${name}" is reserved and cannot be assigned.`)
+  }
+}
+
+export type GeneratedKeyPolicy = 'allow' | 'reject'
+
+export function assertColumnWritable(columnName: string, column: AnyColumnDefinition | undefined, generatedKeys: GeneratedKeyPolicy = 'allow'): void {
+  if (generatedKeys === 'reject' ? column?.generated : column?.computed) {
+    throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
   }
 }
 
