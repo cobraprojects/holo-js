@@ -46,6 +46,7 @@ export class PivotMutation {
 
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
+    this.assertColumnsWritable([attributes])
     if (Object.keys(attributes).length === 0) return 0
     const [existing] = await this.read(this.connection, [id])
     if (!existing || !this.changed(existing, attributes)) return 0
@@ -57,6 +58,7 @@ export class PivotMutation {
     const normalized = this.normalize(ids, attributes)
     const entries = kind === 'attach' ? normalized : this.dedupe(normalized)
     for (const entry of entries) this.validate(entry.attributes)
+    this.assertColumnsWritable(entries.map(entry => entry.attributes))
     const result: Result = { attached: [], detached: [], updated: [] }
     if (kind !== 'sync' && entries.length === 0) return result
 
@@ -165,11 +167,13 @@ export class PivotMutation {
         throw new SecurityError(`Pivot attribute "${column}" on relation "${this.context.relationName}" must be declared with withPivot(...) before it can be written.`)
       }
     }
+  }
+
+  private assertColumnsWritable(attributes: readonly Attributes[]): void {
     const table = this.context.table
-    if (typeof table === 'string') return
-    for (const column of [...Object.keys(attributes), ...(this.context.timestamps ? PIVOT_TIMESTAMP_COLUMNS : [])]) {
-      assertColumnWritable(column, ownEntry(table.columns, column))
-    }
+    if (typeof table === 'string' || attributes.length === 0) return
+    const columns = new Set([...attributes.flatMap(entry => Object.keys(entry)), ...(this.context.timestamps ? PIVOT_TIMESTAMP_COLUMNS : [])])
+    for (const column of columns) assertColumnWritable(column, ownEntry(table.columns, column), 'computed')
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {

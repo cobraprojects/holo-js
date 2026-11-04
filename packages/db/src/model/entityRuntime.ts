@@ -11,10 +11,10 @@ export function assertAttributeNameAllowed(name: string): void {
   }
 }
 
-export type GeneratedKeyPolicy = 'allow' | 'reject'
+export type RejectedGeneratedColumns = 'computed' | 'generated'
 
-export function assertColumnWritable(columnName: string, column: AnyColumnDefinition | undefined, generatedKeys: GeneratedKeyPolicy = 'allow'): void {
-  if (generatedKeys === 'reject' ? column?.generated : column?.computed) {
+export function assertColumnWritable(columnName: string, column: AnyColumnDefinition | undefined, rejected: RejectedGeneratedColumns): void {
+  if (column?.[rejected]) {
     throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
   }
 }
