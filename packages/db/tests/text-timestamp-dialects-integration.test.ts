@@ -11,10 +11,15 @@ const drivers = [
 
 const storedText = {
   postgres: '2026-03-04T10:00:00.123Z',
-  mysql: '2026-03-04 19:00:00.123',
+  mysql: '2026-03-04 19:00:00',
 } as const
 
 const createdAt = new Date('2026-03-04T10:00:00.123Z')
+
+const storedInstant = {
+  postgres: createdAt,
+  mysql: new Date('2026-03-04T10:00:00.000Z'),
+} as const
 
 function useAppTimezone(appTimezone: string, processTimezone: string, now: Date): void {
   const previousTimeZone = process.env.TZ
@@ -79,7 +84,7 @@ describe.each(drivers)('timestamps stored in TEXT columns on %s', (driver) => {
     const user = await User.create({ name: 'Ada' })
 
     expect(await DB.table(names.users).where('id', user.id).value('created_at')).toBe(storedText[driver])
-    expect((await User.findOrFail(user.id)).created_at).toEqual(createdAt)
+    expect((await User.findOrFail(user.id)).created_at).toEqual(storedInstant[driver])
     expect(await User.where('created_at', '<', new Date('2026-03-04T11:00:00.000Z')).count()).toBe(1)
     expect(await User.where('created_at', '>', new Date('2026-03-04T05:00:00.000Z')).count()).toBe(1)
   })
@@ -105,8 +110,8 @@ describe.each(drivers)('timestamps stored in TEXT columns on %s', (driver) => {
     expect(await DB.table(names.memberships).value('created_at')).toBe(storedText[driver])
     const [loaded] = (await User.with('roles').findOrFail(user.id)).getRelation<Entity[]>('roles')
     const pivot = loaded?.getRelation<Record<string, unknown>>('pivot')
-    expect(pivot?.created_at).toEqual(createdAt)
-    expect(pivot?.updated_at).toEqual(createdAt)
+    expect(pivot?.created_at).toEqual(storedInstant[driver])
+    expect(pivot?.updated_at).toEqual(storedInstant[driver])
   })
 })
 

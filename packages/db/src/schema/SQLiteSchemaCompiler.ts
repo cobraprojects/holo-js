@@ -1,5 +1,5 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
-import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { compileColumnDefaultLiteral } from './defaultLiterals'
 import { assertValidIdentifierPath } from './identifiers'
 import { SchemaError } from '../core/errors'
 import { withIndexName, withSchemaQualifiedName } from './introspection/sqlDefinitions'
@@ -9,7 +9,7 @@ import type { SQLiteDependentObject, SQLiteTableObject } from './introspection/s
 import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
-  protected override getDialectLabel(): string {
+  override getDialectLabel(): string {
     return 'SQLite'
   }
 
@@ -27,8 +27,12 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return resolveDialectColumnType('sqlite', column)
   }
 
-  protected override compileDefaultValue(value: unknown): string {
-    return compileDialectDefaultLiteral('sqlite', value)
+  protected override compileDefaultValue(value: unknown, column: AnyColumnDefinition): string {
+    return compileColumnDefaultLiteral('sqlite', value, column.kind)
+  }
+
+  protected override compileDefaultExpression(column: AnyColumnDefinition): string {
+    return `(${super.compileDefaultExpression(column)})`
   }
 
   protected override compileUniqueConstraints(): string[] {

@@ -111,7 +111,7 @@ main: {
 
 On PostgreSQL, `schema` sets the connection's `search_path`, as Laravel's `search_path` setting does. Every pooled connection starts with it, so migrations, the schema builder, queries, models and the CLI create and read unqualified tables in that schema, and the generated schema is read from it. With `schema: 'tenant'`, `holo migrate` creates its tables in `tenant`, and a `public` table with the same name is ignored. Leave `schema` out to keep the server's default `search_path`.
 
-A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no `options`, wins over `schema`:
+A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no or an empty `options`, wins over `schema`:
 
 ```ts
 main: {
@@ -129,6 +129,17 @@ PostgreSQL reads and writes `date` and `timestamp` values in `app.timezone`, whi
 
 In the hour that repeats when clocks fall back, a `timestamp` column can't tell the two instants apart, so a value written at the earlier instant reads back an hour later. With a non-UTC `app.timezone` that observes daylight saving time, an expiry in that hour can be honored up to one hour late. Holo recommends `APP_TIMEZONE=UTC` for PostgreSQL apps, which avoids this.
 
+Holo sets each pooled connection's session `TimeZone` to `app.timezone` when it connects, as it does on MySQL, so `defaultNow()`, `timestamps()` and `CURRENT_TIMESTAMP` defaults on `timestamp` columns hold the wall-clock time in `app.timezone`, whatever the server's own time zone is. A `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in the `PGOPTIONS` environment variable when neither is set wins over `app.timezone`:
+
+```ts
+main: {
+  driver: 'postgres',
+  url: 'postgres://app@127.0.0.1/my_app?options=-c%20TimeZone%3DEurope/Paris',
+},
+```
+
+Objects you pass to `createPostgresAdapter()` as `client`, `pool`, or `createPool` keep their own session time zone.
+
 ### MySQL dates and time zones
 
 MySQL reads and writes `date`, `datetime`, and `timestamp` values in `app.timezone`, which comes from [`APP_TIMEZONE`](/reference/environment), as PostgreSQL does. Holo sets each connection's session time zone to `app.timezone`. MySQL needs its time zone tables loaded for any zone other than `UTC`:
@@ -139,7 +150,7 @@ mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
 
 Without the tables, queries fail, and the reason is reported through `exceptions.report`.
 
-A `Date` value is written as wall-clock time in `app.timezone`, and a `date` reads back as a `Date` at midnight in that zone. On a day the zone skipped entirely, such as 2011-12-30 in `Pacific/Apia`, the `date` reads back as the next day, and saving the loaded value stores that day. To avoid this, set `APP_TIMEZONE=UTC` (the default). In the hour that repeats when clocks fall back, a `timestamp` stored at the later instant reads back an hour early, because MySQL shows both instants with the same wall-clock time. To receive the stored strings instead, set `dateStrings` or `typeCast: false` on the connection. The strings are already in `app.timezone`, and `Date` values are still written in it.
+A `Date` value is written as wall-clock time in `app.timezone`, to the whole second as Laravel does, so `12:00:00.900` is stored as `12:00:00` and a `created_at` set now never lands in the future. This applies to bindings, inlined SQL, column defaults and ISO date strings a model writes, also in `text` columns. After a save or soft delete, the model holds the same whole-second values the row stores. A `date` reads back as a `Date` at midnight in that zone. On a day the zone skipped entirely, such as 2011-12-30 in `Pacific/Apia`, the `date` reads back as the next day, and saving the loaded value stores that day. To avoid this, set `APP_TIMEZONE=UTC` (the default). In the hour that repeats when clocks fall back, a `timestamp` stored at the later instant reads back an hour early, because MySQL shows both instants with the same wall-clock time. To receive the stored strings instead, set `dateStrings` or `typeCast: false` on the connection. The strings are already in `app.timezone`, and `Date` values are still written in it.
 
 Objects you pass to `createMySQLAdapter()` as `client`, `pool`, or `createPool` are used as they are. Holo doesn't convert their dates or set their session time zone, so set their `time_zone` and date options yourself.
 

@@ -1,5 +1,5 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
-import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { compileColumnDefaultLiteral } from './defaultLiterals'
 import { assertValidIndexName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
 import type { AnyColumnDefinition, ColumnDefinition, TableDefinition } from './types'
@@ -32,7 +32,7 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
-  protected override getDialectLabel(): string {
+  override getDialectLabel(): string {
     return 'MySQL'
   }
 
@@ -45,8 +45,12 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
   }
 
   protected override compileDefaultValue(value: unknown, column: AnyColumnDefinition): string {
-    const literal = compileDialectDefaultLiteral('mysql', value)
+    const literal = compileColumnDefaultLiteral('mysql', value, column.kind)
     return value !== null && ['json', 'text', 'blob'].includes(column.kind) ? `(${literal})` : literal
+  }
+
+  protected override compileDefaultExpression(column: AnyColumnDefinition): string {
+    return `(${super.compileDefaultExpression(column)})`
   }
 
   override compileRenameTable(fromTableName: string, toTableName: string): { sql: string, source: string } {

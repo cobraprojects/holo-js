@@ -10,6 +10,7 @@ import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DDLStatement } from './ddl'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { runInTransactionScope } from '../core/transactionScope'
 import type { DatabaseTableStructure } from './introspection'
 import type { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import type { AnyColumnDefinition, ForeignKeyReference } from './types'
@@ -147,9 +148,7 @@ export class SQLiteSchemaOperations {
   }
 
   private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[] = []): Promise<void> {
-    const adapter = this.connection.getAdapter()
-    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp)
-    return adapter.runWithTransactionScope ? adapter.runWithTransactionScope(rebuild) : rebuild()
+    return runInTransactionScope(this.connection, () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp))
   }
 
   private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {
@@ -220,7 +219,9 @@ export class SQLiteSchemaOperations {
       throw new SchemaError(`SQLite cannot read the rebuilt definition of table "${tableName}".`)
     }
     const copiedColumns = [
-      ...rebuiltTable.columns.filter(rebuilt => !isGeneratedColumn(rebuilt)).map(rebuilt => rebuilt.name),
+      ...rebuiltTable.columns
+        .filter(rebuilt => !isGeneratedColumn(rebuilt) && storedTable.columns.some(stored => sameIdentifier(stored.name, rebuilt.name)))
+        .map(rebuilt => rebuilt.name),
       ...this.readHiddenRowIdColumns(tableName, rebuiltTable),
     ]
 

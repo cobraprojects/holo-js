@@ -141,7 +141,7 @@ describe('query builder helpers', () => {
     onTestFinished(() => resetConfigRuntime())
     const mysql = new MySQLQueryCompiler(identifier => `\`${identifier}\``, () => '?')
 
-    expect(mysql.substituteBindings('SELECT ?', [new Date('2026-01-01T12:00:00Z')])).toBe("SELECT '2026-01-01 21:00:00.000'")
+    expect(mysql.substituteBindings('SELECT ?', [new Date('2026-01-01T12:00:00.900Z')])).toBe("SELECT '2026-01-01 21:00:00'")
   })
 
   it('rejects inserting rows selected with unsafe raw SQL when the security policy disallows it', async () => {
