@@ -194,6 +194,46 @@ describe('transaction scope ordering on one SQLite context', () => {
   }, 5_000)
 })
 
+describe('transaction scope ordering across contexts sharing one SQLite adapter', () => {
+  it('keeps statements of another context off the connection while foreign-key checks are off', async () => {
+    const { schema, adapter } = await openDatabase('sqlite')
+    const other = createDatabase({ connectionName: 'default', adapter, dialect: createDialect('sqlite') })
+    const read = startFromAnotherChain(async () => {
+      const result = await other.queryCompiled<{ foreign_keys: number }>({ sql: 'PRAGMA foreign_keys', bindings: [], source: 'schema' })
+      return Number(result.rows[0]?.foreign_keys)
+    })
+
+    await schema.withoutForeignKeyConstraints(async () => {
+      read.start()
+      await nextMacrotask()
+      await nextMacrotask()
+    })
+
+    expect(await read.done).toBe(1)
+  }, 5_000)
+
+  it('finishes when a suspension queries another context on which a root transaction started meanwhile', async () => {
+    const transactions = watchRootTransactions()
+    const { schema, adapter, table } = await openDatabase('sqlite')
+    const other = createDatabase({ connectionName: 'default', adapter, dialect: createDialect('sqlite'), logger: transactions.logger })
+    const transaction = startFromAnotherChain(() => other.transaction(async (tx) => {
+      await tx.table(table).insert({ id: 2, name: 'transaction' })
+    }))
+
+    await schema.withoutForeignKeyConstraints(async () => {
+      const started = transactions.nextStart()
+      transaction.start()
+      await started
+      await nextMacrotask()
+      await other.table(table).insert({ id: 1, name: 'suspension' })
+    })
+    await transaction.done
+
+    expect(await other.table(table).orderBy('id').pluck('id')).toEqual([1, 2])
+    expect(await readForeignKeys(adapter)).toBe(1)
+  }, 5_000)
+})
+
 describe('transaction scope re-entry on one SQLite context', () => {
   it('makes a root transaction forked from a finished transaction wait for the transaction that holds the context', async () => {
     const { db, table } = await openDatabase('sqlite')

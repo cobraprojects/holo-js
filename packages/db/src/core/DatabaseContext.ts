@@ -9,7 +9,7 @@ import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
-import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
+import { createConnectionQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
@@ -181,12 +181,12 @@ export class DatabaseContext {
       : {
           savepointCounter: 0,
           rootTransactionQueue: { tail: Promise.resolve() },
-          scheduler: createQueryScheduler({
+          scheduler: createConnectionQueryScheduler({
             connectionName: this._connectionName,
             supportsConcurrentQueries: this._dialect.capabilities.concurrentQueries,
             supportsWorkerThreads: this._dialect.capabilities.workerThreadExecution,
             concurrency: this._concurrency,
-          }),
+          }, this._adapter),
         }
     this._scope = 'scope' in options ? options.scope : { kind: 'root', depth: 0 }
     this._transactionCallbacks = 'transactionCallbacks' in options ? options.transactionCallbacks : undefined

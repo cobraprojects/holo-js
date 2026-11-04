@@ -18,7 +18,81 @@ type QueueState = {
   readonly waiters: Array<() => void>
 }
 
+class ExclusiveGate {
+  private activeOperations = 0
+  private exclusiveActive = false
+  private exclusivePending = 0
+  private readonly operationWaiters: Array<() => void> = []
+  private readonly exclusiveWaiters: Array<() => void> = []
+  private readonly exclusiveScope = new AsyncLocalStorage<{ active: boolean }>()
+
+  isWithinExclusive(): boolean {
+    return this.exclusiveScope.getStore()?.active === true
+  }
+
+  async exclusive<T>(callback: () => Promise<T>): Promise<T> {
+    if (this.isWithinExclusive()) return callback()
+    this.exclusivePending += 1
+    if (this.exclusiveActive || this.activeOperations > 0) {
+      await new Promise<void>((resolve) => this.exclusiveWaiters.push(resolve))
+    }
+    this.exclusivePending -= 1
+    this.exclusiveActive = true
+    const scope = { active: true }
+    try {
+      return await this.exclusiveScope.run(scope, callback)
+    } finally {
+      scope.active = false
+      this.exclusiveActive = false
+      this.wake()
+    }
+  }
+
+  acquireOperation(): Promise<void> | undefined {
+    if (this.exclusiveActive || this.exclusivePending > 0) {
+      return new Promise<void>((resolve) => {
+        this.operationWaiters.push(() => {
+          this.activeOperations += 1
+          resolve()
+        })
+      })
+    }
+    this.activeOperations += 1
+    return undefined
+  }
+
+  releaseOperation(): void {
+    this.activeOperations -= 1
+    this.wake()
+  }
+
+  private wake(): void {
+    if (this.exclusiveActive || this.activeOperations > 0) return
+    const exclusive = this.exclusiveWaiters.shift()
+    if (exclusive) {
+      exclusive()
+      return
+    }
+    for (const resolve of this.operationWaiters.splice(0)) resolve()
+  }
+}
+
+const connectionGates = new WeakMap<object, ExclusiveGate>()
+
+let shareConnectionGate: (scheduler: QueryScheduler, connection: object) => void
+
 export class QueryScheduler {
+  static {
+    shareConnectionGate = (scheduler, connection) => {
+      const gate = connectionGates.get(connection)
+      if (gate) {
+        scheduler.gate = gate
+      } else {
+        connectionGates.set(connection, scheduler.gate)
+      }
+    }
+  }
+
   private readonly connectionName: string
   private readonly queueLimit: number
   private readonly supportsConcurrentQueries: boolean
@@ -26,12 +100,7 @@ export class QueryScheduler {
   private readonly concurrentState: QueueState
   private readonly serializedState: QueueState
   private readonly workerState: QueueState
-  private activeOperations = 0
-  private exclusiveActive = false
-  private exclusivePending = 0
-  private readonly operationWaiters: Array<() => void> = []
-  private readonly exclusiveWaiters: Array<() => void> = []
-  private readonly exclusiveScope = new AsyncLocalStorage<{ active: boolean }>()
+  private gate = new ExclusiveGate()
   private readonly transactionScope = new AsyncLocalStorage<QueueState>()
 
   constructor(options: QuerySchedulerOptions) {
@@ -82,9 +151,9 @@ export class QueryScheduler {
     callback: (schedulingMode: SchedulingMode) => Promise<T>,
   ): Promise<{ result: T, schedulingMode: SchedulingMode }> {
     const transactionState = this.transactionScope.getStore()
-    const withinExclusive = options.withinExclusive || this.isWithinExclusive() || !!transactionState
+    const withinExclusive = options.withinExclusive || this.gate.isWithinExclusive() || !!transactionState
     if (!withinExclusive) {
-      const operationWait = this.acquireOperation()
+      const operationWait = this.gate.acquireOperation()
       if (operationWait) await operationWait
     }
     const schedulingMode = this.preview(options)
@@ -95,7 +164,7 @@ export class QueryScheduler {
     if (state.active >= state.limit) {
       if (state.queued >= this.queueLimit) {
         if (!withinExclusive) {
-          this.releaseOperation()
+          this.gate.releaseOperation()
         }
         throw new DatabaseError(
           `Query scheduler queue limit exceeded for connection "${this.connectionName}".`,
@@ -120,7 +189,7 @@ export class QueryScheduler {
       state.active -= 1
       this.wakeNext(state)
       if (!withinExclusive) {
-        this.releaseOperation()
+        this.gate.releaseOperation()
       }
     }
   }
@@ -137,25 +206,11 @@ export class QueryScheduler {
   }
 
   isWithinExclusive(): boolean {
-    return this.exclusiveScope.getStore()?.active === true
+    return this.gate.isWithinExclusive()
   }
 
-  async exclusive<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.isWithinExclusive()) return callback()
-    this.exclusivePending += 1
-    if (this.exclusiveActive || this.activeOperations > 0) {
-      await new Promise<void>((resolve) => this.exclusiveWaiters.push(resolve))
-    }
-    this.exclusivePending -= 1
-    this.exclusiveActive = true
-    const scope = { active: true }
-    try {
-      return await this.exclusiveScope.run(scope, callback)
-    } finally {
-      scope.active = false
-      this.exclusiveActive = false
-      this.wakeGate()
-    }
+  exclusive<T>(callback: () => Promise<T>): Promise<T> {
+    return this.gate.exclusive(callback)
   }
 
   preview(options: {
@@ -211,36 +266,14 @@ export class QueryScheduler {
   private wakeNext(state: QueueState): void {
     state.waiters.shift()?.()
   }
-
-  private acquireOperation(): Promise<void> | undefined {
-    if (this.exclusiveActive || this.exclusivePending > 0) {
-      return new Promise<void>((resolve) => {
-        this.operationWaiters.push(() => {
-          this.activeOperations += 1
-          resolve()
-        })
-      })
-    }
-    this.activeOperations += 1
-    return undefined
-  }
-
-  private releaseOperation(): void {
-    this.activeOperations -= 1
-    this.wakeGate()
-  }
-
-  private wakeGate(): void {
-    if (this.exclusiveActive || this.activeOperations > 0) return
-    const exclusive = this.exclusiveWaiters.shift()
-    if (exclusive) {
-      exclusive()
-      return
-    }
-    for (const resolve of this.operationWaiters.splice(0)) resolve()
-  }
 }
 
 export function createQueryScheduler(options: QuerySchedulerOptions): QueryScheduler {
   return new QueryScheduler(options)
+}
+
+export function createConnectionQueryScheduler(options: QuerySchedulerOptions, connection: object): QueryScheduler {
+  const scheduler = new QueryScheduler(options)
+  shareConnectionGate(scheduler, connection)
+  return scheduler
 }
