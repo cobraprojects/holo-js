@@ -60,9 +60,15 @@ function readNumericLiteral(text: string): number | string {
 }
 
 function readJsonLiteral(text: string): unknown {
+  let lossless = true
   try {
-    const value = JSON.parse(text) as unknown
-    return typeof value === 'string' || value === null ? text : value
+    const value = JSON.parse(text, (_key, entry: unknown, context?: { source?: string }) => {
+      if (typeof entry === 'number' && context?.source !== undefined && JSON.stringify(entry) !== context.source) {
+        lossless = false
+      }
+      return entry
+    }) as unknown
+    return typeof value === 'string' || value === null || !lossless ? text : value
   } catch {
     return text
   }

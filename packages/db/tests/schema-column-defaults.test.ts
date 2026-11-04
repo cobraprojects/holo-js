@@ -89,13 +89,15 @@ const uuidExpressions = {
   mysql: 'uuid()',
 } as const
 
-const jsonDefaults: Record<string, { declared: unknown, value: unknown, readBack: unknown }> = {
+const jsonDefaults: Record<string, { declared: unknown, value: unknown, readBack: unknown, postgresReadBack?: unknown }> = {
   json_text_string: { declared: '"hello"', value: 'hello', readBack: '"hello"' },
   json_text_quoted: { declared: '"it\'s \\\\ \\"q\\""', value: 'it\'s \\ "q"', readBack: '"it\'s \\\\ \\"q\\""' },
   json_text_object: { declared: '{"a":1}', value: { a: 1 }, readBack: { a: 1 } },
   json_text_array: { declared: '[1,2]', value: [1, 2], readBack: [1, 2] },
   json_text_number: { declared: '7', value: 7, readBack: 7 },
   json_text_null: { declared: 'null', value: null, readBack: 'null' },
+  json_text_unsafe_integer: { declared: '9007199254740993', value: JSON.parse('9007199254740993') as unknown, readBack: '9007199254740993' },
+  json_text_nested_unsafe_integer: { declared: '{"big":9007199254740993}', value: JSON.parse('{"big":9007199254740993}') as unknown, readBack: '{"big":9007199254740993}', postgresReadBack: '{"big": 9007199254740993}' },
   json_number: { declared: 42, value: 42, readBack: 42 },
   json_negative: { declared: -1.5, value: -1.5, readBack: -1.5 },
   json_true: { declared: true, value: true, readBack: true },
@@ -351,12 +353,13 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       const readBack = readDefaults(definition)
       const rendered = await renderGeneratedSchemaModule([definition])
       for (const [columnName, expected] of Object.entries(jsonDefaults)) {
+        const readBackValue = driver === 'postgres' && 'postgresReadBack' in expected ? expected.postgresReadBack : expected.readBack
         expect(decodeJson(driver, row![columnName])).toEqual(expected.value)
         expect(rendered).toContain(nativeJson
-          ? `"${columnName}": column.json().default(${JSON.stringify(expected.readBack)}),`
+          ? `"${columnName}": column.json().default(${JSON.stringify(readBackValue)}),`
           : `"${columnName}": column.text().default(${JSON.stringify(jsonText(expected.declared))}),`)
         expect(readBack[columnName]).toEqual(nativeJson
-          ? { kind: 'json', default: { value: expected.readBack } }
+          ? { kind: 'json', default: { value: readBackValue } }
           : { kind: 'text', default: { value: jsonText(expected.declared) } })
       }
       expect(row!.json_null).toBeNull()
