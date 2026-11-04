@@ -100,13 +100,15 @@ function sessionStartupOptions(schema: string | undefined): string {
   return settings.map(([name, value]) => `-c ${name}=${escapeStartupOptionValue(value)}`).join(' ')
 }
 
-type StartupConfiguredClient = new (config?: ClientConfig) => { getStartupConf(): { options?: string } }
+type ConnectionParametersClient = new (config?: ClientConfig) => { connectionParameters?: { options?: string } }
 
 function withSessionStartupOptions(base: NonNullable<PoolConfig['Client']>, schema: string | undefined): NonNullable<PoolConfig['Client']> {
-  class HoloClient extends (base as unknown as StartupConfiguredClient) {
-    override getStartupConf() {
-      const startup = super.getStartupConf()
-      return { ...startup, options: [sessionStartupOptions(schema), startup.options].filter(Boolean).join(' ') }
+  class HoloClient extends (base as unknown as ConnectionParametersClient) {
+    constructor(config?: ClientConfig) {
+      super(config)
+      if (this.connectionParameters) {
+        this.connectionParameters.options = [sessionStartupOptions(schema), this.connectionParameters.options].filter(Boolean).join(' ')
+      }
     }
   }
 
