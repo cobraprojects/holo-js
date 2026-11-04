@@ -8,7 +8,8 @@ import { parseStoredDate } from '../schema/normalization'
 import { assertMigrationName, defineMigration } from './defineMigration'
 import { ensureMigrationTable } from './ensureMigrationTable'
 import type { MigrationStartLog } from '../core/types'
-import { type DatabaseContext, runInTransactionScope } from '../core/DatabaseContext'
+import type { DatabaseContext } from '../core/DatabaseContext'
+import { runInTransactionScope } from '../core/transactionScope'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   MigrateOptions,

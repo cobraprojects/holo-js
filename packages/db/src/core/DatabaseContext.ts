@@ -17,6 +17,7 @@ import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { advanceSchemaGeneration } from './schemaGeneration'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
+import { registerTransactionScopeEntry } from './transactionScope'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -125,17 +126,11 @@ function runSerialized<T>(queue: SerialQueue, callback: () => Promise<T>): Promi
 
 let nextDatabaseContextId = 0
 
-let transactionScopeEntry: <T>(context: DatabaseContext, callback: () => Promise<T>) => Promise<T>
-
-export function runInTransactionScope<T>(context: DatabaseContext, callback: () => Promise<T>): Promise<T> {
-  return transactionScopeEntry(context, callback)
-}
-
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
 export class DatabaseContext {
   static {
-    transactionScopeEntry = (context, callback) => context._runInTransactionScope(callback)
+    registerTransactionScopeEntry((context, callback) => context._runInTransactionScope(callback))
   }
 
   private readonly _contextId: number
