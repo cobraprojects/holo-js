@@ -209,6 +209,31 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
     })
   })
 
+  it('holds the stored whole-second Date on an untyped model after a MySQL write', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const table = `holo_subsecond_untyped_${randomUUID().replaceAll('-', '')}`
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME NULL)`)
+        const analytics = createDatabase({ connectionName: 'analytics', adapter, dialect: createDialect('mysql') })
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('mysql') }, analytics } }))
+        const Model = defineModel(table, { connectionName: 'analytics', timestamps: false, fillable: ['id', 'at'] })
+
+        const model = await Model.create({ id: 1, at: new Date('2026-11-15T17:00:00.900Z') })
+        expect(model.get('at')).toEqual(new Date('2026-11-15T17:00:00.000Z'))
+
+        model.fill({ at: new Date('2026-11-15T17:00:05.400Z') })
+        await model.save()
+        expect(model.get('at')).toEqual(new Date('2026-11-15T17:00:05.000Z'))
+        expect((await Model.findOrFail(1)).get('at')).toEqual(model.get('at'))
+      } finally {
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
   it('rejects zoned text with an impossible calendar value instead of writing a different instant', async () => {
     await withAppTimezone('America/New_York', async () => {
       const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })

@@ -238,7 +238,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
       case 'boolean':
         return booleanStorageValue(value)
       default:
-        return value
+        return value instanceof Date && this.getSchemaDialectName() === 'mysql' ? dateLikeWriteValue('mysql', value) : value
     }
   }
 
