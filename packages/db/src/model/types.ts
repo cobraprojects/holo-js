@@ -13,7 +13,7 @@ export type ModelRecord<TTable extends TableDefinition> = InferSelect<TTable>
 export type { GeneratedSchemaTable }
 export type ModelAttributeKey<TTable extends TableDefinition> = Extract<keyof InferSelect<TTable>, string>
 export type ModelColumnName<TTable extends TableDefinition> = ModelAttributeKey<TTable> | `${string}.${ModelAttributeKey<TTable>}`
-type ModelWritableAttributeKey<TTable extends TableDefinition> = Extract<keyof InferUpdate<TTable>, string>
+export type ModelWritableAttributeKey<TTable extends TableDefinition> = Extract<keyof InferUpdate<TTable>, string>
 export type ModelWritableColumnName<TTable extends TableDefinition> = ModelWritableAttributeKey<TTable> | `${TTable['tableName']}.${ModelWritableAttributeKey<TTable>}`
 type ModelArithmeticAttributeKey<TTable extends TableDefinition> = string extends ModelWritableAttributeKey<TTable>
   ? string

@@ -50,6 +50,7 @@ import type {
   ModelAttributeKey,
   ModelCastDefinition,
   ModelArithmeticColumnName,
+  ModelWritableAttributeKey,
   ModelWritableColumnName,
   ModelWritableJsonColumnPath,
   ModelColumnName,
@@ -1949,7 +1950,7 @@ class ModelQueryBuilderBase<
   }
 
   async insertUsing<TSubTable extends TableDefinition>(
-    columns: readonly ModelWritableColumnName<TTable>[],
+    columns: readonly ModelWritableAttributeKey<TTable>[],
     query: SubqueryBuilder<TSubTable>,
   ): Promise<DriverExecutionResult> {
     this.repository.assertWriteTargets(columns)
@@ -1957,7 +1958,7 @@ class ModelQueryBuilderBase<
   }
 
   async insertOrIgnoreUsing<TSubTable extends TableDefinition>(
-    columns: readonly ModelWritableColumnName<TTable>[],
+    columns: readonly ModelWritableAttributeKey<TTable>[],
     query: SubqueryBuilder<TSubTable>,
   ): Promise<DriverExecutionResult> {
     this.repository.assertWriteTargets(columns)

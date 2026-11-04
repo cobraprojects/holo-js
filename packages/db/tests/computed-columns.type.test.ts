@@ -198,7 +198,7 @@ it('leaves increment and decrement unrestricted on untyped models', () => {
   expectTypeOf(arithmetic).toBeFunction()
 })
 
-it('limits insertUsing destinations to writable columns', () => {
+it('limits insertUsing destinations to bare writable columns', () => {
   const copy = async () => {
     await products.insertUsing(['price', 'quantity', 'name'], products.select('price', 'quantity', 'name'))
     await products.where('price', 1).insertOrIgnoreUsing(['price', 'quantity', 'name'], products.select('price', 'quantity', 'name'))
@@ -208,6 +208,10 @@ it('limits insertUsing destinations to writable columns', () => {
     await products.insertUsing(['price', 'total'], products.select('price', 'total'))
     // @ts-expect-error computed columns cannot be insertOrIgnoreUsing destinations
     await products.where('price', 1).insertOrIgnoreUsing(['label'], products.select('label'))
+    // @ts-expect-error insertUsing destinations take bare column names
+    await products.insertUsing(['computed_builder_sqlite.price'], products.select('price'))
+    // @ts-expect-error insertOrIgnoreUsing destinations take bare column names
+    await products.where('price', 1).insertOrIgnoreUsing(['computed_builder_sqlite.price'], products.select('price'))
   }
   expectTypeOf(copy).toBeFunction()
 })
@@ -216,17 +220,12 @@ it('limits qualified write targets to the model own table', () => {
   const write = async () => {
     await products.increment('computed_builder_sqlite.price')
     await products.where('price', 1).decrementEach({ 'computed_builder_sqlite.quantity': 1 })
-    await products.insertUsing(['computed_builder_sqlite.price'], products.select('price'))
     await products.query().upsert({ price: 1, quantity: 2, name: 'Pen' }, ['name'], ['computed_builder_sqlite.price'])
     await products.where('price', 1).updateJson('computed_builder_sqlite.note', null)
     // @ts-expect-error qualified arithmetic targets must use the model table
     await products.increment('joined.price')
     // @ts-expect-error qualified arithmetic targets must use the model table
     await products.where('price', 1).incrementEach({ 'joined.price': 1 })
-    // @ts-expect-error qualified insertUsing destinations must use the model table
-    await products.insertUsing(['joined.price'], products.select('price'))
-    // @ts-expect-error qualified insertOrIgnoreUsing destinations must use the model table
-    await products.where('price', 1).insertOrIgnoreUsing(['joined.price'], products.select('price'))
     // @ts-expect-error qualified upsert update columns must use the model table
     await products.query().upsert({ price: 1, quantity: 2, name: 'Pen' }, ['name'], ['joined.price'])
     // @ts-expect-error qualified json write targets must use the model table

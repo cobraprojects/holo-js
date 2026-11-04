@@ -303,6 +303,19 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await Product.query().get()).toJSON().map(row => Number(row.total))).toEqual([6, 6])
   })
 
+  it('rejects a table-qualified insertUsing and insertOrIgnoreUsing destination before any SQL runs', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    const destination = [`${names.products}.price`, 'quantity', 'name'] as never
+    const error = `Column "${names.products}.price" is not a valid identifier.`
+
+    await expect(Product.insertUsing(destination, Product.select('price', 'quantity', 'name'))).rejects.toThrow(error)
+    await expect(Product.query().insertOrIgnoreUsing(destination, Product.select('price', 'quantity', 'name'))).rejects.toThrow(error)
+    expect(await Product.query().count()).toBe(1)
+  })
+
   it('writes the auto-increment id as an insertUsing and insertOrIgnoreUsing destination', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products, names.shapes]))
