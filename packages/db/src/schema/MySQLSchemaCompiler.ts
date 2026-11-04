@@ -49,6 +49,10 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     return value !== null && ['json', 'text', 'blob'].includes(column.kind) ? `(${literal})` : literal
   }
 
+  protected override compileDefaultExpression(column: AnyColumnDefinition): string {
+    return `(${super.compileDefaultExpression(column)})`
+  }
+
   override compileRenameTable(fromTableName: string, toTableName: string): { sql: string, source: string } {
     return {
       sql: `RENAME TABLE ${this.compileIdentifierPath(fromTableName)} TO ${this.compileIdentifierPath(toTableName)}`,

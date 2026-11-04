@@ -220,7 +220,9 @@ export class SQLiteSchemaOperations {
       throw new SchemaError(`SQLite cannot read the rebuilt definition of table "${tableName}".`)
     }
     const copiedColumns = [
-      ...rebuiltTable.columns.filter(rebuilt => !isGeneratedColumn(rebuilt)).map(rebuilt => rebuilt.name),
+      ...rebuiltTable.columns
+        .filter(rebuilt => !isGeneratedColumn(rebuilt) && storedTable.columns.some(stored => sameIdentifier(stored.name, rebuilt.name)))
+        .map(rebuilt => rebuilt.name),
       ...this.readHiddenRowIdColumns(tableName, rebuiltTable),
     ]
 

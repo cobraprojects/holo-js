@@ -671,6 +671,16 @@ table.string('role').default('member')
 table.json('preferences').default({ theme: 'light' })
 ```
 
+To default to an SQL expression the database evaluates for each row, pass `DB.raw()`, as with Laravel's `default(DB::raw(...))`:
+
+```ts
+import { DB } from '@holo-js/db'
+
+table.uuid('public_id').default(DB.raw('gen_random_uuid()'))
+```
+
+The expression is raw SQL for your database, so never build it from user input. `DB.raw()` here takes no bindings; passing any raises a `SchemaError`. MySQL and SQLite wrap the expression in parentheses, as in `DEFAULT (uuid())`. On SQLite, adding such a column inside `schema.table()` rebuilds the table, so existing rows get a value from the expression. MySQL refuses to add a column whose default calls a function such as `uuid()` to an existing table; add the column nullable, fill it, then make it the default with [`change()`](#change). The Generated schema writes an expression default the database reports, from Holo or from raw SQL, as `.default(DB.raw('…'))`, so it never looks like a string default.
+
 ### defaultNow()
 
 Sets the default to the current time. Use it for timestamp columns that record when a row was created or changed.

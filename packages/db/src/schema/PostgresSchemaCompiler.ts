@@ -76,6 +76,11 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
         sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} SET DEFAULT ${this.compileCurrentTimestamp()}`,
         source: `schema:alterColumn:${tableName}:${column.name}:default`,
       })
+    } else if (column.defaultKind === 'expression') {
+      statements.push({
+        sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} SET DEFAULT ${this.compileDefaultExpression(column)}`,
+        source: `schema:alterColumn:${tableName}:${column.name}:default`,
+      })
     } else {
       statements.push({
         sql: `ALTER TABLE ${tableIdentifier} ALTER COLUMN ${columnIdentifier} DROP DEFAULT`,

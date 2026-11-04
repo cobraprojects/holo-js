@@ -111,7 +111,7 @@ main: {
 
 On PostgreSQL, `schema` sets the connection's `search_path`, as Laravel's `search_path` setting does. Every pooled connection starts with it, so migrations, the schema builder, queries, models and the CLI create and read unqualified tables in that schema, and the generated schema is read from it. With `schema: 'tenant'`, `holo migrate` creates its tables in `tenant`, and a `public` table with the same name is ignored. Leave `schema` out to keep the server's default `search_path`.
 
-A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no `options`, wins over `schema`:
+A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no or an empty `options`, wins over `schema`:
 
 ```ts
 main: {
@@ -128,6 +128,17 @@ The generated schema, the schema builder and `migrate:fresh` use the schema that
 PostgreSQL reads and writes `date` and `timestamp` values in `app.timezone`, which comes from [`APP_TIMEZONE`](/reference/environment), not in the Node process's time zone. A `timestamp` column without a time zone holds the wall-clock time in `app.timezone`, and a `Date` you save is written as that wall-clock time. A `timestamptz` column holds the exact instant. A `date` reads back as a `Date` at midnight in `app.timezone`. On a day the zone skipped entirely, such as 2011-12-30 in `Pacific/Apia`, there is no midnight, so the `date` reads back as the next day, as in Laravel. Saving the loaded value stores that next day. To avoid this, set `APP_TIMEZONE=UTC` (the default).
 
 In the hour that repeats when clocks fall back, a `timestamp` column can't tell the two instants apart, so a value written at the earlier instant reads back an hour later. With a non-UTC `app.timezone` that observes daylight saving time, an expiry in that hour can be honored up to one hour late. Holo recommends `APP_TIMEZONE=UTC` for PostgreSQL apps, which avoids this.
+
+Holo sets each pooled connection's session `TimeZone` to `app.timezone` when it connects, as it does on MySQL, so `defaultNow()`, `timestamps()` and `CURRENT_TIMESTAMP` defaults on `timestamp` columns hold the wall-clock time in `app.timezone`, whatever the server's own time zone is. A `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in the `PGOPTIONS` environment variable when neither is set wins over `app.timezone`:
+
+```ts
+main: {
+  driver: 'postgres',
+  url: 'postgres://app@127.0.0.1/my_app?options=-c%20TimeZone%3DEurope/Paris',
+},
+```
+
+Objects you pass to `createPostgresAdapter()` as `client`, `pool`, or `createPool` keep their own session time zone.
 
 ### MySQL dates and time zones
 
