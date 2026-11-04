@@ -2,7 +2,7 @@ import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWritableAttributeKey, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
@@ -188,7 +188,7 @@ class EntityBase<
     return value as ModelRecord<TTable>[TKey]
   }
 
-  set<TKey extends Extract<keyof ModelRecord<TTable>, string>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
+  set<TKey extends Extract<keyof ModelRecord<TTable>, ModelWritableAttributeKey<TTable>>>(key: TKey, value: ModelRecord<TTable>[TKey]): this {
     this.getRepositoryRuntime().assertMassAssignable?.({ [key]: value })
     this.#attributes[key] = value
     this.#exposeUntypedAttributes()
@@ -974,10 +974,16 @@ export type ModelRelationMethods<TRelations extends RelationMap>
         [K in ModelRelationName<TRelations>]: () => RelationMethodsOf<TRelations[K]>
       }
 
+type ModelEntityAttributes<TTable extends TableDefinition> = {
+  readonly [K in keyof ModelRecord<TTable> as K extends ModelWritableAttributeKey<TTable> ? never : K]: ModelRecord<TTable>[K]
+} & {
+  [K in keyof ModelRecord<TTable> as K extends ModelWritableAttributeKey<TTable> ? K : never]: ModelRecord<TTable>[K]
+}
+
 export type ModelBase<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
-> = EntityBase<TTable, TRelations> & ModelRecord<TTable> & {
+> = EntityBase<TTable, TRelations> & ModelEntityAttributes<TTable> & {
   relation<K extends ModelRelationName<TRelations>>(name: K): RelationMethodsOf<TRelations[K]>
 }
 

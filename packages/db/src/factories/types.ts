@@ -1,5 +1,5 @@
 /* v8 ignore file -- type declarations only */
-import type { ModelInsertPayload, ModelRecord } from '../model/types'
+import type { ModelInsertPayload, ModelRecord, ModelWritableAttributeKey } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 
 export interface FactoryEntityReference<TTable extends TableDefinition = TableDefinition> {
@@ -7,8 +7,8 @@ export interface FactoryEntityReference<TTable extends TableDefinition = TableDe
   exists(): boolean
   get(key: Extract<keyof ModelRecord<TTable>, string>): ModelRecord<TTable>[Extract<keyof ModelRecord<TTable>, string>]
   set(
-    key: Extract<keyof ModelRecord<TTable>, string>,
-    value: ModelRecord<TTable>[Extract<keyof ModelRecord<TTable>, string>],
+    key: Extract<keyof ModelRecord<TTable>, ModelWritableAttributeKey<TTable>>,
+    value: ModelRecord<TTable>[Extract<keyof ModelRecord<TTable>, ModelWritableAttributeKey<TTable>>],
   ): FactoryEntityReference<TTable>
   getRelation(name: string): unknown
   hasRelation(name: string): boolean

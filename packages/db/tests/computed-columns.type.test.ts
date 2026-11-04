@@ -241,3 +241,25 @@ it('leaves qualified write targets unrestricted on untyped models', () => {
   }
   expectTypeOf(write).toBeFunction()
 })
+
+it('exposes computed columns as readonly entity attributes', () => {
+  const write = (product: Entity<typeof computedBuilderSqlite>) => {
+    product.set('price', 2)
+    product.price = 3
+    expectTypeOf(product.total).toEqualTypeOf<number | null>()
+    expectTypeOf(product.get('label')).toEqualTypeOf<string | null>()
+    // @ts-expect-error computed columns cannot be set
+    product.set('total', 100)
+    // @ts-expect-error computed columns are readonly
+    product.total = 100
+  }
+  expectTypeOf(write).toBeFunction()
+})
+
+it('leaves Entity.set() unrestricted on untyped models', () => {
+  const write = async () => {
+    const counter = await untypedCounters.findOrFail(1)
+    counter.set('visits', 2)
+  }
+  expectTypeOf(write).toBeFunction()
+})
