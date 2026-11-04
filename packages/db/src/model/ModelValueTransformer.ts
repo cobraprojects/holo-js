@@ -189,6 +189,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return column ? storesText(column) : this.definition.untyped
   }
 
+  private hasBuiltInDateCast(key: string): boolean {
+    const name = this.parseBuiltInCast(this.resolveCast(key))?.name
+    return name === 'date' || name === 'datetime' || name === 'timestamp'
+  }
+
   private isUntypedIncrementingKey(key: string): boolean {
     const { untyped, primaryKey, uniqueIdConfig } = this.definition
     return untyped && key === primaryKey && key === 'id' && !uniqueIdConfig?.columns.includes(key as never)
@@ -213,6 +218,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
+    if (this.hasBuiltInDateCast(key)) {
+      return dateLikeWriteValue(this.getSchemaDialectName(), value, column && storesText(column) ? 'text' : 'native')
+    }
+
     if (!column) {
       return this.applyDefinitionlessWriteNormalization(key, value)
     }
@@ -226,10 +235,6 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applyDefinitionlessWriteNormalization(key: string, value: unknown): unknown {
     switch (this.parseBuiltInCast(this.resolveCast(key))?.name) {
-      case 'date':
-      case 'datetime':
-      case 'timestamp':
-        return dateLikeWriteValue(this.getSchemaDialectName(), value)
       case 'boolean':
         return booleanStorageValue(value)
       default:
@@ -295,7 +300,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'date':
         case 'datetime':
         case 'timestamp':
-          return dateLikeWriteValue(this.resolveDialect(), value)
+          return value
         case 'vector':
           return this.serializeVectorValue(value, builtInCast.parameter)
       }
