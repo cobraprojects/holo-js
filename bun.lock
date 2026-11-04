@@ -780,7 +780,6 @@
       "version": "0.5.6",
       "dependencies": {
         "pg": "catalog:",
-        "pg-connection-string": "catalog:",
       },
       "devDependencies": {
         "@holo-js/db": "catalog:",
@@ -1306,7 +1305,6 @@
     "nodemailer": "^10.2.1",
     "nuxt": "^4.6.3",
     "pg": "^8.13.0",
-    "pg-connection-string": "^2.14.1",
     "playwright": "^1.57.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

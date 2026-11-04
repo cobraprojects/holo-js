@@ -34,8 +34,7 @@
     "@holo-js/db": "catalog:"
   },
   "dependencies": {
-    "pg": "catalog:",
-    "pg-connection-string": "catalog:"
+    "pg": "catalog:"
   },
   "devDependencies": {
     "@holo-js/db": "catalog:",
