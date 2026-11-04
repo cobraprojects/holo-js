@@ -3,7 +3,6 @@ import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { TableDefinition } from '../schema/types'
 import { assertColumnWritable, ownEntry } from './entityRuntime'
-import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -46,7 +45,7 @@ export class PivotMutation {
 
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
-    this.assertColumnsWritable([attributes])
+    this.assertColumnsWritable(Object.keys(this.timestampAttributes(attributes, false)))
     if (Object.keys(attributes).length === 0) return 0
     const [existing] = await this.read(this.connection, [id])
     if (!existing || !this.changed(existing, attributes)) return 0
@@ -58,7 +57,7 @@ export class PivotMutation {
     const normalized = this.normalize(ids, attributes)
     const entries = kind === 'attach' ? normalized : this.dedupe(normalized)
     for (const entry of entries) this.validate(entry.attributes)
-    this.assertColumnsWritable(entries.map(entry => entry.attributes))
+    this.assertColumnsWritable(entries.flatMap(entry => Object.keys(entry.attributes)))
     const result: Result = { attached: [], detached: [], updated: [] }
     if (kind !== 'sync' && entries.length === 0) return result
 
@@ -100,6 +99,7 @@ export class PivotMutation {
       ...action,
       attributes: this.timestampAttributes(action.attributes, action.kind === 'insert', timestamp),
     }) : actions
+    this.assertColumnsWritable(timestamped.flatMap(action => action.kind === 'delete' ? [] : Object.keys(action.attributes)))
     let offset = 0
     while (offset < timestamped.length) {
       const action = timestamped[offset]!
@@ -169,11 +169,10 @@ export class PivotMutation {
     }
   }
 
-  private assertColumnsWritable(attributes: readonly Attributes[]): void {
+  private assertColumnsWritable(columns: readonly string[]): void {
     const table = this.context.table
-    if (typeof table === 'string' || attributes.length === 0) return
-    const columns = new Set([...attributes.flatMap(entry => Object.keys(entry)), ...(this.context.timestamps ? PIVOT_TIMESTAMP_COLUMNS : [])])
-    for (const column of columns) assertColumnWritable(column, ownEntry(table.columns, column), 'computed')
+    if (typeof table === 'string') return
+    for (const column of new Set(columns)) assertColumnWritable(column, ownEntry(table.columns, column), 'computed')
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {
