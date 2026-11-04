@@ -1,5 +1,5 @@
 import { realpathSync, watch } from 'node:fs'
-import { readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js/kernel'
 import type { LoadedProjectConfig } from './types'
@@ -15,6 +15,11 @@ export const PACKAGE_MANIFEST_DISCOVERY_PATHS = new Set([
   'pnpm-lock.yaml',
   'yarn.lock',
 ])
+
+export const DISCOVERY_WATCH_PROBE_PATH = '.holo-js/runtime/discovery-watch.probe'
+
+const LIVENESS_PROBE_INTERVAL_MS = 50
+const LIVENESS_TIMEOUT_MS = 10_000
 
 const ALWAYS_EXCLUDED_WATCH_ROOTS = [
   '.git',
@@ -349,11 +354,22 @@ type DiscoveryWatchOptions = {
   readonly createWatcher?: WatchFactory
   readonly observe: (change: HoloProjectPrepareChange | (() => Promise<HoloProjectPrepareChange>)) => void
   readonly writeWarning: (message: string) => void
+  readonly deferred?: boolean
 }
 
 type DiscoveryWatch = {
+  readonly ready: Promise<void>
   refresh(project: LoadedProjectConfig): Promise<void>
+  resume(): void
   close(): void
+}
+
+function waitForLiveness(liveness: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    liveness,
+    new Promise<void>((resolvePromise) => { timer = setTimeout(resolvePromise, LIVENESS_PROBE_INTERVAL_MS) }),
+  ]).finally(() => clearTimeout(timer))
 }
 
 export async function startDiscoveryWatch({
@@ -363,6 +379,7 @@ export async function startDiscoveryWatch({
   createWatcher = watch,
   observe,
   writeWarning,
+  deferred = false,
 }: DiscoveryWatchOptions): Promise<DiscoveryWatch> {
   const canonicalProjectRoot = await realpath(projectRoot)
   let project = initialProject
@@ -374,6 +391,15 @@ export async function startDiscoveryWatch({
   let generation = 0
   const handles: WatchHandle[] = []
   const warnedPlugins = new Set<string>()
+  let deferredEvents: Map<string, string> | undefined = deferred ? new Map() : undefined
+  let live = false
+  let confirmLive = (): void => {}
+  const liveness = new Promise<void>((resolvePromise) => {
+    confirmLive = () => {
+      live = true
+      resolvePromise()
+    }
+  })
 
   const releaseHandles = (): void => {
     generation++
@@ -383,8 +409,26 @@ export async function startDiscoveryWatch({
   const close = (): void => {
     if (closed) return
     closed = true
+    deferredEvents = undefined
     signal.removeEventListener('abort', close)
     releaseHandles()
+    confirmLive()
+  }
+
+  const dispatch = (path: string, eventType: string): void => {
+    if (!isDiscoveryRelevantPath(path, project, pluginWatches)) return
+    if (eventType !== 'rename') {
+      observe({ path, kind: 'changed' })
+      return
+    }
+    const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
+    observe(async () => classifyWatchedPathChange(path, await observedSnapshot, snapshots))
+  }
+
+  const defer = (events: Map<string, string>, path: string, eventType: string): void => {
+    const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')
+    if (isAlwaysExcludedWatchPath(path) && path !== generatedSchemaPath && !PACKAGE_MANIFEST_DISCOVERY_PATHS.has(path)) return
+    if (events.get(path) !== 'rename') events.set(path, eventType)
   }
 
   const acquire = (root: string, recursive: boolean): void => {
@@ -393,13 +437,13 @@ export async function startDiscoveryWatch({
     const handle = createWatcher(root, { recursive }, (eventType, fileName) => {
       if (closed || signal.aborted || acquiredGeneration !== generation || typeof fileName !== 'string') return
       const path = normalizeContainedWatchedFilePath(projectRoot, root, fileName, canonicalProjectRoot)
-      if (!path || !isDiscoveryRelevantPath(path, project, pluginWatches)) return
-      if (eventType !== 'rename') {
-        observe({ path, kind: 'changed' })
+      if (!path) return
+      if (path === DISCOVERY_WATCH_PROBE_PATH) {
+        confirmLive()
         return
       }
-      const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
-      observe(async () => classifyWatchedPathChange(path, await observedSnapshot, snapshots))
+      if (deferredEvents) defer(deferredEvents, path, eventType)
+      else dispatch(path, eventType)
     })
     if (closed || signal.aborted) handle.close()
     else handles.push(handle)
@@ -459,6 +503,34 @@ export async function startDiscoveryWatch({
     if (recursive === false && !closed) acquireDirectories(directories)
   }
 
+  const resume = (): void => {
+    const events = deferredEvents
+    deferredEvents = undefined
+    if (!events || closed || signal.aborted) return
+    for (const [path, eventType] of events) dispatch(path, eventType)
+  }
+
+  const probeLiveness = async (): Promise<void> => {
+    const probePath = resolve(projectRoot, DISCOVERY_WATCH_PROBE_PATH)
+    if (live) return
+    const deadline = Date.now() + LIVENESS_TIMEOUT_MS
+    try {
+      await mkdir(dirname(probePath), { recursive: true })
+      for (let attempt = 0; !live; attempt++) {
+        if (Date.now() >= deadline) {
+          writeWarning(`[Holo CLI] The file watcher did not confirm it was watching within ${LIVENESS_TIMEOUT_MS / 1000} seconds. Source edits may not be reflected until the next edit.\n`)
+          return
+        }
+        await writeFile(probePath, String(attempt))
+        await waitForLiveness(liveness)
+      }
+    } catch (error) {
+      writeWarning(`[Holo CLI] Unable to confirm the file watcher is watching: ${error instanceof Error ? error.message : String(error)}\n`)
+    } finally {
+      await rm(probePath, { force: true }).catch(() => undefined)
+    }
+  }
+
   signal.addEventListener('abort', close, { once: true })
   try {
     const directories = await updatePolicy(project)
@@ -469,8 +541,11 @@ export async function startDiscoveryWatch({
       if (!isRecursiveWatchUnsupported(error)) throw error
       recursive = false
     }
-    if (recursive === false) acquireDirectories(directories)
-    return { refresh, close }
+    if (recursive === false) {
+      acquireDirectories(directories)
+      confirmLive()
+    }
+    return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {
     close()
     throw error

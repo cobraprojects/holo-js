@@ -73,6 +73,7 @@ export function createFrameworkRestart({ session, initialArgs, invocation, io, p
       }
     },
     async run() {
+      await drain()
       while (!session.signal.aborted) {
         const run = await session.launch(invocation, serverArgs)
         requestRestart = run.restart

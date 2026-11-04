@@ -199,7 +199,19 @@ export async function runProjectDevServer(
       return nextServerArgs
     }
 
+    discoveryWatch = await startDiscoveryWatch({
+      projectRoot,
+      project,
+      signal: session.signal,
+      createWatcher,
+      deferred: true,
+      observe: change => restart?.observe(change),
+      writeWarning: message => io.stderr.write(message),
+    })
+
     const initialArgs = await prepareDiscovery(true)
+    await discoveryWatch.ready
+    session.signal.throwIfAborted()
     restart = createFrameworkRestart({
       session,
       initialArgs,
@@ -207,18 +219,9 @@ export async function runProjectDevServer(
       io,
       prepare: changes => prepareDiscovery(false, changes),
     })
-    const frameworkRestart = restart
+    discoveryWatch.resume()
 
-    discoveryWatch = await startDiscoveryWatch({
-      projectRoot,
-      project,
-      signal: session.signal,
-      createWatcher,
-      observe: frameworkRestart.observe,
-      writeWarning: message => io.stderr.write(message),
-    })
-
-    await frameworkRestart.run()
+    await restart.run()
   } catch (error) {
     if (!session.signal.aborted) throw error
   } finally {
