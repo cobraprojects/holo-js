@@ -126,6 +126,8 @@ Change several columns at once with `incrementEach()` and `decrementEach()`:
 await User.where('id', user.id).incrementEach({ votes: 5, balance: 100 })
 ```
 
+These methods take only number, big integer and decimal columns that the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs.
+
 ### Update JSON columns
 
 Use `updateJson()` with a `->` path to change one key inside a JSON column:
