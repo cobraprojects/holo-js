@@ -113,6 +113,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
+  compileAddedColumn(tableName: string, column: AnyColumnDefinition): string {
+    return this.compileColumn(tableName, column)
+  }
+
   compileChangedColumn(tableName: string, column: AnyColumnDefinition, preservedConstraints: readonly string[]): string {
     const changedParts = this.compileColumn(tableName, { ...column, primaryKey: false, references: undefined })
     return [changedParts, ...preservedConstraints].join(' ')

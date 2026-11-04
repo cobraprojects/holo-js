@@ -326,6 +326,10 @@ export class SchemaService {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
+        if (this.isSqlite() && definition.computed?.stored) {
+          await this.sqlite.addColumn(tableName, definition)
+          return
+        }
         await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }

@@ -29,8 +29,7 @@ export abstract class SQLSchemaCompiler {
     if (operation.kind === 'addColumn') {
       return [
         this.compileAddColumn(operation.tableName, operation.column),
-        ...this.resolveStandaloneUniqueIndexes(this.resolveColumnUniqueIndexes(operation.tableName, [operation.column]))
-          .map(index => this.compileCreateIndex(operation.tableName, index)),
+        ...this.compileAddedColumnIndexes(operation.tableName, operation.column),
       ]
     }
 
@@ -168,6 +167,11 @@ export abstract class SQLSchemaCompiler {
 
   protected resolveStandaloneUniqueIndexes(_indexes: readonly TableIndexDefinition[]): TableIndexDefinition[] {
     return []
+  }
+
+  compileAddedColumnIndexes(tableName: string, column: AnyColumnDefinition): DDLStatement[] {
+    return this.resolveStandaloneUniqueIndexes(this.resolveColumnUniqueIndexes(tableName, [column]))
+      .map(index => this.compileCreateIndex(tableName, index))
   }
 
   compileAddColumn(tableName: string, column: AnyColumnDefinition): DDLStatement {

@@ -167,6 +167,54 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect(products!.columns.total?.computed?.stored).toBe(true)
   })
 
+  it('adds a storedAs column to a table that has rows and computes it for them', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+    await db.table(names.products).insert([{ price: 2, quantity: 3, name: 'Ink' }, { price: 5, quantity: 1, name: 'Pad' }])
+
+    await schema.table(names.products, (table) => {
+      table.integer('doubled').storedAs('price * 2')
+    })
+
+    await db.table(names.products).insert({ price: 7, quantity: 1, name: 'Pen' })
+    const rows = await db.table(names.products).orderBy('id').get()
+    expect(rows.map(row => [Number(row.doubled), Number(row.total), row.label])).toEqual([[4, 6, 'Ink (it\'s)'], [10, 5, 'Pad (it\'s)'], [14, 7, 'Pen (it\'s)']])
+  })
+
+  it.runIf(driver === 'sqlite')('keeps the rows, indexes, constraints and triggers of a sqlite table a unique storedAs column is added to', async () => {
+    const { db, schema, adapter } = await openDatabase(driver)
+    const name = 'computed_added_stored'
+    onTestFinished(async () => {
+      if (await schema.hasTable(name)) await schema.dropTable(name)
+    })
+    await adapter.execute(`CREATE TABLE "${name}" (
+      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "email" TEXT NOT NULL UNIQUE,
+      "price" INTEGER NOT NULL CHECK ("price" > 0),
+      "visits" INTEGER NOT NULL DEFAULT 0
+    )`)
+    await adapter.execute(`CREATE INDEX "computed_added_stored_price" ON "${name}" ("price")`)
+    await adapter.execute(`CREATE TRIGGER "computed_added_stored_visit" AFTER INSERT ON "${name}" BEGIN UPDATE "${name}" SET "visits" = "visits" + 1 WHERE "id" = NEW."id"; END`)
+    await db.table(name).insert([{ email: 'a@example.com', price: 3 }, { email: 'b@example.com', price: 4 }])
+    await db.table(name).where('id', 2).delete()
+    const reader = createSchemaReader(db)
+    const before = (await reader.readTableStructure(name))!
+
+    await schema.table(name, (table) => {
+      table.integer('doubled').storedAs('price * 2').unique()
+    })
+
+    const after = (await reader.readTableStructure(name))!
+    expect(after.columns.filter(column => column.name !== 'doubled')).toEqual(before.columns)
+    expect(after.indexes.map(index => [index.columns, index.unique])).toEqual(expect.arrayContaining([...before.indexes.map(index => [index.columns, index.unique]), [['doubled'], true]]))
+    expect(after.indexes).toHaveLength(before.indexes.length + 1)
+    expect(await db.table(name).get()).toEqual([{ id: 1, email: 'a@example.com', price: 3, visits: 1, doubled: 6 }])
+    expect(await db.table(name).insertGetId({ email: 'c@example.com', price: 5 })).toBe(3)
+    expect(await db.table(name).where('id', 3).first()).toEqual({ id: 3, email: 'c@example.com', price: 5, visits: 1, doubled: 10 })
+    await expect(db.table(name).insert({ email: 'a@example.com', price: 1 })).rejects.toThrow()
+    await expect(db.table(name).insert({ email: 'd@example.com', price: 0 })).rejects.toThrow()
+    await expect(db.table(name).insert({ email: 'e@example.com', price: 5 })).rejects.toThrow()
+  })
+
   it.runIf(driver !== 'postgres')('recomputes a computed column whose expression change() redeclares', async () => {
     const { db, schema, names } = await openComputedDatabase(driver)
     await db.table(names.products).insert({ price: 2, quantity: 3, name: 'Ink' })

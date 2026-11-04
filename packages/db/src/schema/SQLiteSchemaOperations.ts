@@ -3,11 +3,12 @@ import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
 import { createSchemaReader, readTableStructure } from './introspection'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
-import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
+import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withAddedColumn, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
+import type { DDLStatement } from './ddl'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DatabaseTableStructure } from './introspection'
 import type { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
@@ -34,6 +35,14 @@ export class SQLiteSchemaOperations {
     private readonly withoutForeignKeyConstraints: ForeignKeyConstraintSuspender,
   ) {
     this.compiler = createSQLiteSchemaCompiler(connection)
+  }
+
+  async addColumn(tableName: string, column: AnyColumnDefinition): Promise<void> {
+    await this.rebuildTable(
+      tableName,
+      (_structure, table) => withAddedColumn(table, this.compiler.compileAddedColumn(tableName, column)),
+      this.compiler.compileAddedColumnIndexes(tableName, column),
+    )
   }
 
   async changeColumn(tableName: string, column: AnyColumnDefinition): Promise<void> {
@@ -137,26 +146,26 @@ export class SQLiteSchemaOperations {
     return table => withoutUniquesBackingIndex(table, indexKey)
   }
 
-  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[] = []): Promise<void> {
     const adapter = this.connection.getAdapter()
-    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite)
+    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp)
     return adapter.runWithTransactionScope ? adapter.runWithTransactionScope(rebuild) : rebuild()
   }
 
-  private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+  private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {
     if (!(await this.foreignKeysEnabled())) {
-      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite))
+      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite, followUp))
       return
     }
 
     if (this.connection.isInTransaction() || currentPinnedConnection(this.connection.getAdapter())) {
       await this.assertTableUnreferenced(tableName)
-      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite))
+      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite, followUp))
       return
     }
 
     await this.withoutForeignKeyConstraints(() => this.connection.transaction(async (transaction) => {
-      await this.copyTable(transaction, tableName, rewrite)
+      await this.copyTable(transaction, tableName, rewrite, followUp)
       await this.assertNoForeignKeyViolations(transaction, tableName)
     }))
   }
@@ -184,7 +193,7 @@ export class SQLiteSchemaOperations {
     }
   }
 
-  private async copyTable(connection: DatabaseContext, requestedTableName: string, rewrite: SQLiteTableRewrite): Promise<void> {
+  private async copyTable(connection: DatabaseContext, requestedTableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {
     const tableName = await readSQLiteStoredTableName(connection, requestedTableName)
     const structure = tableName === undefined ? undefined : await readTableStructure(connection, tableName)
     if (tableName === undefined || !structure) {
@@ -223,6 +232,7 @@ export class SQLiteSchemaOperations {
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
       ...this.compiler.compileRestoreSchemaObjects([...schemaObjects, ...dependentObjects]),
+      ...followUp,
     ])
   }
 

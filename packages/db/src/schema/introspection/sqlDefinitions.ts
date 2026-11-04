@@ -157,6 +157,10 @@ export function readPreservedColumnConstraints(stored: StoredColumn, changed: An
     .map(constraint => constraint.text)
 }
 
+export function withAddedColumn(table: StoredTable, addedDefinition: string): string[] {
+  return [...table.columns.map(column => column.text), addedDefinition, ...table.constraints.map(constraint => constraint.text)]
+}
+
 export function withChangedColumn(table: StoredTable, changed: StoredColumn, changedDefinition: string): string[] {
   return [
     ...table.columns.map(column => column === changed ? changedDefinition : column.text),
