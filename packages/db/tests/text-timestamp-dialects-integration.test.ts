@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { DB, type Entity, belongsToMany, column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, type Entity, belongsToMany, column, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -10,7 +10,7 @@ const drivers = [
 ] as const
 
 const storedText = {
-  postgres: '2026-03-04 10:00:00.123+00:00',
+  postgres: '2026-03-04T10:00:00.123Z',
   mysql: '2026-03-04 19:00:00.123',
 } as const
 
@@ -64,7 +64,7 @@ async function createTextTimestampTables(driver: typeof drivers[number]) {
   const memberships = defineGeneratedTable(names.memberships, { user_id: column.integer(), role_id: column.integer(), created_at: column.text().nullable(), updated_at: column.text().nullable() })
   const Role = defineModel(roles, { fillable: ['name'], timestamps: false })
   const User = defineModel(users, { fillable: ['name', 'at', 'native_at'], casts: { at: 'datetime' }, relations: { roles: belongsToMany(() => Role, memberships, 'user_id', 'role_id').withTimestamps() } })
-  return { db, names, Role, User }
+  return { db, names, users, Role, User }
 }
 
 describe.each(drivers)('timestamps stored in TEXT columns on %s', (driver) => {
@@ -118,16 +118,40 @@ describe.runIf(drivers.includes('postgres' as never))('Postgres TEXT timestamps 
     resetDB()
   })
 
-  it('orders a TEXT date-cast column chronologically and stores it as UTC text', async () => {
+  it('orders a TEXT date-cast column chronologically and stores it as ISO text', async () => {
     useAppTimezone('America/New_York', 'Asia/Tokyo', afterFallBack)
     const { names, User } = await createTextTimestampTables('postgres')
 
     const later = await User.create({ name: 'later', at: afterFallBack })
     const earlier = await User.create({ name: 'earlier', at: beforeFallBack })
 
-    expect(await DB.table(names.users).where('id', earlier.id).value('at')).toBe('2024-11-03 05:45:00.000+00:00')
+    expect(await DB.table(names.users).where('id', earlier.id).value('at')).toBe('2024-11-03T05:45:00.000Z')
     expect((await User.orderBy('at').get()).map(user => user.id)).toEqual([earlier.id, later.id])
     expect((await User.findOrFail(earlier.id)).at).toEqual(beforeFallBack)
+  })
+
+  it('sorts a row stored as 0.5.x ISO text together with a newly written row', async () => {
+    useAppTimezone('America/New_York', 'Asia/Tokyo', afterFallBack)
+    const { names, User } = await createTextTimestampTables('postgres')
+    const existing = await User.create({ name: 'existing' })
+    await DB.table(names.users).where('id', existing.id).update({ at: beforeFallBack.toISOString() })
+
+    const written = await User.create({ name: 'written', at: afterFallBack })
+
+    expect((await User.orderBy('at').get()).map(user => user.id)).toEqual([existing.id, written.id])
+    expect((await User.where('at', '<', new Date('2024-11-03T06:00:00.000Z')).get()).map(user => user.id)).toEqual([existing.id])
+    expect((await User.findOrFail(existing.id)).at).toEqual(beforeFallBack)
+  })
+
+  it('keeps sub-millisecond digits of a date-cast string in ISO text', async () => {
+    useAppTimezone('America/New_York', 'Asia/Tokyo', afterFallBack)
+    const { names, users } = await createTextTimestampTables('postgres')
+    registerGeneratedTables({ [names.users]: users })
+    const NamedUser = defineModel(names.users, { fillable: ['name', 'at'], casts: { at: 'datetime' } })
+
+    const user = await NamedUser.create({ name: 'Ada', at: '2024-11-03T01:45:00.123456-04:00' })
+
+    expect(await DB.table(names.users).where('id', user.get('id')).value('at')).toBe('2024-11-03T05:45:00.123456Z')
   })
 
   it('compares a TEXT column with Date predicates as instants', async () => {

@@ -169,7 +169,7 @@ function withPreciseFraction(formatted: string, fraction: string | undefined): s
     return formatted
   }
 
-  return formatted.replace(/\.\d{3}(?=[+-]|$)/, `.${fraction.padEnd(6, '0').slice(0, 6)}`)
+  return formatted.replace(/\.\d{3}(?=[+Z-])/, `.${fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
 function postgresZonedText(parsed: ParsedInstant): string {
@@ -177,7 +177,7 @@ function postgresZonedText(parsed: ParsedInstant): string {
 }
 
 function postgresUtcText(parsed: ParsedInstant): string {
-  return `${withPreciseFraction(parsed.instant.toISOString().replace('T', ' ').slice(0, -1), parsed.fraction)}+00:00`
+  return withPreciseFraction(parsed.instant.toISOString(), parsed.fraction)
 }
 
 function parseInstant(value: unknown): ParsedInstant | undefined {
