@@ -1,6 +1,14 @@
 import type { UnsafeStatement } from './types'
 
-const UNSAFE_SQL_BRAND = Symbol.for('holo-js.db.unsafeSql')
+const STATEMENT_REGISTRY_KEY = Symbol.for('holo-js.db.unsafeSqlStatements')
+
+type UnsafeStatementRegistryHost = typeof globalThis & { [STATEMENT_REGISTRY_KEY]?: WeakSet<object> }
+
+function unsafeStatementRegistry(): WeakSet<object> {
+  const host = globalThis as UnsafeStatementRegistryHost
+  host[STATEMENT_REGISTRY_KEY] ??= new WeakSet()
+  return host[STATEMENT_REGISTRY_KEY]
+}
 
 export function unsafeSql(
   sql: string,
@@ -13,10 +21,10 @@ export function unsafeSql(
     bindings,
     source,
   }
-  Object.defineProperty(statement, UNSAFE_SQL_BRAND, { value: true })
+  unsafeStatementRegistry().add(statement)
   return statement
 }
 
 export function isUnsafeSqlStatement(value: unknown): value is UnsafeStatement {
-  return typeof value === 'object' && value !== null && Object.hasOwn(value, UNSAFE_SQL_BRAND)
+  return typeof value === 'object' && value !== null && unsafeStatementRegistry().has(value)
 }

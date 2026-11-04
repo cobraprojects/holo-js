@@ -103,17 +103,12 @@ describe('expression column defaults', () => {
     expect(() => column.string().default(DB.raw('  '))).toThrow(SchemaError)
   })
 
-  it('reads a DB.raw statement from another copy of the database package as an expression', () => {
-    const foreign = { unsafe: true, sql: 'uuid()', bindings: [] }
-    Object.defineProperty(foreign, Symbol.for('holo-js.db.unsafeSql'), { value: true })
+  it('keeps objects that only look like DB.raw statements as validated values', () => {
+    const lookalike = { unsafe: true, sql: 'uuid()', bindings: [] }
+    const copied = { ...DB.raw('uuid()') }
 
-    expect(column.uuid().default(foreign).toDefinition({ name: 'token' })).toMatchObject({ defaultKind: 'expression', defaultValue: 'uuid()' })
-  })
-
-  it('keeps other object defaults as validated values', () => {
-    const definition = column.json().default({ unsafe: true, sql: 'uuid()' }).toDefinition({ name: 'settings' })
-
-    expect(definition).toMatchObject({ defaultKind: 'value', defaultValue: { unsafe: true, sql: 'uuid()' } })
+    expect(column.json().default(lookalike).toDefinition({ name: 'settings' })).toMatchObject({ defaultKind: 'value', defaultValue: lookalike })
+    expect(column.json().default(copied).toDefinition({ name: 'settings' })).toMatchObject({ defaultKind: 'value' })
   })
 })
 
@@ -254,6 +249,28 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       await db.table(builderTable).insert({ nickname: 'b' })
       const tokens = (await db.table(builderTable).select('token').get()).map(row => (row as { token: string }).token)
 
+      expect(tokens).toHaveLength(2)
+      expect(tokens.every(token => UUID_LIKE.test(token))).toBe(true)
+      expect(new Set(tokens).size).toBe(2)
+    })
+
+    it.skipIf(driver === 'mysql')('adds a DB.raw default column to a table that has rows', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `column_defaults_add_${driver}`
+      await schema.dropTable(name)
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.string('label')
+      })
+      await db.table(name).insert({ label: 'a' })
+
+      await schema.table(name, (table) => {
+        table.uuid('token').default(DB.raw(uuidExpressions[driver]))
+      })
+      await db.table(name).insert({ label: 'b' })
+
+      const tokens = (await db.table(name).select('token').get()).map(row => (row as { token: string }).token)
       expect(tokens).toHaveLength(2)
       expect(tokens.every(token => UUID_LIKE.test(token))).toBe(true)
       expect(new Set(tokens).size).toBe(2)
