@@ -9,7 +9,7 @@ import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
 import type { DDLStatement } from './ddl'
-import type { DatabaseContext } from '../core/DatabaseContext'
+import { type DatabaseContext, runInTransactionScope } from '../core/DatabaseContext'
 import type { DatabaseTableStructure } from './introspection'
 import type { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import type { AnyColumnDefinition, ForeignKeyReference } from './types'
@@ -147,9 +147,7 @@ export class SQLiteSchemaOperations {
   }
 
   private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[] = []): Promise<void> {
-    const adapter = this.connection.getAdapter()
-    const rebuild = () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp)
-    return adapter.runWithTransactionScope ? adapter.runWithTransactionScope(rebuild) : rebuild()
+    return runInTransactionScope(this.connection, () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp))
   }
 
   private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {

@@ -31,7 +31,7 @@ export class QueryScheduler {
   private exclusivePending = 0
   private readonly operationWaiters: Array<() => void> = []
   private readonly exclusiveWaiters: Array<() => void> = []
-  private readonly exclusiveScope = new AsyncLocalStorage<boolean>()
+  private readonly exclusiveScope = new AsyncLocalStorage<{ active: boolean }>()
   private readonly transactionScope = new AsyncLocalStorage<QueueState>()
 
   constructor(options: QuerySchedulerOptions) {
@@ -82,7 +82,7 @@ export class QueryScheduler {
     callback: (schedulingMode: SchedulingMode) => Promise<T>,
   ): Promise<{ result: T, schedulingMode: SchedulingMode }> {
     const transactionState = this.transactionScope.getStore()
-    const withinExclusive = options.withinExclusive || this.exclusiveScope.getStore() === true || !!transactionState
+    const withinExclusive = options.withinExclusive || this.isWithinExclusive() || !!transactionState
     if (!withinExclusive) {
       const operationWait = this.acquireOperation()
       if (operationWait) await operationWait
@@ -136,16 +136,23 @@ export class QueryScheduler {
     return scheduled.result
   }
 
+  isWithinExclusive(): boolean {
+    return this.exclusiveScope.getStore()?.active === true
+  }
+
   async exclusive<T>(callback: () => Promise<T>): Promise<T> {
+    if (this.isWithinExclusive()) return callback()
     this.exclusivePending += 1
     if (this.exclusiveActive || this.activeOperations > 0) {
       await new Promise<void>((resolve) => this.exclusiveWaiters.push(resolve))
     }
     this.exclusivePending -= 1
     this.exclusiveActive = true
+    const scope = { active: true }
     try {
-      return await this.exclusiveScope.run(true, callback)
+      return await this.exclusiveScope.run(scope, callback)
     } finally {
+      scope.active = false
       this.exclusiveActive = false
       this.wakeGate()
     }
