@@ -1,6 +1,6 @@
 import type { UnsafeStatement } from './types'
 
-const createdStatements = new WeakSet<UnsafeStatement>()
+const UNSAFE_SQL_BRAND = Symbol.for('holo-js.db.unsafeSql')
 
 export function unsafeSql(
   sql: string,
@@ -13,10 +13,10 @@ export function unsafeSql(
     bindings,
     source,
   }
-  createdStatements.add(statement)
+  Object.defineProperty(statement, UNSAFE_SQL_BRAND, { value: true })
   return statement
 }
 
 export function isUnsafeSqlStatement(value: unknown): value is UnsafeStatement {
-  return typeof value === 'object' && value !== null && createdStatements.has(value as UnsafeStatement)
+  return typeof value === 'object' && value !== null && Object.hasOwn(value, UNSAFE_SQL_BRAND)
 }

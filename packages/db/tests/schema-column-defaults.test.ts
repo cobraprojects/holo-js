@@ -103,6 +103,13 @@ describe('expression column defaults', () => {
     expect(() => column.string().default(DB.raw('  '))).toThrow(SchemaError)
   })
 
+  it('reads a DB.raw statement from another copy of the database package as an expression', () => {
+    const foreign = { unsafe: true, sql: 'uuid()', bindings: [] }
+    Object.defineProperty(foreign, Symbol.for('holo-js.db.unsafeSql'), { value: true })
+
+    expect(column.uuid().default(foreign).toDefinition({ name: 'token' })).toMatchObject({ defaultKind: 'expression', defaultValue: 'uuid()' })
+  })
+
   it('keeps other object defaults as validated values', () => {
     const definition = column.json().default({ unsafe: true, sql: 'uuid()' }).toDefinition({ name: 'settings' })
 
