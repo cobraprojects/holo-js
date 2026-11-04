@@ -456,10 +456,22 @@ export abstract class SQLSchemaCompiler {
       .join('.')
   }
 
+  assertSupportedColumnDefault(column: AnyColumnDefinition): void {
+    if (column.defaultKind === 'value') {
+      this.assertSupportedDefaultValue(column.defaultValue, column)
+    }
+  }
+
   protected assertSupportedDefaultValue(value: unknown, column: AnyColumnDefinition): void {
     if (!this.isSupportedDefaultValue(value)) {
       throw new SchemaError(
         `Column "${column.name}" has a default value that cannot be compiled safely for ${this.getDialectLabel()}.`,
+      )
+    }
+
+    if (column.kind === 'json' && typeof value === 'string' && !isJsonText(value)) {
+      throw new SchemaError(
+        `Column "${column.name}" has a json default that is not JSON text. Pass JSON text, such as JSON.stringify('hello'), or a value.`,
       )
     }
   }
@@ -520,4 +532,13 @@ export abstract class SQLSchemaCompiler {
   protected abstract getDialectLabel(): string
   protected abstract compileColumnType(column: AnyColumnDefinition): string
   protected abstract compileDefaultValue(value: unknown, column: AnyColumnDefinition): string
+}
+
+function isJsonText(value: string): boolean {
+  try {
+    JSON.parse(value)
+    return true
+  } catch {
+    return false
+  }
 }

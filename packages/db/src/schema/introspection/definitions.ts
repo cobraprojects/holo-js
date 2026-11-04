@@ -61,7 +61,8 @@ function readNumericLiteral(text: string): number | string {
 
 function readJsonLiteral(text: string): unknown {
   try {
-    return JSON.parse(text) as unknown
+    const value = JSON.parse(text) as unknown
+    return typeof value === 'string' ? text : value
   } catch {
     return text
   }

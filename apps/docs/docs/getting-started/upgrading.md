@@ -252,16 +252,6 @@ These changes can make a migration that hasn't run yet fail, as it would in Lara
 - On SQLite, `change()` inside your own transaction throws `SchemaError` when another table references the rebuilt table, because SQLite can't turn off foreign key checks there. Run it in a migration or outside the transaction. A rebuild that would leave a foreign key pointing at a missing row throws `SchemaError` and changes nothing.
 - On SQLite, `dropColumn()` raises SQLite's error for a column that an index, unique constraint, primary key or foreign key uses. Drop the index or unique first. See [dropColumn()](/database/migrations#dropcolumn).
 
-### JSON column defaults are values
-
-A `json()` column's `default()` now takes the JSON value and writes it as JSON on every database, so `default('hello')` defaults to the JSON string `"hello"` instead of failing on PostgreSQL. A migration that passed already-encoded JSON text, such as `default(JSON.stringify({ theme: 'light' }))` or `default('{"theme":"light"}')`, now defaults to that text as a JSON string the next time it runs, for example on `migrate:fresh`. Pass the value instead:
-
-```ts
-table.json('preferences').default({ theme: 'light' })
-```
-
-Columns that existing migrations already created keep their defaults. See [default()](/database/migrations#default).
-
 ### Unique and foreign key names
 
 `unique()` columns are now named `{table}_{column}_unique` on every database, shortened with a hash past 63 bytes. Before, PostgreSQL named them `{table}_{column}_key`, MySQL named them after the column, and SQLite named their index `sqlite_autoindex_{table}_{n}`. Foreign keys declared inside `createTable()` or added with a new column are now named `{table}_{column}_foreign` on PostgreSQL and SQLite too. Before, PostgreSQL named them `{table}_{column}_fkey` and SQLite left them unnamed. Existing constraints keep their old names.

@@ -60,7 +60,9 @@ export function compileColumnDefaultLiteral(
   value: unknown,
   kind: LogicalColumnKind,
 ): string {
-  return kind === 'json' && value !== null
-    ? compileDialectStringLiteral(dialect, JSON.stringify(value))
-    : compileDialectDefaultLiteral(dialect, value)
+  if (kind !== 'json' || value === null) {
+    return compileDialectDefaultLiteral(dialect, value)
+  }
+
+  return compileDialectStringLiteral(dialect, typeof value === 'string' ? value : JSON.stringify(value))
 }
