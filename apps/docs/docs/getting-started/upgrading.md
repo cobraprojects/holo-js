@@ -217,7 +217,7 @@ table.timestamp('synced_at').generated() // [!code --]
 table.timestamp('synced_at').defaultNow() // [!code ++]
 ```
 
-A column the database fills in without a default, such as through a trigger or a generated column expression, is now required in `create()`.
+A column the database fills in through a trigger, without a default, is now required in `create()`. A computed column, declared with [`storedAs()` or `virtualAs()`](/database/migrations#storedas) or by raw SQL, stays out of the insert and update types, and models never write it.
 
 Read `status()` to see whether a migration ran:
 

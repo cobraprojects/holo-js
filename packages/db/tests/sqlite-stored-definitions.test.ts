@@ -217,7 +217,7 @@ describe('SQLite schema changes on tables created by raw SQL', () => {
 
     const columns = (await readStructure(db, 'g')).columns
     expect(columns.find(column => column.name === 'x')).toEqual(expect.objectContaining({ fullType: 'TEXT', notNull: false }))
-    expect(columns.find(column => column.name === 'y')).toEqual(expect.objectContaining({ fullType: 'INTEGER', defaultExpression: '1', computed: false }))
+    expect(columns.find(column => column.name === 'y')).toEqual(expect.objectContaining({ fullType: 'INTEGER', defaultExpression: '1', computed: undefined }))
     await db.table('g').insert({ id: 1, x: null })
     expect(await db.table('g').pluck('y')).toEqual([1])
   })

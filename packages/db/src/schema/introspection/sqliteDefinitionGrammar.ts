@@ -24,7 +24,8 @@ type UniqueConstraint = ConstraintSource & { readonly kind: 'UNIQUE', readonly c
 type CheckConstraint = ConstraintSource & { readonly kind: 'CHECK', readonly expression: readonly SqlToken[] }
 export type ForeignKeyConstraint = ConstraintSource & { readonly kind: 'FOREIGN KEY', readonly columns: readonly string[], readonly references: ForeignKeyClause }
 type CollateConstraint = ConstraintSource & { readonly kind: 'COLLATE', readonly collation: string }
-type ColumnAttributeConstraint = ConstraintSource & { readonly kind: 'NOT NULL' | 'NULL' | 'DEFAULT' | 'GENERATED' | 'DEFERRABLE' | 'NAME' }
+type GeneratedConstraint = ConstraintSource & { readonly kind: 'GENERATED', readonly expression: string }
+type ColumnAttributeConstraint = ConstraintSource & { readonly kind: 'NOT NULL' | 'NULL' | 'DEFAULT' | 'DEFERRABLE' | 'NAME' }
 
 export type StoredConstraint
   = | PrimaryKeyConstraint
@@ -32,6 +33,7 @@ export type StoredConstraint
     | CheckConstraint
     | ForeignKeyConstraint
     | CollateConstraint
+    | GeneratedConstraint
     | ColumnAttributeConstraint
 
 export interface StoredColumn {
@@ -60,7 +62,7 @@ const DEFAULT_FOREIGN_KEY_ACTION = 'NO ACTION'
 class TokenCursor {
   index = 0
 
-  constructor(private readonly sql: string, private readonly tokens: readonly SqlToken[]) {}
+  constructor(readonly sql: string, private readonly tokens: readonly SqlToken[]) {}
 
   get done(): boolean {
     return this.index >= this.tokens.length
@@ -208,9 +210,9 @@ function skipDefaultValue(cursor: TokenCursor): void {
 function readGeneratedTail(cursor: TokenCursor): ConstraintBody {
   cursor.accept('GENERATED', 'ALWAYS')
   if (!cursor.accept('AS')) cursor.fail()
-  cursor.expectGroup()
+  const expression = sliceTokens(cursor.sql, cursor.expectGroup().children ?? [])
   if (!cursor.accept('STORED')) cursor.accept('VIRTUAL')
-  return { kind: 'GENERATED' }
+  return { kind: 'GENERATED', expression }
 }
 
 function readColumnConstraintBody(cursor: TokenCursor, columnName: string): ConstraintBody {

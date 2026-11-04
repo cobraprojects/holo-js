@@ -1420,7 +1420,7 @@ export class ModelRepository<
     return withoutModelEvents(() => this.saveMany(entities))
   }
 
-  async update(id: unknown, values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async update(id: unknown, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable>> {
     const existing = await this.findOrFail(id)
     existing.fill(values)
     return existing.save()
@@ -1819,7 +1819,7 @@ export class ModelRepository<
     mode: WriteMode,
     enforceGuards = true,
     applyMutators = true,
-  ): Partial<ModelUpdatePayload<TTable>> {
+  ): Partial<ModelRecord<TTable>> {
     const entries = Object.entries(values)
 
     if (entries.length === 0) {
@@ -1852,7 +1852,7 @@ export class ModelRepository<
       return [key, applyMutators ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
     }))
 
-    return sanitized as Partial<ModelUpdatePayload<TTable>>
+    return sanitized as Partial<ModelRecord<TTable>>
   }
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {

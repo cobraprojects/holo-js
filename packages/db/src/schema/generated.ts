@@ -232,6 +232,10 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
     chains.push('.primaryKey()')
   }
 
+  if (columnDefinition.computed) {
+    chains.push(`.${columnDefinition.computed.stored ? 'storedAs' : 'virtualAs'}(${JSON.stringify(columnDefinition.computed.expression)})`)
+  }
+
   if (columnDefinition.nullable) {
     chains.push('.nullable()')
   }

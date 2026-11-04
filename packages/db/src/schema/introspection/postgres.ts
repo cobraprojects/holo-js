@@ -3,11 +3,12 @@ import { splitTablePath } from '../identifiers'
 import { createIntrospect } from './introspect'
 import { readForeignKeyColumns, readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
+import type { ComputedColumn } from '../types'
 import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
-type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, is_computed: boolean, primary_key_position: number | null }
+type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 type CheckRow = { name: string, column_name: string, definition: string }
@@ -27,7 +28,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   a.attnotnull AS not_null,
   pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_value,
   a.attidentity <> '' AS is_identity,
-  a.attgenerated <> '' AS is_computed,
+  a.attgenerated::text AS generated_kind,
   (SELECT array_position(con.conkey, a.attnum) FROM pg_catalog.pg_constraint con WHERE con.conrelid = t.oid AND con.contype = 'p') AS primary_key_position
   ${TABLE_RELATION}
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -86,6 +87,12 @@ const REFERENTIAL_ACTIONS: Readonly<Record<string, string>> = {
   d: 'SET DEFAULT',
 }
 
+function readComputedColumn(row: ColumnRow): ComputedColumn | undefined {
+  return row.generated_kind === '' || row.default_value === null
+    ? undefined
+    : { expression: row.default_value, stored: row.generated_kind === 's' }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -127,17 +134,18 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
         schema: resolvedSchema,
         columns: columns.rows.map((row) => {
           const autoIncrement = row.is_identity || (row.default_value?.startsWith('nextval(') ?? false)
+          const computed = readComputedColumn(row)
           return {
             name: row.name,
             dataType: row.data_type,
             fullType: row.full_type,
             length: readStringLength(row.full_type),
             notNull: row.not_null,
-            defaultExpression: row.default_value,
-            default: autoIncrement ? { kind: 'none' } : parseSqlDefault(row.default_value),
+            defaultExpression: computed ? null : row.default_value,
+            default: autoIncrement || computed ? { kind: 'none' } : parseSqlDefault(row.default_value),
             primaryKey: row.primary_key_position !== null,
             autoIncrement,
-            computed: row.is_computed,
+            computed,
           }
         }),
         primaryKeyColumns: columns.rows

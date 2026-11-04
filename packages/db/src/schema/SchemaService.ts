@@ -21,6 +21,8 @@ import type { DDLStatement, UniqueBacking } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
 import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
+const POSTGRES_VIRTUAL_COLUMN_VERSION = 180000
+
 export interface IntrospectedColumn {
   name: string
   type: string
@@ -231,7 +233,20 @@ export class SchemaService {
     return column.toDefinition({ name: columnName })
   }
 
+  private async assertSupportsVirtualColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
+    const virtualColumn = columns.find(column => column.computed?.stored === false)
+    if (!virtualColumn || !this.isPostgres()) return
+    const result = await this.connection.introspectCompiled<{ version: string }>({
+      sql: 'SELECT current_setting(\'server_version_num\') AS version',
+      source: 'schema:postgresServerVersion',
+    })
+    if (Number(result.rows[0]?.version) < POSTGRES_VIRTUAL_COLUMN_VERSION) {
+      throw new SchemaError(`PostgreSQL 18 or newer is required for the virtualAs() column "${virtualColumn.name}". Use storedAs() instead.`)
+    }
+  }
+
   private async createDefinedTable(table: TableDefinition): Promise<void> {
+    await this.assertSupportsVirtualColumns(Object.values(table.columns))
     const compiler = this.createCompiler()
     const indexes = compiler.resolveCreateTableIndexes(table)
     const tableStatement = compiler.compileTableCreation(table)
@@ -301,6 +316,7 @@ export class SchemaService {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
+        await this.assertSupportsVirtualColumns([definition])
         await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }

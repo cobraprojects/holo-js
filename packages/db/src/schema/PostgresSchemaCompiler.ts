@@ -1,3 +1,4 @@
+import { SchemaError } from '../core/errors'
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { resolveGeneratedCheckName } from './generatedNames'
@@ -37,6 +38,9 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
     column: ColumnDefinition,
   ): Array<{ sql: string, source: string }> {
     this.assertSupportedAlterColumnDefinition(column)
+    if (column.computed) {
+      throw new SchemaError(`PostgreSQL cannot change the expression of generated column "${column.name}". Drop and add the column instead.`)
+    }
     const tableIdentifier = this.compileIdentifierPath(tableName)
     const columnIdentifier = this.quoteIdentifier(column.name)
     const statements: Array<{ sql: string, source: string }> = []
