@@ -1,4 +1,4 @@
-import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+import { DB, column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 export const columnDefaultsBuilderPostgres = defineGeneratedTable("column_defaults_builder_postgres", {
   "id": column.id(),
@@ -20,6 +20,7 @@ export const columnDefaultsBuilderPostgres = defineGeneratedTable("column_defaul
   "public_id": column.uuid().default("00000000-0000-0000-0000-000000000000"),
   "seen_at": column.timestamp().defaultNow(),
   "nickname": column.string().nullable(),
+  "token": column.uuid().default(DB.raw("gen_random_uuid()")),
 })
 
 export const columnDefaultsRawPostgres = defineGeneratedTable("column_defaults_raw_postgres", {
@@ -38,7 +39,7 @@ export const columnDefaultsRawPostgres = defineGeneratedTable("column_defaults_r
   "settings": column.json().default({"a":1}),
   "status": column.enum(["draft","live"]).default("live"),
   "seen_at": column.timestamp().defaultNow(),
-  "token": column.uuid().default("gen_random_uuid()"),
+  "token": column.uuid().default(DB.raw("gen_random_uuid()")),
 })
 
 declare module '@holo-js/db' {

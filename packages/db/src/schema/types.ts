@@ -19,7 +19,7 @@ export type LogicalColumnKind
     | 'vector'
     | 'enum'
 
-export type ColumnDefaultKind = 'value' | 'now'
+export type ColumnDefaultKind = 'value' | 'now' | 'expression'
 export type IdGenerationStrategy = 'autoIncrement' | 'uuid' | 'ulid' | 'snowflake'
 export type VectorValue = readonly number[]
 

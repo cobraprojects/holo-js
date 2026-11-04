@@ -9,6 +9,7 @@ import { assertMigrationName, defineMigration } from './defineMigration'
 import { ensureMigrationTable } from './ensureMigrationTable'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { runInTransactionScope } from '../core/transactionScope'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   MigrateOptions,
@@ -202,10 +203,7 @@ export class MigrationService {
     callback: (connection: DatabaseContext) => Promise<T>,
   ): Promise<T> {
     const adapter = this.connection.getAdapter()
-    const runWithinScope = adapter.runWithTransactionScope?.bind(adapter)
-      ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
-
-    return await runWithinScope(async () => {
+    return await runInTransactionScope(this.connection, async () => {
       const driverState = await adapter.beforeMigrationTransaction?.()
       try {
         return await this.connection.transaction(async (tx) => {

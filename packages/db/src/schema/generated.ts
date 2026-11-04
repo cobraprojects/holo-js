@@ -245,6 +245,8 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
   if (columnDefinition.hasDefault) {
     if (columnDefinition.defaultKind === 'now') {
       chains.push('.defaultNow()')
+    } else if (columnDefinition.defaultKind === 'expression') {
+      chains.push(`.default(DB.raw(${JSON.stringify(columnDefinition.defaultValue)}))`)
     } else if (typeof columnDefinition.defaultValue !== 'undefined') {
       chains.push(`.default(${serializeValue(columnDefinition.defaultValue)})`)
     }
@@ -288,12 +290,17 @@ function renderTableOptions(table: TableDefinition): string {
   return options.length > 0 ? `, { ${options.join(', ')} }` : ''
 }
 
+function usesExpressionDefault(table: TableDefinition): boolean {
+  return Object.values(table.columns).some(columnDefinition => columnDefinition.hasDefault && columnDefinition.defaultKind === 'expression')
+}
+
 function buildGeneratedSchemaModuleLines(
   tables: readonly TableDefinition[],
   options: { withTypeAugmentation: boolean },
 ): string[] {
   const renderedTables = [...tables].sort((left, right) => left.tableName.localeCompare(right.tableName))
   const usedBuilders = [
+    ...(renderedTables.some(usesExpressionDefault) ? ['DB'] : []),
     ...(renderedTables.some(table => Object.keys(table.columns).length > 0) ? ['column'] : []),
     ...(renderedTables.length > 0 ? ['defineGeneratedTable'] : []),
     'registerGeneratedTables',

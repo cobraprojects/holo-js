@@ -59,9 +59,28 @@ function readNumericLiteral(text: string): number | string {
   return text.trim() !== '' && Number.isFinite(value) ? value : text
 }
 
+const JSON_NUMBER_PATTERN = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i
+
+function normalizeJsonNumber(text: string): string {
+  const match = JSON_NUMBER_PATTERN.exec(text)
+  if (!match) return text
+  const [, sign = '', integer = '', fraction = '', exponent = '0'] = match
+  const digits = `${integer}${fraction}`.replace(/^0+/, '')
+  const significant = digits.replace(/0+$/, '')
+  if (significant === '') return '0'
+  return `${sign}${significant}e${Number(exponent) - fraction.length + digits.length - significant.length}`
+}
+
 function readJsonLiteral(text: string): unknown {
+  let lossless = true
   try {
-    return JSON.parse(text) as unknown
+    const value = JSON.parse(text, (_key, entry: unknown, context?: { source?: string }) => {
+      if (typeof entry === 'number' && context?.source !== undefined && normalizeJsonNumber(JSON.stringify(entry)) !== normalizeJsonNumber(context.source)) {
+        lossless = false
+      }
+      return entry
+    }) as unknown
+    return typeof value === 'string' || value === null || !lossless ? text : value
   } catch {
     return text
   }
@@ -132,7 +151,7 @@ function toColumnDefinition(
     unique: uniqueColumns.has(column.name),
     ...(columnDefault.kind === 'now' ? { defaultKind: 'now' as const } : {}),
     ...(columnDefault.kind === 'literal' ? { defaultKind: 'value' as const, defaultValue: coerceDefaultValue(kind, columnDefault.value) } : {}),
-    ...(columnDefault.kind === 'expression' ? { defaultKind: 'value' as const, defaultValue: columnDefault.sql } : {}),
+    ...(columnDefault.kind === 'expression' ? { defaultKind: 'expression' as const, defaultValue: columnDefault.sql } : {}),
     ...(foreignKey ? { references: toForeignKeyReference(foreignKey) } : {}),
     ...(column.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
     ...(enumValues ? { enumValues } : {}),
