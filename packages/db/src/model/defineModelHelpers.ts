@@ -1,7 +1,7 @@
 import { singularize } from 'inflection'
 import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
-import { getConnectionGeneratedTableDefinition, getGeneratedTableDefinition, isGeneratedSchemaConnection } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition, getGeneratedTableDefinition, isGeneratedSchemaConnection, isGeneratedSchemaSuspended } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinition } from '../schema/types'
@@ -60,6 +60,10 @@ export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): 
 }
 
 export function resolveGeneratedModelTable(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
+  if (isGeneratedSchemaSuspended()) {
+    return undefined
+  }
+
   const table = connectionName === undefined
     ? getGeneratedTableDefinition(tableName)
     : getConnectionGeneratedTableDefinition(tableName, connectionName)

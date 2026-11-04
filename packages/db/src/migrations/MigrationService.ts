@@ -3,10 +3,9 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
-import { createGeneratedSchemaRefresh } from '../schema/generatedSchemaRefresh'
+import { runWithoutGeneratedSchema } from '../schema/generated'
 import { parseStoredDate } from '../schema/normalization'
 import { assertMigrationName, defineMigration } from './defineMigration'
-import { MigrationSchemaService } from './MigrationSchemaService'
 import { ensureMigrationTable } from './ensureMigrationTable'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -115,15 +114,13 @@ export class MigrationService {
       .filter(migration => !ranNames.has(migration.name))
       .slice(0, step)
 
-    if (pending.length > 0) {
-      await this.registerDatabaseSchema()
-    }
     const executed: RegisteredMigrationDefinition[] = []
     for (const migration of pending) {
       const log = this.createMigrationLog(migration.name, 'up', nextBatch)
       await this.runMigrationLifecycle(log, async () => {
         await this.runMigrationTransaction(async (tx) => {
-          await migration.up(this.createContext(tx))
+          const context = this.createContext(tx)
+          await runWithoutGeneratedSchema(() => migration.up(context))
           await new TableQueryBuilder(migrationsTable, tx).insert({
             name: migration.name,
             batch: nextBatch,
@@ -171,9 +168,6 @@ export class MigrationService {
         .sort((left, right) => right.id - left.id)
         .slice(0, step)
 
-      if (toRollback.length > 0) {
-        await this.registerDatabaseSchema()
-      }
       const rolledBack: RegisteredMigrationDefinition[] = []
       for (const record of toRollback) {
         const migration = this.migrations.get(record.name)
@@ -184,9 +178,12 @@ export class MigrationService {
         const log = this.createMigrationLog(record.name, 'down', record.batch)
         await this.runMigrationLifecycle(log, async () => {
           await this.runMigrationTransaction(async (tx) => {
-            if (migration.down) {
-              await migration.down(this.createContext(tx))
-            }
+            const context = this.createContext(tx)
+            await runWithoutGeneratedSchema(async () => {
+              if (migration.down) {
+                await migration.down(context)
+              }
+            })
 
             await new TableQueryBuilder(migrationsTable, tx)
               .where('name', record.name)
@@ -245,14 +242,10 @@ export class MigrationService {
     return rows
   }
 
-  private async registerDatabaseSchema(): Promise<void> {
-    await createGeneratedSchemaRefresh(this.connection).refreshAll()
-  }
-
   private createContext(connection: DatabaseContext): MigrationContext {
     return {
       db: connection,
-      schema: new MigrationSchemaService(connection, createGeneratedSchemaRefresh(connection)),
+      schema: createSchemaService(connection),
     }
   }
 

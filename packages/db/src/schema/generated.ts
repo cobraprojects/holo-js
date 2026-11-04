@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { defineTable } from './defineTable'
 import type { ColumnInput } from './columns'
 import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
@@ -31,6 +32,23 @@ const generatedSchemaSource = (() => {
   return runtime.__holoGeneratedSchemaSource__
 })()
 
+const generatedSchemaSuspension = (() => {
+  const runtime = globalThis as typeof globalThis & {
+    __holoGeneratedSchemaSuspension__?: AsyncLocalStorage<true>
+  }
+
+  runtime.__holoGeneratedSchemaSuspension__ ??= new AsyncLocalStorage<true>()
+  return runtime.__holoGeneratedSchemaSuspension__
+})()
+
+export function runWithoutGeneratedSchema<TResult>(callback: () => TResult): TResult {
+  return generatedSchemaSuspension.run(true, callback)
+}
+
+export function isGeneratedSchemaSuspended(): boolean {
+  return generatedSchemaSuspension.getStore() === true
+}
+
 export function setGeneratedSchemaConnection(connectionName: string | undefined): void {
   generatedSchemaSource.connectionName = connectionName
 }
@@ -62,10 +80,6 @@ export function defineGeneratedTable<
   return defineTable(tableName, columns, options)
 }
 
-export function forgetGeneratedTable(tableName: string): void {
-  generatedTables.delete(tableName)
-}
-
 export function clearGeneratedTables(): void {
   generatedTables.clear()
 }
@@ -75,6 +89,7 @@ export function getGeneratedTableDefinition<TName extends string>(tableName: TNa
 }
 
 export function getConnectionGeneratedTableDefinition(tableName: string, connectionName: string): TableDefinition | undefined {
+  if (isGeneratedSchemaSuspended()) return undefined
   const schemaConnection = generatedSchemaSource.connectionName
   return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
 }
