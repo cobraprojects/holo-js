@@ -1,4 +1,4 @@
-import { realpathSync, watch } from 'node:fs'
+import { realpathSync, watch, type WatchEventType } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js/kernel'
@@ -156,18 +156,21 @@ function resolveConfiguredDiscoveryRoots(project: LoadedProjectConfig): readonly
   ]
 }
 
+function resolveGeneratedSchemaPath(project: LoadedProjectConfig): string {
+  return project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts'
+}
+
+function isAlwaysWatchedPath(path: string, project: LoadedProjectConfig): boolean {
+  return PACKAGE_MANIFEST_DISCOVERY_PATHS.has(path) || path === toPosixSlashes(resolveGeneratedSchemaPath(project))
+}
+
 function isDiscoveryRelevantPath(
   filePath: string,
   project: LoadedProjectConfig,
   pluginWatches: readonly PluginPrepareWatch[] = [],
 ): boolean {
   const normalized = toPosixSlashes(filePath)
-  if (PACKAGE_MANIFEST_DISCOVERY_PATHS.has(normalized)) {
-    return true
-  }
-
-  const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')
-  if (normalized === generatedSchemaPath) {
+  if (isAlwaysWatchedPath(normalized, project)) {
     return true
   }
 
@@ -237,7 +240,7 @@ async function collectDiscoveryWatchRoots(
 
   const generatedSchemaDirectory = resolve(
     projectRoot,
-    dirname(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts'),
+    dirname(resolveGeneratedSchemaPath(project)),
   )
   await collectDirectoryTree(generatedSchemaDirectory, directories, hostExcludedPaths)
 
@@ -364,7 +367,7 @@ type DiscoveryWatch = {
   close(): void
 }
 
-function waitForLiveness(liveness: Promise<void>): Promise<void> {
+function waitForLivenessOrProbeInterval(liveness: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     liveness,
@@ -391,12 +394,12 @@ export async function startDiscoveryWatch({
   let generation = 0
   const handles: WatchHandle[] = []
   const warnedPlugins = new Set<string>()
-  let deferredEvents: Map<string, string> | undefined = deferred ? new Map() : undefined
-  let live = false
-  let confirmLive = (): void => {}
+  let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
+  let probing = true
+  let stopProbing = (): void => {}
   const liveness = new Promise<void>((resolvePromise) => {
-    confirmLive = () => {
-      live = true
+    stopProbing = () => {
+      probing = false
       resolvePromise()
     }
   })
@@ -412,10 +415,10 @@ export async function startDiscoveryWatch({
     deferredEvents = undefined
     signal.removeEventListener('abort', close)
     releaseHandles()
-    confirmLive()
+    stopProbing()
   }
 
-  const dispatch = (path: string, eventType: string): void => {
+  const dispatch = (path: string, eventType: WatchEventType): void => {
     if (!isDiscoveryRelevantPath(path, project, pluginWatches)) return
     if (eventType !== 'rename') {
       observe({ path, kind: 'changed' })
@@ -425,9 +428,8 @@ export async function startDiscoveryWatch({
     observe(async () => classifyWatchedPathChange(path, await observedSnapshot, snapshots))
   }
 
-  const defer = (events: Map<string, string>, path: string, eventType: string): void => {
-    const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')
-    if (isAlwaysExcludedWatchPath(path) && path !== generatedSchemaPath && !PACKAGE_MANIFEST_DISCOVERY_PATHS.has(path)) return
+  const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
+    if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return
     if (events.get(path) !== 'rename') events.set(path, eventType)
   }
 
@@ -439,7 +441,7 @@ export async function startDiscoveryWatch({
       const path = normalizeContainedWatchedFilePath(projectRoot, root, fileName, canonicalProjectRoot)
       if (!path) return
       if (path === DISCOVERY_WATCH_PROBE_PATH) {
-        confirmLive()
+        stopProbing()
         return
       }
       if (deferredEvents) defer(deferredEvents, path, eventType)
@@ -511,18 +513,18 @@ export async function startDiscoveryWatch({
   }
 
   const probeLiveness = async (): Promise<void> => {
+    if (!probing) return
     const probePath = resolve(projectRoot, DISCOVERY_WATCH_PROBE_PATH)
-    if (live) return
     const deadline = Date.now() + LIVENESS_TIMEOUT_MS
     try {
       await mkdir(dirname(probePath), { recursive: true })
-      for (let attempt = 0; !live; attempt++) {
+      for (let attempt = 0; probing; attempt++) {
         if (Date.now() >= deadline) {
           writeWarning(`[Holo CLI] The file watcher did not confirm it was watching within ${LIVENESS_TIMEOUT_MS / 1000} seconds. Source edits may not be reflected until the next edit.\n`)
           return
         }
         await writeFile(probePath, String(attempt))
-        await waitForLiveness(liveness)
+        await waitForLivenessOrProbeInterval(liveness)
       }
     } catch (error) {
       writeWarning(`[Holo CLI] Unable to confirm the file watcher is watching: ${error instanceof Error ? error.message : String(error)}\n`)
@@ -543,7 +545,7 @@ export async function startDiscoveryWatch({
     }
     if (recursive === false) {
       acquireDirectories(directories)
-      confirmLive()
+      stopProbing()
     }
     return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {

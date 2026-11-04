@@ -228,5 +228,6 @@ export async function runProjectDevServer(
     if (restart) await restart.shutdown()
     else session.dispose()
     discoveryWatch?.close()
+    await discoveryWatch?.ready
   }
 }

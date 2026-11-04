@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -82,21 +82,30 @@ it('re-prepares before launching the server when a source edit lands during the 
   expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
 })
 
-it('launches the server only after the watcher confirms it is live and catches up on edits seen before then', async () => {
+it('launches the server only after the watcher confirms it is live', async () => {
   const root = await createProject()
   const watcher = createFakeWatcher()
   const calls: string[] = []
 
-  await runDev(root, watcher, calls, (call) => {
-    if (call !== 1) return
+  await runDev(root, watcher, calls, () => {
     void delay(0).then(() => {
-      watcher.emit('change', 'server/models/User.ts')
       calls.push('live')
       watcher.emit('rename', DISCOVERY_WATCH_PROBE_PATH)
     })
   })
 
-  expect(calls).toEqual(['prepare', 'live', 'prepare', 'spawn'])
+  expect(calls).toEqual(['prepare', 'live', 'spawn'])
+})
+
+it('removes its liveness probe when the initial prepare fails', async () => {
+  const root = await createProject()
+  const watcher = createFakeWatcher()
+
+  await expect(runDev(root, watcher, [], () => {
+    throw new Error('prepare failed')
+  })).rejects.toThrow('prepare failed')
+
+  await expect(stat(join(root, DISCOVERY_WATCH_PROBE_PATH))).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
 it('does no extra prepare at startup when no discovery source changed', async () => {
