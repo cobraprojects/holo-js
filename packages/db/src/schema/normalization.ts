@@ -196,6 +196,12 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
+export function wholeSecondInstant(instant: Date): Date {
+  const time = instant.getTime()
+  const millisecond = ((time % 1000) + 1000) % 1000
+  return millisecond === 0 ? instant : new Date(time - millisecond)
+}
+
 export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, storage: DateStorage = 'native'): unknown {
   if (dialect === 'sqlite') {
     return normalizeSQLiteDateValue(value)
@@ -207,7 +213,7 @@ export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, s
   }
 
   if (dialect === 'mysql') {
-    return parsed.instant
+    return wholeSecondInstant(parsed.instant)
   }
 
   if (storage === 'text') {

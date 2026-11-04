@@ -164,6 +164,51 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
     })
   })
 
+  it('holds the stored whole-second values on the model after a MySQL write', async () => {
+    await withAppTimezone('America/New_York', async () => {
+      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const table = `holo_subsecond_model_${randomUUID().replaceAll('-', '')}`
+      const created = new Date('2026-11-15T17:00:00.900Z')
+      const updated = new Date('2026-11-15T17:00:05.400Z')
+      const deleted = new Date('2026-11-15T17:00:09.700Z')
+      vi.useFakeTimers({ toFake: ['Date'], now: created })
+      try {
+        await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME NULL, created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL, deleted_at TIMESTAMP NULL)`)
+        configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: { adapter, dialect: createDialect('mysql') } } }))
+        const typed = defineGeneratedTable(table, { id: column.integer(), at: column.datetime().nullable(), created_at: column.timestamp().nullable(), updated_at: column.timestamp().nullable(), deleted_at: column.timestamp().nullable() })
+        const Model = defineModel(typed, { primaryKey: 'id', fillable: ['id', 'at'], softDeletes: true })
+        const wholeSecond = (value: Date) => new Date(Math.floor(value.getTime() / 1000) * 1000)
+        const instantOf = (value: unknown) => new Date(value as string | Date)
+
+        const model = await Model.create({ id: 1, at: created })
+        expect(model.get('created_at')).toEqual(wholeSecond(created))
+        expect(model.get('updated_at')).toEqual(wholeSecond(created))
+        expect(model.get('at')).toEqual(wholeSecond(created))
+
+        vi.setSystemTime(updated)
+        model.fill({ at: '2026-11-15T17:00:05.400Z' } as never)
+        await model.save()
+        expect(model.get('updated_at')).toEqual(wholeSecond(updated))
+        expect(model.get('at')).toEqual(wholeSecond(updated))
+
+        vi.setSystemTime(deleted)
+        await model.delete()
+        expect(instantOf(model.get('deleted_at'))).toEqual(wholeSecond(deleted))
+        expect(model.get('updated_at')).toEqual(wholeSecond(deleted))
+
+        const stored = await Model.withTrashed().findOrFail(1)
+        for (const key of ['at', 'created_at', 'updated_at', 'deleted_at'] as const) {
+          expect(instantOf(model.get(key))).toEqual(stored.get(key))
+        }
+      } finally {
+        vi.useRealTimers()
+        resetDB()
+        await adapter.execute(`DROP TABLE IF EXISTS ${table}`)
+        await adapter.disconnect()
+      }
+    })
+  })
+
   it('rejects zoned text with an impossible calendar value instead of writing a different instant', async () => {
     await withAppTimezone('America/New_York', async () => {
       const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
