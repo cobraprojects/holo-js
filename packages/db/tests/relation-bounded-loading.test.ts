@@ -12,6 +12,7 @@ import {
   morphToMany,
   scopeRelation,
   hasMany,
+  type ModelCastDefinition,
   type TableDefinition,
 } from '../src'
 
@@ -228,7 +229,8 @@ describe('bounded relation loading', () => {
     await createTestTable(db, codes)
     await db.table(codes).insert([{ code: '01', label: 'zero-one' }, { code: '1', label: 'one' }])
 
-    const Code = defineModelFromTable(codes, { casts: { code: 'number' } })
+    const storedKeyCasts: Record<string, ModelCastDefinition> = { code: 'number' }
+    const Code = defineModelFromTable(codes, { casts: storedKeyCasts })
     const keys = ['01', '1', ...Array.from({ length: 256 }, (_, index) => `missing-${index}`)]
     const found = await Code.findMany(keys)
 

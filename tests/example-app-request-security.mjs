@@ -65,6 +65,10 @@ async function clientAddress(baseUrl, headers = {}) {
 
 const spoofedHeaders = { 'x-forwarded-for': '203.0.113.66', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'attacker.test' }
 
+function answeredByApp(observed) {
+  return observed?.address !== undefined
+}
+
 async function waitForStableClientAddress(baseUrl, predicate, message) {
   const deadline = Date.now() + 60000
   const stableFor = 5000
@@ -72,7 +76,7 @@ async function waitForStableClientAddress(baseUrl, predicate, message) {
   let stableSince
   while (Date.now() < deadline) {
     observed = await clientAddress(baseUrl, spoofedHeaders).catch(() => undefined)
-    if (observed && predicate(observed)) {
+    if (answeredByApp(observed) && predicate(observed)) {
       stableSince ??= Date.now()
       if (Date.now() - stableSince >= stableFor) return
     } else {

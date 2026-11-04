@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { normalizeDialectReadValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -110,7 +110,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   serializeAttributeValue(key: string, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(ownEntry(this.definition.casts, key))
+    const builtInCast = this.parseBuiltInCast(this.resolveCast(key))
     if (
       value instanceof Date
       && builtInCast
@@ -129,11 +129,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     source: 'serialized' | 'database' = 'serialized',
     dialect: SchemaDialectName = this.getSchemaDialectName(),
   ): Partial<ModelRecord<TTable>> {
-    const casts = { ...this.definition.casts, ...extraCasts }
     return Object.fromEntries(
       Object.entries(values).map(([key, value]) => {
+        const cast = ownEntry(extraCasts, key) ?? this.resolveCast(key)
         const normalized = this.applySchemaReadNormalization(key, value, source, dialect)
-        return [key, this.isNativeJsonCast(key, casts[key]) ? normalized : this.applyCastGet(casts[key], normalized)]
+        return [key, this.isNativeJsonCast(key, cast) ? normalized : this.applyCastGet(cast, normalized)]
       }),
     ) as Partial<ModelRecord<TTable>>
   }
@@ -170,9 +170,33 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   }
 
   castForStorage(key: string, value: unknown): unknown {
-    const cast = ownEntry(this.definition.casts, key)
+    const cast = this.resolveCast(key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
+  }
+
+  resolveCast(key: string): ModelCastDefinition | undefined {
+    return ownEntry(this.definition.casts, key) ?? (this.isModelDateColumn(key) ? 'datetime' : undefined)
+  }
+
+  private isModelDateColumn(key: string): boolean {
+    const { createdAtColumn, updatedAtColumn, deletedAtColumn } = this.definition
+    if (key !== createdAtColumn && key !== updatedAtColumn && key !== deletedAtColumn) {
+      return false
+    }
+
+    const column = ownEntry(this.definition.table.columns, key)
+    return column ? storesText(column) : this.definition.untyped
+  }
+
+  private hasBuiltInDateCast(key: string): boolean {
+    const name = this.parseBuiltInCast(this.resolveCast(key))?.name
+    return name === 'date' || name === 'datetime' || name === 'timestamp'
+  }
+
+  private isUntypedIncrementingKey(key: string): boolean {
+    const { untyped, primaryKey, uniqueIdConfig } = this.definition
+    return untyped && key === primaryKey && key === 'id' && !uniqueIdConfig?.columns.includes(key as never)
   }
 
   private isNativeJsonCast(key: string, cast: ModelCastDefinition | undefined): boolean {
@@ -182,7 +206,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaReadNormalization(key: string, value: unknown, source: 'serialized' | 'database', dialect: SchemaDialectName): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (!column) {
-      return value
+      return this.isUntypedIncrementingKey(key) ? readIntegerKey(value) : value
     }
 
     if (column.kind === 'json' && source === 'database' && dialect !== 'sqlite') {
@@ -194,8 +218,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
+    if (this.hasBuiltInDateCast(key)) {
+      return dateLikeWriteValue(this.getSchemaDialectName(), value, column && storesText(column) ? 'text' : 'native')
+    }
+
     if (!column) {
-      return value
+      return this.applyDefinitionlessWriteNormalization(key, value)
     }
 
     if (column.kind === 'json') {
@@ -203,6 +231,15 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)
+  }
+
+  private applyDefinitionlessWriteNormalization(key: string, value: unknown): unknown {
+    switch (this.parseBuiltInCast(this.resolveCast(key))?.name) {
+      case 'boolean':
+        return booleanStorageValue(value)
+      default:
+        return value
+    }
   }
 
   private getSchemaDialectName(): SchemaDialectName {
@@ -224,7 +261,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'date':
         case 'datetime':
         case 'timestamp':
-          return value == null || value instanceof Date ? value : new Date(String(value))
+          return parseStoredDate(this.resolveDialect(), value)
         case 'vector':
           return this.parseVectorValue(value, builtInCast.parameter)
       }
@@ -259,11 +296,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'string':
           return value == null ? value : String(value)
         case 'json':
-          return typeof value === 'string' ? value : JSON.stringify(value)
+          return value == null ? value : JSON.stringify(value)
         case 'date':
         case 'datetime':
         case 'timestamp':
-          return value instanceof Date ? value.toISOString() : value
+          return value
         case 'vector':
           return this.serializeVectorValue(value, builtInCast.parameter)
       }

@@ -18,6 +18,8 @@ export interface DatabaseCapabilities {
   schemaQualifiedIdentifiers: boolean
   nativeUpsert: boolean
   ddlAddColumnSupport?: boolean
+  ddlRenameColumnSupport: boolean
+  ddlDropColumnSupport: boolean
   ddlAlterSupport: boolean
   introspection: boolean
 }
@@ -35,6 +37,8 @@ export const DEFAULT_CAPABILITIES: DatabaseCapabilities = {
   schemaQualifiedIdentifiers: false,
   nativeUpsert: false,
   ddlAddColumnSupport: false,
+  ddlRenameColumnSupport: false,
+  ddlDropColumnSupport: false,
   ddlAlterSupport: false,
   introspection: false,
 }

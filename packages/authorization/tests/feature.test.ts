@@ -209,12 +209,12 @@ describe('@holo-js/authorization feature flows', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('registers model policies before the generated schema registry resolves the target table', async () => {
+  it('registers model policies before the Generated schema resolves the target table', async () => {
     const pendingSchemaModel = {
       definition: {
         name: 'Comment',
         get table(): { readonly tableName: string } {
-          throw new Error('Model "comments" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.')
+          throw new Error('Model "comments" is not present in the Generated schema. Run "holo migrate" to regenerate it.')
         },
       },
       query: () => ({

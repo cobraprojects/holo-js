@@ -52,12 +52,13 @@ The generated model starts with `fillable: []`, which blocks every column from `
 
 ## Where the types come from
 
-You don't declare columns in the model. Holo reads them from your [migrations](/database/migrations):
+You don't declare columns in the model. Holo reads them from your database after your [migrations](/database/migrations) run:
 
 1. You write a migration that creates or changes the `posts` table.
-2. You run `npx holo migrate`.
-3. Holo regenerates `.holo-js/generated/schema.generated.ts` with every table's columns. Don't edit this file.
+2. You run `npx holo migrate`. `npx holo migrate:rollback`, `npx holo migrate:fresh`, and `npx holo build` do the same step.
+3. Holo reads the database and regenerates `.holo-js/generated/schema.generated.ts` with every table's columns. Don't edit this file.
 4. `defineModel('posts')` picks up those column types.
+5. The model's built-in [casts](/orm/casts#how-casts-and-types-fit-together) set the type of the columns the database can't describe, such as JSON stored in a SQLite `text` column.
 
 After a migration, every model method knows your columns:
 
@@ -71,10 +72,10 @@ await Post.where('titel', 'Hello')
 //               ^ TypeScript error: 'titel' is not a column of posts
 ```
 
-Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default.
+Records are typed too. A `text().nullable()` column reads as `string | null`, a `timestamp()` as `Date`, and `create()` requires every column that has no default. A column with a `'json'`, `'boolean'`, `'number'`, `'string'`, `'date'`, `'datetime'`, `'timestamp'`, or `'vector'` cast takes the cast's type instead, both when you read it and when you write it. Models you reach by name, such as `belongsTo('User')`, and the user from `auth.user()` get the same types.
 
 ::: tip
-If autocomplete shows stale columns, run `npx holo migrate` again. A model whose table isn't in the generated schema throws `Model "posts" is not present in the generated schema registry` at runtime.
+If autocomplete shows stale columns, run `npx holo migrate` again. On a fresh clone of a project whose database already exists, `npx holo dev`, `npx holo migrate` or `npx holo build` writes the full types. A model on the default connection whose table isn't in the generated schema throws `Model "posts" is not present in the Generated schema` at runtime.
 :::
 
 ## Conventions
@@ -109,6 +110,8 @@ export default defineModel('countries', {
 })
 ```
 
+Models don't support composite primary keys, as in Laravel. A model on a table whose primary key has several columns throws `SchemaError` when an operation needs its key, such as `find()`, `create()` or `save()`, unless you set `primaryKey` to one of them. Use such a table as a `belongsToMany` pivot instead. See [primary(columns)](/database/migrations#primary-columns).
+
 ### Timestamps
 
 If the table has `created_at` and `updated_at` columns, Holo fills them on create and refreshes `updated_at` on every save. Add both columns in a migration with `table.timestamps()`.
@@ -136,7 +139,7 @@ export default defineModel('events', {
 })
 ```
 
-See [multiple connections](/database/connections) for configuring named connections.
+The generated schema covers only the default connection, so a model on another connection is untyped, as in Laravel: its attributes are `unknown`, and casts, `fillable` and `guarded` work as usual. See [Point a model at a connection](/database/connections#point-a-model-at-a-connection) for what it does at runtime, and [multiple connections](/database/connections) for configuring named connections.
 
 ## Mass assignment
 

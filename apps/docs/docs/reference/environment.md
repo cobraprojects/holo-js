@@ -63,7 +63,7 @@ Used in `config/app.ts`. See [app.ts](/reference/config#app-ts).
 
 ## Database
 
-Used in `config/database.ts`. See [database.ts](/reference/config#database-ts).
+Used in `config/database.ts`. See [database.ts](/reference/config#database-ts). Holo reads them only where your config calls `env()`, so they apply to the app and to CLI commands such as `holo migrate` alike.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -75,14 +75,14 @@ Used in `config/database.ts`. See [database.ts](/reference/config#database-ts).
 | `DB_USERNAME` | `postgres` / `root` | Database user. |
 | `DB_PASSWORD` | empty | Database password. |
 | `DB_DATABASE` | project name | Database name. |
-| `DB_SCHEMA` | `public` | Postgres schema. |
+| `DB_SCHEMA` | `public` | Postgres schema. Sets the `search_path`. |
 | `DB_POOL_MAX` | `4` | Postgres: maximum pool size. |
 | `DB_CONNECTION_TIMEOUT_MS` | `5000` | Postgres: connection timeout. |
 | `DB_IDLE_TIMEOUT_MS` | `30000` | Postgres: idle connection timeout. |
 | `DB_MAX_CONCURRENT_QUERIES` | `4` | Postgres: queries running at once. |
 | `DB_QUERY_QUEUE_LIMIT` | `32` | Postgres: queries allowed to wait. |
-| `DB_SSL` | none | `true` or `false`. Applied to the default connection when you run database commands from the CLI. |
-| `DB_LOGGING` | none | `true` or `false`. Applied to the default connection when you run database commands from the CLI. |
+| `DB_SSL` | `false` | `true` or `false`. Turns on TLS for MySQL connections whose config reads it, as new MySQL projects do. PostgreSQL TLS comes from `sslmode` in `DB_URL` or from `PGSSLMODE`. |
+| `DB_LOGGING` | `false` | `true` or `false`. Turns on the connection's built-in query logging. |
 
 ## Redis
 

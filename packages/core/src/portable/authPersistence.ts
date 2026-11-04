@@ -8,11 +8,13 @@ import { createCoreSessionRevocationStore } from './authSessionRevocations'
 import { connectionAsyncContext, DB, Entity, holoRuntimeInternals, ModelRepository, TableQueryBuilder, TransactionError, type DatabaseContext } from '@holo-js/db'
 
 export function serializeAuthTimestamp(value: Date, driver: string): Date | string {
-  return driver === 'mysql' || driver === 'postgres' ? value : value.toISOString()
+  return driver === 'mysql' || driver === 'postgres' ? value : holoRuntimeInternals.formatSQLiteDateTime(value)
 }
 
 export function normalizeDateValue(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value))
+  if (value instanceof Date) return value
+  const text = String(value)
+  return holoRuntimeInternals.parseSQLiteDateTime(text) ?? new Date(text)
 }
 
 export function normalizeJsonValue(value: unknown): unknown {
@@ -289,8 +291,6 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('user_id', String(record.userId))
             .where('email', record.email)
             .where('token_hash', record.tokenHash)
-            .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
-            .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
           const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
@@ -334,8 +334,6 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
             .where('provider', record.provider)
             .where('email', record.email)
             .where('token_hash', record.tokenHash)
-            .where('created_at', serializeAuthTimestamp(record.createdAt, connection.getDriver()))
-            .where('expires_at', serializeAuthTimestamp(record.expiresAt, connection.getDriver()))
             .where('expires_at', '>', serializeAuthTimestamp(new Date(), connection.getDriver()))
           const claimed = await holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(query, 'expires_at')
             .whereNull('used_at')
@@ -475,7 +473,6 @@ async function resolveAuthProviderRuntime<TCustom extends HoloConfigMap>(
     try {
       const moduleValue = await importBundledRuntimeModule(projectRoot, candidate) as {
         default?: unknown
-        holoModelPendingSchema?: boolean
       }
       if ('default' in moduleValue) {
         return moduleValue
@@ -533,7 +530,6 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
 
     const resolvedModule = await resolveAuthProviderRuntime(projectRoot, loadedConfig, providerConfig.model) as {
       default?: unknown
-      holoModelPendingSchema?: boolean
       prepareAuthCreateInput?: (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>
       prepareAuthUpdateInput?: (
         user: unknown,
@@ -560,53 +556,6 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       update(id: unknown, values: Record<string, unknown>): Promise<Record<string, unknown>>
       delete?(id: unknown): Promise<void>
     }
-    const throwPendingSchema = (): never => {
-      throw new Error(
-        `[@holo-js/core] Auth provider model "${providerConfig.model}" is pending generated schema output. `
-        + 'Run the schema generator before using auth.',
-      )
-    }
-
-    if (typeof model === 'undefined' && resolvedModule.holoModelPendingSchema === true) {
-      const pendingAdapter: CoreAuthProviderBinding = {
-        async findById() {
-          return throwPendingSchema()
-        },
-        async findByCredentials() {
-          return throwPendingSchema()
-        },
-        async create() {
-          return throwPendingSchema()
-        },
-        async update() {
-          return throwPendingSchema()
-        },
-        matchesUser() {
-          return false
-        },
-        getId() {
-          return throwPendingSchema()
-        },
-        getPasswordHash() {
-          return throwPendingSchema()
-        },
-        getRememberToken() {
-          return throwPendingSchema()
-        },
-        async updateRememberToken() {
-          return throwPendingSchema()
-        },
-        getEmailVerifiedAt() {
-          return throwPendingSchema()
-        },
-        serialize() {
-          return throwPendingSchema()
-        },
-      }
-
-      return [providerName, pendingAdapter] as const
-    }
-
     const sanitizeAuthWriteInput = (
       input: Readonly<Record<string, unknown>>,
     ): Record<string, unknown> => {

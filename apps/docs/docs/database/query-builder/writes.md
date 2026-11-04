@@ -50,7 +50,7 @@ await DB.table('tags').insert([
 
 ### insertGetId()
 
-`insertGetId()` inserts one row and returns its auto-incrementing ID:
+`insertGetId()` inserts one row and returns its auto-incrementing ID. An integer ID is a number on every database, as in Laravel, including a PostgreSQL `bigint` key that the driver returns as text. A key beyond `Number.MAX_SAFE_INTEGER`, such as a snowflake ID, comes back as its exact text instead, so no digits are lost and the call never fails after the row is written. A model's auto-increment key reads the same way. A key that isn't numeric, such as a UUID, comes back as the string the database returns:
 
 ```ts
 const userId = await DB.table('users').insertGetId({
@@ -58,6 +58,8 @@ const userId = await DB.table('users').insertGetId({
   email: 'ava@example.com',
 })
 ```
+
+On a model whose table is in the Generated schema, the key's TypeScript type stays `number`, even though a key beyond `Number.MAX_SAFE_INTEGER` is a string at runtime. Other integer columns past that range still throw `HydrationError` when read. Making the type match the runtime value is tracked in [#499](https://github.com/cobraprojects/holo-js/issues/499).
 
 ### insertOrIgnore()
 
@@ -156,7 +158,7 @@ An `update()` or `delete()` without a `where` clause affects every row in the ta
 
 ### Update JSON fields
 
-Use `->` in the key to set one value inside a JSON column, leaving the rest of the document alone:
+Use `->` in the key to set one value inside a JSON column, leaving the rest of the document alone. On SQLite, which stores JSON as text, a `text` column works too, as in Laravel. On PostgreSQL and MySQL the column must be a JSON column, or Holo throws a `SecurityError`.
 
 ```ts
 await DB.table('users')

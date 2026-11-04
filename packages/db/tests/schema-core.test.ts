@@ -4,7 +4,6 @@ import {
   TableDefinitionBuilder,
   TableMutationBuilder,
   column,
-  createSchemaRegistry,
   type InferInsert,
   type InferSelect,
   type InferUpdate,
@@ -179,37 +178,9 @@ describe('native schema core', () => {
     expect(insertRow.name).toBe('A')
   })
 
-  it('supports per-registry table registration without global leakage', () => {
+  it('fails closed when attempting to bind an unbound raw column definition', () => {
     const users = defineTable('users', {
       id: column.id() })
-
-    const registryA = createSchemaRegistry()
-    const registryB = createSchemaRegistry()
-
-    expect(registryA.register(users)).toBe(users)
-    expect(registryA.has('users')).toBe(true)
-    expect(registryA.get('users')).toBe(users)
-    expect(registryA.list()).toEqual([users])
-    expect(registryB.list()).toEqual([])
-
-    registryA.register(users)
-    expect(registryA.list()).toEqual([users])
-
-    registryA.clear()
-    expect(registryA.list()).toEqual([])
-  })
-
-  it('fails closed when attempting to bind an unbound raw column definition or duplicate registry name', () => {
-    const users = defineTable('users', {
-      id: column.id() })
-
-    const registry = createSchemaRegistry()
-    registry.register(users)
-
-    const usersClone = defineTable('users', {
-      id: column.id() })
-
-    expect(() => registry.register(usersClone)).toThrow(SchemaError)
 
     expect(() => defineTable('broken', {
       id: users.id,
@@ -228,7 +199,7 @@ describe('native schema core', () => {
 
   it('covers the fluent create-table builder surface directly', () => {
     const tableBuilder = new TableDefinitionBuilder('audit_logs')
-      .id('audit_id').generated().primaryKey()
+      .id('audit_id').primaryKey()
       .autoIncrementId('legacy_id')
       .integer('account_id')
       .integer('manager_id')
@@ -607,7 +578,7 @@ describe('native schema core', () => {
 
   it('covers the table-mutation builder surface directly', () => {
     const builder = new TableMutationBuilder('users')
-    builder.id('user_id').generated().primaryKey()
+    builder.id('user_id').primaryKey()
     builder.autoIncrementId('legacy_id')
     builder.integer('account_id')
     builder.foreignId('team_id').constrained('teams').cascadeOnDelete()
@@ -685,6 +656,51 @@ describe('native schema core', () => {
       { kind: 'renameIndex', fromIndexName: 'users_public_id_unique', toIndexName: 'users_public_lookup' },
       { kind: 'createForeignKey', columnName: 'account_id', reference: { table: 'accounts', column: 'id' }, constraintName: 'users_account_id_foreign' },
       { kind: 'dropForeignKey', constraintName: 'users_account_id_foreign' },
+    ])
+  })
+
+  it('keeps column-form drops as columns for the database to resolve and drops keys before their columns', () => {
+    const builder = new TableMutationBuilder('tenant.posts')
+
+    builder.dropUnique(['email'])
+    builder.dropUnique('posts_email_key')
+    builder.dropConstrainedForeignId('author_id')
+    builder.dropMorphs('taggable')
+    builder.dropMorphs('owner', 'posts_owner_lookup')
+
+    expect(builder.getOperations()).toEqual([
+      { kind: 'dropUnique', columns: ['email'] },
+      { kind: 'dropUnique', indexName: 'posts_email_key' },
+      { kind: 'dropForeignKey', columns: ['author_id'] },
+      { kind: 'dropColumn', columnName: 'author_id' },
+      { kind: 'dropIndex', columns: ['taggable_type', 'taggable_id'] },
+      { kind: 'dropColumn', columnName: 'taggable_type' },
+      { kind: 'dropColumn', columnName: 'taggable_id' },
+      { kind: 'dropIndex', indexName: 'posts_owner_lookup' },
+      { kind: 'dropColumn', columnName: 'owner_type' },
+      { kind: 'dropColumn', columnName: 'owner_id' },
+    ])
+  })
+
+  it('adds and drops the timestamp and soft-delete shortcut columns', () => {
+    const builder = new TableMutationBuilder('posts')
+
+    builder.timestamps()
+    builder.softDeletes()
+    builder.softDeletes('archived_at')
+    builder.dropTimestamps()
+    builder.dropSoftDeletes()
+    builder.dropSoftDeletes('archived_at')
+
+    expect(builder.getOperations()).toEqual([
+      expect.objectContaining({ kind: 'addColumn', columnName: 'created_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'updated_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'deleted_at' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'archived_at' }),
+      { kind: 'dropColumn', columnName: 'created_at' },
+      { kind: 'dropColumn', columnName: 'updated_at' },
+      { kind: 'dropColumn', columnName: 'deleted_at' },
+      { kind: 'dropColumn', columnName: 'archived_at' },
     ])
   })
 
@@ -1105,13 +1121,11 @@ describe('native schema core', () => {
   it('covers text columns and explicit primary-key modifiers on non-id columns', () => {
     const docs = defineTable('docs', {
       slug: column.string().primaryKey(),
-      body: column.text().nullable(),
-      checksum: column.string().generated() })
+      body: column.text().nullable() })
 
     expect(docs.slug.primaryKey).toBe(true)
     expect(docs.body.kind).toBe('text')
     expect(docs.body.nullable).toBe(true)
-    expect(docs.checksum.generated).toBe(true)
   })
 
   it('supports function-based foreign-key references', () => {

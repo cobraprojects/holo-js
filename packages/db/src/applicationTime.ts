@@ -62,6 +62,11 @@ const DAY_MILLIS = 24 * 60 * 60 * 1000
 
 export type WallClockAmbiguity = 'earlier' | 'later'
 
+export const SERVER_WALL_CLOCK_AMBIGUITY: Readonly<Record<'postgres' | 'mysql', WallClockAmbiguity>> = Object.freeze({
+  postgres: 'later',
+  mysql: 'earlier',
+})
+
 function instantOfWallClock(wall: WallClock, timeZone: string, ambiguity: WallClockAmbiguity): Date {
   const local = utcMillisOf(wall)
   const offsets = [...new Set([

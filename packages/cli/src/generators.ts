@@ -290,7 +290,7 @@ export async function runMakeModel(
   input: PreparedInput,
 ): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
-  const generatedSchemaFilePath = await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
+  await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
     ?? await prepareProjectDiscovery(projectRoot, project.config)
   /* v8 ignore next */
@@ -354,7 +354,6 @@ export async function runMakeModel(
 
   await writeTextFile(modelFilePath, renderModelTemplate({
     tableName,
-    generatedSchemaImportPath: relativeImportPath(modelFilePath, generatedSchemaFilePath),
     ...(options.observer
       ? {
           observerImportPath: relativeImportPath(modelFilePath, observerFilePath),

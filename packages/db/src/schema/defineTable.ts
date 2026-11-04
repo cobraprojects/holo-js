@@ -1,6 +1,7 @@
 import { SchemaError } from '../core/errors'
 import { isColumnBuilder, type ColumnInput } from './columns'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { resolvePrimaryKeyColumnOrder } from './tablePrimaryKey'
 import type {
   AnyColumnDefinition,
   TableDefinition,
@@ -23,6 +24,8 @@ type BoundColumns<TColumns extends ColumnShapeInput> = {
 
 export interface DefineTableOptions {
   indexes?: readonly TableIndexDefinition[]
+  primaryKeyName?: string
+  primaryKeyColumns?: readonly string[]
 }
 
 export type BoundTableDefinition<
@@ -64,6 +67,10 @@ export function defineTable<
     assertValidIdentifierSegment(columnName, 'Column name')
   }
 
+  if (options.primaryKeyName) {
+    assertValidIdentifierSegment(options.primaryKeyName, 'Primary key name')
+  }
+
   for (const index of options.indexes ?? []) {
     if (index.name) {
       assertValidIdentifierSegment(index.name, 'Index name')
@@ -81,11 +88,15 @@ export function defineTable<
     ]),
   ) as BoundColumns<TColumns>
 
+  const primaryKeyColumns = options.primaryKeyColumns && resolvePrimaryKeyColumnOrder(name, boundColumns, options.primaryKeyColumns)
+
   const table = {
     kind: 'table' as const,
     tableName: name,
     columns: boundColumns,
     indexes: Object.freeze([...(options.indexes ?? [])]),
+    ...(options.primaryKeyName ? { primaryKeyName: options.primaryKeyName } : {}),
+    ...(primaryKeyColumns ? { primaryKeyColumns } : {}),
     ...boundColumns,
   } satisfies TableDefinition<TName, BoundColumns<TColumns>> & BoundColumns<TColumns>
 

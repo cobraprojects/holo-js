@@ -59,6 +59,8 @@ function normalizeRelatedResolver(related: RegisteredModelName | (() => ModelDef
   return related
 }
 
+export const PIVOT_TIMESTAMP_COLUMNS = Object.freeze(['created_at', 'updated_at'] as const)
+
 function decoratePivotRelation<TBase extends {
   pivotColumns: readonly string[]
   pivotWheres: readonly { column: string, operator: string, value: unknown }[]
@@ -87,7 +89,7 @@ function decoratePivotRelation<TBase extends {
     },
     withTimestamps() {
       return clone({
-        pivotColumns: Object.freeze([...new Set([...relation.pivotColumns, 'created_at', 'updated_at'])]),
+        pivotColumns: Object.freeze([...new Set([...relation.pivotColumns, ...PIVOT_TIMESTAMP_COLUMNS])]),
         pivotTimestamps: true,
       } as Partial<TBase>)
     },

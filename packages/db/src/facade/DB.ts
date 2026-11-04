@@ -3,6 +3,7 @@ import { ConfigurationError } from '../core/errors'
 import { unsafeSql } from '../core/unsafe'
 import { resetGlobalModelRegistry } from '../model/ModelRegistry'
 import { resetMorphRegistry } from '../model/morphRegistry'
+import { setGeneratedSchemaConnection } from '../schema/generated'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ConnectionManager } from '../connection/ConnectionManager'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -31,10 +32,12 @@ function getDatabaseFacadeState(): {
 class DatabaseFacade {
   configure(manager: ConnectionManager): void {
     getDatabaseFacadeState().manager = manager
+    setGeneratedSchemaConnection(manager.getDefaultConnectionName())
   }
 
   reset(): void {
     getDatabaseFacadeState().manager = undefined
+    setGeneratedSchemaConnection(undefined)
   }
 
   getManager(): ConnectionManager {

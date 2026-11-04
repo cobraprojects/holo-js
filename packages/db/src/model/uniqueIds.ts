@@ -6,6 +6,7 @@ import { snapshotAttributes } from './entityRuntime'
 import type {
   ModelAttributeKey,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelTrait,
   UniqueIdRuntimeConfig,
@@ -33,10 +34,13 @@ export function applyGeneratedUniqueIds<TTable extends TableDefinition>(
   return output
 }
 
-export function applyPendingModelAttributes<TTable extends TableDefinition>(
+export function applyPendingModelAttributes<
+  TTable extends TableDefinition,
+  TValues extends Partial<ModelRecord<TTable>> | ModelInsertPayload<TTable>,
+>(
   definition: ModelDefinition<TTable>,
-  values: Partial<ModelRecord<TTable>>,
-): Partial<ModelRecord<TTable>> {
+  values: TValues,
+): TValues {
   return Object.keys(definition.pendingAttributes).length === 0
     ? values
     : { ...snapshotAttributes(definition.pendingAttributes), ...values }
@@ -138,7 +142,7 @@ function isUniqueIdTrait<TTable extends TableDefinition>(
 
 export function resolveUniqueIdConfig<TTable extends TableDefinition>(
   traits: readonly ModelTrait<TTable>[] | undefined,
-  primaryKey: ModelAttributeKey<TTable>,
+  primaryKey: () => ModelAttributeKey<TTable>,
   uniqueIds?: readonly ModelAttributeKey<TTable>[],
   newUniqueId?: () => string,
 ): UniqueIdRuntimeConfig<TTable> | null {
@@ -156,7 +160,7 @@ export function resolveUniqueIdConfig<TTable extends TableDefinition>(
   }
 
   const trait = uniqueIdTraits[0]!
-  const columns = uniqueIds ?? trait.columns ?? [primaryKey]
+  const columns = uniqueIds ?? trait.columns ?? [primaryKey()]
   if (columns.length === 0) {
     throw new SchemaError('uniqueIds must contain at least one column.')
   }

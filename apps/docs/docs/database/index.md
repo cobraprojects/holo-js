@@ -55,7 +55,7 @@ Connections live under `connections`, keyed by a name you choose. `defaultConnec
 
 ### SQLite
 
-Point `url` at a file path. `:memory:` gives you an in-memory database.
+Point `url` at a file path, or at a `file:` URL such as `file:./storage/database.sqlite` (query parameters such as `?mode=ro` aren't supported). Holo opens the file the first time your app queries the connection, and never creates it: a query against a missing file fails with `Database file at path "<path>" does not exist. Run "holo migrate" to create it.` Only `npx holo migrate` and `npx holo migrate:fresh` create the file and its directory. `:memory:` gives you an in-memory database, which starts empty in every process and is gone when the process exits. Use it for tests. Don't use it as the default connection of an app you build: `holo build` and `holo dev` read the schema types from a new, empty in-memory database, so the generated schema has no tables.
 
 ```ts [config/database.ts]
 import { defineDatabaseConfig } from '@holo-js/db'
@@ -70,6 +70,8 @@ export default defineDatabaseConfig({
   },
 })
 ```
+
+SQLite has no date type. A `Date` you write or bind on SQLite, in a model, in `DB.table()`, in `where()` or in a raw query, is stored as UTC text in the format SQLite's `CURRENT_TIMESTAMP` uses, such as `2026-01-02 03:04:05`. Milliseconds are kept when they aren't zero, as in `2026-01-02 03:04:05.678`, so a value reads back as the same `Date`. Because `defaultNow()` and `CURRENT_TIMESTAMP` defaults store the same format, a `Date` compares and orders correctly against `date`, `datetime` and `timestamp` columns, and against `TEXT` date columns created before 0.6 once their ISO 8601 values are rewritten as the [upgrade guide](/getting-started/upgrading#model-types-come-from-the-database-and-casts) shows. Holo reads these values as UTC.
 
 ### PostgreSQL and MySQL
 
@@ -89,6 +91,7 @@ export default defineDatabaseConfig({
       username: env('DB_USERNAME', 'postgres'),
       password: env('DB_PASSWORD'),
       database: env('DB_DATABASE', 'my_app'),
+      logging: env('DB_LOGGING', false),
       schema: env('DB_SCHEMA', 'public'),
     },
   },
@@ -103,6 +106,22 @@ main: {
   url: env('DATABASE_URL'),
 },
 ```
+
+### PostgreSQL schema
+
+On PostgreSQL, `schema` sets the connection's `search_path`, as Laravel's `search_path` setting does. Every pooled connection starts with it, so migrations, the schema builder, queries, models and the CLI create and read unqualified tables in that schema, and the generated schema is read from it. With `schema: 'tenant'`, `holo migrate` creates its tables in `tenant`, and a `public` table with the same name is ignored. Leave `schema` out to keep the server's default `search_path`.
+
+A `search_path` in the URL's `options` parameter, or in the `PGOPTIONS` environment variable when the URL has no `options`, wins over `schema`:
+
+```ts
+main: {
+  driver: 'postgres',
+  url: 'postgres://app@127.0.0.1/my_app?options=-c%20search_path%3Dtenant,public',
+  schema: 'tenant',
+},
+```
+
+The generated schema, the schema builder and `migrate:fresh` use the schema that unqualified statements use, which is the first schema of the `search_path` that exists. With the URL above and no `tenant` schema in the database, `holo migrate` creates its tables in `public`, the generated schema lists them from `public`, and `migrate:fresh` drops them from `public`.
 
 ### PostgreSQL dates and time zones
 
@@ -482,7 +501,7 @@ try {
 | `password` | `string` | PostgreSQL and MySQL |
 | `database` | `string` | Database name (or SQLite file) |
 | `filename` | `string` | Same as `database` |
-| `schema` | `string` | PostgreSQL schema, such as `public` |
+| `schema` | `string` | PostgreSQL schema, such as `public`. Sets the `search_path`. See [PostgreSQL schema](#postgresql-schema) |
 | `ssl` | `boolean \| object` | PostgreSQL and MySQL |
 | `max` | `number` | PostgreSQL pool size, at least `1` |
 | `connectionTimeoutMillis` | `number` | PostgreSQL pool wait, `0` or more |
@@ -506,10 +525,12 @@ New projects read these from `.env`:
 | `DB_URL` | `url` (SQLite projects) |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` | PostgreSQL and MySQL credentials |
 | `DB_SCHEMA` | PostgreSQL `schema` |
+| `DB_SSL` | `ssl` (MySQL projects). PostgreSQL TLS comes from `sslmode` in `DB_URL` or from `PGSSLMODE` |
+| `DB_LOGGING` | `logging` |
 | `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT_MS`, `DB_IDLE_TIMEOUT_MS` | PostgreSQL pool |
 | `DB_MAX_CONCURRENT_QUERIES`, `DB_QUERY_QUEUE_LIMIT` | `concurrency` settings |
 
-These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them.
+These names come from the generated `config/database.ts`. Rename them freely; only the config file reads them. The app and CLI commands such as `holo migrate` use the same resolved config, so a variable your config doesn't read, or a value it sets without `env()`, changes neither.
 
 ## Next steps
 

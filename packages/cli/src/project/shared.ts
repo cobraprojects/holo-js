@@ -16,12 +16,12 @@ export type CliModelReference = {
       readonly tableName: string
     }
     readonly prunable?: unknown
+    readonly casts?: Readonly<Record<string, unknown>>
+    readonly createdAtColumn?: string
+    readonly updatedAtColumn?: string
+    readonly deletedAtColumn?: string
   }
   prune(): Promise<number>
-}
-
-export type InactiveGeneratedModelModule = {
-  readonly holoModelPendingSchema: true
 }
 
 export type DiscoveredAppCommand = {
@@ -40,6 +40,8 @@ export type GeneratedModelRegistryEntry = {
   readonly tableName: string
   readonly prunable: boolean
   readonly exportName?: string
+  readonly casts?: Readonly<Record<string, string>>
+  readonly dateColumns?: readonly string[]
 }
 
 export type GeneratedMigrationRegistryEntry = {

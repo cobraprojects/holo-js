@@ -23,6 +23,18 @@ export function assertValidIdentifierPath(identifier: string, context: string): 
   }
 }
 
+export interface TablePath {
+  readonly schema?: string
+  readonly table: string
+}
+
+export function splitTablePath(tableName: string): TablePath {
+  const separator = tableName.lastIndexOf('.')
+  return separator === -1
+    ? { table: tableName }
+    : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
+}
+
 export function sanitizeIdentifierForGeneratedName(identifier: string): string {
   return identifier.replaceAll('.', '_')
 }

@@ -12,7 +12,6 @@ import {
   type AuthorizationDiscoveryModule,
   type GeneratedCommandRegistryEntry,
   type GeneratedJobRegistryEntry,
-  type InactiveGeneratedModelModule,
   type MinimalListenerDefinition,
   type NormalizedDiscoveredQueueJob,
   hasEventDefinitionMarker,
@@ -226,15 +225,22 @@ export function isCliModelReference(value: unknown): value is CliModelReference 
     && typeof value.prune === 'function'
 }
 
-export function isUnresolvedModelSchemaError(error: unknown): boolean {
-  return error instanceof Error
-    && (error.message.includes('is not present in the generated schema registry')
-      || ('code' in error && error.code === 'SCHEMA_ERROR'
-        && /^Table ".+" does not define a primary key column\.$/.test(error.message)))
+export function collectBuiltInCasts(casts: Readonly<Record<string, unknown>> | undefined): Readonly<Record<string, string>> | undefined {
+  const entries = Object.entries(casts ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
-export function isInactiveGeneratedModelModule(value: unknown): value is InactiveGeneratedModelModule {
-  return isRecord(value) && value.holoModelPendingSchema === true
+export function collectModelDateColumns(definition: CliModelReference['definition']): readonly string[] | undefined {
+  const columns = [definition.createdAtColumn, definition.updatedAtColumn, definition.deletedAtColumn]
+    .filter((column): column is string => typeof column === 'string')
+  return columns.length > 0 ? [...new Set(columns)] : undefined
+}
+
+export function isUnresolvedModelSchemaError(error: unknown): boolean {
+  return error instanceof Error
+    && (error.message.includes('is not present in the Generated schema')
+      || ('code' in error && error.code === 'SCHEMA_ERROR'
+        && /^Table ".+" does not define a primary key column\.$/.test(error.message)))
 }
 
 export function isMigrationDefinition(value: unknown): value is MigrationDefinition {

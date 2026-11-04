@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,7 @@ async function createPreparedDriver(options: {
   const tempDirectory = await mkdtemp(join(tmpdir(), 'holo-cache-db-'))
   tempDirectories.push(tempDirectory)
   const databasePath = options.databasePath ?? join(tempDirectory, 'cache.sqlite')
+  await writeFile(databasePath, '', { flag: 'a' })
   const connection = cacheDbInternals.createDatabaseConnection('cache', {
     driver: 'sqlite',
     filename: databasePath,
@@ -73,6 +74,7 @@ async function createPublicFeatureHarness() {
   const tempDirectory = await mkdtemp(join(tmpdir(), 'holo-cache-db-feature-'))
   tempDirectories.push(tempDirectory)
   const databasePath = join(tempDirectory, 'feature.sqlite')
+  await writeFile(databasePath, '')
 
   configureDB(createConnectionManager({
     defaultConnection: 'default',
@@ -97,7 +99,13 @@ async function createPublicFeatureHarness() {
   })
 
   const schema = createSchemaService(DB.connection())
-  await schema.sync([users])
+  await schema.createTable('users', (table) => {
+    table.id()
+    table.string('name')
+    table.string('status')
+    table.integer('loginCount')
+    table.timestamps()
+  })
   await cacheDbInternals.prepareCacheDatabaseTables(DB.connection())
 
   const driver = createDatabaseCacheDriver({
@@ -263,6 +271,7 @@ describe('@holo-js/cache-db', () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), 'holo-cache-db-missing-entry-'))
     tempDirectories.push(tempDirectory)
     const databasePath = join(tempDirectory, 'missing-entry.sqlite')
+    await writeFile(databasePath, '')
     const driver = createDatabaseCacheDriver({
       name: 'database',
       connectionName: 'cache',
@@ -284,6 +293,7 @@ describe('@holo-js/cache-db', () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), 'holo-cache-db-missing-lock-'))
     tempDirectories.push(tempDirectory)
     const databasePath = join(tempDirectory, 'missing-lock.sqlite')
+    await writeFile(databasePath, '')
     const connection = cacheDbInternals.createDatabaseConnection('cache', {
       driver: 'sqlite',
       filename: databasePath,

@@ -1,0 +1,222 @@
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { holoRuntimeInternals, renderGeneratedSchemaModule, type AnyColumnDefinition, type TableDefinition } from '../src'
+import { openDatabase } from './support/database'
+
+const { createSchemaReader } = holoRuntimeInternals
+
+type ReadDefault = 'none' | 'now' | { value: unknown }
+
+function readDefaults(table: TableDefinition): Record<string, { kind: string, default: ReadDefault }> {
+  return Object.fromEntries(Object.values(table.columns).map((column: AnyColumnDefinition) => [column.name, {
+    kind: column.kind,
+    default: !column.hasDefault ? 'none' : column.defaultKind === 'now' ? 'now' : { value: column.defaultValue },
+  }]))
+}
+
+const rawTables = {
+  sqlite: (name: string) => `CREATE TABLE "${name}" (
+    "id" integer PRIMARY KEY,
+    "word_now" varchar(20) NOT NULL DEFAULT 'now',
+    "bare_now" varchar(20) NOT NULL DEFAULT now,
+    "word_current_timestamp" varchar(20) NOT NULL DEFAULT 'CURRENT_TIMESTAMP',
+    "word_null" varchar(20) NOT NULL DEFAULT 'null',
+    "word_true" varchar(20) NOT NULL DEFAULT 'true',
+    "digits" varchar(20) NOT NULL DEFAULT '007',
+    "count" integer NOT NULL DEFAULT -3,
+    "ratio" real NOT NULL DEFAULT 1.5,
+    "balance_zero" numeric NOT NULL DEFAULT 0.00,
+    "balance" numeric NOT NULL DEFAULT '12.50',
+    "enabled" tinyint(1) NOT NULL DEFAULT TRUE,
+    "settings" text NOT NULL DEFAULT '{"a":1}',
+    "status" varchar(10) NOT NULL DEFAULT 'live' CHECK ("status" IN ('draft', 'live')),
+    "seen_at" datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "token" text NOT NULL DEFAULT (lower(hex(randomblob(4)))),
+    "missing" text DEFAULT NULL
+  )`,
+  postgres: (name: string) => `CREATE TABLE "${name}" (
+    "id" serial PRIMARY KEY,
+    "word_now" varchar(20) NOT NULL DEFAULT 'now',
+    "word_current_timestamp" varchar(20) NOT NULL DEFAULT 'CURRENT_TIMESTAMP',
+    "word_null" varchar(20) NOT NULL DEFAULT 'null',
+    "word_true" varchar(20) NOT NULL DEFAULT 'true',
+    "digits" varchar(20) NOT NULL DEFAULT '007',
+    "count" integer NOT NULL DEFAULT -3,
+    "big_count" bigint NOT NULL DEFAULT 5000000000,
+    "ratio" double precision NOT NULL DEFAULT 1.5,
+    "balance_zero" numeric(8, 2) NOT NULL DEFAULT 0.00,
+    "balance" numeric(8, 2) NOT NULL DEFAULT '12.50',
+    "enabled" boolean NOT NULL DEFAULT true,
+    "settings" jsonb NOT NULL DEFAULT '{"a":1}',
+    "status" varchar(10) NOT NULL DEFAULT 'live' CHECK ("status" IN ('draft', 'live')),
+    "seen_at" timestamp NOT NULL DEFAULT now(),
+    "token" uuid NOT NULL DEFAULT gen_random_uuid()
+  )`,
+  mysql: (name: string) => `CREATE TABLE \`${name}\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`word_now\` varchar(20) NOT NULL DEFAULT 'now',
+    \`word_current_timestamp\` varchar(20) NOT NULL DEFAULT 'CURRENT_TIMESTAMP',
+    \`word_null\` varchar(20) NOT NULL DEFAULT 'null',
+    \`word_true\` varchar(20) NOT NULL DEFAULT 'true',
+    \`digits\` varchar(20) NOT NULL DEFAULT '007',
+    \`count\` int NOT NULL DEFAULT -3,
+    \`big_count\` bigint NOT NULL DEFAULT 5000000000,
+    \`ratio\` double NOT NULL DEFAULT 1.5,
+    \`balance_zero\` decimal(8, 2) NOT NULL DEFAULT 0.00,
+    \`balance\` decimal(8, 2) NOT NULL DEFAULT '12.50',
+    \`enabled\` tinyint(1) NOT NULL DEFAULT 1,
+    \`settings\` json NOT NULL DEFAULT ('{"a":"it''s \\\\\\\\ fine"}'),
+    \`note\` text NOT NULL DEFAULT ('it''s'),
+    \`status\` enum('draft', 'live') NOT NULL DEFAULT 'live',
+    \`seen_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    \`seen_at_ms\` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    \`token\` varchar(40) NOT NULL DEFAULT (concat('t-', uuid()))
+  )`,
+} as const
+
+const builderKinds = {
+  sqlite: { bigInteger: 'integer', uuid: 'text', settings: 'text', seenAt: 'datetime' },
+  postgres: { bigInteger: 'bigInteger', uuid: 'uuid', settings: 'json', seenAt: 'timestamp' },
+  mysql: { bigInteger: 'bigInteger', uuid: 'uuid', settings: 'json', seenAt: 'timestamp' },
+} as const
+
+const expectedRawDefaults = {
+  sqlite: {
+    id: { kind: 'id', default: 'none' },
+    word_now: { kind: 'string', default: { value: 'now' } },
+    bare_now: { kind: 'string', default: { value: 'now' } },
+    word_current_timestamp: { kind: 'string', default: { value: 'CURRENT_TIMESTAMP' } },
+    word_null: { kind: 'string', default: { value: 'null' } },
+    word_true: { kind: 'string', default: { value: 'true' } },
+    digits: { kind: 'string', default: { value: '007' } },
+    count: { kind: 'integer', default: { value: -3 } },
+    ratio: { kind: 'real', default: { value: 1.5 } },
+    balance_zero: { kind: 'decimal', default: { value: '0.00' } },
+    balance: { kind: 'decimal', default: { value: '12.50' } },
+    enabled: { kind: 'boolean', default: { value: true } },
+    settings: { kind: 'text', default: { value: '{"a":1}' } },
+    status: { kind: 'enum', default: { value: 'live' } },
+    seen_at: { kind: 'datetime', default: 'now' },
+    token: { kind: 'text', default: { value: 'lower(hex(randomblob(4)))' } },
+    missing: { kind: 'text', default: { value: null } },
+  },
+  postgres: {
+    id: { kind: 'id', default: 'none' },
+    word_now: { kind: 'string', default: { value: 'now' } },
+    word_current_timestamp: { kind: 'string', default: { value: 'CURRENT_TIMESTAMP' } },
+    word_null: { kind: 'string', default: { value: 'null' } },
+    word_true: { kind: 'string', default: { value: 'true' } },
+    digits: { kind: 'string', default: { value: '007' } },
+    count: { kind: 'integer', default: { value: -3 } },
+    big_count: { kind: 'bigInteger', default: { value: 5000000000 } },
+    ratio: { kind: 'real', default: { value: 1.5 } },
+    balance_zero: { kind: 'decimal', default: { value: '0.00' } },
+    balance: { kind: 'decimal', default: { value: '12.50' } },
+    enabled: { kind: 'boolean', default: { value: true } },
+    settings: { kind: 'json', default: { value: { a: 1 } } },
+    status: { kind: 'enum', default: { value: 'live' } },
+    seen_at: { kind: 'timestamp', default: 'now' },
+    token: { kind: 'uuid', default: { value: 'gen_random_uuid()' } },
+  },
+  mysql: {
+    id: { kind: 'id', default: 'none' },
+    word_now: { kind: 'string', default: { value: 'now' } },
+    word_current_timestamp: { kind: 'string', default: { value: 'CURRENT_TIMESTAMP' } },
+    word_null: { kind: 'string', default: { value: 'null' } },
+    word_true: { kind: 'string', default: { value: 'true' } },
+    digits: { kind: 'string', default: { value: '007' } },
+    count: { kind: 'integer', default: { value: -3 } },
+    big_count: { kind: 'bigInteger', default: { value: 5000000000 } },
+    ratio: { kind: 'real', default: { value: 1.5 } },
+    balance_zero: { kind: 'decimal', default: { value: '0.00' } },
+    balance: { kind: 'decimal', default: { value: '12.50' } },
+    enabled: { kind: 'boolean', default: { value: true } },
+    settings: { kind: 'json', default: { value: { a: 'it\'s \\ fine' } } },
+    note: { kind: 'text', default: { value: 'it\'s' } },
+    status: { kind: 'enum', default: { value: 'live' } },
+    seen_at: { kind: 'timestamp', default: 'now' },
+    seen_at_ms: { kind: 'datetime', default: 'now' },
+    token: { kind: 'string', default: { value: 'concat(_utf8mb4\'t-\',uuid())' } },
+  },
+} as const
+
+for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+  describe(`${driver} column defaults in the Generated schema`, () => {
+    const builderTable = `column_defaults_builder_${driver}`
+    const rawTable = `column_defaults_raw_${driver}`
+
+    async function openDefaultsDatabase() {
+      const { db, schema } = await openDatabase(driver)
+      for (const name of [builderTable, rawTable]) {
+        await schema.dropTable(name)
+        onTestFinished(() => schema.dropTable(name))
+      }
+      await schema.createTable(builderTable, (table) => {
+        table.id()
+        table.string('word_now').default('now')
+        table.string('word_current_timestamp').default('CURRENT_TIMESTAMP')
+        table.string('word_null').default('null')
+        table.string('word_true').default('true')
+        table.string('quoted').default('it\'s')
+        table.text('body').default('hello')
+        table.integer('count').default(-3)
+        table.bigInteger('big_count').default(5000000000)
+        table.real('ratio').default(1.5)
+        table.decimal('balance_zero').default('0.00')
+        table.decimal('balance').default('12.50')
+        table.boolean('enabled').default(true)
+        table.boolean('archived').default(false)
+        table.json('settings').default({ a: 1, label: 'it\'s' })
+        table.enum('status', ['draft', 'live'] as const).default('live')
+        table.uuid('public_id').default('00000000-0000-0000-0000-000000000000')
+        table.timestamp('seen_at').defaultNow()
+        table.string('nickname').nullable()
+      })
+      await db.executeCompiled({ sql: rawTables[driver](rawTable), source: 'test:column-defaults' })
+      const reader = createSchemaReader(db)
+      const tables = [(await reader.readTable(builderTable))!, (await reader.readTable(rawTable))!]
+      return { tables }
+    }
+
+    it('reads each schema builder default as a literal of its column type or as now', async () => {
+      const { tables: [builder] } = await openDefaultsDatabase()
+      const kinds = builderKinds[driver]
+
+      expect(readDefaults(builder!)).toEqual({
+        id: { kind: 'id', default: 'none' },
+        word_now: { kind: 'string', default: { value: 'now' } },
+        word_current_timestamp: { kind: 'string', default: { value: 'CURRENT_TIMESTAMP' } },
+        word_null: { kind: 'string', default: { value: 'null' } },
+        word_true: { kind: 'string', default: { value: 'true' } },
+        quoted: { kind: 'string', default: { value: 'it\'s' } },
+        body: { kind: 'text', default: { value: 'hello' } },
+        count: { kind: 'integer', default: { value: -3 } },
+        big_count: { kind: kinds.bigInteger, default: { value: 5000000000 } },
+        ratio: { kind: 'real', default: { value: 1.5 } },
+        balance_zero: { kind: 'decimal', default: { value: '0.00' } },
+        balance: { kind: 'decimal', default: { value: '12.50' } },
+        enabled: { kind: 'boolean', default: { value: true } },
+        archived: { kind: 'boolean', default: { value: false } },
+        settings: {
+          kind: kinds.settings,
+          default: { value: kinds.settings === 'json' ? { a: 1, label: 'it\'s' } : '{"a":1,"label":"it\'s"}' },
+        },
+        status: { kind: 'enum', default: { value: 'live' } },
+        public_id: { kind: kinds.uuid, default: { value: '00000000-0000-0000-0000-000000000000' } },
+        seen_at: { kind: kinds.seenAt, default: 'now' },
+        nickname: { kind: 'string', default: 'none' },
+      })
+    })
+
+    it('reads raw DDL defaults as literals of their column type, now, or the database expression', async () => {
+      const { tables: [, raw] } = await openDefaultsDatabase()
+
+      expect(readDefaults(raw!)).toEqual(expectedRawDefaults[driver])
+    })
+
+    it('writes a Generated schema module with those defaults that the type tests compile', async () => {
+      const { tables } = await openDefaultsDatabase()
+
+      await expect(renderGeneratedSchemaModule(tables)).toMatchFileSnapshot(`./fixtures/column-defaults/${driver}.generated.ts`)
+    })
+  })
+}

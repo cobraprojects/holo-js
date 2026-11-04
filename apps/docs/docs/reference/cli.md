@@ -118,11 +118,13 @@ Most people start with `create holo-js` instead. See [Installation](/getting-sta
 
 ### dev
 
-Refresh Holo's generated files, then start your framework's dev server.
+Write the generated schema types from your default connection's database, refresh Holo's other generated files, then start your framework's dev server.
 
 ```bash
 npx holo dev [...frameworkArgs]
 ```
+
+The dev server doesn't need the database. If `holo dev` can't read it, it prints a warning that names the connection and starts with the generated schema it already has, or an empty one. Run `npx holo migrate` once the database is reachable to write it. `holo dev` and your app never create a missing SQLite file: pages that don't query the database still work, and a query fails with an error that names the file and tells you to run `npx holo migrate`.
 
 While it runs, `holo dev` watches your Holo folders (`config/`, `.env` files, `server/models`, `server/jobs`, and so on) and refreshes the generated files when they change, restarting the dev server when needed.
 
@@ -144,7 +146,7 @@ Your scaffolded `package.json` already has `"dev": "holo dev"`, so `npm run dev`
 
 ### build
 
-Refresh Holo's generated files, then run your framework's production build.
+Refresh Holo's generated files, then run your framework's production build. `holo build` reads the generated schema types from your default connection's database, so the database must be reachable; it doesn't load or run migrations. If the database can't be read, the build stops with an error that names the connection. A SQLite database file that doesn't exist counts as unreadable: `holo build` never creates it. Run `npx holo migrate` to create it. A SQLite `:memory:` database is new and empty in every process, so `holo build` can't read your tables from one and writes a generated schema with no tables.
 
 ```bash
 npx holo build [...frameworkArgs]
@@ -186,7 +188,9 @@ Scan your project and regenerate the files in `.holo-js/generated` (model, migra
 npx holo prepare
 ```
 
-`dev` and `build` run this for you. Run it yourself after pulling changes or when your editor's types look out of date.
+`dev` and `build` run this for you, and your scaffolded `package.json` runs it on install. Run it yourself after pulling changes or when your editor's types look out of date. `prepare` doesn't read the database or load your migrations. It registers each migration by its file name.
+
+If `.holo-js/generated/schema.generated.ts` fails to load, for example a file written by an earlier release, every command replaces it with an empty generated schema, prints a one-line notice and continues. The next `migrate`, `build` or `dev` writes it again from the database.
 
 ### install
 
@@ -462,7 +466,9 @@ npx holo make:channel orders.{orderId}
 
 ### migrate
 
-Run every [migration](/database/migrations) that hasn't run yet.
+Run every [migration](/database/migrations) that hasn't run yet, then write the generated schema types from the database. A skipped `--isolated` run leaves them unchanged. `migrate:rollback` and `migrate:fresh` write them too.
+
+When the database of the default connection, or of another connection a migration uses, doesn't exist, `migrate` and `migrate:fresh` create it the first time they use it: the SQLite file and its directory, or the PostgreSQL or MySQL database. They are the only commands that create a database. `holo seed` and other commands fail on a missing one.
 
 ```bash
 npx holo migrate [--step <n>] [--isolated]
@@ -471,7 +477,7 @@ npx holo migrate [--step <n>] [--isolated]
 | Flag | Description |
 | --- | --- |
 | `--step <n>` | Run at most this many pending migrations. |
-| `--isolated` | Take a database lock first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
+| `--isolated` | Take the `migrations` lock from the default cache store first. If another run holds it, this run skips and exits successfully. Use it when several replicas run `migrate` at deploy time; every server must share the store, such as `redis` or `database`. If `@holo-js/cache` isn't installed, the store can't be resolved, or the store can't give a lock, the run fails before migrating and the error names that cause. See [Isolating migration runs](/database/migrations#isolating-migration-runs). |
 
 ```bash
 npx holo migrate
@@ -540,7 +546,7 @@ npx holo seed [--only <names>] [--quietly] [--force]
 npx holo seed --only roles,admin
 ```
 
-When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
+`seed` writes the generated schema types from the database before it runs your seeders, so models resolve against the current tables. If it can't read the database, it warns and runs them with the generated schema it has. When `APP_ENV` is `production`, `seed` asks you to confirm first. Without a terminal, it stops with an error unless you pass `--force`.
 
 ### prune
 
@@ -792,7 +798,7 @@ npx holo media:table
 
 ### media:regenerate
 
-Rebuild [image conversions](/media/conversions) for stored media.
+Rebuild [image conversions](/media/conversions) for stored media. Like `seed`, it writes the generated schema types from the database first.
 
 ```bash
 npx holo media:regenerate [ModelName ...] [--ids=<ids>] [--only=<names>] [--only-missing]

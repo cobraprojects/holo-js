@@ -103,6 +103,7 @@ type RuntimeAdapterConnectionConfig = Pick<HoloProjectConnectionConfig, 'max' | 
   password?: string
   database?: string
   ssl?: boolean | Record<string, unknown>
+  schema?: string
 }
 
 function coercePort(value: number | string | undefined): number | undefined {
@@ -184,6 +185,7 @@ function resolveConnectionConfig(
         password,
         database,
         ssl,
+        schema: schemaName,
         max: normalized.max,
         connectionTimeoutMillis: normalized.connectionTimeoutMillis,
         idleTimeoutMillis: normalized.idleTimeoutMillis,
@@ -229,6 +231,8 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
     schemaQualifiedIdentifiers: false,
     nativeUpsert: true,
     ddlAddColumnSupport: true,
+    ddlRenameColumnSupport: true,
+    ddlDropColumnSupport: true,
     ddlAlterSupport: false,
     introspection: true,
   }
@@ -354,6 +358,21 @@ export function createRuntimeConnectionOptions(
   }
 }
 
+export function resolveRuntimeDefaultConnectionName(config: RuntimeConfigInput): string {
+  const topLevelDb = asRecord(config.db) as RuntimeDatabaseConfig | undefined
+  const connections = topLevelDb?.connections ?? {}
+  const connectionEntries = Object.entries(connections)
+  if (!hasRuntimeConnectionEntries(connectionEntries)) {
+    return 'default'
+  }
+
+  if (topLevelDb?.defaultConnection) {
+    return topLevelDb.defaultConnection
+  }
+
+  return Object.hasOwn(connections, 'default') ? 'default' : connectionEntries[0][0]
+}
+
 export function resolveRuntimeConnectionManagerOptions(
   config: RuntimeConfigInput,
 ): ConnectionManager {
@@ -370,12 +389,7 @@ export function resolveRuntimeConnectionManagerOptions(
     })
   }
 
-  const configuredDefault = topLevelDb?.defaultConnection
-  const defaultConnection = configuredDefault
-    ? configuredDefault
-    : Object.hasOwn(connections, 'default')
-      ? 'default'
-      : connectionEntries[0][0]
+  const defaultConnection = resolveRuntimeDefaultConnectionName(config)
 
   const resolvedConnections = connectionEntries
     .map(([name, input]) => [

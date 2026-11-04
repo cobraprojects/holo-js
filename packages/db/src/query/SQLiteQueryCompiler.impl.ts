@@ -1,4 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { formatSQLiteDateTime } from '../sqliteDateTime'
 import type { CompiledStatement } from '../core/types'
 import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
@@ -67,6 +68,12 @@ function splitSchemaTable(tableName: string): { readonly schemaName: string, rea
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  protected override readonly dialect = 'sqlite'
+
+  protected override createDateLiteral(value: Date): string {
+    return this.createSqlStringLiteral(formatSQLiteDateTime(value))
+  }
+
   override compileTableSchemaLookup(tableName: string): CompiledStatement | undefined {
     if (tableName.includes('.')) return undefined
 

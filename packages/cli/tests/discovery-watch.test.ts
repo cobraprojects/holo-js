@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { EventEmitter, once } from 'node:events'
-import { expect, it, onTestFinished } from 'vitest'
+import { randomUUID } from 'node:crypto'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
@@ -18,6 +19,29 @@ async function createProject(): Promise<string> {
   await write(root, 'package.json', '{"name":"watch-fixture","type":"module"}')
   await write(root, 'config/app.ts', 'export default {}')
   return root
+}
+
+async function startCapturedWatch(root: string, config = defaultProjectConfig()) {
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config },
+    observe: captured.observe,
+  })
+  onTestFinished(() => watcher.close())
+  await vi.waitFor(async () => {
+    await write(root, 'config/app.ts', randomUUID())
+    expect(captured.changes.map(change => change.path)).toContain('config/app.ts')
+  }, { interval: 50, timeout: 3_000 })
+  return { ...captured, watcher }
+}
+
+async function editAndObserve(root: string, path: string, waitForChange: (path: string, kind: 'changed') => Promise<void>): Promise<void> {
+  const changed = waitForChange(path, 'changed')
+  await write(root, path, randomUUID())
+  await changed
 }
 
 function captureChanges() {
@@ -44,47 +68,27 @@ it('observes real source edits and excludes generated artifacts, dependency file
   for (const path of [...included, ...excluded]) await write(root, path)
   await write(outside, 'Outside.ts')
   await symlink(outside, join(root, 'server/models/escaped'), 'dir')
-  const { changes, observe, waitForChange } = captureChanges()
-  const watcher = await startDiscoveryWatch({
-    projectRoot: root,
-    signal: new AbortController().signal,
-    writeWarning: message => { throw new Error(message) },
-    project: { config: defaultProjectConfig() },
-    observe,
-  })
-  onTestFinished(() => watcher.close())
-  for (const path of included) {
-    const changed = waitForChange(path, 'changed')
-    await write(root, path, 'edited')
-    await changed
-  }
+  const { changes, waitForChange, watcher } = await startCapturedWatch(root)
+  for (const path of included) await editAndObserve(root, path, waitForChange)
   for (const path of excluded) await write(root, path, 'excluded')
   await write(root, 'server/models/escaped/Outside.ts', 'escaped')
-  await new Promise(resolve => setTimeout(resolve, 300))
+  await editAndObserve(root, 'config/app.ts', waitForChange)
   const unexpected = changes.filter(change => !included.includes(change.path))
   expect(unexpected, JSON.stringify(unexpected)).toEqual([])
+  const observedBeforeClose = changes.length
   watcher.close()
-  await new Promise(resolve => setTimeout(resolve, 100))
-  const observed = changes.length
-  await write(root, 'config/app.ts', 'after close')
-  await new Promise(resolve => setTimeout(resolve, 300))
-  expect(changes).toHaveLength(observed)
+  const witness = await startCapturedWatch(root)
+  await editAndObserve(root, 'server/jobs/send.ts', witness.waitForChange)
+  await editAndObserve(root, 'config/app.ts', witness.waitForChange)
+  expect(changes.slice(observedBeforeClose).map(change => change.path)).not.toContain('server/jobs/send.ts')
 })
 
 it('observes real file creation and deletion and switches to newly configured discovery roots', async () => {
   const root = await createProject()
   await write(root, 'server/models/User.ts')
   await write(root, 'src/models/nested/Existing.ts')
-  const { changes, observe, waitForChange } = captureChanges()
   const config = defaultProjectConfig()
-  const watcher = await startDiscoveryWatch({
-    projectRoot: root,
-    signal: new AbortController().signal,
-    writeWarning: message => { throw new Error(message) },
-    project: { config },
-    observe,
-  })
-  onTestFinished(() => watcher.close())
+  const { changes, waitForChange, watcher } = await startCapturedWatch(root, config)
   const created = waitForChange('server/models/New.ts', 'created')
   await write(root, 'server/models/New.ts')
   await created
@@ -92,15 +96,14 @@ it('observes real file creation and deletion and switches to newly configured di
   await rm(join(root, 'server/models/User.ts'))
   await deleted
   await watcher.refresh({ config: { ...config, paths: { ...config.paths, models: 'src/models' } } })
+  const observedAfterRefresh = changes.length
   const changed = waitForChange('src/models/nested/Existing.ts', 'changed')
   await write(root, 'src/models/nested/Existing.ts', 'updated')
   await changed
   const nestedCreated = waitForChange('src/models/new/nested/Added.ts', 'created')
   await write(root, 'src/models/new/nested/Added.ts')
   await nestedCreated
-  await new Promise(resolve => setTimeout(resolve, 100))
-  changes.length = 0
   await write(root, 'server/models/New.ts', 'obsolete')
-  await new Promise(resolve => setTimeout(resolve, 300))
-  expect(changes).toEqual([])
+  await editAndObserve(root, 'config/app.ts', waitForChange)
+  expect(changes.slice(observedAfterRefresh).map(change => change.path)).not.toContain('server/models/New.ts')
 })

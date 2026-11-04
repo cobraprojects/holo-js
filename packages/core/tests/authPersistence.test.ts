@@ -26,7 +26,7 @@ describe('auth persistence serialization', () => {
     expect(serializeAccessTokenRecord(normalized)).toMatchObject({
       user_id: '2',
       abilities: '["read"]',
-      last_used_at: '2026-01-02T00:00:00.000Z',
+      last_used_at: '2026-01-02 00:00:00',
     })
 
     const malformed = normalizeAccessTokenRecord({

@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { defineTable } from './defineTable'
 import type { ColumnInput } from './columns'
-import type { BoundTableDefinition } from './defineTable'
+import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
 
@@ -22,6 +23,44 @@ const generatedTables = (() => {
   return runtime.__holoGeneratedTables__
 })()
 
+const generatedSchemaSource = (() => {
+  const runtime = globalThis as typeof globalThis & {
+    __holoGeneratedSchemaSource__?: { connectionName?: string }
+  }
+
+  runtime.__holoGeneratedSchemaSource__ ??= {}
+  return runtime.__holoGeneratedSchemaSource__
+})()
+
+const generatedSchemaSuspension = (() => {
+  const runtime = globalThis as typeof globalThis & {
+    __holoGeneratedSchemaSuspension__?: AsyncLocalStorage<true>
+  }
+
+  runtime.__holoGeneratedSchemaSuspension__ ??= new AsyncLocalStorage<true>()
+  return runtime.__holoGeneratedSchemaSuspension__
+})()
+
+export function runWithoutGeneratedSchema<TResult>(callback: () => TResult): TResult {
+  return generatedSchemaSuspension.run(true, callback)
+}
+
+export function isGeneratedSchemaSuspended(): boolean {
+  return generatedSchemaSuspension.getStore() === true
+}
+
+export function setGeneratedSchemaConnection(connectionName: string | undefined): void {
+  generatedSchemaSource.connectionName = connectionName
+}
+
+export function useGeneratedSchemaConnection(connectionName: string): () => void {
+  const previous = generatedSchemaSource.connectionName
+  generatedSchemaSource.connectionName = connectionName
+  return () => {
+    generatedSchemaSource.connectionName = previous
+  }
+}
+
 export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
   for (const table of Object.values(tables)) {
     generatedTables.set(table.tableName, table)
@@ -36,7 +75,7 @@ export function defineGeneratedTable<
 >(
   tableName: TName,
   columns: TColumns,
-  options: { indexes?: readonly TableIndexDefinition[] } = {},
+  options: Pick<DefineTableOptions, 'indexes' | 'primaryKeyColumns'> = {},
 ): BoundTableDefinition<TName, TColumns> {
   return defineTable(tableName, columns, options)
 }
@@ -47,6 +86,16 @@ export function clearGeneratedTables(): void {
 
 export function getGeneratedTableDefinition<TName extends string>(tableName: TName): GeneratedSchemaTable<TName> | undefined {
   return generatedTables.get(tableName) as GeneratedSchemaTable<TName> | undefined
+}
+
+export function getConnectionGeneratedTableDefinition(tableName: string, connectionName: string): TableDefinition | undefined {
+  if (isGeneratedSchemaSuspended()) return undefined
+  const schemaConnection = generatedSchemaSource.connectionName
+  return schemaConnection === undefined || schemaConnection === connectionName ? generatedTables.get(tableName) : undefined
+}
+
+export function isGeneratedSchemaConnection(connectionName: string): boolean {
+  return generatedSchemaSource.connectionName === connectionName
 }
 
 export function resolveGeneratedTableDefinition<
@@ -183,8 +232,14 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
     chains.push('.primaryKey()')
   }
 
+  if (columnDefinition.computed) {
+    chains.push(`.${columnDefinition.computed.stored ? 'storedAs' : 'virtualAs'}(${JSON.stringify(columnDefinition.computed.expression)})`)
+  }
+
   if (columnDefinition.nullable) {
     chains.push('.nullable()')
+  } else if (columnDefinition.computed) {
+    chains.push('.notNull()')
   }
 
   if (columnDefinition.hasDefault) {
@@ -193,10 +248,6 @@ function renderColumnBuilder(table: TableDefinition, columnDefinition: TableDefi
     } else if (typeof columnDefinition.defaultValue !== 'undefined') {
       chains.push(`.default(${serializeValue(columnDefinition.defaultValue)})`)
     }
-  }
-
-  if (columnDefinition.generated && columnDefinition.kind !== 'id') {
-    chains.push('.generated()')
   }
 
   if (columnDefinition.unique && !columnDefinition.primaryKey) {
@@ -229,6 +280,14 @@ function renderIndex(index: TableIndexDefinition): string {
   return `{ columns: ${JSON.stringify([...index.columns])}, unique: ${index.unique}${index.name ? `, name: ${JSON.stringify(index.name)}` : ''} }`
 }
 
+function renderTableOptions(table: TableDefinition): string {
+  const options = [
+    ...(table.indexes.length > 0 ? [`indexes: [${table.indexes.map(renderIndex).join(', ')}]`] : []),
+    ...(table.primaryKeyColumns ? [`primaryKeyColumns: ${JSON.stringify([...table.primaryKeyColumns])}`] : []),
+  ]
+  return options.length > 0 ? `, { ${options.join(', ')} }` : ''
+}
+
 function buildGeneratedSchemaModuleLines(
   tables: readonly TableDefinition[],
   options: { withTypeAugmentation: boolean },
@@ -239,7 +298,9 @@ function buildGeneratedSchemaModuleLines(
     ...(renderedTables.length > 0 ? ['defineGeneratedTable'] : []),
     'registerGeneratedTables',
   ]
+  const declaresEmptyTables = options.withTypeAugmentation && renderedTables.length === 0
   const declarations: string[] = [
+    ...(declaresEmptyTables ? ['/* eslint-disable @typescript-eslint/no-empty-object-type */'] : []),
     `import { ${usedBuilders.join(', ')} } from '@holo-js/db'`,
     '',
   ]
@@ -254,23 +315,28 @@ function buildGeneratedSchemaModuleLines(
     for (const columnDefinition of Object.values(table.columns)) {
       declarations.push(`  ${JSON.stringify(columnDefinition.name)}: ${renderColumnBuilder(table, columnDefinition)},`)
     }
-    declarations.push(`}${table.indexes.length > 0 ? `, { indexes: [${table.indexes.map(renderIndex).join(', ')}] }` : ''})`)
+    declarations.push(`}${renderTableOptions(table)})`)
     declarations.push('')
   }
 
   if (options.withTypeAugmentation) {
     declarations.push('declare module \'@holo-js/db\' {')
-    declarations.push('  interface GeneratedSchemaTables {')
-    declarations.push(...interfaceLines)
-    declarations.push('  }')
+    if (declaresEmptyTables) {
+      declarations.push('  interface GeneratedSchemaTables {}')
+    } else {
+      declarations.push('  interface GeneratedSchemaTables {')
+      declarations.push(...interfaceLines)
+      declarations.push('  }')
+    }
     declarations.push('}')
     declarations.push('')
   }
 
+  const tableEntries = exportedTableEntries.length > 0 ? `{ ${exportedTableEntries.join(', ')} }` : '{}'
   declarations.push(
     options.withTypeAugmentation
-      ? `export const tables = { ${exportedTableEntries.join(', ')} } as const`
-      : `export const tables = Object.freeze({ ${exportedTableEntries.join(', ')} })`,
+      ? `export const tables = ${tableEntries} as const`
+      : `export const tables = Object.freeze(${tableEntries})`,
   )
   declarations.push('')
   declarations.push('registerGeneratedTables(tables)')
@@ -280,19 +346,7 @@ function buildGeneratedSchemaModuleLines(
 }
 
 export function renderGeneratedSchemaPlaceholder(): string {
-  return [
-    '/* eslint-disable @typescript-eslint/no-empty-object-type */',
-    'import { registerGeneratedTables } from \'@holo-js/db\'',
-    '',
-    'declare module \'@holo-js/db\' {',
-    '  interface GeneratedSchemaTables {}',
-    '}',
-    '',
-    'export const tables = {} as const',
-    '',
-    'registerGeneratedTables(tables)',
-    '',
-  ].join('\n')
+  return renderGeneratedSchemaModule([])
 }
 
 export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]): string {

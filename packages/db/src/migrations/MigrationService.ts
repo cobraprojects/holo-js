@@ -3,20 +3,19 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
+import { runWithoutGeneratedSchema } from '../schema/generated'
+import { parseStoredDate } from '../schema/normalization'
 import { assertMigrationName, defineMigration } from './defineMigration'
 import { ensureMigrationTable } from './ensureMigrationTable'
-import { MigrationLease } from './MigrationLease'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
-  IsolatedMigrationResult,
   MigrateOptions,
   MigrationContext,
   MigrationDefinition,
-  MigrationSquashPlan,
   MigrationStatus,
   RollbackOptions,
-  MigrationExecutionPolicy,
 } from './types'
 
 type RegisteredMigrationDefinition = MigrationDefinition & { readonly name: string }
@@ -74,11 +73,6 @@ export class MigrationService {
     return this.migrations.get(name)
   }
 
-  async hasRan(name: string): Promise<boolean> {
-    const ran = await this.getRanRecords()
-    return ran.some(record => record.name === name)
-  }
-
   async status(): Promise<MigrationStatus[]> {
     const ran = await this.getRanRecords()
     const ranMap = new Map(ran.map(record => [record.name, record]))
@@ -101,24 +95,6 @@ export class MigrationService {
     })
   }
 
-  async planSquash(archiveName = 'schema'): Promise<MigrationSquashPlan> {
-    const normalizedArchiveName = archiveName.trim().replace(/\s+/g, '_')
-    if (normalizedArchiveName.length === 0) {
-      throw new DatabaseError('Migration squash archive name must be a non-empty string.', 'INVALID_MIGRATION_ARCHIVE_NAME')
-    }
-
-    const ran = await this.getRanRecords()
-    const batches = ran.map(record => record.batch)
-
-    return {
-      archiveName: normalizedArchiveName,
-      includedMigrations: ran.map(record => record.name),
-      fromBatch: batches.length > 0 ? Math.min(...batches) : undefined,
-      toBatch: batches.length > 0 ? Math.max(...batches) : undefined,
-      ranCount: ran.length,
-    }
-  }
-
   async migrate(options: MigrateOptions = {}): Promise<RegisteredMigrationDefinition[]> {
     return this.runExclusively(async () => {
       await this.ensureTrackingTableForMigration()
@@ -126,27 +102,7 @@ export class MigrationService {
     })
   }
 
-  async migrateIsolated(options: MigrateOptions = {}): Promise<IsolatedMigrationResult> {
-    return this.runExclusively(async () => {
-      await this.ensureTrackingTableForMigration()
-      const lease = new MigrationLease(this.connection)
-      if (!await lease.acquire()) {
-        return { kind: 'skipped' }
-      }
-
-      try {
-        const executed = await this.applyPendingMigrations(options, () => lease.renew())
-        return { kind: 'ran', executed }
-      } finally {
-        await lease.release()
-      }
-    })
-  }
-
-  private async applyPendingMigrations(
-    options: MigrateOptions,
-    beforeMigration?: () => Promise<void>,
-  ): Promise<RegisteredMigrationDefinition[]> {
+  private async applyPendingMigrations(options: MigrateOptions): Promise<RegisteredMigrationDefinition[]> {
     const step = options.step ?? Number.POSITIVE_INFINITY
     const ran = await this.getRanRecords()
     const ranNames = new Set(ran.map(record => record.name))
@@ -160,12 +116,11 @@ export class MigrationService {
 
     const executed: RegisteredMigrationDefinition[] = []
     for (const migration of pending) {
-      await beforeMigration?.()
       const log = this.createMigrationLog(migration.name, 'up', nextBatch)
       await this.runMigrationLifecycle(log, async () => {
         await this.runMigrationTransaction(async (tx) => {
           const context = this.createContext(tx)
-          await migration.up(context)
+          await runWithoutGeneratedSchema(() => migration.up(context))
           await new TableQueryBuilder(migrationsTable, tx).insert({
             name: migration.name,
             batch: nextBatch,
@@ -224,9 +179,11 @@ export class MigrationService {
         await this.runMigrationLifecycle(log, async () => {
           await this.runMigrationTransaction(async (tx) => {
             const context = this.createContext(tx)
-            if (migration.down) {
-              await migration.down(context)
-            }
+            await runWithoutGeneratedSchema(async () => {
+              if (migration.down) {
+                await migration.down(context)
+              }
+            })
 
             await new TableQueryBuilder(migrationsTable, tx)
               .where('name', record.name)
@@ -239,14 +196,6 @@ export class MigrationService {
 
       return rolledBack
     })
-  }
-
-  getExecutionPolicy(): MigrationExecutionPolicy {
-    return {
-      mode: 'exclusive',
-      scope: 'adapter',
-      allowsConcurrentMigrations: false,
-    }
   }
 
   private async runMigrationTransaction<T>(
@@ -349,8 +298,8 @@ export class MigrationService {
   }
 
   private normalizeMigratedAt(value: string | Date): Date {
-    const normalized = value instanceof Date ? value : new Date(value)
-    if (Number.isNaN(normalized.getTime())) {
+    const normalized = parseStoredDate(this.connection.getDriver() as SchemaDialectName, value)
+    if (!(normalized instanceof Date) || Number.isNaN(normalized.getTime())) {
       throw new HydrationError('Migration tracking contains an invalid migrated-at timestamp.')
     }
 

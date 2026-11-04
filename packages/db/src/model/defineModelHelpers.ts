@@ -1,8 +1,7 @@
 import { singularize } from 'inflection'
-import { ConfigurationError, SchemaError } from '../core/errors'
-import { DB } from '../facade/DB'
+import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
-import { getGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition, getGeneratedTableDefinition, isGeneratedSchemaConnection, isGeneratedSchemaSuspended } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
 import type { BoundTableDefinition } from '../schema/defineTable'
 import type { TableDefinition } from '../schema/types'
@@ -43,41 +42,47 @@ export function inferModelName(tableName: string): string {
     .join('')
 }
 
+export class CompositeModelKeyError extends SchemaError {}
+
 export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): Extract<keyof TTable['columns'], string> {
-  const primaryKey = Object.values(table.columns).find(column => column.primaryKey)
+  const [primaryKey, ...otherPrimaryKeys] = Object.values(table.columns).filter(column => column.primaryKey)
   if (!primaryKey) {
     throw new SchemaError(`Table "${table.tableName}" does not define a primary key column.`)
+  }
+
+  if (otherPrimaryKeys.length > 0) {
+    throw new CompositeModelKeyError(
+      `Table "${table.tableName}" has a composite primary key, which models do not support. Set the model's primaryKey option to one column, or use the table as a belongsToMany pivot.`,
+    )
   }
 
   return primaryKey.name as Extract<keyof TTable['columns'], string>
 }
 
-function getRuntimeSchemaTable(tableName: string, connectionName?: string): TableDefinition | undefined {
-  try {
-    return DB.getManager().connection(connectionName).getSchemaRegistry().get(tableName)
-  } catch (error) {
-    if (
-      error instanceof ConfigurationError
-      && error.code === 'CONFIGURATION_ERROR'
-      && error.message.includes('ConnectionManager')
-      && error.message.includes('not configured')
-    ) {
-      return undefined
-    }
-
-    throw error
+export function resolveGeneratedModelTable(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
+  if (isGeneratedSchemaSuspended()) {
+    return undefined
   }
+
+  const table = connectionName === undefined
+    ? getGeneratedTableDefinition(tableName)
+    : getConnectionGeneratedTableDefinition(tableName, connectionName)
+  if (table || (connectionName !== undefined && !isGeneratedSchemaConnection(connectionName))) {
+    return table
+  }
+
+  throw new SchemaError(
+    `Model "${tableName}" is not present in the Generated schema. Run "holo migrate" to regenerate it.`,
+  )
 }
 
-export function resolveGeneratedModelTable(tableName: string, connectionName?: string): TableDefinition {
-  const table = getGeneratedTableDefinition(tableName) ?? getRuntimeSchemaTable(tableName, connectionName)
-  if (!table) {
-    throw new SchemaError(
-      `Model "${tableName}" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.`,
-    )
-  }
-
-  return table
+export function createUntypedModelTable<TName extends string>(tableName: TName): TableDefinition<TName> {
+  return Object.freeze({
+    kind: 'table',
+    tableName,
+    columns: Object.freeze({}),
+    indexes: Object.freeze([]),
+  })
 }
 
 export function resolveDeletedAtColumn<TTable extends TableDefinition>(

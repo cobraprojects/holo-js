@@ -614,7 +614,7 @@ function resolveDefinitionTableName(definition: AuthorizationTargetModelDefiniti
   try {
     return definition.table?.tableName?.trim() || undefined
   } catch (error) {
-    if (error instanceof Error && error.message.includes('is not present in the generated schema registry')) {
+    if (error instanceof Error && error.message.includes('is not present in the Generated schema')) {
       return undefined
     }
 

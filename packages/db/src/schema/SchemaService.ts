@@ -1,21 +1,26 @@
 import { closePinnedConnection, currentPinnedConnection, pinnedRestoreOptions, runPinnedConnection } from '../concurrency/pinnedConnection'
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { mutateSchemaRegistry } from './mutationState'
 import { CapabilityError, SchemaError } from '../core/errors'
-import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
-import { defineTable } from './defineTable'
-import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
+import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
-import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
-import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
-import { MySQLSchemaCompiler } from './MySQLSchemaCompiler'
+import { PostgresEnumChecks } from './PostgresEnumChecks'
+import { PostgresVirtualColumns } from './PostgresVirtualColumns'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
+import { createSchemaCompiler } from './schemaCompilerFactory'
+import { executeStatements, runAtomically } from './ddlExecution'
+import { SQLiteSchemaOperations } from './SQLiteSchemaOperations'
 import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
+import { createSchemaReader, readTableStructure } from './introspection'
+import { inferColumnKind } from './introspection/definitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import type { DDLStatement } from './ddl'
-import type { AnyColumnDefinition, ForeignKeyReference, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
+import type { DDLStatement, UniqueBacking } from './ddl'
+import type { DatabaseTableStructure } from './introspection'
+import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
 
 export interface IntrospectedColumn {
   name: string
@@ -40,116 +45,20 @@ export interface IntrospectedForeignKey {
   onDelete: string
 }
 
-export interface SchemaSyncPlan {
-  readonly mode: 'create_missing_only'
-  readonly tablesToCreate: readonly string[]
-  readonly existingTables: readonly string[]
-  readonly destructiveChanges: false
-}
-
-type SQLiteTableRow = {
-  name: string
-}
-
-type SQLiteColumnRow = {
-  name: string
-  type: string
-  notnull: number
-  dflt_value: string | null
-  pk: number
-}
-
-type SQLiteIndexRow = {
-  name: string
-  unique: number
-}
-
-type SQLiteIndexInfoRow = {
-  name: string
-}
-
-type SQLiteForeignKeyRow = {
-  table: string
-  from: string
-  to: string
-  on_update: string
-  on_delete: string
-}
-
-type SQLiteTableSqlRow = {
-  sql: string
-}
-
-type SQLiteSchemaObjectRow = {
-  type: 'index' | 'trigger'
-  name: string
-  sql: string
-}
-
-type PostgresColumnRow = {
-  name: string
-  type: string
-  is_nullable: 'YES' | 'NO'
-  default_value: string | null
-  primary_key: boolean
-}
-
-type PostgresIndexRow = {
-  name: string
-  definition: string
-}
-
-type PostgresConstraintRow = {
-  name: string
-  is_check: boolean
-}
-
-type CheckConstraintRename = {
-  readonly from: string
-  readonly to: string
-}
-
-type PostgresForeignKeyRow = {
-  table_name: string
-  from_column: string
-  to_column: string
-  on_update: string
-  on_delete: string
-}
-
-type MySQLColumnRow = {
-  name: string
-  type: string
-  is_nullable: 'YES' | 'NO'
-  default_value: string | null
-  column_key: string
-}
-
-type MySQLIndexRow = {
-  name: string
-  non_unique: number
-  column_name: string
-}
-
-type MySQLForeignKeyRow = {
-  table_name: string
-  from_column: string
-  to_column: string
-  on_update: string
-  on_delete: string
-}
-
 export class SchemaService {
   private pinnedRestorePending = false
+  private readonly sqlite: SQLiteSchemaOperations
+  private readonly postgresEnumChecks: PostgresEnumChecks
+  private readonly postgresVirtualColumns: PostgresVirtualColumns
 
-  constructor(private readonly connection: DatabaseContext) {}
+  constructor(private readonly connection: DatabaseContext) {
+    this.sqlite = new SQLiteSchemaOperations(connection, callback => this.withoutForeignKeyConstraints(callback))
+    this.postgresEnumChecks = new PostgresEnumChecks(connection)
+    this.postgresVirtualColumns = new PostgresVirtualColumns(connection)
+  }
 
   getDialectName(): string {
     return this.connection.getDialect().name
-  }
-
-  register<TTable extends TableDefinition>(table: TTable): TTable {
-    return this.connection.getSchemaRegistry().register(table)
   }
 
   async createTable<TName extends string>(
@@ -163,9 +72,6 @@ export class SchemaService {
   async dropTable(tableName: string): Promise<void> {
     assertValidIdentifierPath(tableName, 'Table name')
     await this.execute(this.createCompiler().compile(dropTableOperation(tableName)))
-    mutateSchemaRegistry(this.connection, [tableName], () => {
-      this.connection.getSchemaRegistry().delete(tableName)
-    })
   }
 
   async renameTable(
@@ -174,20 +80,10 @@ export class SchemaService {
   ): Promise<void> {
     assertValidIdentifierPath(fromTableName, 'Table name')
     assertValidIdentifierPath(toTableName, 'Table name')
-    const destinationTableName = this.resolveRenamedTablePath(fromTableName, toTableName)
-    const registered = this.findRegisteredTable(fromTableName)
-    const enumColumnNames = Object.values(registered?.columns ?? {})
-      .filter(column => column.kind === 'enum')
-      .map(column => column.name)
-    await this.executeRename(
-      this.createCompiler().compile(renameTableOperation(fromTableName, toTableName)),
-      destinationTableName,
-      enumColumnNames.map(columnName => ({
-        from: resolveGeneratedCheckName(fromTableName, columnName),
-        to: resolveGeneratedCheckName(destinationTableName, columnName),
-      })),
-    )
-    this.renameRegisteredTable(registered, destinationTableName)
+    const statements = this.createCompiler().compile(renameTableOperation(fromTableName, toTableName))
+    await (this.isPostgres()
+      ? this.postgresEnumChecks.renameTable(fromTableName, toTableName, statements)
+      : this.execute(statements))
   }
 
   async table(
@@ -199,6 +95,10 @@ export class SchemaService {
     await callback(builder)
     const operations = builder.getOperations()
     this.assertTableMutationIndexNames(tableName, operations)
+    this.assertCompilableColumnChanges(tableName, operations)
+    await this.assertSupportedColumns(operations.flatMap(operation => operation.kind === 'addColumn' || operation.kind === 'alterColumn'
+      ? [this.resolveColumnDefinition(operation.columnName, operation.column)]
+      : []))
 
     for (const operation of operations) {
       await this.executeTableMutation(tableName, operation)
@@ -251,30 +151,6 @@ export class SchemaService {
     }
   }
 
-  async sync(tables?: readonly TableDefinition[]): Promise<void> {
-    const plan = await this.previewSync(tables)
-    const tableMap = new Map((tables ?? this.connection.getSchemaRegistry().list()).map(table => [table.tableName, table]))
-
-    for (const tableName of plan.tablesToCreate) {
-      await this.createDefinedTable(tableMap.get(tableName)!)
-    }
-  }
-
-  async previewSync(tables?: readonly TableDefinition[]): Promise<SchemaSyncPlan> {
-    const toSync = tables ?? this.connection.getSchemaRegistry().list()
-    const existingTables = await this.getTables()
-    const existingSet = new Set(existingTables)
-
-    return {
-      mode: 'create_missing_only',
-      tablesToCreate: toSync
-        .map(table => table.tableName)
-        .filter(tableName => !existingSet.has(tableName)),
-      existingTables,
-      destructiveChanges: false,
-    }
-  }
-
   async hasTable(name: string): Promise<boolean> {
     assertValidIdentifierPath(name, 'Table name')
     const tables = await this.getTables()
@@ -282,296 +158,76 @@ export class SchemaService {
   }
 
   async getTables(): Promise<string[]> {
-    if (this.isSqlite()) {
-      const result = await this.connection.introspectCompiled<SQLiteTableRow>({
-        sql: 'SELECT name FROM sqlite_master WHERE type = \'table\' AND name NOT LIKE \'sqlite_%\' ORDER BY name',
-        source: 'schema:introspect:tables',
-      })
-      return result.rows.map(row => row.name).sort()
-    }
-
-    if (this.isPostgres()) {
-      const schemaName = this.connection.getSchemaName() ?? 'public'
-      const result = await this.connection.introspectCompiled<SQLiteTableRow>({
-        sql: 'SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = $1 ORDER BY tablename',
-        bindings: [schemaName],
-        source: 'schema:introspect:tables',
-      })
-      return result.rows.map(row => row.name).sort()
-    }
-
-    if (this.isMySQL()) {
-      const schemaName = this.connection.getSchemaName()
-      const result = await this.connection.introspectCompiled<SQLiteTableRow>({
-        sql: schemaName
-          ? 'SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name'
-          : 'SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name',
-        bindings: schemaName ? [schemaName] : undefined,
-        source: 'schema:introspect:tables',
-      })
-      return result.rows.map(row => row.name).sort()
-    }
-
-    throw this.unsupportedIntrospectionError()
+    return createSchemaReader(this.connection).listTables()
   }
 
   async getColumns(tableName: string): Promise<IntrospectedColumn[]> {
-    assertValidIdentifierPath(tableName, 'Table name')
-    if (this.isSqlite()) {
-      const result = await this.connection.introspectCompiled<SQLiteColumnRow>({
-        sql: `PRAGMA table_info(${this.connection.getDialect().quoteIdentifier(tableName)})`,
-        source: `schema:introspect:columns:${tableName}`,
-      })
-      return result.rows.map(row => ({
-        name: row.name,
-        type: row.type,
-        logicalType: this.inferLogicalColumnType(row.type, 'sqlite'),
-        notNull: row.notnull === 1,
-        defaultValue: row.dflt_value,
-        primaryKey: row.pk === 1,
-      }))
-    }
-
-    if (this.isPostgres()) {
-      const result = await this.connection.introspectCompiled<PostgresColumnRow>({
-        sql: 'SELECT c.column_name AS name, c.data_type AS type, c.is_nullable AS is_nullable, c.column_default AS default_value, EXISTS (SELECT 1 FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_schema = \'public\' AND tc.table_name = c.table_name AND tc.constraint_type = \'PRIMARY KEY\' AND kcu.column_name = c.column_name) AS primary_key FROM information_schema.columns c WHERE c.table_schema = \'public\' AND c.table_name = $1 ORDER BY c.ordinal_position',
-        bindings: [tableName],
-        source: `schema:introspect:columns:${tableName}`,
-      })
-      return result.rows.map(row => ({
-        name: row.name,
-        type: row.type,
-        logicalType: this.inferLogicalColumnType(row.type, 'postgres'),
-        notNull: row.is_nullable === 'NO',
-        defaultValue: row.default_value,
-        primaryKey: row.primary_key,
-      }))
-    }
-
-    if (this.isMySQL()) {
-      const schemaName = this.connection.getSchemaName()
-      const result = await this.connection.introspectCompiled<MySQLColumnRow>({
-        sql: schemaName
-          ? 'SELECT column_name AS name, data_type AS type, is_nullable AS is_nullable, column_default AS default_value, column_key AS column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position'
-          : 'SELECT column_name AS name, data_type AS type, is_nullable AS is_nullable, column_default AS default_value, column_key AS column_key FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position',
-        bindings: schemaName ? [schemaName, tableName] : [tableName],
-        source: `schema:introspect:columns:${tableName}`,
-      })
-      return result.rows.map(row => ({
-        name: row.name,
-        type: row.type,
-        logicalType: this.inferLogicalColumnType(row.type, 'mysql'),
-        notNull: row.is_nullable === 'NO',
-        defaultValue: row.default_value,
-        primaryKey: row.column_key === 'PRI',
-      }))
-    }
-
-    throw this.unsupportedIntrospectionError()
+    const structure = await this.readTableStructure(tableName)
+    return structure?.columns.map(column => ({
+      name: column.name,
+      type: column.dataType,
+      logicalType: inferColumnKind(structure.dialect, column.fullType),
+      notNull: column.notNull,
+      defaultValue: column.defaultExpression,
+      primaryKey: column.primaryKey,
+    })) ?? []
   }
 
   async getIndexes(tableName: string): Promise<IntrospectedIndex[]> {
-    assertValidIdentifierPath(tableName, 'Table name')
-    if (this.isSqlite()) {
-      const indexRows = await this.connection.introspectCompiled<SQLiteIndexRow>({
-        sql: `PRAGMA index_list(${this.connection.getDialect().quoteIdentifier(tableName)})`,
-        source: `schema:introspect:indexes:${tableName}`,
-      })
-
-      const indexes: IntrospectedIndex[] = []
-      for (const row of indexRows.rows) {
-        const columns = await this.connection.introspectCompiled<SQLiteIndexInfoRow>({
-          sql: `PRAGMA index_info(${this.connection.getDialect().quoteIdentifier(row.name)})`,
-          source: `schema:introspect:indexColumns:${tableName}:${row.name}`,
-        })
-
-        indexes.push({
-          name: row.name,
-          unique: row.unique === 1,
-          columns: columns.rows.map(column => column.name),
-        })
-      }
-
-      return indexes
-    }
-
-    if (this.isPostgres()) {
-      const result = await this.connection.introspectCompiled<PostgresIndexRow>({
-        sql: 'SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = \'public\' AND tablename = $1 ORDER BY indexname',
-        bindings: [tableName],
-        source: `schema:introspect:indexes:${tableName}`,
-      })
-
-      return result.rows.flatMap((row) => {
-        const parsed = this.parsePostgresIndex(row)
-        return parsed ? [parsed] : []
-      })
-    }
-
-    if (this.isMySQL()) {
-      const schemaName = this.connection.getSchemaName()
-      const result = await this.connection.introspectCompiled<MySQLIndexRow>({
-        sql: schemaName
-          ? 'SELECT index_name AS name, non_unique AS non_unique, column_name AS column_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index'
-          : 'SELECT index_name AS name, non_unique AS non_unique, column_name AS column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? ORDER BY index_name, seq_in_index',
-        bindings: schemaName ? [schemaName, tableName] : [tableName],
-        source: `schema:introspect:indexes:${tableName}`,
-      })
-
-      const grouped = new Map<string, IntrospectedIndex>()
-      for (const row of result.rows) {
-        const existing = grouped.get(row.name)
-        if (existing) {
-          existing.columns.push(row.column_name)
-          continue
-        }
-
-        grouped.set(row.name, {
-          name: row.name,
-          unique: row.non_unique === 0,
-          columns: [row.column_name],
-        })
-      }
-
-      return [...grouped.values()]
-    }
-
-    throw this.unsupportedIntrospectionError()
+    const structure = await this.readTableStructure(tableName)
+    return structure?.indexes.map(index => ({
+      name: index.name,
+      unique: index.unique,
+      columns: [...index.columns],
+    })) ?? []
   }
 
   async getForeignKeys(tableName: string): Promise<IntrospectedForeignKey[]> {
-    assertValidIdentifierPath(tableName, 'Table name')
-    if (this.isSqlite()) {
-      const result = await this.connection.introspectCompiled<SQLiteForeignKeyRow>({
-        sql: `PRAGMA foreign_key_list(${this.connection.getDialect().quoteIdentifier(tableName)})`,
-        source: `schema:introspect:foreignKeys:${tableName}`,
-      })
+    const structure = await this.readTableStructure(tableName)
+    return structure?.foreignKeys.map(foreignKey => ({
+      table: foreignKey.table,
+      from: foreignKey.from,
+      to: foreignKey.to,
+      onUpdate: foreignKey.onUpdate,
+      onDelete: foreignKey.onDelete,
+    })) ?? []
+  }
 
-      return result.rows.map(row => ({
-        table: row.table,
-        from: row.from,
-        to: row.to,
-        onUpdate: row.on_update,
-        onDelete: row.on_delete,
-      }))
-    }
-
-    if (this.isPostgres()) {
-      const result = await this.connection.introspectCompiled<PostgresForeignKeyRow>({
-        sql: 'SELECT ccu.table_name AS table_name, kcu.column_name AS from_column, ccu.column_name AS to_column, rc.update_rule AS on_update, rc.delete_rule AS on_delete FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema JOIN information_schema.referential_constraints rc ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema WHERE tc.constraint_type = \'FOREIGN KEY\' AND tc.table_schema = \'public\' AND tc.table_name = $1 ORDER BY kcu.ordinal_position',
-        bindings: [tableName],
-        source: `schema:introspect:foreignKeys:${tableName}`,
-      })
-
-      return result.rows.map(row => ({
-        table: row.table_name,
-        from: row.from_column,
-        to: row.to_column,
-        onUpdate: row.on_update,
-        onDelete: row.on_delete,
-      }))
-    }
-
-    if (this.isMySQL()) {
-      const schemaName = this.connection.getSchemaName()
-      const result = await this.connection.introspectCompiled<MySQLForeignKeyRow>({
-        sql: schemaName
-          ? 'SELECT kcu.referenced_table_name AS table_name, kcu.column_name AS from_column, kcu.referenced_column_name AS to_column, rc.update_rule AS on_update, rc.delete_rule AS on_delete FROM information_schema.key_column_usage kcu JOIN information_schema.referential_constraints rc ON rc.constraint_name = kcu.constraint_name AND rc.constraint_schema = kcu.table_schema WHERE kcu.table_schema = ? AND kcu.table_name = ? AND kcu.referenced_table_name IS NOT NULL ORDER BY kcu.ordinal_position'
-          : 'SELECT kcu.referenced_table_name AS table_name, kcu.column_name AS from_column, kcu.referenced_column_name AS to_column, rc.update_rule AS on_update, rc.delete_rule AS on_delete FROM information_schema.key_column_usage kcu JOIN information_schema.referential_constraints rc ON rc.constraint_name = kcu.constraint_name AND rc.constraint_schema = kcu.table_schema WHERE kcu.table_schema = DATABASE() AND kcu.table_name = ? AND kcu.referenced_table_name IS NOT NULL ORDER BY kcu.ordinal_position',
-        bindings: schemaName ? [schemaName, tableName] : [tableName],
-        source: `schema:introspect:foreignKeys:${tableName}`,
-      })
-
-      return result.rows.map(row => ({
-        table: row.table_name,
-        from: row.from_column,
-        to: row.to_column,
-        onUpdate: row.on_update,
-        onDelete: row.on_delete,
-      }))
-    }
-
-    throw this.unsupportedIntrospectionError()
+  private readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined> {
+    return readTableStructure(this.connection, tableName)
   }
 
   private createCompiler(): SQLSchemaCompiler {
-    const quoteIdentifier = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
-    const dialectName = this.connection.getDialect().name
-
-    if (dialectName.startsWith('sqlite')) {
-      return new SQLiteSchemaCompiler(quoteIdentifier)
-    }
-
-    if (dialectName.startsWith('postgres')) {
-      return new PostgresSchemaCompiler(quoteIdentifier)
-    }
-
-    if (dialectName.startsWith('mysql')) {
-      return new MySQLSchemaCompiler(quoteIdentifier)
-    }
-
-    throw new CapabilityError(
-      `SchemaService does not support dialect "${dialectName}".`,
-    )
+    return createSchemaCompiler(this.connection)
   }
 
-  private async execute(statements: readonly { sql: string, bindings?: readonly unknown[], source: string }[]): Promise<void> {
-    for (const statement of statements) {
-      await this.connection.executeCompiled(statement)
-    }
+  private execute(statements: readonly DDLStatement[]): Promise<void> {
+    return executeStatements(this.connection, statements)
   }
 
   private isSqlite(): boolean {
-    return this.connection.getDialect().name.startsWith('sqlite')
+    return isSQLiteConnection(this.connection)
   }
 
   private isPostgres(): boolean {
-    return this.connection.getDialect().name.startsWith('postgres')
+    return isPostgresConnection(this.connection)
   }
 
   private isMySQL(): boolean {
-    return this.connection.getDialect().name.startsWith('mysql')
-  }
-
-  private parsePostgresIndex(row: PostgresIndexRow): IntrospectedIndex | null {
-    const unique = row.definition.includes('CREATE UNIQUE INDEX')
-    const columnsMatch = row.definition.match(/\((.+)\)$/)
-    if (!columnsMatch) {
-      return null
-    }
-
-    return {
-      name: row.name,
-      unique,
-      columns: columnsMatch[1]!.split(',').map(column => column.trim().replaceAll('"', '')),
-    }
-  }
-
-  private unsupportedIntrospectionError(): CapabilityError {
-    return new CapabilityError(
-      `SchemaService does not support introspection for dialect "${this.connection.getDialect().name}".`,
-    )
+    return isMySQLConnection(this.connection)
   }
 
   private assertAlterCapability(action: string): void {
-    if (!this.connection.getCapabilities().ddlAlterSupport) {
-      throw new CapabilityError(
-        `SchemaService does not support ${action} for dialect "${this.connection.getDialect().name}".`,
-      )
-    }
+    this.assertColumnCapability(this.connection.getCapabilities().ddlAlterSupport, action)
   }
 
   private assertAddColumnCapability(): void {
     const capabilities = this.connection.getCapabilities()
-    if (!(capabilities.ddlAddColumnSupport ?? capabilities.ddlAlterSupport)) {
-      throw new CapabilityError(
-        `SchemaService does not support adding columns for dialect "${this.connection.getDialect().name}".`,
-      )
-    }
+    this.assertColumnCapability(capabilities.ddlAddColumnSupport ?? capabilities.ddlAlterSupport, 'adding columns')
   }
 
-  private assertForeignKeyCapability(action: string): void {
-    if (this.isSqlite() || !this.connection.getCapabilities().ddlAlterSupport) {
+  private assertColumnCapability(supported: boolean, action: string): void {
+    if (!supported) {
       throw new CapabilityError(
         `SchemaService does not support ${action} for dialect "${this.connection.getDialect().name}".`,
       )
@@ -582,20 +238,56 @@ export class SchemaService {
     return column.toDefinition({ name: columnName })
   }
 
-  private async createDefinedTable(table: TableDefinition): Promise<void> {
-    const statements = this.createCompiler().compile(createTableOperation(table))
-    const registry = this.connection.getSchemaRegistry()
-    const declared = registry.has(table.tableName)
-    for (const [position, statement] of statements.entries()) {
-      await this.connection.executeCompiled(statement)
-      if (!declared) {
-        mutateSchemaRegistry(this.connection, [table.tableName], () => {
-          registry.replace(defineTable(table.tableName, table.columns, {
-            indexes: table.indexes.slice(0, position),
-          }))
-        })
+  private assertCompilableColumnChanges(
+    tableName: string,
+    operations: ReturnType<TableMutationBuilder['getOperations']>,
+  ): void {
+    if (this.isSqlite()) return
+    const compiler = this.createCompiler()
+    for (const operation of operations) {
+      if (operation.kind === 'alterColumn') {
+        compiler.compile(alterColumnOperation(tableName, this.resolveColumnDefinition(operation.columnName, operation.column)))
       }
     }
+  }
+
+  private async assertSupportedColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
+    if (this.isPostgres()) await this.postgresVirtualColumns.assertSupported(columns)
+  }
+
+  private async createDefinedTable(table: TableDefinition): Promise<void> {
+    await this.assertSupportedColumns(Object.values(table.columns))
+    const compiler = this.createCompiler()
+    const indexes = compiler.resolveCreateTableIndexes(table)
+    const tableStatement = compiler.compileTableCreation(table)
+    if (indexes.length === 0) {
+      await this.execute([tableStatement])
+      return
+    }
+
+    await runAtomically(this.connection, async (connection) => {
+      await executeStatements(connection, [tableStatement])
+      const missingIndexes = await resolveMissingIndexes(connection, table.tableName, indexes)
+      await executeStatements(connection, missingIndexes.map(index => compiler.compileCreateIndex(table.tableName, index)))
+    })
+  }
+
+  private async executeAtomically(statements: readonly DDLStatement[]): Promise<void> {
+    if (statements.length < 2) {
+      await this.execute(statements)
+      return
+    }
+
+    await runAtomically(this.connection, connection => executeStatements(connection, statements))
+  }
+
+  private async resolveCoveringIndexName(tableName: string, columns: readonly string[], unique: boolean): Promise<string> {
+    return resolveCoveringIndex(tableName, await this.readTableStructure(tableName), columns, unique).name
+  }
+
+  private async resolveUniqueBacking(tableName: string, indexName: string): Promise<UniqueBacking> {
+    const index = (await this.readTableStructure(tableName))?.indexes.find(candidate => candidate.name === indexName)
+    return index?.constraint && !index.primary ? 'constraint' : 'index'
   }
 
   private assertTableMutationIndexNames(
@@ -610,7 +302,10 @@ export class SchemaService {
           this.resolveIndexName(tableName, operation.index)
           break
         case 'dropIndex':
-          assertValidIndexName(operation.indexName)
+        case 'dropUnique':
+          if ('indexName' in operation) {
+            assertValidIndexName(operation.indexName)
+          }
           break
         case 'renameIndex':
           assertValidIndexName(operation.fromIndexName)
@@ -625,270 +320,127 @@ export class SchemaService {
 
   private async executeTableMutation(
     tableName: string,
-    operation:
-      | { kind: 'addColumn', columnName: string, column: AnyColumnBuilder }
-      | { kind: 'alterColumn', columnName: string, column: AnyColumnBuilder }
-      | { kind: 'dropColumn', columnName: string }
-      | { kind: 'renameColumn', fromColumnName: string, toColumnName: string }
-      | { kind: 'createIndex', index: TableIndexDefinition }
-      | { kind: 'dropIndex', indexName: string }
-      | { kind: 'renameIndex', fromIndexName: string, toIndexName: string }
-      | { kind: 'createForeignKey', columnName: string, reference: ForeignKeyReference, constraintName?: string }
-      | { kind: 'dropForeignKey', constraintName: string },
+    operation: ReturnType<TableMutationBuilder['getOperations']>[number],
   ): Promise<void> {
     switch (operation.kind) {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        await this.execute(this.createCompiler().compile(addColumnOperation(tableName, definition)))
-        this.updateRegisteredTable(tableName, table => this.withColumn(table, definition))
-        return
-      }
-      case 'alterColumn': {
-        const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        if (this.isSqlite()) {
-          await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
-        } else {
-          this.assertAlterCapability('altering columns')
-          const previousDefinition = this.findRegisteredTable(tableName)?.columns[definition.name]
-          const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition, previousDefinition))
-          if (this.isPostgres()) {
-            await this.connection.transaction(async (tx) => {
-              await new SchemaService(tx).execute(statements)
-            })
-          } else {
-            await this.execute(statements)
-          }
+        if (this.isSqlite() && definition.computed?.stored) {
+          await this.sqlite.addColumn(tableName, definition)
+          return
         }
-        this.updateRegisteredTable(tableName, table => this.withAlteredColumn(table, definition))
+        await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }
+      case 'alterColumn':
+        await this.alterColumn(tableName, this.resolveColumnDefinition(operation.columnName, operation.column))
+        return
       case 'dropColumn':
-        this.assertAlterCapability('dropping columns')
+        this.assertColumnCapability(this.connection.getCapabilities().ddlDropColumnSupport, 'dropping columns')
         await this.execute(this.createCompiler().compile(dropColumnOperation(tableName, operation.columnName)))
-        this.updateRegisteredTable(tableName, table => this.withoutColumn(table, operation.columnName))
         return
-      case 'renameColumn':
-        this.assertAlterCapability('renaming columns')
-        await this.executeRename(
-          this.createCompiler().compile(renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName)),
-          tableName,
-          this.findRegisteredTable(tableName)?.columns[operation.fromColumnName]?.kind === 'enum'
-            ? [{
-                from: resolveGeneratedCheckName(tableName, operation.fromColumnName),
-                to: resolveGeneratedCheckName(tableName, operation.toColumnName),
-              }]
-            : [],
-        )
-        this.updateRegisteredTable(
-          tableName,
-          table => this.renameRegisteredColumn(table, operation.fromColumnName, operation.toColumnName),
-        )
+      case 'renameColumn': {
+        this.assertColumnCapability(this.connection.getCapabilities().ddlRenameColumnSupport, 'renaming columns')
+        const statements = this.createCompiler().compile(renameColumnOperation(tableName, operation.fromColumnName, operation.toColumnName))
+        await (this.isPostgres()
+          ? this.postgresEnumChecks.renameColumn(tableName, operation.fromColumnName, operation.toColumnName, statements)
+          : this.execute(statements))
         return
+      }
       case 'createIndex':
         await this.execute(this.createCompiler().compile(createIndexOperation(tableName, operation.index)))
-        this.updateRegisteredTable(tableName, table => this.withIndex(table, operation.index))
         return
-      case 'dropIndex':
-        await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, operation.indexName)))
-        this.updateRegisteredTable(tableName, table => this.withoutIndex(table, operation.indexName))
+      case 'dropIndex': {
+        const indexName = 'indexName' in operation ? operation.indexName : await this.resolveCoveringIndexName(tableName, operation.columns, false)
+        await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, indexName)))
         return
-      case 'renameIndex':
-        if (this.isSqlite()) {
-          throw new CapabilityError('SchemaService does not support renaming indexes for dialect "sqlite".')
+      }
+      case 'dropUnique': {
+        const indexName = 'indexName' in operation ? operation.indexName : await this.resolveCoveringIndexName(tableName, operation.columns, true)
+        if (this.isSqlite() && await this.sqlite.dropInlineUnique(tableName, indexName)) {
+          return
         }
         await this.execute(this.createCompiler().compile(
-          renameIndexOperation(tableName, operation.fromIndexName, operation.toIndexName),
+          dropUniqueOperation(tableName, indexName, await this.resolveUniqueBacking(tableName, indexName)),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.renameRegisteredIndex(table, operation.fromIndexName, operation.toIndexName),
-        )
+        return
+      }
+      case 'renameIndex':
+        await (this.isSqlite()
+          ? this.sqlite.renameIndex(tableName, operation.fromIndexName, operation.toIndexName)
+          : this.execute(this.createCompiler().compile(renameIndexOperation(tableName, operation.fromIndexName, operation.toIndexName))))
         return
       case 'createForeignKey':
-        this.assertForeignKeyCapability('adding foreign keys')
         assertValidIdentifierSegment(operation.columnName, 'Foreign key column')
         assertValidIdentifierPath(operation.reference.table, 'Foreign key table')
         assertValidIdentifierSegment(operation.reference.column, 'Foreign key column')
+        if (this.isSqlite()) {
+          await this.sqlite.addForeignKey(tableName, operation.columnName, operation.reference, operation.constraintName)
+          return
+        }
+        this.assertAlterCapability('adding foreign keys')
         await this.execute(this.createCompiler().compile(
           createForeignKeyOperation(tableName, operation.columnName, operation.reference, operation.constraintName),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.withForeignKey(table, operation.columnName, operation.reference, operation.constraintName),
-        )
         return
-      case 'dropForeignKey':
-        this.assertForeignKeyCapability('dropping foreign keys')
+      case 'dropForeignKey': {
+        const foreignKey = 'constraintName' in operation
+          ? { name: operation.constraintName, columns: [] }
+          : resolveCoveringForeignKey(tableName, await this.readTableStructure(tableName), operation.columns)
+        if (this.isSqlite()) {
+          await this.sqlite.dropForeignKey(tableName, foreignKey)
+          return
+        }
+        if (foreignKey.name === undefined) {
+          throw new SchemaError(`Table "${tableName}" has an unnamed foreign key on columns "${foreignKey.columns.join('", "')}".`)
+        }
+        this.assertAlterCapability('dropping foreign keys')
         await this.execute(this.createCompiler().compile(
-          dropForeignKeyOperation(tableName, operation.constraintName),
+          dropForeignKeyOperation(tableName, foreignKey.name),
         ))
-        this.updateRegisteredTable(
-          tableName,
-          table => this.withoutForeignKey(table, operation.constraintName),
-        )
         return
+      }
+      case 'createPrimaryKey':
+        await (this.isSqlite()
+          ? this.sqlite.createPrimaryKey(tableName, operation.columns, operation.constraintName)
+          : this.execute(this.createCompiler().compile(createPrimaryKeyOperation(tableName, operation.columns, operation.constraintName))))
+        return
+      case 'dropPrimaryKey':
+        await this.dropPrimaryKey(tableName, operation.constraintName)
     }
   }
 
-  private async executeRename(
-    statements: DDLStatement[],
-    tableName: string,
-    checkRenames: readonly CheckConstraintRename[],
-  ): Promise<void> {
-    if (!this.isPostgres() || checkRenames.length === 0) {
-      await this.execute(statements)
+  private async alterColumn(tableName: string, definition: AnyColumnDefinition): Promise<void> {
+    if (this.isSqlite()) {
+      await this.sqlite.changeColumn(tableName, definition)
       return
     }
 
-    await this.connection.transaction(async (tx) => {
-      const service = new SchemaService(tx)
-      await service.execute(statements)
-      await service.renamePostgresEnumChecks(tableName, checkRenames)
-    })
+    this.assertAlterCapability('altering columns')
+    const statements = this.createCompiler().compile(alterColumnOperation(tableName, definition))
+    await (this.isPostgres()
+      ? this.postgresEnumChecks.alterColumn(tableName, definition.name, statements)
+      : this.execute(statements))
   }
 
-  private findRegisteredTable(tableName: string): TableDefinition | undefined {
-    const registry = this.connection.getSchemaRegistry()
-    const defaultSchema = this.connection.getSchemaName() ?? (this.isPostgres() ? 'public' : undefined)
-    const segments = tableName.split('.')
-    const equivalentName = !defaultSchema ? undefined
-      : segments.length === 1 ? `${defaultSchema}.${tableName}`
-        : segments.length === 2 && segments[0] === defaultSchema ? segments[1]! : undefined
-
-    return registry.get(tableName) ?? (equivalentName ? registry.get(equivalentName) : undefined)
-  }
-
-  private resolveRenamedTablePath(fromTableName: string, toTableName: string): string {
-    const fromSegments = fromTableName.split('.')
-    if (this.isMySQL() || toTableName.includes('.') || fromSegments.length === 1) {
-      return toTableName
+  private async dropPrimaryKey(tableName: string, constraintName?: string): Promise<void> {
+    const structure = await this.readTableStructure(tableName)
+    if (!structure?.columns.some(column => column.primaryKey)) {
+      throw new SchemaError(`Table "${tableName}" has no primary key to drop.`)
     }
 
-    return [...fromSegments.slice(0, -1), toTableName].join('.')
-  }
-
-  private async renamePostgresEnumChecks(
-    tableName: string,
-    checkRenames: readonly CheckConstraintRename[],
-  ): Promise<void> {
-    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
-    const tableIdentifier = tableName.split('.').map(quote).join('.')
-    const result = await this.connection.introspectCompiled<PostgresConstraintRow>({
-      sql: 'SELECT conname AS name, contype = \'c\' AS is_check FROM pg_constraint WHERE conrelid = to_regclass($1)',
-      bindings: [tableIdentifier],
-      source: `schema:introspect:checks:${tableName}`,
-    })
-    const existingCheckNames = new Set(result.rows.filter(row => row.is_check).map(row => row.name))
-    const reservedNames = new Set([...result.rows.map(row => row.name), ...checkRenames.map(({ to }) => to)])
-    const reserveTemporaryName = (): string => {
-      let suffix = 0
-      while (reservedNames.has(`__holo_check_rename_${suffix}`)) {
-        suffix += 1
-      }
-
-      const name = `__holo_check_rename_${suffix}`
-      reservedNames.add(name)
-      return name
-    }
-    const pendingRenames = checkRenames
-      .filter(({ from, to }) => from !== to && existingCheckNames.has(from))
-      .map(rename => ({ ...rename, temporary: reserveTemporaryName() }))
-    const renameConstraint = (from: string, to: string) => this.connection.executeCompiled({
-      sql: `ALTER TABLE ${tableIdentifier} RENAME CONSTRAINT ${quote(from)} TO ${quote(to)}`,
-      source: `schema:renameCheck:${tableName}:${from}:${to}`,
-    })
-
-    for (const { from, temporary } of pendingRenames) {
-      await renameConstraint(from, temporary)
+    if (this.isSqlite()) {
+      await this.sqlite.dropPrimaryKey(tableName)
+      return
     }
 
-    for (const { to, temporary } of pendingRenames) {
-      await renameConstraint(temporary, to)
-    }
-  }
-
-
-  private async rebuildSqliteTableForAlteredColumn(
-    tableName: string,
-    column: AnyColumnDefinition,
-  ): Promise<void> {
-    await this.connection.transaction(async (tx) => {
-      await new SchemaService(tx).rebuildSqliteTable(tableName, column)
-    })
-  }
-
-  private async rebuildSqliteTable(
-    tableName: string,
-    column: AnyColumnDefinition,
-  ): Promise<void> {
-    const registered = this.connection.getSchemaRegistry().get(tableName)
-    if (!registered) {
-      throw new SchemaError(
-        `SQLite column changes require table "${tableName}" to be registered before calling change().`,
-      )
+    const actualName = structure.indexes.find(index => index.primary)?.name ?? 'PRIMARY'
+    if (this.isPostgres() && constraintName !== undefined && constraintName !== actualName) {
+      throw new SchemaError(`Table "${tableName}" has primary key "${actualName}", not "${constraintName}".`)
     }
 
-    if (!registered.columns[column.name]) {
-      throw new SchemaError(
-        `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
-      )
-    }
-
-    const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
-    if (await this.hasTable(temporaryTableName)) {
-      throw new SchemaError(
-        `SQLite cannot rebuild table "${tableName}" because temporary table "${temporaryTableName}" already exists.`,
-      )
-    }
-
-    const rebuilt = this.withAlteredColumn(registered, column)
-    const schemaObjects = await this.connection.introspectCompiled<SQLiteSchemaObjectRow>({
-      sql: 'SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? AND type IN (\'index\', \'trigger\') AND sql IS NOT NULL ORDER BY type, name',
-      bindings: [tableName],
-      source: `schema:sqliteRebuild:objects:${tableName}`,
-    })
-    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
-    const compiler = new SQLiteSchemaCompiler(quote)
-    const columns = Object.keys(rebuilt.columns).map(quote).join(', ')
-
-    const currentTable = await this.connection.introspectCompiled<SQLiteTableSqlRow>({
-      sql: 'SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?',
-      bindings: [tableName],
-      source: `schema:sqliteRebuild:table:${tableName}`,
-    })
-    const currentSql = (currentTable.rows[0]?.sql ?? '').replace(/'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g, ' ')
-    const uncheckedEnumColumns = new Set(Object.values(registered.columns)
-      .filter(definition => definition.kind === 'enum' && definition.name !== column.name)
-      .filter(definition => !new RegExp(`CHECK\\s*\\(\\s*["\`[]?${definition.name}["\`\\]]?\\s+IN\\s*\\(`, 'i').test(currentSql))
-      .map(definition => definition.name))
-
-    await this.connection.executeCompiled(compiler.compileRebuildTable(rebuilt, temporaryTableName, uncheckedEnumColumns))
-    await this.connection.executeCompiled({
-      sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
-      source: `schema:sqliteRebuild:copy:${tableName}`,
-    })
-    if (Object.values(rebuilt.columns).some(definition => definition.idStrategy === 'autoIncrement')) {
-      await this.connection.executeCompiled({
-        sql: 'DELETE FROM sqlite_sequence WHERE name = ?',
-        bindings: [temporaryTableName],
-        source: `schema:sqliteRebuild:sequence:${tableName}`,
-      })
-      await this.connection.executeCompiled({
-        sql: 'UPDATE sqlite_sequence SET name = ? WHERE name = ?',
-        bindings: [temporaryTableName, tableName],
-        source: `schema:sqliteRebuild:sequence:${tableName}`,
-      })
-    }
-    await this.execute(compiler.compile(dropTableOperation(tableName)))
-    await this.execute(compiler.compile(renameTableOperation(temporaryTableName, tableName)))
-
-    for (const object of schemaObjects.rows) {
-      await this.connection.executeCompiled({
-        sql: object.sql,
-        source: `schema:sqliteRebuild:restore:${object.type}:${object.name}`,
-      })
-    }
+    await this.execute(this.createCompiler().compile(dropPrimaryKeyOperation(tableName, actualName)))
   }
 
   private async buildTableDefinition<TName extends string>(
@@ -906,162 +458,8 @@ export class SchemaService {
     return builder.build()
   }
 
-  private updateRegisteredTable(
-    tableName: string,
-    update: (table: TableDefinition) => TableDefinition,
-  ): void {
-    const existing = this.findRegisteredTable(tableName)
-    if (!existing) {
-      return
-    }
-
-    mutateSchemaRegistry(this.connection, [existing.tableName], () => {
-      this.connection.getSchemaRegistry().replace(update(existing))
-    })
-  }
-
-  private renameRegisteredTable(existing: TableDefinition | undefined, toTableName: string): void {
-    if (!existing) {
-      return
-    }
-
-    const registry = this.connection.getSchemaRegistry()
-    mutateSchemaRegistry(this.connection, [existing.tableName, toTableName], () => {
-      registry.delete(existing.tableName)
-      registry.replace(defineTable(toTableName, existing.columns, { indexes: existing.indexes }))
-    })
-  }
-
-  private withColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [column.name]: column,
-    }, { indexes: table.indexes })
-  }
-
-  private withAlteredColumn(table: TableDefinition, column: AnyColumnDefinition): TableDefinition {
-    const existing = table.columns[column.name]
-    if (!existing) {
-      return this.withColumn(table, column)
-    }
-
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [column.name]: Object.freeze({
-        ...column,
-        primaryKey: existing.primaryKey,
-        unique: existing.unique,
-        references: existing.references,
-      }),
-    }, { indexes: table.indexes })
-  }
-
-  private withoutColumn(table: TableDefinition, columnName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).filter(([name]) => name !== columnName),
-    )
-    const nextIndexes = table.indexes.filter(index => !index.columns.includes(columnName))
-    return defineTable(table.tableName, nextColumns, { indexes: nextIndexes })
-  }
-
-  private renameRegisteredColumn(table: TableDefinition, fromColumnName: string, toColumnName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).map(([name, column]) => {
-        if (name !== fromColumnName) {
-          return [name, column]
-        }
-
-        return [toColumnName, Object.freeze({
-          ...column,
-          name: toColumnName,
-          references: column.references
-            ? {
-                ...column.references,
-                constraintName: column.references.constraintName
-                  ?? this.resolveForeignKeyName(table.tableName, fromColumnName),
-              }
-            : undefined,
-        })]
-      }),
-    )
-    const nextIndexes = table.indexes.map(index => ({
-      ...index,
-      name: index.name
-        ?? (
-          index.columns.includes(fromColumnName)
-            ? this.resolveIndexName(table.tableName, index)
-            : undefined
-        ),
-      columns: index.columns.map(columnName => columnName === fromColumnName ? toColumnName : columnName),
-    }))
-    return defineTable(table.tableName, nextColumns, { indexes: nextIndexes })
-  }
-
-  private withIndex(table: TableDefinition, index: TableIndexDefinition): TableDefinition {
-    return defineTable(table.tableName, table.columns, {
-      indexes: [...table.indexes, index],
-    })
-  }
-
-  private withoutIndex(table: TableDefinition, indexName: string): TableDefinition {
-    const nextIndexes = table.indexes.filter(index => this.resolveIndexName(table.tableName, index) !== indexName)
-    return defineTable(table.tableName, table.columns, { indexes: nextIndexes })
-  }
-
-  private renameRegisteredIndex(table: TableDefinition, fromIndexName: string, toIndexName: string): TableDefinition {
-    const nextIndexes = table.indexes.map(index => (
-      this.resolveIndexName(table.tableName, index) === fromIndexName
-        ? { ...index, name: toIndexName }
-        : index
-    ))
-    return defineTable(table.tableName, table.columns, { indexes: nextIndexes })
-  }
-
-  private withForeignKey(
-    table: TableDefinition,
-    columnName: string,
-    reference: ForeignKeyReference,
-    constraintName?: string,
-  ): TableDefinition {
-    const target = table.columns[columnName]
-    if (!target) {
-      return table
-    }
-
-    return defineTable(table.tableName, {
-      ...table.columns,
-      [columnName]: Object.freeze({
-        ...target,
-        references: { ...reference, ...(constraintName ? { constraintName } : {}) },
-      }),
-    }, { indexes: table.indexes })
-  }
-
-  private withoutForeignKey(table: TableDefinition, constraintName: string): TableDefinition {
-    const nextColumns = Object.fromEntries(
-      Object.entries(table.columns).map(([name, column]) => {
-        const generatedConstraintName = this.resolveForeignKeyName(table.tableName, name)
-        const registeredConstraintName = column.references?.constraintName ?? generatedConstraintName
-        if (!column.references || registeredConstraintName !== constraintName) {
-          return [name, column]
-        }
-
-        return [name, Object.freeze({
-          ...column,
-          references: undefined,
-        })]
-      }),
-    )
-
-    return defineTable(table.tableName, nextColumns, { indexes: table.indexes })
-  }
-
   private resolveIndexName(tableName: string, index: TableIndexDefinition): string {
     return resolveGeneratedIndexName(tableName, index)
-  }
-
-  private resolveForeignKeyName(tableName: string, columnName: string): string {
-    return resolveGeneratedForeignKeyName(tableName, columnName)
   }
 
   private createForeignKeyConstraintStatement(enable: boolean): { sql: string, source: string } {
@@ -1090,105 +488,28 @@ export class SchemaService {
       `SchemaService does not support foreign key constraint toggles for dialect "${this.connection.getDialect().name}".`,
     )
   }
+}
 
-  private inferLogicalColumnType(
-    physicalType: string,
-    dialect: 'sqlite' | 'postgres' | 'mysql',
-  ): LogicalColumnKind | null {
-    const normalized = physicalType.trim().toLowerCase()
-    if (normalized.length === 0) {
-      return null
+async function resolveMissingIndexes(
+  connection: DatabaseContext,
+  tableName: string,
+  declaredIndexes: readonly TableIndexDefinition[],
+): Promise<TableIndexDefinition[]> {
+  const existingIndexes = (await readTableStructure(connection, tableName))?.indexes ?? []
+  return declaredIndexes.filter((declared) => {
+    const existing = existingIndexes.find(index => index.name === declared.name)
+    if (!existing) {
+      return true
     }
 
-    if (normalized === 'uuid') {
-      return 'uuid'
+    if (existing.unique !== declared.unique || existing.columns.join('|') !== declared.columns.join('|')) {
+      throw new SchemaError(
+        `Index "${declared.name}" on table "${tableName}" already exists with columns "${existing.columns.join('", "')}"${existing.unique ? ' (unique)' : ''}, not the declared columns "${declared.columns.join('", "')}"${declared.unique ? ' (unique)' : ''}.`,
+      )
     }
 
-    if (normalized === 'json' || normalized === 'jsonb') {
-      return 'json'
-    }
-
-    if (normalized.startsWith('vector')) {
-      return 'vector'
-    }
-
-    if (normalized.startsWith('enum(')) {
-      return 'enum'
-    }
-
-    if (normalized === 'boolean' || normalized === 'bool') {
-      return 'boolean'
-    }
-
-    if (normalized === 'date') {
-      return 'date'
-    }
-
-    if (normalized.startsWith('timestamp')) {
-      return 'timestamp'
-    }
-
-    if (normalized === 'datetime') {
-      return 'datetime'
-    }
-
-    if (normalized === 'time') {
-      return 'string'
-    }
-
-    if (normalized === 'real'
-      || normalized === 'double'
-      || normalized === 'double precision'
-      || normalized === 'float') {
-      return 'real'
-    }
-
-    if (normalized === 'numeric' || normalized.startsWith('decimal')) {
-      return 'decimal'
-    }
-
-    if (normalized === 'blob'
-      || normalized === 'bytea'
-      || normalized === 'binary'
-      || normalized === 'varbinary') {
-      return 'blob'
-    }
-
-    if (normalized === 'text'
-      || normalized === 'tinytext'
-      || normalized === 'mediumtext'
-      || normalized === 'longtext') {
-      return 'text'
-    }
-
-    if (normalized.startsWith('varchar')
-      || normalized.startsWith('character varying')
-      || normalized.startsWith('character')
-      || normalized === 'char') {
-      return 'string'
-    }
-
-    if (normalized === 'bigint' || normalized === 'bigserial') {
-      return 'bigInteger'
-    }
-
-    if (normalized === 'integer'
-      || normalized === 'int'
-      || normalized === 'smallint'
-      || normalized === 'serial') {
-      return 'integer'
-    }
-
-    if (dialect === 'mysql' && normalized === 'tinyint') {
-      return 'boolean'
-    }
-
-    if (dialect === 'sqlite' && normalized.includes('int')) {
-      return 'integer'
-    }
-
-    return null
-  }
+    return false
+  })
 }
 
 export function createSchemaService(connection: DatabaseContext): SchemaService {

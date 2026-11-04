@@ -12,7 +12,9 @@ describe('SQLite boolean bindings without registered schema', () => {
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'holo-sqlite-booleans-'))
     const filename = join(directory, 'database.sqlite')
-    database = createDatabase({ adapter: createSQLiteAdapter({ filename }), dialect: createDialect('sqlite') })
+    const adapter = createSQLiteAdapter({ filename })
+    await adapter.ensureDatabaseExists()
+    database = createDatabase({ adapter, dialect: createDialect('sqlite') })
     await createSchemaService(database).createTable('boolean_probe', table => {
       table.integer('id').primaryKey()
       table.boolean('enabled')

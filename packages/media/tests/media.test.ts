@@ -1795,7 +1795,7 @@ describe('@holo-js/media', () => {
         extension: 'txt',
         size: 1,
         path,
-        generated_conversions: original.generatedConversions === null ? 'null' : original.generatedConversions,
+        generated_conversions: JSON.stringify(original.generatedConversions),
         order_column: original.order,
       })
     }

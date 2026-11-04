@@ -922,6 +922,7 @@ export default defineSessionConfig({ driver: 'file', stores: { file: { driver: '
     })
     const root = await createProjectRoot()
     await writeFile(join(root, 'config/database.ts'), `import { defineDatabaseConfig } from ${databaseEntry}; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: ${JSON.stringify(join(root, 'auth.sqlite'))} } } })`)
+    await writeFile(join(root, 'auth.sqlite'), '')
 
     await writeFile(join(root, 'config/session.ts'), `
 import { defineSessionConfig } from ${sessionEntry}

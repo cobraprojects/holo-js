@@ -75,6 +75,7 @@ it('refreshes prepared channel discovery and authorizes fresh private subscripti
     }))
     await mkdir(join(projectRoot, 'server/models'), { recursive: true })
     await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeFile(join(projectRoot, 'storage/database.sqlite'), '')
     await writeFile(join(projectRoot, 'config/app.ts'), "export default { name: 'Broadcast Lifecycle', key: 'test-key' }")
     await writeFile(join(projectRoot, 'config/database.ts'), "export default { defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: './storage/database.sqlite' } } }")
     await writeFile(join(projectRoot, 'server/models/User.ts'), "import { column, defineGeneratedTable, defineModel } from '@holo-js/db'; export default defineModel(defineGeneratedTable('users', { id: column.integer().primaryKey(), email: column.string() }), { timestamps: false, fillable: ['email'] })")

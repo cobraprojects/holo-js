@@ -32,6 +32,15 @@ export interface DropIndexOperation {
   readonly indexName: string
 }
 
+export interface DropUniqueOperation {
+  readonly kind: 'dropUnique'
+  readonly tableName: string
+  readonly indexName: string
+  readonly backedBy: UniqueBacking
+}
+
+export type UniqueBacking = 'constraint' | 'index'
+
 export interface RenameIndexOperation {
   readonly kind: 'renameIndex'
   readonly tableName: string
@@ -62,7 +71,6 @@ export interface AlterColumnOperation {
   readonly kind: 'alterColumn'
   readonly tableName: string
   readonly column: AnyColumnDefinition
-  readonly previousColumn?: AnyColumnDefinition
 }
 
 export interface CreateForeignKeyOperation {
@@ -79,7 +87,20 @@ export interface DropForeignKeyOperation {
   readonly constraintName: string
 }
 
-export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation
+export interface CreatePrimaryKeyOperation {
+  readonly kind: 'createPrimaryKey'
+  readonly tableName: string
+  readonly columns: readonly string[]
+  readonly constraintName?: string
+}
+
+export interface DropPrimaryKeyOperation {
+  readonly kind: 'dropPrimaryKey'
+  readonly tableName: string
+  readonly constraintName: string
+}
+
+export type DDLOperation = CreateTableOperation | DropTableOperation | RenameTableOperation | CreateIndexOperation | DropIndexOperation | DropUniqueOperation | RenameIndexOperation | AddColumnOperation | DropColumnOperation | RenameColumnOperation | AlterColumnOperation | CreateForeignKeyOperation | DropForeignKeyOperation | CreatePrimaryKeyOperation | DropPrimaryKeyOperation
 
 export interface DDLStatement {
   readonly sql: string
@@ -134,6 +155,19 @@ export function dropIndexOperation(
   }
 }
 
+export function dropUniqueOperation(
+  tableName: string,
+  indexName: string,
+  backedBy: UniqueBacking,
+): DropUniqueOperation {
+  return {
+    kind: 'dropUnique',
+    tableName,
+    indexName,
+    backedBy,
+  }
+}
+
 export function renameIndexOperation(
   tableName: string,
   fromIndexName: string,
@@ -185,11 +219,8 @@ export function renameColumnOperation(
 export function alterColumnOperation(
   tableName: string,
   column: AnyColumnDefinition,
-  previousColumn?: AnyColumnDefinition,
 ): AlterColumnOperation {
-  return previousColumn
-    ? { kind: 'alterColumn', tableName, column, previousColumn }
-    : { kind: 'alterColumn', tableName, column }
+  return { kind: 'alterColumn', tableName, column }
 }
 
 export function createForeignKeyOperation(
@@ -216,4 +247,19 @@ export function dropForeignKeyOperation(
     tableName,
     constraintName,
   }
+}
+
+export function createPrimaryKeyOperation(
+  tableName: string,
+  columns: readonly string[],
+  constraintName?: string,
+): CreatePrimaryKeyOperation {
+  return { kind: 'createPrimaryKey', tableName, columns, constraintName }
+}
+
+export function dropPrimaryKeyOperation(
+  tableName: string,
+  constraintName: string,
+): DropPrimaryKeyOperation {
+  return { kind: 'dropPrimaryKey', tableName, constraintName }
 }

@@ -2,7 +2,7 @@ import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { assertValidIndexName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
-import type { AnyColumnDefinition, ColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
+import type { AnyColumnDefinition, ColumnDefinition, TableDefinition } from './types'
 
 export class MySQLSchemaCompiler extends SQLSchemaCompiler {
   protected override compileTableDefinitions(table: TableDefinition): string[] {
@@ -65,16 +65,6 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
-  override compileCreateIndex(tableName: string, index: TableIndexDefinition): { sql: string, source: string } {
-    const indexName = this.resolveIndexName(tableName, index)
-    const quotedColumns = index.columns.map((column) => this.quoteIdentifier(column)).join(', ')
-
-    return {
-      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
-      source: `schema:createIndex:${tableName}:${indexName}`,
-    }
-  }
-
   override compileDropIndex(tableName: string, indexName: string): { sql: string, source: string } {
     assertValidIndexName(indexName)
     return {
@@ -83,10 +73,24 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
+  override compileDropUnique(tableName: string, indexName: string): { sql: string, source: string } {
+    return {
+      ...this.compileDropIndex(tableName, indexName),
+      source: `schema:dropUnique:${tableName}:${indexName}`,
+    }
+  }
+
   override compileDropForeignKey(tableName: string, constraintName: string): { sql: string, source: string } {
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP FOREIGN KEY ${this.quoteIdentifier(constraintName)}`,
       source: `schema:dropForeignKey:${tableName}:${constraintName}`,
+    }
+  }
+
+  override compileDropPrimaryKey(tableName: string): { sql: string, source: string } {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP PRIMARY KEY`,
+      source: `schema:dropPrimaryKey:${tableName}`,
     }
   }
 }

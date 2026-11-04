@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   ConfigurationError, DatabaseError, HydrationError, TableQueryBuilder,
   createDatabase, createDialect, createMigrationService, createSchemaService, defineMigration,
-  type DatabaseContext, type DatabaseLogger,
+  type DatabaseContext, type DatabaseLogger, type MigrationService,
 } from '../src'
 
 const connections: DatabaseContext[] = []
@@ -12,6 +12,10 @@ function createConnection(logger?: DatabaseLogger): DatabaseContext {
   const db = createDatabase({ adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite'), logger })
   connections.push(db)
   return db
+}
+
+async function ranMigrationNames(migrator: MigrationService): Promise<string[]> {
+  return (await migrator.status()).filter(migration => migration.status === 'ran').map(migration => migration.name)
 }
 
 function tableMigration(name: string, tableName: string) {
@@ -53,15 +57,11 @@ describe('native migration workflows', () => {
       expect.objectContaining({ name: first.name, status: 'ran', batch: 1, migratedAt: expect.any(Date) }),
       expect.objectContaining({ name: second.name, status: 'ran', batch: 2, migratedAt: expect.any(Date) }),
     ])
-    expect(await migrator.planSquash('initial schema')).toEqual({
-      archiveName: 'initial_schema', includedMigrations: [first.name, second.name], fromBatch: 1, toBatch: 2, ranCount: 2,
-    })
     await expect(migrator.rollback({ batch: 99 })).resolves.toEqual([])
     expect((await migrator.rollback({ batch: 1 })).map(migration => migration.name)).toEqual([first.name])
     expect(await schema.hasTable('first_records')).toBe(false)
     expect(await schema.hasTable('second_records')).toBe(true)
-    expect(await migrator.hasRan(first.name!)).toBe(false)
-    expect(await migrator.hasRan(second.name!)).toBe(true)
+    expect(await ranMigrationNames(migrator)).toEqual([second.name])
     await migrator.rollback({ step: 1 })
     expect(await schema.hasTable('second_records')).toBe(false)
   })
@@ -84,11 +84,11 @@ describe('native migration workflows', () => {
     const migrator = createMigrationService(db, [migration])
     await expect(migrator.migrate()).rejects.toThrow('migration aborted')
     expect(await schema.hasTable('atomic_records')).toBe(false)
-    expect(await migrator.hasRan(migration.name!)).toBe(false)
+    expect(await ranMigrationNames(migrator)).toEqual([])
     abort = false
     await migrator.migrate()
     expect(await new TableQueryBuilder('atomic_records', db).get()).toEqual([{ id: 1, value: 'persisted only on success' }])
-    expect(await migrator.hasRan(migration.name!)).toBe(true)
+    expect(await ranMigrationNames(migrator)).toEqual([migration.name])
   })
 
   it('preserves tracking and data when rollback fails', async () => {
@@ -107,7 +107,7 @@ describe('native migration workflows', () => {
     const migrator = createMigrationService(db, [migration])
     await migrator.migrate()
     await expect(migrator.rollback()).rejects.toThrow('rollback aborted')
-    expect(await migrator.hasRan(migration.name!)).toBe(true)
+    expect(await ranMigrationNames(migrator)).toEqual([migration.name])
     expect(await new TableQueryBuilder('retained_records', db).get()).toEqual([{ value: 'retained' }])
   })
 
@@ -126,9 +126,28 @@ describe('native migration workflows', () => {
     await expect(migrator.rollback({ step: 1 })).resolves.toEqual([])
     expect((await migrator.rollback({ step: 2 })).map(migration => migration.name)).toEqual([irreversible.name])
     expect(await createSchemaService(db).hasTable('irreversible_records')).toBe(true)
-    expect(await migrator.hasRan(irreversible.name!)).toBe(false)
-    expect(await migrator.hasRan('2026_01_01_000003_unavailable')).toBe(true)
-    expect(await migrator.hasRan(migration.name!)).toBe(true)
+    const unavailable = defineMigration({ name: '2026_01_01_000003_unavailable', async up() {} })
+    expect(await ranMigrationNames(createMigrationService(db, [migration, irreversible, unavailable])))
+      .toEqual([migration.name, unavailable.name])
+  })
+
+  it.each([
+    { format: 'offset-free SQLite text', stored: '2026-11-04 12:00:00' },
+    { format: 'legacy ISO text', stored: '2026-11-04T12:00:00.000Z' },
+  ])('reports the UTC migration time stored as $format in a non-UTC process', async ({ stored }) => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    onTestFinished(() => {
+      if (previousTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimeZone
+    })
+    const db = createConnection()
+    const migration = tableMigration('2026_01_01_000001_valid', 'valid_records')
+    const migrator = createMigrationService(db, [migration])
+    await migrator.migrate()
+    await new TableQueryBuilder('_holo_migrations', db).update({ migrated_at: stored })
+
+    expect((await migrator.status())[0]?.migratedAt?.toISOString()).toBe('2026-11-04T12:00:00.000Z')
   })
 
   it('rejects corrupted native tracking metadata and preserves database errors', async () => {
@@ -166,7 +185,6 @@ describe('native migration workflows', () => {
     }
     await running
     expect(await createSchemaService(db).hasTable('delayed_records')).toBe(true)
-    await expect(migrator.planSquash(' ')).rejects.toThrow('non-empty string')
   })
 
   it('reports successful and failed migration lifecycles through configured logging', async () => {

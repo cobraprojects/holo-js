@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
+import { Readable } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeConfigCache } from '@holo-js/config'
 import {
@@ -11,9 +12,11 @@ import {
 } from './project'
 import { prepareNuxtTsconfigSnapshot } from './project-prepare'
 import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
-import { fileExists } from './fs-utils'
+import { errorMessage } from './error-message'
+import { isSchemaChangingKind } from './runtime-kinds'
+import { RUNTIME_FAILURE_FD } from './runtime-failure'
 import { loadProjectPluginMigrationPublishers } from './project/plugins'
-import type { RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
+import type { BundledRuntimeEntry, RuntimeCommandKind, RuntimeEnvironment, RuntimeSpawnResult, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
 
 const runtimeImportMeta = import.meta as ImportMeta & {
@@ -50,12 +53,6 @@ export async function initializeProjectRuntime(
   return initializeHolo(projectRoot, options)
 }
 
-export function parseBooleanEnv(value: string | undefined): boolean | undefined {
-  if (value === 'true') return true
-  if (value === 'false') return false
-  return undefined
-}
-
 export async function cacheProjectConfig(
   projectRoot: string,
   cacheWriter: typeof writeConfigCache = writeConfigCache,
@@ -67,205 +64,44 @@ export async function cacheProjectConfig(
   }
 }
 
-export function createEnvRuntimeConfig() {
-  return {
-    db: {
-      defaultConnection: 'default',
-      connections: {
-        default: {
-          driver: process.env.DB_DRIVER,
-          url: process.env.DB_URL,
-          host: process.env.DB_HOST,
-          port: process.env.DB_PORT,
-          username: process.env.DB_USERNAME,
-          password: process.env.DB_PASSWORD,
-          database: process.env.DB_DATABASE,
-          schema: process.env.DB_SCHEMA,
-          ssl: parseBooleanEnv(process.env.DB_SSL),
-          logging: parseBooleanEnv(process.env.DB_LOGGING),
-        },
-      },
-    },
-  }
-}
-
-export function normalizeRuntimeConnectionInput(
-  connection: object | string | undefined,
-): Record<string, unknown> {
-  if (typeof connection === 'string') {
-    return { url: connection }
-  }
-
-  return connection ? { ...(connection as Record<string, unknown>) } : {}
-}
-
-export function isDefined(value: unknown): boolean {
-  return value !== undefined
-}
-
-export function filterDefinedRuntimeConnectionInput(
-  connection: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(connection).filter(([, value]) => isDefined(value)),
-  )
-}
-
-export function mergeRuntimeDatabaseConfig(
-  config: {
-    defaultConnection?: string
-    connections?: Record<string, object | string>
-  } | undefined,
-  envRuntimeConfig: ReturnType<typeof createEnvRuntimeConfig>,
-) {
-  const envDefault = envRuntimeConfig.db.connections.default
-  const hasEnvOverrides = Object.values(envDefault).some(isDefined)
-
-  if (!config) {
-    return envRuntimeConfig.db
-  }
-
-  if (!hasEnvOverrides) {
-    return config
-  }
-
-  const defaultConnection = config.defaultConnection ?? 'default'
-  const connections = { ...(config.connections ?? {}) }
-  connections[defaultConnection] = {
-    ...normalizeRuntimeConnectionInput(connections[defaultConnection]),
-    ...filterDefinedRuntimeConnectionInput(envDefault),
-  }
-
-  return {
-    ...config,
-    defaultConnection,
-    connections,
-  }
-}
-
-export const RUNTIME_MIGRATION_NAME_PATTERN = /^\d{4}_\d{2}_\d{2}_\d{6}_[a-z0-9_]+$/
-
-export function inferRuntimeMigrationName(entry: string): string {
-  const fileName = entry.split('/').pop()?.replace(/\.[^.]+$/, '')
-  if (!fileName || !RUNTIME_MIGRATION_NAME_PATTERN.test(fileName)) {
-    throw new Error(`Registered migration "${entry}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
-  }
-
-  return fileName
-}
-
-export function normalizeRuntimeMigration(
-  entry: string,
-  migration: RuntimeMigrationCandidate & Record<string, unknown>,
-): Record<string, unknown> & { name: string, up(...args: unknown[]): unknown } {
-  return {
-    ...migration,
-    name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry),
-  }
-}
-
-type FreshDropConnection = {
-  getDialect(): {
-    name: string
-    quoteIdentifier(identifier: string): string
-  }
-  getSchemaName(): string | undefined
-  executeCompiled(statement: { sql: string, source: string }): Promise<unknown>
-}
-
-type FreshDropSchema = {
-  getTables(): Promise<string[]>
-  dropTable(tableName: string): Promise<void>
-  withoutForeignKeyConstraints<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
-}
-
-export function compileFreshDropIdentifierPath(
-  quoteIdentifier: (identifier: string) => string,
-  identifier: string,
-): string {
-  if (!identifier.includes('.')) {
-    return quoteIdentifier(identifier)
-  }
-
-  return identifier
-    .split('.')
-    .map(part => quoteIdentifier(part))
-    .join('.')
-}
-
-export async function dropAllTablesForFresh(
-  connection: FreshDropConnection,
-  schema: FreshDropSchema,
-): Promise<void> {
-  const tables = await schema.getTables()
-  if (connection.getDialect().name === 'postgres') {
-    const schemaName = connection.getSchemaName()
-    const quoteIdentifier = connection.getDialect().quoteIdentifier
-
-    for (const tableName of tables) {
-      const qualifiedTableName = schemaName ? `${schemaName}.${tableName}` : tableName
-      await connection.executeCompiled({
-        sql: `DROP TABLE IF EXISTS ${compileFreshDropIdentifierPath(quoteIdentifier, qualifiedTableName)} CASCADE`,
-        source: `schema:dropTableFresh:${qualifiedTableName}`,
-      })
-    }
-    return
-  }
-
-  await schema.withoutForeignKeyConstraints(async () => {
-    for (const tableName of tables) {
-      await schema.dropTable(tableName)
-    }
-  })
-}
-
 /* v8 ignore start */
-export async function getRuntimeEnvironment(projectRoot: string): Promise<RuntimeEnvironment> {
+type RuntimeBundle = Awaited<ReturnType<typeof bundleProjectModule>>
+
+async function bundleRuntimeEntries(projectRoot: string, entries: readonly string[], bundled: RuntimeBundle[]): Promise<BundledRuntimeEntry[]> {
+  const bundledEntries: BundledRuntimeEntry[] = []
+  for (const entry of entries) {
+    const bundle = await bundleProjectModule(projectRoot, resolve(projectRoot, entry), { external: ['@holo-js/db'] })
+    bundled.push(bundle)
+    bundledEntries.push({ sourcePath: entry, path: bundle.path })
+  }
+  return bundledEntries
+}
+
+export async function getRuntimeEnvironment(projectRoot: string, kind: RuntimeCommandKind): Promise<RuntimeEnvironment> {
   let project = await loadProjectConfig(projectRoot, { required: true })
-  if (!await loadGeneratedProjectRegistry(projectRoot)) {
+  if (kind !== 'generate-schema' && !await loadGeneratedProjectRegistry(projectRoot)) {
     await prepareProjectDiscovery(projectRoot, project.config)
     project = await loadProjectConfig(projectRoot, { required: true })
   }
-  const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, project.config)
-  const hasGeneratedSchema = await fileExists(generatedSchemaPath)
-  const bundleInputs = [
-    ...project.config.models.map(entry => resolve(projectRoot, entry)),
-    ...project.config.migrations.map(entry => resolve(projectRoot, entry)),
-    ...project.config.seeders.map(entry => resolve(projectRoot, entry)),
-    ...(hasGeneratedSchema ? [generatedSchemaPath] : []),
-  ]
-  const bundled: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
-
-  try {
-    for (const entryPath of bundleInputs) {
-      bundled.push(await bundleProjectModule(projectRoot, entryPath, { external: ['@holo-js/db'] }))
-    }
-  } catch (error) {
+  const sources = kind === 'generate-schema'
+    ? { models: [], migrations: [], seeders: [] }
+    : project.config
+  const bundled: RuntimeBundle[] = []
+  const cleanup = async () => {
     await Promise.all(bundled.map(entry => entry.cleanup()))
-    throw error
   }
 
-  const bundledModels = bundled.slice(0, project.config.models.length).map(entry => entry.path)
-  const bundledMigrations = bundled
-    .slice(project.config.models.length, project.config.models.length + project.config.migrations.length)
-    .map(entry => entry.path)
-  const bundledSeeders = bundled
-    .slice(project.config.models.length + project.config.migrations.length)
-    .slice(0, project.config.seeders.length)
-    .map(entry => entry.path)
-  const bundledGeneratedSchema = hasGeneratedSchema
-    ? bundled[project.config.models.length + project.config.migrations.length + project.config.seeders.length]?.path
-    : undefined
-
-  return {
-    project,
-    bundledModels,
-    bundledMigrations,
-    bundledSeeders,
-    ...(bundledGeneratedSchema ? { bundledGeneratedSchema } : {}),
-    async cleanup() {
-      await Promise.all(bundled.map(entry => entry.cleanup()))
-    },
+  try {
+    return {
+      project,
+      bundledModels: await bundleRuntimeEntries(projectRoot, sources.models, bundled),
+      bundledMigrations: await bundleRuntimeEntries(projectRoot, sources.migrations, bundled),
+      bundledSeeders: await bundleRuntimeEntries(projectRoot, sources.seeders, bundled),
+      cleanup,
+    }
+  } catch (error) {
+    await cleanup()
+    throw error
   }
 }
 /* v8 ignore stop */
@@ -314,10 +150,11 @@ export function runRuntimeInvocation(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
+    let failure = ''
     let error: Error | null = null
 
     child.stdin.on('error', stdinError => {
@@ -332,6 +169,13 @@ export function runRuntimeInvocation(
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk
     })
+    const failureChannel = child.stdio[RUNTIME_FAILURE_FD]
+    if (failureChannel instanceof Readable) {
+      failureChannel.setEncoding('utf8')
+      failureChannel.on('data', (chunk: string) => {
+        failure += chunk
+      })
+    }
     child.on('error', spawnError => {
       error = spawnError
     })
@@ -341,12 +185,18 @@ export function runRuntimeInvocation(
         error,
         stdout,
         stderr,
+        failure,
       })
     })
   })
 }
 
 export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResult): string {
+  const failure = result.failure?.trim()
+  if (failure) {
+    return failure
+  }
+
   const stderr = result.stderr?.trim()
   if (stderr) {
     return formatRuntimeFailureText(stderr)
@@ -365,15 +215,10 @@ export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResul
   return `Runtime command "${kind}" failed.`
 }
 
-function stripRuntimeErrorPrefix(line: string): string {
-  return line.replace(/^(?:[A-Za-z][\w.]*Error|Error):\s+/, '')
-}
+const RUNTIME_ERROR_PREFIX = /^(?:[A-Za-z][\w.]*Error|Error)(?: \[[A-Z_]+\])?:\s+/
 
-function isRuntimeErrorSourceLine(line: string): boolean {
-  return line.startsWith('throw ')
-    || line.startsWith('at ')
-    || line === '^'
-    || /^\^+$/.test(line)
+function stripRuntimeErrorPrefix(line: string): string {
+  return line.replace(RUNTIME_ERROR_PREFIX, '')
 }
 
 function formatRuntimeFailureText(text: string): string {
@@ -382,12 +227,7 @@ function formatRuntimeFailureText(text: string): string {
     .map(line => line.trim())
     .filter(Boolean)
 
-  const friendlyLine = lines.find(line => line.includes('Unable to ') && !isRuntimeErrorSourceLine(line))
-  if (friendlyLine) {
-    return stripRuntimeErrorPrefix(friendlyLine)
-  }
-
-  const errorLine = lines.find(line => /^(?:[A-Za-z][\w.]*Error|Error):\s+/.test(line))
+  const errorLine = lines.find(line => RUNTIME_ERROR_PREFIX.test(line))
   if (errorLine) {
     return stripRuntimeErrorPrefix(errorLine)
   }
@@ -396,42 +236,57 @@ function formatRuntimeFailureText(text: string): string {
 }
 
 /* v8 ignore start */
+async function refreshDiscoveryAfterFailedRun(
+  projectRoot: string,
+  config: RuntimeEnvironment['project']['config'],
+  failure: Error,
+): Promise<void> {
+  try {
+    await prepareProjectDiscovery(projectRoot, config)
+  } catch (error) {
+    throw new Error(`${failure.message}\nUnable to refresh generated types after the failed run: ${errorMessage(error)}`, { cause: error })
+  }
+}
+
+function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string } {
+  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href }
+}
+
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
-  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema' | 'media:regenerate',
+  kind: RuntimeCommandKind,
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
-  if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'seed' || kind === 'media:regenerate') {
+  if (kind === 'seed' || kind === 'media:regenerate') {
+    await withRuntimeEnvironment(projectRoot, 'generate-schema', {}, async () => undefined).catch((error: unknown) => {
+      process.stderr.write(`[Holo CLI] Continuing with the existing Generated schema. ${errorMessage(error)}\n`)
+    })
+  }
+  if (isSchemaChangingKind(kind) || kind === 'seed' || kind === 'media:regenerate') {
     const project = await loadProjectConfig(projectRoot, { required: true })
     await prepareProjectDiscovery(projectRoot, project.config)
   }
 
-  const environment = await getRuntimeEnvironment(projectRoot)
+  const environment = await getRuntimeEnvironment(projectRoot, kind)
 
   try {
-    const envRuntimeConfig = createEnvRuntimeConfig()
-    const runtimeDatabaseConfig = mergeRuntimeDatabaseConfig(
-      environment.project.config.database,
-      envRuntimeConfig,
-    )
-    const migrationPublishers = kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'hydrate-schema'
+    const migrationPublishers = isSchemaChangingKind(kind)
       ? await loadProjectPluginMigrationPublishers(projectRoot)
       : []
     const runtimePayload = JSON.stringify({
       kind,
       projectRoot,
       runtimeConfig: {
-        db: runtimeDatabaseConfig,
+        db: environment.project.config.database,
       },
-      models: environment.bundledModels.map(entry => pathToFileURL(entry).href),
-      migrations: environment.bundledMigrations.map(entry => pathToFileURL(entry).href),
+      models: environment.bundledModels.map(toRuntimeModuleEntry),
+      migrations: environment.bundledMigrations.map(toRuntimeModuleEntry),
       migrationPublishers: migrationPublishers.map(entry => ({
         packageName: entry.packageName,
         url: pathToFileURL(entry.path).href,
       })),
-      seeders: environment.bundledSeeders.map(entry => pathToFileURL(entry).href),
-      generatedSchema: environment.bundledGeneratedSchema ? pathToFileURL(environment.bundledGeneratedSchema).href : undefined,
+      seeders: environment.bundledSeeders.map(toRuntimeModuleEntry),
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),
       generatedSchemaRuntimeOutputPath: resolve(projectRoot, GENERATED_SCHEMA_RUNTIME_PATH),
       options,
@@ -444,12 +299,16 @@ export async function withRuntimeEnvironment<T>(
     })
 
     if (result.status !== 0 || result.error) {
-      throw new Error(getRuntimeFailureMessage(kind, result))
+      const failure = new Error(getRuntimeFailureMessage(kind, result))
+      if (isSchemaChangingKind(kind)) {
+        await refreshDiscoveryAfterFailedRun(projectRoot, environment.project.config, failure)
+      }
+      throw failure
     }
 
     const output = await callback((result.stdout ?? '').trim())
 
-    if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback') {
+    if (isSchemaChangingKind(kind)) {
       await prepareProjectDiscovery(projectRoot, environment.project.config)
     }
 

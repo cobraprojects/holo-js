@@ -1,5 +1,5 @@
 import { connectionAsyncContext, DB, TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
-import { serializeAuthTimestamp } from './authPersistence'
+import { normalizeDateValue, serializeAuthTimestamp } from './authPersistence'
 import { normalizeSessionRecordFromRow, serializeSessionRecordForRow } from './recordPersistence'
 
 const SESSION_FLASH_ENVELOPE_MARKER = 'holo-session-flash-v1'
@@ -101,7 +101,7 @@ function createSessionQuery(
 }
 
 function isExpiredSessionRow(row: Record<string, unknown>): boolean {
-  const expiresAt = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
+  const expiresAt = normalizeDateValue(row.expires_at)
   return !Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()
 }
 

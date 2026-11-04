@@ -1,9 +1,12 @@
 import { rawSqlPlaceholders } from './rawSql'
 import { SecurityError } from '../core/errors'
-import { isInlineIntegerValue } from './ast'
+import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
+import { storesJson } from '../schema/normalization'
 import type { TableColumnsShape } from '../schema/types'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   QueryAggregateSelection,
+  QueryColumnSelection,
   QueryJoinClause,
   QueryColumnPredicate,
   QueryDatePredicate,
@@ -186,6 +189,23 @@ function assertColumnReference(
   }
 
   assertKnownColumn(column, tableName, allowedColumns)
+}
+
+function assertColumnSelection(
+  selection: QueryColumnSelection,
+  tableName: string,
+  allowedColumns?: Set<string>,
+): void {
+  const allColumnsOf = readAllColumnsSelectionTable(selection.column)
+  if (allColumnsOf !== undefined && !selection.alias) {
+    assertQualifiedIdentifier(allColumnsOf, 'Column reference')
+    return
+  }
+
+  assertColumnReference(selection.column, tableName, allowedColumns)
+  if (selection.alias) {
+    assertIdentifier(selection.alias, 'Selection alias')
+  }
 }
 
 function assertJoinClause(join: QueryJoinClause): void {
@@ -495,7 +515,8 @@ function isJsonUpdateOperation(value: QueryUpdateValue): value is QueryJsonUpdat
 function assertJsonUpdateOperation(
   column: string,
   operation: QueryJsonUpdateOperation,
-  sourceColumns?: TableColumnsShape,
+  sourceColumns: TableColumnsShape | undefined,
+  dialect: SchemaDialectName | undefined,
 ): void {
   if (operation.path.length === 0 || operation.path.some(segment => !segment || typeof segment !== 'string')) {
     throw new SecurityError(`JSON update for column "${column}" must include a valid nested path.`)
@@ -506,7 +527,7 @@ function assertJsonUpdateOperation(
   }
 
   const columnDefinition = sourceColumns?.[column]
-  if (columnDefinition && columnDefinition.kind !== 'json') {
+  if (columnDefinition && !storesJson(dialect, columnDefinition)) {
     throw new SecurityError(`JSON updates require "${column}" to be a JSON column.`)
   }
 }
@@ -515,8 +536,9 @@ function assertUpdateValue(
   column: string,
   value: QueryUpdateValue,
   tableName: string,
-  allowedColumns?: Set<string>,
-  sourceColumns?: TableColumnsShape,
+  allowedColumns: Set<string> | undefined,
+  sourceColumns: TableColumnsShape | undefined,
+  dialect: SchemaDialectName | undefined,
 ): void {
   assertKnownColumn(column, tableName, allowedColumns)
 
@@ -530,13 +552,13 @@ function assertUpdateValue(
         throw new SecurityError(`Update value for column "${column}" is malformed.`)
       }
 
-      assertJsonUpdateOperation(column, operation, sourceColumns)
+      assertJsonUpdateOperation(column, operation, sourceColumns, dialect)
     }
     return
   }
 
   if (isJsonUpdateOperation(value)) {
-    assertJsonUpdateOperation(column, value, sourceColumns)
+    assertJsonUpdateOperation(column, value, sourceColumns, dialect)
     return
   }
 
@@ -553,7 +575,7 @@ function assertNonNegativeInteger(value: number | undefined, kind: string): void
   }
 }
 
-export function validateQueryPlan(plan: QueryPlan): void {
+export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName): void {
   assertQualifiedIdentifier(plan.source.tableName, 'Table')
   if (plan.source.alias) {
     assertIdentifier(plan.source.alias, 'Table alias')
@@ -581,10 +603,7 @@ export function validateQueryPlan(plan: QueryPlan): void {
           continue
         }
 
-        assertColumnReference(selection.column, plan.source.tableName, allowedColumns)
-        if (selection.alias) {
-          assertIdentifier(selection.alias, 'Selection alias')
-        }
+        assertColumnSelection(selection, plan.source.tableName, allowedColumns)
       }
 
       for (const join of plan.joins) {
@@ -752,7 +771,7 @@ export function validateQueryPlan(plan: QueryPlan): void {
       }
 
       for (const column of keys) {
-        assertUpdateValue(column, plan.values[column]!, plan.source.tableName, allowedColumns, plan.source.table?.columns)
+        assertUpdateValue(column, plan.values[column]!, plan.source.tableName, allowedColumns, plan.source.table?.columns, dialect)
       }
 
       for (const predicate of plan.predicates) {

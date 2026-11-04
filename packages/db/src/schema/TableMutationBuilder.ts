@@ -1,4 +1,5 @@
 import { column, type AnyColumnBuilder } from './columns'
+import { SOFT_DELETE_COLUMN_NAME, softDeleteColumn, TIMESTAMP_COLUMN_NAMES, timestampColumn } from './conventionalColumns'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
 import { resolveConventionalIndexName } from './generatedNames'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
@@ -31,10 +32,12 @@ interface CreateIndexMutationOperation {
   index: TableIndexDefinition
 }
 
-interface DropIndexMutationOperation {
-  kind: 'dropIndex'
-  indexName: string
-}
+type CoveredColumnsTarget = { columns: readonly string[] }
+type IndexTarget = { indexName: string } | CoveredColumnsTarget
+
+type DropIndexMutationOperation = { kind: 'dropIndex' } & IndexTarget
+
+type DropUniqueMutationOperation = { kind: 'dropUnique' } & IndexTarget
 
 interface RenameIndexMutationOperation {
   kind: 'renameIndex'
@@ -49,9 +52,17 @@ interface CreateForeignKeyMutationOperation {
   constraintName?: string
 }
 
-interface DropForeignKeyMutationOperation {
-  kind: 'dropForeignKey'
-  constraintName: string
+type DropForeignKeyMutationOperation = { kind: 'dropForeignKey' } & ({ constraintName: string } | CoveredColumnsTarget)
+
+interface CreatePrimaryKeyMutationOperation {
+  kind: 'createPrimaryKey'
+  columns: readonly string[]
+  constraintName?: string
+}
+
+interface DropPrimaryKeyMutationOperation {
+  kind: 'dropPrimaryKey'
+  constraintName?: string
 }
 
 interface MutableColumnMutationOperation {
@@ -67,11 +78,18 @@ type TableMutationOperation
     | RenameColumnMutationOperation
     | CreateIndexMutationOperation
     | DropIndexMutationOperation
+    | DropUniqueMutationOperation
     | RenameIndexMutationOperation
     | CreateForeignKeyMutationOperation
     | DropForeignKeyMutationOperation
+    | CreatePrimaryKeyMutationOperation
+    | DropPrimaryKeyMutationOperation
 
 type ColumnMutationMode = 'addColumn' | 'alterColumn'
+
+function toIndexTarget(index: string | readonly string[]): IndexTarget {
+  return typeof index === 'string' ? { indexName: index } : { columns: [...index] }
+}
 type ColumnFactory<TBuilder extends AnyColumnBuilder = AnyColumnBuilder> = () => TBuilder
 
 class TableForeignKeyBuilder {
@@ -176,8 +194,13 @@ class TableColumnMutationBuilder {
     return this
   }
 
-  generated(): this {
-    this.operation.column = this.operation.column.generated()
+  storedAs(expression: string): this {
+    this.operation.column = this.operation.column.storedAs(expression)
+    return this
+  }
+
+  virtualAs(expression: string): this {
+    this.operation.column = this.operation.column.virtualAs(expression)
     return this
   }
 
@@ -453,8 +476,10 @@ export class TableMutationBuilder {
     return this.columnMutation(columnName, () => column.enum(values))
   }
 
-  dropColumn(columnName: string): void {
-    this.operations.push({ kind: 'dropColumn', columnName })
+  dropColumn(columns: string | readonly string[]): void {
+    for (const columnName of typeof columns === 'string' ? [columns] : columns) {
+      this.operations.push({ kind: 'dropColumn', columnName })
+    }
   }
 
   renameColumn(fromColumnName: string, toColumnName: string): void {
@@ -475,8 +500,20 @@ export class TableMutationBuilder {
     })
   }
 
-  dropIndex(indexName: string): void {
-    this.operations.push({ kind: 'dropIndex', indexName })
+  primary(columns: readonly string[], name?: string): void {
+    this.operations.push({ kind: 'createPrimaryKey', columns, constraintName: name })
+  }
+
+  dropPrimary(name?: string): void {
+    this.operations.push({ kind: 'dropPrimaryKey', constraintName: name })
+  }
+
+  dropIndex(index: string | readonly string[]): void {
+    this.operations.push({ kind: 'dropIndex', ...toIndexTarget(index) })
+  }
+
+  dropUnique(index: string | readonly string[]): void {
+    this.operations.push({ kind: 'dropUnique', ...toIndexTarget(index) })
   }
 
   renameIndex(fromIndexName: string, toIndexName: string): void {
@@ -495,8 +532,41 @@ export class TableMutationBuilder {
     return new TableForeignKeyBuilder(operation)
   }
 
-  dropForeign(indexName: string): void {
-    this.operations.push({ kind: 'dropForeignKey', constraintName: indexName })
+  dropForeign(index: string | readonly string[]): void {
+    this.operations.push(typeof index === 'string'
+      ? { kind: 'dropForeignKey', constraintName: index }
+      : { kind: 'dropForeignKey', columns: [...index] })
+  }
+
+  dropConstrainedForeignId(columnName: string): void {
+    this.dropForeign([columnName])
+    this.dropColumn(columnName)
+  }
+
+  timestamps(): this {
+    for (const columnName of TIMESTAMP_COLUMN_NAMES) {
+      this.columnMutation(columnName, timestampColumn)
+    }
+    return this
+  }
+
+  softDeletes(columnName: string = SOFT_DELETE_COLUMN_NAME): this {
+    this.columnMutation(columnName, softDeleteColumn)
+    return this
+  }
+
+  dropTimestamps(): void {
+    this.dropColumn(TIMESTAMP_COLUMN_NAMES)
+  }
+
+  dropSoftDeletes(columnName: string = SOFT_DELETE_COLUMN_NAME): void {
+    this.dropColumn(columnName)
+  }
+
+  dropMorphs(name: string, indexName?: string): void {
+    const morphColumns = [`${name}_type`, `${name}_id`]
+    this.dropIndex(indexName ?? morphColumns)
+    this.dropColumn(morphColumns)
   }
 
   morphs(name: string, indexName?: string): this {

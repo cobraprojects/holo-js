@@ -14,15 +14,17 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import { getGeneratedTableDefinition } from '../schema/generated'
-import { normalizeDialectReadValue } from '../schema/normalization'
-import { withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
+import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
+import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
-import { assertAttributeNameAllowed, ownEntry, snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
+import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
 import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
@@ -49,6 +51,7 @@ import type {
   ModelColumnName,
   ModelLifecycleEventName,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelReference,
   RelationDefinition,
@@ -107,15 +110,23 @@ function serializedFlag(serialized: boolean): { readonly serialized?: true } {
 const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
 const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
 
-function findWriteColumn(definition: AnyModelDefinition, key: string) {
-  const columnName = key.includes('->') ? key.split('->')[0]! : key
+function findWriteColumn(definition: AnyModelDefinition, key: string, rejected: RejectedGeneratedColumns) {
+  const attribute = key.includes('->') ? key.split('->')[0]! : key
+  const ownTablePrefix = `${definition.table.tableName}.`
+  const columnName = attribute.startsWith(ownTablePrefix) ? attribute.slice(ownTablePrefix.length) : attribute
   assertAttributeNameAllowed(columnName)
   const column = ownEntry(definition.table.columns, columnName)
-  if (!column) {
+  if (!column && !definition.untyped) {
     throw new SecurityError(`Column "${columnName}" is not defined on model "${definition.name}".`)
   }
 
+  assertColumnWritable(columnName, column, rejected)
+
   return { columnName, column }
+}
+
+function isClassCast(cast: ModelCastDefinition | undefined): boolean {
+  return typeof cast === 'object' && !('kind' in cast && cast.kind === 'enum')
 }
 
 function hasDefinition<TTable extends TableDefinition>(
@@ -332,7 +343,7 @@ export class ModelRepository<
 
   async firstOrNew(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -346,7 +357,7 @@ export class ModelRepository<
 
   async firstOrCreate(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -373,7 +384,7 @@ export class ModelRepository<
 
   async createOrFirst(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     if (Object.keys(match).length === 0) {
       throw new HydrationError('createOrFirst() requires at least one attribute to match the existing row.')
@@ -402,7 +413,7 @@ export class ModelRepository<
       .reduce((query, [column, value]) => query.where(column as never, value), this.query())
   }
 
-  make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
+  make(values: ModelInsertPayload<TTable> = {}): Entity<TTable> {
     return new Entity(
       this,
       this.assertMassAssignable(applyPendingModelAttributes(this.definition, values)),
@@ -1371,17 +1382,18 @@ export class ModelRepository<
     }
   }
 
-  async create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
+    await this.loadGuardableColumns()
     this.assertMassAssignable(applyPendingModelAttributes(this.definition, values))
     return this.createRecord(values)
   }
 
-  async createQuietly(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async createQuietly(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
     return withoutModelEvents(() => this.create(values))
   }
 
   async createMany(
-    values: readonly Partial<ModelRecord<TTable>>[],
+    values: readonly ModelInsertPayload<TTable>[],
   ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     const created: Entity<TTable>[] = []
     for (const value of values) {
@@ -1391,7 +1403,7 @@ export class ModelRepository<
   }
 
   async createManyQuietly(
-    values: readonly Partial<ModelRecord<TTable>>[],
+    values: readonly ModelInsertPayload<TTable>[],
   ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return withoutModelEvents(() => this.createMany(values))
   }
@@ -1413,7 +1425,7 @@ export class ModelRepository<
     return withoutModelEvents(() => this.saveMany(entities))
   }
 
-  async update(id: unknown, values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async update(id: unknown, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable>> {
     const existing = await this.findOrFail(id)
     existing.fill(values)
     return existing.save()
@@ -1707,7 +1719,7 @@ export class ModelRepository<
     return withoutModelEvents(() => this.createManyRelatedEntities(entity, relationName, values))
   }
 
-  private async createRecord(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  private async createRecord(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
     return this.insertEntity(new Entity(this, values, false))
   }
 
@@ -1720,12 +1732,13 @@ export class ModelRepository<
       const beforeTimestamps = snapshotAttributes(entity.toAttributes())
       entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
-      const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
+      await this.assertGuardableAttributes(entity.toAttributes())
+      const payload = this.sanitizeStoredValues(entity.toAttributes(), 'create')
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
         ? await query.insert(payload)
-        : { lastInsertId: await query.insertGetId(payload) }
+        : { lastInsertId: await insertGetIdByKey(query, payload, this.definition.primaryKey) }
       const attributes = {
         ...payload,
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
@@ -1764,7 +1777,7 @@ export class ModelRepository<
 
   async upsert(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelUpdatePayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -1779,7 +1792,7 @@ export class ModelRepository<
 
   async updateOrCreate(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelUpdatePayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     return this.upsert(match, values)
   }
@@ -1792,55 +1805,76 @@ export class ModelRepository<
     const { createdAtColumn, updatedAtColumn } = this.definition
     const timestamped: Record<string, unknown> = { ...payload }
     if (mode === 'create' && createdAtColumn && !(createdAtColumn in payload)) {
+      this.assertConfiguredColumnWritable(createdAtColumn)
       timestamped[createdAtColumn] = this.normalizeForStorage(createdAtColumn, timestamp)
     }
 
     if (updatedAtColumn && !(updatedAtColumn in payload)) {
+      this.assertConfiguredColumnWritable(updatedAtColumn)
       timestamped[updatedAtColumn] = this.normalizeForStorage(updatedAtColumn, timestamp)
     }
 
     return timestamped
   }
 
+  softDeleteWrite(deletedAtColumn: string, deletedAt = new Date().toISOString()): Record<string, unknown> {
+    this.assertConfiguredColumnWritable(deletedAtColumn)
+    return this.withWriteTimestamps({ [deletedAtColumn]: this.castForStorage(deletedAtColumn, deletedAt) }, 'update', deletedAt)
+  }
+
+  private assertConfiguredColumnWritable(columnName: string): void {
+    assertColumnWritable(columnName, ownEntry(this.definition.table.columns, columnName), 'computed')
+  }
+
+  assertWriteTargets(columns: readonly string[]): void {
+    for (const column of columns) {
+      findWriteColumn(this.definition, column, 'computed')
+    }
+  }
+
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
-    enforceGuards = true,
-    applyMutators = true,
-  ): Partial<ModelUpdatePayload<TTable>> {
+  ): ModelUpdatePayload<TTable> {
+    return this.sanitizeWriteValues(values, mode, true) as ModelUpdatePayload<TTable>
+  }
+
+  private sanitizeStoredValues(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, mode: WriteMode): Partial<ModelRecord<TTable>> {
+    return this.sanitizeWriteValues(values, mode, false) as Partial<ModelRecord<TTable>>
+  }
+
+  private sanitizeWriteValues(
+    values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
+    mode: WriteMode,
+    applyWriteRules: boolean,
+  ): Record<string, unknown> {
     const entries = Object.entries(values)
 
     if (entries.length === 0) {
       return {}
     }
 
-    const sanitized = Object.fromEntries(entries.map(([key, value]) => {
-      const { columnName, column } = findWriteColumn(this.definition, key)
+    return Object.fromEntries(entries.map(([key, value]) => {
+      const { columnName, column } = findWriteColumn(this.definition, key, 'generated')
 
       if (typeof value === 'undefined') {
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
       }
 
-      if (column.generated) {
-        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
-      }
-
-      if (enforceGuards) {
-        this.assertWritableColumn(columnName)
+      if (applyWriteRules) {
+        this.assertWritableColumn(columnName, key)
       }
 
       if (key.includes('->')) {
-        if (column.kind !== 'json') {
+        if (column && !storesJson(this.getConnection().getDriver() as SchemaDialectName, column)) {
           throw new SecurityError(`Column "${columnName}" must be a JSON column to support nested JSON updates.`)
         }
 
         return [key, value]
       }
 
-      return [key, applyMutators ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
+      return [columnName, applyWriteRules ? this.normalizeForStorage(columnName, value) : this.castForStorage(columnName, value)]
     }))
-
-    return sanitized as Partial<ModelUpdatePayload<TTable>>
   }
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
@@ -1866,7 +1900,8 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const written = entity.getDirty()
-      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      await this.assertGuardableAttributes(written)
+      const dirty = this.sanitizeStoredValues(written, 'update')
       if (Object.keys(dirty).length === 0) {
         return this.finishUnchangedSave(entity)
       }
@@ -1954,10 +1989,10 @@ export class ModelRepository<
       const deletedAtColumn = this.getDeletedAtColumn()
       if (deletedAtColumn) {
         const deletedAt = new Date().toISOString()
-        const written = this.withWriteTimestamps({ [deletedAtColumn]: deletedAt }, 'update', deletedAt)
+        const written = this.softDeleteWrite(deletedAtColumn, deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
-        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.definition.casts[deletedAtColumn], deletedAt) } as never)
+        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.valueTransformer.resolveCast(deletedAtColumn), deletedAt) } as never)
         entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {
@@ -1995,7 +2030,7 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       const written = entity.getDirty()
-      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      const dirty = this.sanitizeStoredValues(written, 'update')
       const wrote = Object.keys(dirty).length > 0
       if (wrote) {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
@@ -2141,16 +2176,20 @@ export class ModelRepository<
     }
   }
 
+  createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
+    const table = this.definition.table
+    return this.definition.untyped
+      ? new TableQueryBuilder(table, connection, createSelectQueryPlan(createTableSource(table.tableName)))
+      : new TableQueryBuilder(table, connection)
+  }
+
   private createQuery(
     applySoftDeletes: boolean,
     applyGlobalScopes: boolean,
     applyDefaultRelations: boolean,
     excludedGlobalScopes: ReadonlySet<string> = new Set(),
   ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
-    let query = new ModelQueryBuilder(
-      this,
-      new TableQueryBuilder(this.definition.table, this.getConnection()),
-    )
+    let query = new ModelQueryBuilder(this, this.createTableQuery())
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
@@ -2782,7 +2821,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    if (!(column in related.definition.table.columns)) {
+    if (!related.definition.untyped && !(column in related.definition.table.columns)) {
       throw new SecurityError(`Column "${column}" is not defined on related model "${related.definition.name}".`)
     }
 
@@ -3288,7 +3327,13 @@ export class ModelRepository<
 
     return projected
       ? joined
-      : joined.select(...Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`))
+      : joined.select(...this.listRelatedColumnSelections(related, relatedTable))
+  }
+
+  private listRelatedColumnSelections(related: ModelRepository, relatedTable: string): readonly string[] {
+    return related.definition.untyped
+      ? [`${relatedTable}.*`]
+      : Object.keys(related.definition.table.columns).map(column => `${relatedTable}.${column}`)
   }
 
   private async getThroughEntitiesByParentKey(
@@ -3611,7 +3656,7 @@ export class ModelRepository<
 
   private resolvePivotTable(pivotTable: string | TableDefinition, connection: DatabaseContext): string | TableDefinition {
     if (typeof pivotTable !== 'string') return pivotTable
-    return connection.getSchemaRegistry().get(pivotTable) ?? getGeneratedTableDefinition(pivotTable) ?? pivotTable
+    return getConnectionGeneratedTableDefinition(pivotTable, connection.getConnectionName()) ?? pivotTable
   }
 
   private resolvePivotTableName(pivotTable: string | TableDefinition): string {
@@ -3696,10 +3741,13 @@ export class ModelRepository<
     const connection = this.getConnection()
     const table = this.resolvePivotTable(relation.pivotTable, connection)
     const dialect = connection.getDriver() as SchemaDialectName
+    const timestampColumns: readonly string[] = relation.pivotTimestamps ? PIVOT_TIMESTAMP_COLUMNS : []
     return Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
         const definition = typeof table === 'string' ? undefined : table.columns[column]
-        return [column, definition ? normalizeDialectReadValue(dialect, definition, value) : value]
+        const normalized = definition ? normalizeDialectReadValue(dialect, definition, value) : value
+        const readsAsDate = timestampColumns.includes(column) && (!definition || storesText(definition))
+        return [column, readsAsDate ? this.applyCastGet('datetime', normalized) : normalized]
       }),
     )
   }
@@ -3734,21 +3782,52 @@ export class ModelRepository<
 
   assertMassAssignable<TValues extends Partial<ModelRecord<TTable>> | Record<string, unknown>>(values: TValues): TValues {
     for (const key of Object.keys(values)) {
-      const { columnName, column } = findWriteColumn(this.definition, key)
+      const { columnName } = findWriteColumn(this.definition, key, 'generated')
 
-      if (column.generated) {
-        throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
-      }
-
-      this.assertWritableColumn(columnName)
+      this.assertWritableColumn(columnName, key)
     }
 
     return values
   }
 
-  private assertWritableColumn(column: string): void {
+  async loadGuardableColumns(): Promise<void> {
+    if (this.guardsByColumnListing()) {
+      await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    }
+  }
+
+  private async assertGuardableAttributes(values: Record<string, unknown>): Promise<void> {
+    if (!this.guardsByColumnListing() || areModelGuardsDisabled()) {
+      return
+    }
+
+    const columns = await loadColumnListing(this.getConnection(), this.definition.table.tableName)
+    const unknownKey = Object.keys(values).find(key => !key.includes('->') && !this.isGuardableColumn(key, columns))
+    if (unknownKey !== undefined) {
+      throw new SecurityError(`Column "${unknownKey}" is not writable on model "${this.definition.name}".`)
+    }
+  }
+
+  private guardsByColumnListing(): boolean {
+    return this.definition.untyped && this.definition.hasExplicitFillable !== true && this.definition.guarded.length > 0
+  }
+
+  private isGuardableColumn(
+    key: string,
+    columns = getLoadedColumnListing(this.getConnection(), this.definition.table.tableName),
+  ): boolean {
+    if (ownEntry(this.definition.mutators, key) || isClassCast(ownEntry(this.definition.casts, key))) return true
+    if (key.includes('->')) return false
+    return columns === undefined || columns.size === 0 || columns.has(key)
+  }
+
+  private assertWritableColumn(column: string, key: string): void {
     if (!this.isWritableColumn(column)) {
       throw new SecurityError(`Column "${column}" is not writable on model "${this.definition.name}".`)
+    }
+
+    if (this.guardsByColumnListing() && !areModelGuardsDisabled() && !this.isGuardableColumn(key)) {
+      throw new SecurityError(`Column "${key}" is not writable on model "${this.definition.name}".`)
     }
   }
 
@@ -3829,9 +3908,7 @@ export class ModelRepository<
 
           await query.getTableQueryBuilder()
             .where(relation.ownerKey, ownerId)
-            .update({
-              [related.definition.updatedAtColumn]: touchedAt,
-            })
+            .update(related.withWriteTimestamps({}, 'update', touchedAt))
           break
         }
         case 'morphTo': {
@@ -3850,9 +3927,7 @@ export class ModelRepository<
 
           await query.getTableQueryBuilder()
             .where(related.definition.primaryKey, ownerId)
-            .update({
-              [related.definition.updatedAtColumn]: touchedAt,
-            })
+            .update(related.withWriteTimestamps({}, 'update', touchedAt))
           break
         }
       }

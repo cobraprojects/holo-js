@@ -1,0 +1,193 @@
+import { findCreatedObjectName, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
+import { sameIdentifier, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
+import type { AnyColumnDefinition } from '../types'
+
+const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
+const DEFAULT_COLLATION = 'BINARY'
+const ROWID_NAMES = ['rowid', '_rowid_', 'oid'] as const
+
+export function unquoteStringLiteral(literal: string): string {
+  return literal.slice(1, -1).replaceAll('\'\'', '\'')
+}
+
+export function readStringLiterals(text: string): string[] {
+  return [...text.matchAll(new RegExp(STRING_LITERAL_PATTERN, 'g'))].map(match => unquoteStringLiteral(match[0]))
+}
+
+export function withIndexName(createIndexSql: string, quotedIndexName: string): string | undefined {
+  const name = findCreatedObjectName(createIndexSql)?.name
+  if (!name) return undefined
+  return `${createIndexSql.slice(0, name.start)}${quotedIndexName}${createIndexSql.slice(name.end)}`
+}
+
+export function withSchemaQualifiedName(createSql: string, quotedSchema: string): string | undefined {
+  const created = findCreatedObjectName(createSql)
+  if (!created) return undefined
+  return `${createSql.slice(0, created.qualifiedStart)}${quotedSchema}.${createSql.slice(created.name.start)}`
+}
+
+const STRING_LENGTH_PATTERN = /^(?:n?var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i
+
+export function readStringLength(type: string): number | undefined {
+  const match = type.trim().match(STRING_LENGTH_PATTERN)
+  return match ? Number(match[1]) : undefined
+}
+
+export function readForeignKeyColumns(rows: readonly { readonly name: string, readonly from_column: string }[], name: string): string[] {
+  return rows.filter(row => row.name === name).map(row => row.from_column)
+}
+
+export interface EnumCheckDefinition {
+  readonly name?: string
+  readonly column: string
+  readonly values: string[]
+}
+
+export interface IndexKeyColumn {
+  readonly name: string
+  readonly collation: string
+}
+
+type ConstraintMatcher = (constraint: StoredConstraint) => boolean
+
+function allConstraints(table: StoredTable): StoredConstraint[] {
+  return [...table.columns.flatMap(column => column.constraints), ...table.constraints]
+}
+
+function readExpressionColumn(token: SqlToken | undefined): string | undefined {
+  return token?.kind === 'word' || token?.kind === 'quotedIdentifier' ? token.value : undefined
+}
+
+function readEnumCheck(constraint: StoredConstraint): EnumCheckDefinition | undefined {
+  if (constraint.kind !== 'CHECK') return undefined
+  const [columnToken, operator, list, ...rest] = constraint.expression
+  const column = readExpressionColumn(columnToken)
+  if (column === undefined || operator?.keyword !== 'IN' || list?.kind !== 'group' || rest.length > 0) return undefined
+  const items = splitTokensOnCommas(list.children ?? [])
+  const values = items.flatMap(([value, ...extra]) => value?.kind === 'string' && value.value !== undefined && extra.length === 0 ? [value.value] : [])
+  if (values.length === 0 || values.length !== items.length) return undefined
+  return { ...(constraint.name === undefined ? {} : { name: constraint.name }), column, values }
+}
+
+function isEnumCheckOn(constraint: StoredConstraint, columnName: string): boolean {
+  return sameIdentifier(columnName, readEnumCheck(constraint)?.column)
+}
+
+export function findStoredColumn(table: StoredTable, columnName: string): StoredColumn | undefined {
+  return table.columns.find(column => sameIdentifier(column.name, columnName))
+}
+
+export function readEnumChecks(table: StoredTable): EnumCheckDefinition[] {
+  return allConstraints(table).flatMap((constraint) => {
+    const check = readEnumCheck(constraint)
+    return check ? [{ ...check, column: findStoredColumn(table, check.column)?.name ?? check.column }] : []
+  })
+}
+
+export function readForeignKeys(table: StoredTable): ForeignKeyConstraint[] {
+  return allConstraints(table).filter(constraint => constraint.kind === 'FOREIGN KEY')
+}
+
+export function hasAutoIncrement(table: StoredTable): boolean {
+  return allConstraints(table).some(constraint => constraint.kind === 'PRIMARY KEY' && constraint.autoIncrement)
+}
+
+type PrimaryKeyConstraint = Extract<StoredConstraint, { kind: 'PRIMARY KEY' }>
+
+function isPrimaryKey(constraint: StoredConstraint): constraint is PrimaryKeyConstraint {
+  return constraint.kind === 'PRIMARY KEY'
+}
+
+function isWithoutRowId(table: StoredTable): boolean {
+  const keywords = tokenizeSql(table.options).map(token => token.keyword)
+  return keywords.some((keyword, index) => keyword === 'WITHOUT' && keywords[index + 1] === 'ROWID')
+}
+
+function declaresRowIdAlias(table: StoredTable): boolean {
+  const [primaryKey, ...otherPrimaryKeys] = allConstraints(table).filter(isPrimaryKey)
+  const [keyColumn, ...otherKeyColumns] = primaryKey?.columns ?? []
+  if (!primaryKey || !keyColumn || otherPrimaryKeys.length > 0 || otherKeyColumns.length > 0) return false
+  const column = findStoredColumn(table, keyColumn.name)
+  const declaredOnColumn = column?.constraints.includes(primaryKey) === true
+  return column?.type.toUpperCase() === 'INTEGER' && !(declaredOnColumn && keyColumn.descending)
+}
+
+export function keepsRowIdOnlyAsHiddenColumn(table: StoredTable): boolean {
+  return !isWithoutRowId(table) && !declaresRowIdAlias(table)
+}
+
+export function findUnshadowedRowIdName(table: StoredTable): string | undefined {
+  return ROWID_NAMES.find(rowIdName => !findStoredColumn(table, rowIdName))
+}
+
+export function isGeneratedColumn(column: StoredColumn): boolean {
+  return readGeneratedExpression(column) !== undefined
+}
+
+export function readGeneratedExpression(column: StoredColumn | undefined): string | undefined {
+  return column?.constraints.flatMap(constraint => constraint.kind === 'GENERATED' ? [constraint.expression] : [])[0]
+}
+
+function renderColumn(column: StoredColumn, constraints: readonly StoredConstraint[]): string {
+  return constraints.length === column.constraints.length ? column.text : [column.declaration, ...constraints.map(constraint => constraint.text)].join(' ')
+}
+
+export function renderDefinitions(table: StoredTable): string[] {
+  return [...table.columns.map(column => column.text), ...table.constraints.map(constraint => constraint.text)]
+}
+
+function withoutConstraints(table: StoredTable, matches: ConstraintMatcher): string[] | undefined {
+  if (!allConstraints(table).some(matches)) return undefined
+  const kept = (constraints: readonly StoredConstraint[]) => constraints.filter(constraint => !matches(constraint))
+  return [
+    ...table.columns.map(column => renderColumn(column, kept(column.constraints))),
+    ...kept(table.constraints).map(constraint => constraint.text),
+  ]
+}
+
+const CHANGED_COLUMN_CONSTRAINTS = new Set<StoredConstraint['kind']>(['NOT NULL', 'NULL', 'DEFAULT'])
+
+function redeclares(changed: AnyColumnDefinition, constraint: StoredConstraint): boolean {
+  return CHANGED_COLUMN_CONSTRAINTS.has(constraint.kind) || (constraint.kind === 'GENERATED' && changed.computed !== undefined)
+}
+
+export function readPreservedColumnConstraints(stored: StoredColumn, changed: AnyColumnDefinition): string[] {
+  return stored.constraints
+    .filter(constraint => !redeclares(changed, constraint) && !isEnumCheckOn(constraint, stored.name))
+    .map(constraint => constraint.text)
+}
+
+export function withAddedColumn(table: StoredTable, addedDefinition: string): string[] {
+  return [...table.columns.map(column => column.text), addedDefinition, ...table.constraints.map(constraint => constraint.text)]
+}
+
+export function withChangedColumn(table: StoredTable, changed: StoredColumn, changedDefinition: string): string[] {
+  return [
+    ...table.columns.map(column => column === changed ? changedDefinition : column.text),
+    ...table.constraints.filter(constraint => !isEnumCheckOn(constraint, changed.name)).map(constraint => constraint.text),
+  ]
+}
+
+export function withoutPrimaryKeys(table: StoredTable): string[] {
+  return withoutConstraints(table, constraint => constraint.kind === 'PRIMARY KEY') ?? renderDefinitions(table)
+}
+
+export function withoutForeignKeys(table: StoredTable, matches: (foreignKey: ForeignKeyConstraint) => boolean): string[] | undefined {
+  return withoutConstraints(table, constraint => constraint.kind === 'FOREIGN KEY' && matches(constraint))
+}
+
+function keyCollation(table: StoredTable, keyColumn: KeyColumn): string {
+  const declared = findStoredColumn(table, keyColumn.name)?.constraints.flatMap(constraint => constraint.kind === 'COLLATE' ? [constraint.collation] : []) ?? []
+  return keyColumn.collation ?? declared.at(-1) ?? DEFAULT_COLLATION
+}
+
+function withoutUniques(table: StoredTable, matchesKey: (columns: readonly KeyColumn[]) => boolean): string[] | undefined {
+  return withoutConstraints(table, constraint => constraint.kind === 'UNIQUE' && matchesKey(constraint.columns))
+}
+
+export function withoutUniquesBackingIndex(table: StoredTable, indexKey: readonly IndexKeyColumn[]): string[] | undefined {
+  return withoutUniques(table, key => key.length === indexKey.length && key.every((keyColumn, position) => {
+    const indexColumn = indexKey[position]
+    return sameIdentifier(keyColumn.name, indexColumn?.name) && sameIdentifier(keyCollation(table, keyColumn), indexColumn?.collation)
+  }))
+}

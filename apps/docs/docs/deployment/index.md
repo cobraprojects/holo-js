@@ -43,7 +43,7 @@ npm run build
 `holo build` refreshes Holo's generated files (model and job registries, generated schema types) and then runs your framework's build. Extra arguments are passed to the framework.
 
 ::: warning
-`holo build` connects to your database to read which migrations have run, and uses that to generate schema information. The build environment needs the same database settings as production, and you should run migrations before building.
+`holo build` reads the tables and columns of your default connection's database and writes the generated schema types from them. It doesn't load or run migrations. The build environment needs the same database settings as production, and the database must be reachable: if it isn't, `holo build` fails with an error that names the connection. On SQLite, the database file must already exist where the build runs: `holo build` never creates it, so a fresh checkout or a Docker build stage without the file fails instead of building against an empty database. Run your migrations before building. `holo build` doesn't load your migration files either, so a migration that imports a development-only package doesn't break the build.
 :::
 
 ## Start the server
@@ -97,7 +97,7 @@ Holo never migrates on startup. A typical deploy:
 5. Cache config with `npx holo config:cache` (optional).
 6. Start or restart the web server and workers.
 
-If several replicas run step 3 at once, use `npx holo migrate --isolated`. One replica applies the migrations and the others skip them without failing the deploy. See [Isolating migration runs](/database/migrations#isolating-migration-runs).
+If several replicas run step 3 at once, use `npx holo migrate --isolated`. One replica applies the migrations and the others skip them without failing the deploy. The lock comes from the default cache store, so every replica must share a `redis` or `database` store. A `database` store needs its tables first: run `npx holo cache:table` and `npx holo migrate` once. See [Isolating migration runs](/database/migrations#isolating-migration-runs).
 
 To undo the last deploy's migrations, run `npx holo migrate:rollback`. In production it asks you to confirm, so pass `--force` in a script. See [Migrations](/database/migrations).
 

@@ -49,7 +49,7 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectReadValue('postgres', timestampColumn, '2025-01-02T03:04:05.000Z')).toEqual(date)
     expect(normalizeDialectReadValue('postgres', timestampColumn, date)).toBe(date)
     expect(normalizeDialectWriteValue('postgres', timestampColumn, date)).toBe(date)
-    expect(normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:05.000Z')).toBe('2025-01-02T03:04:05.000000+00:00')
+    expect(normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:05.000Z')).toBe('2025-01-02T03:04:05.000+00:00')
     expect(normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:05+02:00')).toBe('2025-01-02T01:04:05.000+00:00')
     expect(normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:05+0200')).toBe('2025-01-02T01:04:05.000+00:00')
     expect(normalizeDialectWriteValue('postgres', timestampColumn, '2026-11-15T03:30:00.123456Z')).toBe('2026-11-15T03:30:00.123456+00:00')
@@ -66,7 +66,7 @@ describe('schema normalization rules', () => {
     expect(() => normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:60Z')).toThrow('Leap second')
     expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-99-99T03:04:05.314Z')).toBe('2025-99-99T03:04:05.314Z')
     expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-01-02 03:04:05')).toBe('2025-01-02 03:04:05')
-    expect(normalizeDialectWriteValue('sqlite', timestampColumn, date)).toBe('2025-01-02T03:04:05.000Z')
+    expect(normalizeDialectWriteValue('sqlite', timestampColumn, date)).toBe('2025-01-02 03:04:05')
 
     expect(normalizeDialectReadValue('sqlite', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectReadValue('mysql', stringColumn, 'Mohamed')).toBe('Mohamed')

@@ -508,10 +508,10 @@ describe('type system contracts', () => {
     expectTypeOf<WithExistsReturn>().toMatchTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
     expectTypeOf<WithSumReturn>().toMatchTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
     expectTypeOf<GroupedReturn>().toMatchTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
-    const createName: Assert<IsEqual<CreatePayload['name'], string>> = true
-    const createTeamId: Assert<IsEqual<CreatePayload['team_id'], number>> = true
+    const createName: Assert<IsEqual<CreatePayload['name'], string | undefined>> = true
+    const createTeamId: Assert<IsEqual<CreatePayload['team_id'], number | undefined>> = true
     const createId: Assert<IsEqual<CreatePayload['id'], number | undefined>> = true
-    const createCreatedAt: Assert<IsEqual<CreatePayload['created_at'], Date>> = true
+    const createCreatedAt: Assert<IsEqual<CreatePayload['created_at'], Date | undefined>> = true
     const makeName: Assert<IsEqual<MakePayload['name'], string | undefined>> = true
     expectTypeOf(User.recent).toBeFunction()
     expectTypeOf(User.definition.pendingAttributes).toMatchTypeOf<Partial<InferInsert<typeof users>>>()

@@ -16,6 +16,37 @@ const mysql = createRequire(join(root, 'packages/db-mysql/package.json'))('mysql
 const frameworks = process.env.HOLO_TEST_FRAMEWORK ? [process.env.HOLO_TEST_FRAMEWORK] : ['next', 'nuxt', 'sveltekit']
 const drivers = process.env.HOLO_TEST_DRIVER ? [process.env.HOLO_TEST_DRIVER] : ['sqlite', 'postgres', 'mysql']
 const compiledMarker = 'Compiled in'
+const postgresServer = {
+  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+  user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
+  password: process.env.HOLO_POSTGRES_PASSWORD,
+}
+const mysqlServer = {
+  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
+  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
+  user: process.env.HOLO_MYSQL_USER ?? 'root',
+  password: process.env.HOLO_MYSQL_PASSWORD ?? '',
+}
+
+async function withPostgresAdmin(task) {
+  const client = new pg.Client({ ...postgresServer, database: 'postgres' })
+  await client.connect()
+  try {
+    await task(client)
+  } finally {
+    await client.end()
+  }
+}
+
+async function withMysqlAdmin(task) {
+  const connection = await mysql.createConnection(mysqlServer)
+  try {
+    await task(connection)
+  } finally {
+    await connection.end()
+  }
+}
 
 async function runApp(framework, driver) {
   assert.ok(['next', 'nuxt', 'sveltekit'].includes(framework))
@@ -26,8 +57,8 @@ async function runApp(framework, driver) {
   const insertOnlyRole = `${name}_writer`
   const password = randomUUID()
   const filename = join(projectRoot, 'storage', `${name}.sqlite`)
-  let postgresAdmin
-  let mysqlAdmin
+  let postgresProvisioned = false
+  let mysqlProvisioned = false
   const env = { ...process.env, [exampleAppRunVariable]: name, DB_DRIVER: driver, SESSION_DRIVER: 'database', SESSION_CONNECTION: 'main' }
   const logPath = join(root, 'coverage', `app-${framework}-${driver}.log`)
   const fileWatch = watchExampleAppFiles(fixture.directory)
@@ -41,28 +72,22 @@ async function runApp(framework, driver) {
       if (!env.BROADCAST_APP_KEY && generatedBroadcastKey) env.BROADCAST_APP_KEY = generatedBroadcastKey
       assert.ok(env.BROADCAST_APP_KEY, `${framework} example app .env must define BROADCAST_APP_KEY; run bun install to generate it`)
     }
-    {
-      const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
-      const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
-      const client = new pg.Client({ host, port, user: process.env.HOLO_POSTGRES_USER ?? 'postgres', password: process.env.HOLO_POSTGRES_PASSWORD, database: 'postgres' })
-      await client.connect()
-      postgresAdmin = client
-      await postgresAdmin.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`)
-      await postgresAdmin.query(`CREATE ROLE ${insertOnlyRole} NOLOGIN NOSUPERUSER NOBYPASSRLS`)
-      await postgresAdmin.query(`GRANT ${insertOnlyRole} TO ${name}`)
-      await postgresAdmin.query(`CREATE DATABASE ${name} OWNER ${name}`)
-      env.DB_POSTGRES_URL = `postgresql://${name}:${password}@${host}:${port}/${name}`
-      env.HOLO_POSTGRES_INSERT_ONLY_ROLE = insertOnlyRole
-    }
-    {
-      const host = process.env.HOLO_MYSQL_HOST ?? '127.0.0.1'
-      const port = Number(process.env.HOLO_MYSQL_PORT ?? 3306)
-      const user = process.env.HOLO_MYSQL_USER ?? 'root'
-      const password = process.env.HOLO_MYSQL_PASSWORD ?? ''
-      mysqlAdmin = await mysql.createConnection({ host, port, user, password })
-      await mysqlAdmin.query(`CREATE DATABASE ${name}`)
-      env.DB_MYSQL_URL = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${name}`
-    }
+    await withPostgresAdmin(async (admin) => {
+      postgresProvisioned = true
+      await admin.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`)
+      await admin.query(`CREATE ROLE ${insertOnlyRole} NOLOGIN NOSUPERUSER NOBYPASSRLS`)
+      await admin.query(`GRANT ${insertOnlyRole} TO ${name}`)
+      await admin.query(`CREATE DATABASE ${name} OWNER ${name}`)
+    })
+    env.DB_POSTGRES_URL = `postgresql://${name}:${password}@${postgresServer.host}:${postgresServer.port}/${name}`
+    env.HOLO_POSTGRES_INSERT_ONLY_ROLE = insertOnlyRole
+    await withMysqlAdmin(async (admin) => {
+      mysqlProvisioned = true
+      await admin.query(`CREATE DATABASE ${name}`)
+    })
+    env.DB_MYSQL_URL = `mysql://${encodeURIComponent(mysqlServer.user)}:${encodeURIComponent(mysqlServer.password)}@${mysqlServer.host}:${mysqlServer.port}/${name}`
+    await mkdir(join(projectRoot, 'storage'), { recursive: true })
+    await writeFile(filename, '')
     env.DB_SQLITE_URL = filename
     env.DB_URL = env[`DB_${driver.toUpperCase()}_URL`]
     await mkdir(join(root, 'coverage'), { recursive: true })
@@ -122,17 +147,15 @@ async function runApp(framework, driver) {
     await writeFile(join(root, 'coverage', `app-${framework}-${driver}-files.log`), fileWatch.log())
   })
   if (log) await attempt(() => closeWriteStream(log))
-  if (postgresAdmin) {
-    await attempt(async () => {
-      await postgresAdmin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
-      await postgresAdmin.query(`DROP ROLE IF EXISTS ${name}`)
-      await postgresAdmin.query(`DROP ROLE IF EXISTS ${insertOnlyRole}`)
-    })
-    await attempt(() => postgresAdmin.end())
+  if (postgresProvisioned) {
+    await attempt(() => withPostgresAdmin(async (admin) => {
+      await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+      await admin.query(`DROP ROLE IF EXISTS ${name}`)
+      await admin.query(`DROP ROLE IF EXISTS ${insertOnlyRole}`)
+    }))
   }
-  if (mysqlAdmin) {
-    await attempt(() => mysqlAdmin.query(`DROP DATABASE IF EXISTS ${name}`))
-    await attempt(() => mysqlAdmin.end())
+  if (mysqlProvisioned) {
+    await attempt(() => withMysqlAdmin(admin => admin.query(`DROP DATABASE IF EXISTS ${name}`)))
   }
   await attempt(() => Promise.all(['', '-wal', '-shm'].map(suffix => rm(`${filename}${suffix}`, { force: true }))))
   await attempt(() => rm(fixture.directory, { recursive: true, force: true }))

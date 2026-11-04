@@ -26,7 +26,7 @@ async function database(logger?: DatabaseLogger): Promise<{ readonly filename: s
   directories.push(directory)
   const filename = join(directory, 'revocations.sqlite')
   const connection = connect(filename, logger)
-  await connection.initialize()
+  await connection.getAdapter().ensureDatabaseExists?.()
   await connection.executeCompiled({ sql: schema, source: 'schema' })
   configureDB(new ConnectionManager({ defaultConnection: 'main', connections: { main: connection } }))
   return { filename, connection }

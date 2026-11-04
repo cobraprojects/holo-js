@@ -292,6 +292,6 @@ describe('query builder helpers', () => {
     const ids = Array.from({ length: 10 }, (_, index) => index + 1)
 
     expect(DB.table('orders').whereIn('id', ids).where('paid', true).where('settings->theme', 'dark').toRawSql())
-      .toBe('SELECT * FROM "orders" WHERE "id" IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) AND "paid" = true AND jsonb_extract_path(("settings")::jsonb, \'theme\') = \'"dark"\'::jsonb')
+      .toBe('SELECT * FROM "orders" WHERE "id" IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) AND "paid" = 1 AND jsonb_extract_path(("settings")::jsonb, \'theme\') = \'"dark"\'::jsonb')
   })
 })

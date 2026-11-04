@@ -46,7 +46,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
+import { readInsertedKey, readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -94,7 +94,10 @@ import { createAggregateValueCounts } from './aggregateValueCounts'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
-import { resolveTablePrimaryKey } from '../schema/tablePrimaryKey'
+import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { storesJson } from '../schema/normalization'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
@@ -161,6 +164,21 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+type KeyedInsert = (
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+) => Promise<number | string | undefined>
+
+let keyedInsert: KeyedInsert
+
+export function insertGetIdByKey(
+  query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
+  values: Readonly<Record<string, unknown>>,
+  keyColumn: string,
+): Promise<number | string | undefined> {
+  return keyedInsert(query, values, keyColumn)
+}
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
@@ -208,7 +226,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: this.connection.getSchemaRegistry().get(source.tableName) }
+    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
@@ -636,7 +654,7 @@ export class TableQueryBuilder<
 
   private assertJsonRootColumn(column: string, methodName: string): void {
     const columnDefinition = this.getSourceColumnDefinition(column)
-    if (columnDefinition && columnDefinition.kind !== 'json') {
+    if (columnDefinition && !storesJson(this.connection.getDriver() as SchemaDialectName, columnDefinition)) {
       throw new SecurityError(`${methodName}() requires "${column}" to be a JSON column.`)
     }
   }
@@ -1970,7 +1988,7 @@ export class TableQueryBuilder<
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
     const integerColumns = resolveIntegerResultColumns(this.plan)
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
-    if (aggregates.length === 0 && integerColumns.length === 0) return rows
+    if (aggregates.length === 0 && integerColumns.size === 0) return rows
     return rows.map(row => {
       const values: Record<string, unknown> = readIntegerResultColumns(row, integerColumns)
       for (const selection of aggregates) {
@@ -2707,21 +2725,20 @@ export class TableQueryBuilder<
 
   private async executeInsert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
-    returnGeneratedId = false,
+    generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    const primaryKeyColumn = this.resolvePrimaryKeyColumn()
     const captureReturningRows = await this.shouldCaptureInsertReturningRows()
-    const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && returnGeneratedId)
+    const useReturningRows = captureReturningRows || (this.connection.getCapabilities().returning && generatedKeyColumn !== undefined)
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, {
             returning: captureReturningRows,
-            returningColumn: captureReturningRows ? undefined : primaryKeyColumn,
+            returningColumn: captureReturningRows ? undefined : generatedKeyColumn,
           }),
-          true,
+          generatedKeyColumn ?? this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows),
@@ -2743,7 +2760,7 @@ export class TableQueryBuilder<
     const result: MutationExecutionResult = captureReturningRows
       ? await this.queryReturningMutationRows(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true, returning: true }),
-          true,
+          this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true }),
@@ -2760,9 +2777,18 @@ export class TableQueryBuilder<
     return insertResult
   }
 
+  static {
+    keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+  }
+
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
-    const result = await this.executeInsert(values, true)
-    return result.lastInsertId
+    assertSinglePrimaryKey(this.source.table)
+    return this.insertGetKey(values, this.resolvePrimaryKeyColumn())
+  }
+
+  private async insertGetKey(values: Readonly<Record<string, unknown>>, keyColumn: string): Promise<number | string | undefined> {
+    const result = await this.executeInsert(values, keyColumn)
+    return readInsertedKey(this.plan.source.table, keyColumn, result.lastInsertId)
   }
 
   async upsert(
@@ -2781,7 +2807,7 @@ export class TableQueryBuilder<
     const result: MutationExecutionResult = useReturningRows
       ? await this.queryReturningMutationRows(
           createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns, { returning: true }),
-          true,
+          this.resolveSinglePrimaryKeyColumn(),
         )
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns),
@@ -3156,13 +3182,13 @@ export class TableQueryBuilder<
       | ReturnType<typeof createUpsertQueryPlan>
       | ReturnType<typeof createUpdateQueryPlan>
       | ReturnType<typeof createDeleteQueryPlan>,
-    includeLastInsertId = false,
+    lastInsertIdColumn?: string,
   ): Promise<MutationExecutionResult> {
     const result = await this.connection.queryCompiled(this.getCompiler().compile(plan))
     const rows = this.freezeMutationRows(result.rows)
     return {
       affectedRows: result.rowCount,
-      lastInsertId: includeLastInsertId ? this.readReturnedLastInsertId(rows) : undefined,
+      lastInsertId: lastInsertIdColumn === undefined ? undefined : this.readReturnedLastInsertId(rows, lastInsertIdColumn),
       rows: rows.length === 0
         ? undefined
         : Object.freeze({
@@ -3177,14 +3203,16 @@ export class TableQueryBuilder<
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
   }
 
+  private resolveSinglePrimaryKeyColumn(): string | undefined {
+    const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(this.source.table)
+    return otherPrimaryKeys.length === 0 ? primaryKey : undefined
+  }
+
   private readReturnedLastInsertId(
     rows: readonly Readonly<Record<string, unknown>>[],
+    column: string,
   ): number | string | undefined {
-    if (rows.length !== 1) {
-      return undefined
-    }
-
-    const value = rows[0]?.[this.resolvePrimaryKeyColumn()]
+    const value = rows.length === 1 ? rows[0]?.[column] : undefined
     return typeof value === 'number' || typeof value === 'string'
       ? value
       : undefined
@@ -3269,7 +3297,7 @@ export class TableQueryBuilder<
       : []
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
-      this.source.tableName,
+      this.source,
       rows,
       lastInsertId,
       hasInvalidationListeners,
@@ -3302,28 +3330,8 @@ export class TableQueryBuilder<
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const primaryKey = this.resolvePrimaryKeyColumn()
-    const previousRows = new Map(numericColumns.length > 0
-      ? capturedRows?.previousRows?.map(row => [
-          typeof values[primaryKey] === 'undefined'
-            ? row[primaryKey]
-            : this.applyCapturedUpdateValue(row[primaryKey], values[primaryKey]),
-          row,
-        ])
-      : [])
     const mutations = !hasInvalidationListeners ? [] : numericColumns.length > 0 && capturedRows?.rows
-      ? capturedRows.rows.map((row) => {
-          const previousRow = previousRows.get(row[primaryKey])
-          return createDatabaseMutationEvent(
-            'update',
-            this.connection.getConnectionName(),
-            this.source.tableName,
-            [{ kind: 'comparison', column: primaryKey, operator: '=', value: previousRow?.[primaryKey] ?? row[primaryKey] }],
-            Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
-            [row],
-            previousRow ? [previousRow] : undefined,
-          )
-        })
+      ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
           this.connection.getConnectionName(),
@@ -3339,6 +3347,35 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private createNumericUpdateMutationEvents(
+    values: Readonly<Record<string, unknown>>,
+    numericColumns: readonly string[],
+    rows: readonly Readonly<Record<string, unknown>>[],
+    previousRows: readonly Readonly<Record<string, unknown>>[],
+  ): ReturnType<typeof createDatabaseMutationEvent>[] {
+    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const keyOf = (keyValues: readonly unknown[]): unknown => keyValues.length === 1
+      ? keyValues[0]
+      : JSON.stringify(keyValues, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
+    const updatedKeyValues = (row: Readonly<Record<string, unknown>>) => primaryKeys.map(key => typeof values[key] === 'undefined'
+      ? row[key]
+      : this.applyCapturedUpdateValue(row[key], values[key]))
+    const previousRowsByKey = new Map(previousRows.map(row => [keyOf(updatedKeyValues(row)), row]))
+
+    return rows.map((row) => {
+      const previousRow = previousRowsByKey.get(keyOf(primaryKeys.map(key => row[key])))
+      return createDatabaseMutationEvent(
+        'update',
+        this.connection.getConnectionName(),
+        this.source.tableName,
+        primaryKeys.map(key => ({ kind: 'comparison' as const, column: key, operator: '=', value: previousRow?.[key] ?? row[key] })),
+        Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
+        [row],
+        previousRow ? [previousRow] : undefined,
+      )
+    })
   }
 
   private getCompiler(): SQLQueryCompiler {
@@ -3365,11 +3402,10 @@ export class TableQueryBuilder<
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
     const columns = Object.keys(amounts)
-    const primaryKey = this.resolvePrimaryKeyColumn()
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [primaryKey, ...columns] as never[]),
+      withSelections(this.plan, [...resolveTablePrimaryKeyColumns(this.source.table), ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
@@ -3390,6 +3426,7 @@ export class TableQueryBuilder<
       return this.update(values)
     }
 
+    const primaryKey = this.resolvePrimaryKeyColumn()
     const plan = this.plan.predicates.length === 0
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
@@ -3463,22 +3500,23 @@ export class TableQueryBuilder<
       throw new SecurityError('Cursor pagination cannot use random ordering.')
     }
 
-    if (this.plan.orderBy.length === 0) {
-      if (!this.source.table) {
-        throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
-      }
-
-      const primaryKey = this.resolvePrimaryKeyColumn()
-      const column = this.plan.joins.length === 0 ? primaryKey : `${this.source.alias ?? this.source.tableName}.${primaryKey}`
-      return this.clone(withOrderBy(this.plan, { kind: 'column', column, direction: 'asc' }))
+    const primaryKeys = this.source.table ? listTablePrimaryKeyColumns(this.source.table) : []
+    if (this.plan.orderBy.length === 0 && primaryKeys.length === 0) {
+      throw new SecurityError('Cursor pagination requires an explicit stable orderBy clause.')
     }
 
-    const primaryKey = this.source.table && this.resolvePrimaryKeyColumn()
-    const qualifiedKey = `${this.source.alias ?? this.source.tableName}.${primaryKey}`
-    if (primaryKey && !this.plan.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))) {
-      return this.clone(withOrderBy(this.plan, { kind: 'column', column: this.plan.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' }))
-    }
-    return this
+    return this.withPrimaryKeyTieBreakers(primaryKeys)
+  }
+
+  private withPrimaryKeyTieBreakers(primaryKeys: readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const tableName = this.source.alias ?? this.source.tableName
+    const plan = primaryKeys.reduce((current, primaryKey) => {
+      const qualifiedKey = `${tableName}.${primaryKey}`
+      return current.orderBy.some(order => order.kind === 'column' && (order.column === primaryKey || order.column === qualifiedKey))
+        ? current
+        : withOrderBy(current, { kind: 'column', column: current.joins.length === 0 ? primaryKey : qualifiedKey, direction: 'asc' })
+    }, this.plan)
+    return plan === this.plan ? this : this.clone(plan)
   }
 
   private resolveCursorOrders(): readonly { readonly column: string, readonly direction: 'asc' | 'desc' }[] {
@@ -3523,11 +3561,12 @@ export class TableQueryBuilder<
     return rows.flatMap((row) => {
       const value = row[column]
       if (value === null) return []
-      if (typeof value !== 'number' || Number.isNaN(value)) {
+      const numericValue = this.normalizeNumericResult(value)
+      if (numericValue === undefined) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return [value]
+      return [numericValue]
     })
   }
 
@@ -3588,7 +3627,7 @@ export function whereColumnNotExpiredByDatabaseClock<
   const dialectName = connection.getDialect().name
   const quoted = dialectName === 'mysql' ? `\`${column}\`` : `"${column}"`
   if (dialectName === 'sqlite') {
-    return append(`${quoted} > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, [])
+    return append(`strftime('%Y-%m-%d %H:%M:%f', ${quoted}) > strftime('%Y-%m-%d %H:%M:%f', 'now')`, [])
   }
 
   if (dialectName === 'postgres') {

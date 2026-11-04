@@ -2,6 +2,7 @@ import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { clearConfigCache, loadEnvironment, resolveConfigCachePath } from '@holo-js/config'
+import { errorMessage } from './error-message'
 import {
   parseTokens,
   isInteractive,
@@ -1297,6 +1298,10 @@ export function createInternalCommands(
       },
       async run(input) {
         const runProjectDevServer = await resolveProjectExecutor(projectExecutors, 'runProjectDevServer')
+        const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
+        await executeRuntime(context.projectRoot, 'generate-schema', {}, async () => undefined).catch((error: unknown) => {
+          writeLine(context.stderr, `[Holo CLI] Starting with the existing Generated schema. ${errorMessage(error)}`)
+        })
         const passthroughArgs = serializePassthroughInput(input)
         if (passthroughArgs.length > 0) {
           await runProjectDevServer(context, context.projectRoot, undefined, undefined, undefined, passthroughArgs)
@@ -1319,8 +1324,8 @@ export function createInternalCommands(
         const runProjectBuildPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectBuildPrepare')
         const runProjectBuild = await resolveProjectExecutor(projectExecutors, 'runProjectBuild')
         const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
+        await executeRuntime(context.projectRoot, 'generate-schema', {}, async () => undefined)
         await prepareProjectSchema(context.projectRoot)
-        await executeRuntime(context.projectRoot, 'hydrate-schema', {}, async () => undefined)
         await runProjectBuildPrepare(context, context.projectRoot)
         const passthroughArgs = serializePassthroughInput(input)
         if (passthroughArgs.length > 0) {
@@ -2141,9 +2146,7 @@ export function createInternalCommands(
         await executeRuntime(
           context.projectRoot,
           'fresh',
-          {
-            seed: false,
-          },
+          {},
           async (stdout) => {
             for (const line of stdout.split('\n').filter(Boolean)) {
               writeLine(context.stdout, line)

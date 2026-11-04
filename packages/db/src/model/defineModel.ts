@@ -8,6 +8,7 @@ import { setAutomaticEagerLoading, setPreventAccessingMissingAttributes, setPrev
 import { resolveUniqueIdConfig, validateUniqueIdConfig } from './uniqueIds'
 import {
   buildModelTable,
+  createUntypedModelTable,
   inferModelName,
   inferPrimaryKey,
   normalizeEventHandlers,
@@ -31,11 +32,19 @@ import type {
   DynamicRelationResolver,
   DefineModelOptions,
   EntityWithLoaded,
+  EmptyModelCastMap,
+  EmptyModelDateOptions,
   EmptyScopeMap,
   GeneratedSchemaTable,
   ModelAttributeKey,
+  ModelCastedTable,
+  ModelCastMap,
+  ModelArithmeticColumnName,
   ModelColumnName,
+  ModelDateColumns,
+  ModelDateOptions,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelScopesDefinition,
   ModelUpdatePayload,
@@ -53,13 +62,26 @@ type ModelTableBuilderResult<
 > = {
   build(): BoundTableDefinition<TName, TColumns>
 }
+type CastedModelOptions<
+  TTable extends TableDefinition,
+  TScopes extends ModelScopesDefinition,
+  TRelations extends RelationMap,
+  THidden extends readonly string[],
+  TCasts extends ModelCastMap,
+  TDateOptions extends ModelDateOptions,
+> = DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden, readonly casts?: TCasts } & TDateOptions
+type ModelTable<
+  TTable extends TableDefinition,
+  TCasts extends ModelCastMap,
+  TDateOptions extends ModelDateOptions,
+> = ModelCastedTable<TTable, TCasts, ModelDateColumns<TDateOptions>>
 type SharedModelDefinitionFields<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition,
   TRelations extends RelationMap,
 > = Omit<
   ModelDefinition<TTable, TScopes, TRelations>,
-  'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
+  'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
 >
 
 function snapshotModelScopes<TScopes extends ModelScopesDefinition>(scopes: TScopes): TScopes {
@@ -122,30 +144,36 @@ export function defineModel<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TColumns extends ColumnShapeInput,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   tableName: TName,
   builder: (table: TableDefinitionBuilder<TName, EmptyColumnShape>) => ModelTableBuilderResult<TName, TColumns>,
-  options?: DefineModelOptions<BoundTableDefinition<TName, TColumns>, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<BoundTableDefinition<TName, TColumns>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<BoundTableDefinition<TName, TColumns>, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel<
   TName extends string,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   tableName: TName,
-  options?: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<GeneratedSchemaTable<TName>, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModel(
   tableOrName: string | TableDefinition,
   builderOrOptions?:
@@ -175,10 +203,12 @@ export function defineModelFromTable<
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
   TRelations extends RelationMap = RelationMap,
   const THidden extends readonly string[] = readonly string[],
+  const TCasts extends ModelCastMap = EmptyModelCastMap,
+  const TDateOptions extends ModelDateOptions = EmptyModelDateOptions,
 >(
   table: TTable,
-  options?: DefineModelOptions<TTable, TScopes, TRelations> & { readonly hidden?: THidden },
-): StaticModelApi<TTable, TScopes, TRelations, THidden>
+  options?: CastedModelOptions<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden, TCasts, TDateOptions>,
+): StaticModelApi<ModelTable<TTable, TCasts, TDateOptions>, TScopes, TRelations, THidden>
 export function defineModelFromTable(
   table: TableDefinition,
   options?: DefineModelOptions<TableDefinition>,
@@ -201,72 +231,73 @@ function defineModelFromGeneratedTableName<
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
-  const resolveTableDefinition = (): GeneratedSchemaTable<TName> => (
-    resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName>
+  type ColumnName = Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  const untypedTable = createUntypedModelTable(tableName) as GeneratedSchemaTable<TName>
+  const resolveSchemaTable = (): GeneratedSchemaTable<TName> | undefined => (
+    resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName> | undefined
   )
-  const resolvePrimaryKeyFromTable = (
-    table: GeneratedSchemaTable<TName>,
-  ): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
-    (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  const resolvePrimaryKeyFromTable = (table: GeneratedSchemaTable<TName> | undefined): ColumnName => (
+    (options.primaryKey ?? (table ? inferPrimaryKey(table) : 'id')) as ColumnName
   )
   const resolveUniqueIdFromTable = (
-    table: GeneratedSchemaTable<TName>,
+    table: GeneratedSchemaTable<TName> | undefined,
   ): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
     return resolveUniqueIdConfig(
       options.traits,
-      resolvePrimaryKeyFromTable(table),
+      () => resolvePrimaryKeyFromTable(table),
       options.uniqueIds,
       options.newUniqueId,
     )
   }
-  const resolveTable = (): GeneratedSchemaTable<TName> => {
-    const table = resolveTableDefinition()
-    validateUniqueIdConfig(table, inferredName, resolveUniqueIdFromTable(table))
+  const resolveValidatedSchemaTable = (): GeneratedSchemaTable<TName> | undefined => {
+    const table = resolveSchemaTable()
+    if (table) {
+      validateUniqueIdConfig(table, inferredName, resolveUniqueIdFromTable(table))
+    }
     return table
   }
-  const resolvePrimaryKey = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
-    resolvePrimaryKeyFromTable(resolveTable())
-  )
-  const resolveCreatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
-    const timestamps = options.timestamps ?? true
-    return timestamps
-      ? resolveTimestampColumn(resolveTable(), options.createdAtColumn, 'created_at')
-      : undefined
+  const resolveTimestamp = (explicit: string | undefined, fallback: string): ColumnName | undefined => {
+    if (!(options.timestamps ?? true)) {
+      return undefined
+    }
+
+    const table = resolveValidatedSchemaTable()
+    return table ? resolveTimestampColumn(table, explicit, fallback) : (explicit ?? fallback) as ColumnName
   }
-  const resolveUpdatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
-    const timestamps = options.timestamps ?? true
-    return timestamps
-      ? resolveTimestampColumn(resolveTable(), options.updatedAtColumn, 'updated_at')
-      : undefined
-  }
-  const resolveDeletedAt = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => (
-    resolveDeletedAtColumn(resolveTable(), options)
-  )
-  const resolveUniqueId = (): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
-    return resolveUniqueIdFromTable(resolveTable())
+  const resolveDeletedAt = (): ColumnName | undefined => {
+    const table = resolveValidatedSchemaTable()
+    if (table) {
+      return resolveDeletedAtColumn(table, options)
+    }
+
+    return options.softDeletes ? (options.deletedAtColumn ?? 'deleted_at') as ColumnName : undefined
   }
 
   const definition = {
     ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
-  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
-    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
+  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
+    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'untyped' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
 
   Object.defineProperties(definition, {
     table: {
       enumerable: true,
-      get: resolveTable,
+      get: () => resolveValidatedSchemaTable() ?? untypedTable,
+    },
+    untyped: {
+      enumerable: true,
+      get: () => resolveSchemaTable() === undefined,
     },
     primaryKey: {
       enumerable: true,
-      get: resolvePrimaryKey,
+      get: () => resolvePrimaryKeyFromTable(resolveValidatedSchemaTable()),
     },
     createdAtColumn: {
       enumerable: true,
-      get: resolveCreatedAtColumn,
+      get: () => resolveTimestamp(options.createdAtColumn, 'created_at'),
     },
     updatedAtColumn: {
       enumerable: true,
-      get: resolveUpdatedAtColumn,
+      get: () => resolveTimestamp(options.updatedAtColumn, 'updated_at'),
     },
     deletedAtColumn: {
       enumerable: true,
@@ -274,7 +305,7 @@ function defineModelFromGeneratedTableName<
     },
     uniqueIdConfig: {
       enumerable: true,
-      get: resolveUniqueId,
+      get: () => resolveUniqueIdFromTable(resolveValidatedSchemaTable()),
     },
   })
 
@@ -291,7 +322,7 @@ function defineModelFromResolvedTable<
 ): StaticModelApi<TTable, TScopes, TRelations> {
   const deletedAtColumn = resolveDeletedAtColumn(table, options)
   const inferredName = options.name ?? inferModelName(table.tableName)
-  const primaryKey = (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof TTable['columns'], string>
+  const resolvePrimaryKey = () => (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof TTable['columns'], string>
   const timestamps = options.timestamps ?? true
   const createdAtColumn = timestamps
     ? resolveTimestampColumn(table, options.createdAtColumn, 'created_at')
@@ -301,7 +332,7 @@ function defineModelFromResolvedTable<
     : undefined
   const uniqueIdConfig = resolveUniqueIdConfig(
     options.traits,
-    primaryKey,
+    resolvePrimaryKey,
     options.uniqueIds,
     options.newUniqueId,
   )
@@ -309,17 +340,18 @@ function defineModelFromResolvedTable<
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
-  const definition: ModelDefinition<TTable, TScopes, TRelations> = Object.freeze({
+  const definition = {
     ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
     table,
-    primaryKey,
+    untyped: false,
     createdAtColumn,
     updatedAtColumn,
     uniqueIdConfig,
     deletedAtColumn,
-  })
+  } as Omit<ModelDefinition<TTable, TScopes, TRelations>, 'primaryKey'> & Pick<ModelDefinition<TTable, TScopes, TRelations>, 'primaryKey'>
+  Object.defineProperty(definition, 'primaryKey', { enumerable: true, get: resolvePrimaryKey })
 
-  return createStaticModelApi(definition)
+  return createStaticModelApi(Object.freeze(definition))
 }
 
 function createStaticModelApi<
@@ -475,16 +507,16 @@ function createStaticModelApi<
     onlyTrashed() {
       return this.getRepository().query().onlyTrashed()
     },
-    create(values: Partial<ModelRecord<TTable>>) {
+    create(values: ModelInsertPayload<TTable>) {
       return this.getRepository().create(values)
     },
-    createMany(values: readonly Partial<ModelRecord<TTable>>[]) {
+    createMany(values: readonly ModelInsertPayload<TTable>[]) {
       return this.getRepository().createMany(values)
     },
-    createQuietly(values: Partial<ModelRecord<TTable>>) {
+    createQuietly(values: ModelInsertPayload<TTable>) {
       return this.getRepository().createQuietly(values)
     },
-    createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]) {
+    createManyQuietly(values: readonly ModelInsertPayload<TTable>[]) {
       return this.getRepository().createManyQuietly(values)
     },
     update(id: unknown, values: ModelUpdatePayload<TTable>) {
@@ -493,10 +525,10 @@ function createStaticModelApi<
     prune() {
       return this.getRepository().prune()
     },
-    increment(column: ModelColumnName<TTable>, amount: number = 1, extraValues: Partial<ModelRecord<TTable>> = {}) {
+    increment(column: ModelArithmeticColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().increment(column, amount, extraValues)
     },
-    decrement(column: ModelColumnName<TTable>, amount: number = 1, extraValues: Partial<ModelRecord<TTable>> = {}) {
+    decrement(column: ModelArithmeticColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().decrement(column, amount, extraValues)
     },
     delete(id: unknown) {
@@ -511,19 +543,19 @@ function createStaticModelApi<
     forceDelete(id: unknown) {
       return this.getRepository().forceDelete(id)
     },
-    updateOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    updateOrCreate(match: Partial<ModelRecord<TTable>>, values: ModelUpdatePayload<TTable> = {}) {
       return this.getRepository().updateOrCreate(match, values)
     },
-    upsert(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    upsert(match: Partial<ModelRecord<TTable>>, values: ModelUpdatePayload<TTable> = {}) {
       return this.getRepository().upsert(match, values)
     },
-    firstOrNew(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    firstOrNew(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().firstOrNew(match, values)
     },
-    firstOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    firstOrCreate(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().firstOrCreate(match, values)
     },
-    createOrFirst(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    createOrFirst(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().createOrFirst(match, values)
     },
     saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]) {
@@ -533,7 +565,7 @@ function createStaticModelApi<
       registerDynamicRelation(definition, name, resolver)
       return this
     },
-    make(values: Partial<ModelRecord<TTable>> = {}) {
+    make(values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().make(values)
     },
     hydrate(row: Partial<ModelRecord<TTable>>, sourceConnection?: DatabaseContext) {

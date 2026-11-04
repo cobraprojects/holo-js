@@ -1,10 +1,11 @@
 /* v8 ignore file -- type declarations only */
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { GeneratedSchemaTable } from '../schema/generated'
-import type { InferInsert, InferSelect, InferUpdate, TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, ColumnDefinition, InferInsert, InferSelect, InferUpdate, TableColumnsShape, TableDefinition, VectorValue } from '../schema/types'
 import type { Entity, ModelBase, ModelRelationMethods } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 import type { ModelCollection } from './collection'
+import type { TableWildcardSelection } from '../query/selectionTypes'
 
 export type ModelInsertPayload<TTable extends TableDefinition> = Partial<InferInsert<TTable>>
 export type ModelUpdatePayload<TTable extends TableDefinition> = Partial<InferUpdate<TTable>>
@@ -12,12 +13,24 @@ export type ModelRecord<TTable extends TableDefinition> = InferSelect<TTable>
 export type { GeneratedSchemaTable }
 export type ModelAttributeKey<TTable extends TableDefinition> = Extract<keyof InferSelect<TTable>, string>
 export type ModelColumnName<TTable extends TableDefinition> = ModelAttributeKey<TTable> | `${string}.${ModelAttributeKey<TTable>}`
+export type ModelWritableAttributeKey<TTable extends TableDefinition> = Extract<keyof InferUpdate<TTable>, string>
+export type ModelWritableColumnName<TTable extends TableDefinition> = ModelWritableAttributeKey<TTable> | `${TTable['tableName']}.${ModelWritableAttributeKey<TTable>}`
+type ModelArithmeticAttributeKey<TTable extends TableDefinition> = string extends ModelWritableAttributeKey<TTable>
+  ? string
+  : Extract<{
+    [K in keyof InferUpdate<TTable>]-?: NonNullable<InferUpdate<TTable>[K]> extends number | bigint | string ? K : never
+  }[keyof InferUpdate<TTable>], string>
+export type ModelArithmeticColumnName<TTable extends TableDefinition> = ModelArithmeticAttributeKey<TTable> | `${TTable['tableName']}.${ModelArithmeticAttributeKey<TTable>}`
 export type ModelColumnReference<TTable extends TableDefinition> = ModelColumnName<TTable> | `${string}.${string}`
 export type ModelJsonColumnPath<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>}->${string}`
-export type ModelSelectableColumn<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>} as ${string}`
+export type ModelWritableJsonColumnPath<TTable extends TableDefinition> = ModelWritableColumnName<TTable> | `${ModelWritableColumnName<TTable>}->${string}`
+export type ModelSelectableColumn<TTable extends TableDefinition, TJoinedTables extends string = never> = ModelColumnName<TTable>
+  | `${ModelColumnName<TTable>} as ${string}`
+  | TableWildcardSelection<TTable['tableName'] | TJoinedTables>
 export interface AnyModelDefinition {
   readonly kind: 'model'
   readonly table: TableDefinition
+  readonly untyped: boolean
   readonly name: string
   readonly primaryKey: string
   readonly connectionName?: string
@@ -311,17 +324,17 @@ export interface BelongsToRelationMethods<TRelated> {
 /**
  * Methods available on HasOne/HasOneThrough relations when called as a method
  */
-export interface HasOneRelationMethods<TRelated> {
-  create(values: Record<string, unknown>): Promise<TRelated>
+export interface HasOneRelationMethods<TRelated, TValues = Record<string, unknown>> {
+  create(values: TValues): Promise<TRelated>
   save(related: TRelated): Promise<TRelated>
 }
 
 /**
  * Methods available on HasMany/HasManyThrough relations when called as a method
  */
-export interface HasManyRelationMethods<TRelated> {
-  create(values: Record<string, unknown>): Promise<TRelated>
-  createMany(values: readonly Record<string, unknown>[]): Promise<TRelated[]>
+export interface HasManyRelationMethods<TRelated, TValues = Record<string, unknown>> {
+  create(values: TValues): Promise<TRelated>
+  createMany(values: readonly TValues[]): Promise<TRelated[]>
   save(related: TRelated): Promise<TRelated>
   saveMany(related: readonly TRelated[]): Promise<TRelated[]>
 }
@@ -329,13 +342,13 @@ export interface HasManyRelationMethods<TRelated> {
 /**
  * Methods available on BelongsToMany relations when called as a method (e.g., post.tags())
  */
-export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>> {
+export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>, TValues = Record<string, unknown>> {
   attach(ids: unknown | readonly unknown[], attributes?: TPivot): Promise<void>
   detach(ids?: unknown | readonly unknown[]): Promise<number>
   sync(ids: unknown): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>
   toggle(ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }>
   updateExistingPivot(id: unknown, attributes: TPivot): Promise<number>
-  create(values: Record<string, unknown>): Promise<TRelated>
+  create(values: TValues): Promise<TRelated>
   save(related: TRelated): Promise<TRelated>
 }
 
@@ -346,27 +359,27 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
   = TRelation extends BelongsToRelationDefinition<infer TRelated>
     ? BelongsToRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
     : TRelation extends HasOneRelationDefinition<infer TRelated>
-      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
       : TRelation extends HasOneOfManyRelationDefinition<infer TRelated>
-        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
         : TRelation extends HasManyRelationDefinition<infer TRelated>
-          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
           : TRelation extends HasOneThroughRelationDefinition<infer TRelated>
-            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
             : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
-              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
               : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
-                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
-                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                   : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
-                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                     : TRelation extends MorphManyRelationDefinition<infer TRelated>
-                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphToManyRelationDefinition<infer TRelated>
-                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
-                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                         : never
 
 export interface RelationMap {
@@ -570,7 +583,11 @@ type PivotRecordOfRelation<TRelation>
   = TRelation extends { readonly pivotModel: () => infer TModel extends ModelDefinitionLike }
     ? Entity<ModelDefinitionTable<TModel>, RelatedRelationsOfDefinition<TModel>>
     : TRelation extends { readonly pivotTable: infer TPivotTable extends string | TableDefinition }
-      ? InferSelect<TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable>
+      ? InferSelect<ModelCastedTable<
+        TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable,
+        EmptyModelCastMap,
+        TRelation extends { readonly pivotTimestamps: true } ? 'created_at' | 'updated_at' : never
+      >>
       : Record<never, never>
 
 type LoadedPivotOfRelation<TRelation>
@@ -778,6 +795,76 @@ export type ModelCastDefinition = BuiltInCastString | EnumCastDefinition | Casta
   get?: (value: unknown) => unknown
   set?: (value: unknown) => unknown
 }
+export type ModelCastMap = Readonly<Record<string, ModelCastDefinition>>
+export type EmptyModelCastMap = Record<never, never>
+
+type BuiltInCastValues = {
+  readonly boolean: boolean
+  readonly number: number
+  readonly string: string
+  readonly date: Date
+  readonly datetime: Date
+  readonly timestamp: Date
+  readonly vector: VectorValue
+}
+
+type BuiltInCastNameOf<TCast> = TCast extends `${infer TName extends BuiltInCastName}:${string}`
+  ? TName
+  : TCast extends BuiltInCastName ? TCast : never
+
+type JsonCastValue<TColumnValue> = [TColumnValue] extends [string] ? unknown : TColumnValue
+
+type CastValue<TCastName, TColumnValue>
+  = [TCastName] extends [never] ? TColumnValue
+    : TCastName extends 'json' ? JsonCastValue<TColumnValue>
+      : TCastName extends keyof BuiltInCastValues ? BuiltInCastValues[TCastName] : TColumnValue
+
+type CastedColumn<TColumn extends AnyColumnDefinition, TCast>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, infer THasDefault, infer TGenerated, infer TPrimaryKey, infer TComputed>
+    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>
+    : never
+
+type CastedColumns<TColumns extends TableColumnsShape, TCasts extends ModelCastMap> = {
+  [K in keyof TColumns]: CastedColumn<TColumns[K], K extends keyof TCasts ? TCasts[K] : never>
+}
+
+type CastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap>
+  = [Extract<keyof TCasts, keyof TTable['columns']>] extends [never] ? TTable
+    : Omit<TTable, 'columns'> & { readonly columns: CastedColumns<TTable['columns'], TCasts> }
+
+type KnownCasts<TCasts extends ModelCastMap> = string extends keyof TCasts ? EmptyModelCastMap : TCasts
+
+type ColumnValueOf<TColumn> = TColumn extends ColumnDefinition<infer TValue, boolean, boolean, boolean, boolean, boolean> ? TValue : never
+
+type ModelDateCasts<TTable extends TableDefinition, TDateColumns extends string, TCasts extends ModelCastMap> = {
+  readonly [K in Extract<Exclude<TDateColumns, keyof KnownCasts<TCasts>>, keyof TTable['columns']> as string extends ColumnValueOf<TTable['columns'][K]> ? K : never]: 'datetime'
+}
+
+export type ModelCastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap, TDateColumns extends string = never>
+  = CastedTable<TTable, KnownCasts<TCasts> & ModelDateCasts<TTable, TDateColumns, TCasts>>
+
+export interface ModelDateOptions {
+  readonly timestamps?: boolean
+  readonly createdAtColumn?: string
+  readonly updatedAtColumn?: string
+  readonly softDeletes?: boolean
+  readonly deletedAtColumn?: string
+}
+
+export type EmptyModelDateOptions = Record<never, never>
+
+type TimestampColumns<TOptions extends ModelDateOptions>
+  = TOptions extends { readonly timestamps: false } ? never
+    : | (TOptions extends { readonly createdAtColumn: infer TColumn extends string } ? TColumn : 'created_at')
+      | (TOptions extends { readonly updatedAtColumn: infer TColumn extends string } ? TColumn : 'updated_at')
+
+type SoftDeleteColumn<TOptions extends ModelDateOptions>
+  = TOptions extends { readonly softDeletes: true }
+    ? TOptions extends { readonly deletedAtColumn: infer TColumn extends string } ? TColumn : 'deleted_at'
+    : never
+
+export type ModelDateColumns<TOptions extends ModelDateOptions> = TimestampColumns<TOptions> | SoftDeleteColumn<TOptions>
+
 export type ModelAccessor = (value: unknown, entity: AnyEntity) => unknown
 export type ModelMutator = (value: unknown, entity?: AnyEntity) => unknown
 export type ModelDateSerializer = (value: Date) => unknown
@@ -858,6 +945,7 @@ export interface ModelDefinition<
 > {
   readonly kind: 'model'
   readonly table: TTable
+  readonly untyped: boolean
   readonly name: string
   readonly primaryKey: ModelAttributeKey<TTable>
   readonly connectionName?: string
@@ -923,11 +1011,12 @@ export type ModelScopeMethods<
   TScopes extends ModelScopesDefinition,
   TRelations extends RelationMap = RelationMap,
   TLoaded = unknown,
+  TJoinedTables extends string = never,
 > = {
   [K in keyof TScopes]:
   TScopes[K] extends (query: infer TQuery, ...args: infer TArgs) => ModelQueryBuilder<TTable>
     ? ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes> extends TQuery
-      ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes>
+      ? (...args: TArgs) => ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
       : never
     : never
 }

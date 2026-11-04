@@ -3,7 +3,6 @@ export type { TransactionScopeKind, ConcurrencyOptions, QueryStartLog, QuerySucc
 /* v8 ignore file -- type declarations only */
 import type { DatabaseCapabilities } from './capabilities'
 import type { SecurityPolicy } from '../security/policy'
-import type { SchemaRegistry } from '../schema/SchemaRegistry'
 import type { ModelRegistry } from '../model/ModelRegistry'
 import type { SchedulingMode } from './QueryScheduler'
 
@@ -91,6 +90,7 @@ export interface DriverAdapter {
   disconnect(): Promise<void>
   isConnected(): boolean
   isDatabaseMissingError?(error: unknown): boolean
+  databaseExists?(): Promise<boolean>
   ensureDatabaseExists?(): Promise<void>
   runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
   beforeMigrationTransaction?(): Promise<unknown>
@@ -135,6 +135,5 @@ export interface DatabaseContextOptions {
   logger?: DatabaseLogger
   security?: Partial<SecurityPolicy>
   concurrency?: ConcurrencyOptions
-  schemaRegistry?: SchemaRegistry
   modelRegistry?: ModelRegistry
 }

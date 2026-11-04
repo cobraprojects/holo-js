@@ -10,6 +10,7 @@ import {
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
   renderGeneratedSchemaRuntimeModule,
+  SchemaError,
   type TableDefinition,
 } from '../src'
 
@@ -67,7 +68,6 @@ describe('generated schema helpers', () => {
       vector_value: column.vector({ dimensions: 3 }),
       enum_value: column.enum(['draft', 'published'] as const).default('draft'),
       nullable_value: column.string().nullable(),
-      generated_value: column.string().generated(),
       public_uuid: column.uuid().primaryKey(),
     }, {
       indexes: [
@@ -161,7 +161,6 @@ describe('generated schema helpers', () => {
     expect(rendered).toContain('"vector_value": column.vector({ dimensions: 3 }),')
     expect(rendered).toContain('"enum_value": column.enum(["draft","published"]).default("draft"),')
     expect(rendered).toContain('"nullable_value": column.string().nullable(),')
-    expect(rendered).toContain('"generated_value": column.string().generated(),')
     expect(rendered).toContain('"public_uuid": column.uuid().primaryKey(),')
     expect(rendered).toContain('"maybe": column.string().default(undefined),')
     expect(rendered).toContain('"nullable_note": column.string().nullable().default(null),')
@@ -193,6 +192,10 @@ describe('generated schema helpers', () => {
     }
   })
 
+  it('keeps the lint header on an empty Generated schema module, as on the scaffolded placeholder', () => {
+    expect(renderGeneratedSchemaModule([]).split('\n')[0]).toBe('/* eslint-disable @typescript-eslint/no-empty-object-type */')
+  })
+
   it('resolves explicit generated tables and falls back to a minimal table shape when absent', () => {
     const users = defineGeneratedTable('users', {
       id: column.id(),
@@ -205,5 +208,12 @@ describe('generated schema helpers', () => {
     expect(fallback.tableName).toBe('missing_users')
     expect(Object.keys(fallback.columns)).toEqual(['id'])
     expect(fallback.columns.id?.kind).toBe('id')
+  })
+
+  it('rejects a primary key column order that does not list exactly the primary-key columns', () => {
+    const columns = { a: column.integer().primaryKey(), b: column.integer().primaryKey(), c: column.integer() }
+
+    expect(() => defineGeneratedTable('post_tags', columns, { primaryKeyColumns: ['b', 'c'] })).toThrow(SchemaError)
+    expect(() => defineGeneratedTable('post_tags', columns, { primaryKeyColumns: ['b'] })).toThrow(SchemaError)
   })
 })

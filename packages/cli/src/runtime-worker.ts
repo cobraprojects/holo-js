@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs'
 import { writeTextFile } from './project/atomic-file'
 import { initializeHolo } from '@holo-js/core'
 import {
@@ -5,15 +6,20 @@ import {
   createMigrationService,
   createSchemaService,
   createSeederService,
+  holoRuntimeInternals,
   registerGeneratedTables,
   renderGeneratedSchemaModule,
   renderGeneratedSchemaRuntimeModule,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
+  type DatabaseContext,
   type TableDefinition,
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
-import { createSchemaHydrationConnection, replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
+import { errorMessage } from './error-message'
+import { runWithMigrationLock } from './migration-lock'
+import { isSchemaChangingKind } from './runtime-kinds'
+import { RUNTIME_FAILURE_FD } from './runtime-failure'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { regenerateMediaConversions, type MediaRegenerationOptions } from './media-regeneration'
 import type * as MediaModule from '@holo-js/media'
@@ -21,18 +27,22 @@ import type * as StorageRuntimeModule from '@holo-js/storage/runtime'
 
 type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOptions>[0]
 
+type RuntimeModuleEntry = {
+  readonly sourcePath: string
+  readonly url: string
+}
+
 type RuntimePayload = {
   readonly kind?: string
   readonly projectRoot?: string
   readonly runtimeConfig?: RuntimeConfigPayload
-  readonly models?: readonly string[]
-  readonly migrations?: readonly string[]
+  readonly models?: readonly RuntimeModuleEntry[]
+  readonly migrations?: readonly RuntimeModuleEntry[]
   readonly migrationPublishers?: readonly {
     readonly packageName: string
     readonly url: string
   }[]
-  readonly seeders?: readonly string[]
-  readonly generatedSchema?: string
+  readonly seeders?: readonly RuntimeModuleEntry[]
   readonly generatedSchemaOutputPath?: string
   readonly generatedSchemaRuntimeOutputPath?: string
   readonly options?: Record<string, unknown>
@@ -63,7 +73,7 @@ type FreshDropConnection = {
     name: string
     quoteIdentifier(identifier: string): string
   }
-  getSchemaName(): string | undefined
+  queryCompiled<TRow extends Record<string, unknown>>(statement: { sql: string, source: string }): Promise<{ rows: TRow[] }>
   executeCompiled(statement: { sql: string, source: string }): Promise<unknown>
 }
 
@@ -83,6 +93,11 @@ async function readRuntimePayload(): Promise<RuntimePayload> {
   const input = Buffer.concat(chunks).toString('utf8')
   return JSON.parse(input.length > 0 ? input : '{}') as RuntimePayload
 }
+
+process.on('uncaughtException', (error) => {
+  writeSync(RUNTIME_FAILURE_FD, errorMessage(error))
+  process.exitCode = 1
+})
 
 const payload = await readRuntimePayload()
 
@@ -133,63 +148,15 @@ function isSeeder(value: unknown): value is RuntimeSeeder {
   return isRecord(value) && typeof value.name === 'string' && typeof value.run === 'function'
 }
 
-function isTable(value: unknown): value is TableDefinition {
-  return isRecord(value)
-    && value.kind === 'table'
-    && typeof value.tableName === 'string'
-    && isRecord(value.columns)
-    && Array.isArray(value.indexes)
-}
-
-function extractTables(moduleValue: unknown): TableDefinition[] {
-  if (isRecord(moduleValue) && isRecord(moduleValue.tables)) {
-    return Object.values(moduleValue.tables).filter(isTable)
-  }
-
-  if (isRecord(moduleValue) && isTable(moduleValue.default)) {
-    return [moduleValue.default]
-  }
-
-  if (isRecord(moduleValue)) {
-    return Object.values(moduleValue).filter(isTable)
-  }
-
-  return []
-}
-
 const RUNTIME_MIGRATION_NAME_PATTERN = /^\d{4}_\d{2}_\d{2}_\d{6}_[a-z0-9_]+$/
 
-function inferRuntimeMigrationName(entry: string): string {
-  const fileName = entry.split('/').pop()?.replace(/\.[^.]+$/, '')
+function inferRuntimeMigrationName(sourcePath: string): string {
+  const fileName = sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '')
   if (!fileName || !RUNTIME_MIGRATION_NAME_PATTERN.test(fileName)) {
-    throw new Error(`Registered migration "${entry}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
+    throw new Error(`Registered migration "${sourcePath}" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.`)
   }
 
   return fileName
-}
-
-function normalizeRuntimeMigration(
-  entry: string,
-  migration: RuntimeMigration,
-): RuntimeMigration {
-  return {
-    ...migration,
-    name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry),
-  }
-}
-
-function compileFreshDropIdentifierPath(
-  quoteIdentifier: (identifier: string) => string,
-  identifier: string,
-): string {
-  if (!identifier.includes('.')) {
-    return quoteIdentifier(identifier)
-  }
-
-  return identifier
-    .split('.')
-    .map(part => quoteIdentifier(part))
-    .join('.')
 }
 
 async function dropAllTablesForFresh(
@@ -198,14 +165,15 @@ async function dropAllTablesForFresh(
 ): Promise<void> {
   const tables = await schema.getTables()
   if (connection.getDialect().name === 'postgres') {
-    const schemaName = connection.getSchemaName()
-    const quoteIdentifier = connection.getDialect().quoteIdentifier
+    const { quoteIdentifier } = connection.getDialect()
+    const current = await connection.queryCompiled<{ schema: string }>({ sql: 'SELECT current_schema() AS schema', source: 'schema:currentSchema' })
+    const schemaName = current.rows[0]?.schema
+    if (!schemaName) return
 
     for (const tableName of tables) {
-      const qualifiedTableName = schemaName ? `${schemaName}.${tableName}` : tableName
       await connection.executeCompiled({
-        sql: `DROP TABLE IF EXISTS ${compileFreshDropIdentifierPath(quoteIdentifier, qualifiedTableName)} CASCADE`,
-        source: `schema:dropTableFresh:${qualifiedTableName}`,
+        sql: `DROP TABLE IF EXISTS ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)} CASCADE`,
+        source: `schema:dropTableFresh:${schemaName}.${tableName}`,
       })
     }
     return
@@ -218,30 +186,30 @@ async function dropAllTablesForFresh(
   })
 }
 
-async function preloadGeneratedSchema(
-  manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
-  entry: string | undefined,
-): Promise<void> {
-  if (!entry) {
-    return
-  }
+async function isDatabaseMissing(connection: DatabaseContext): Promise<boolean> {
+  const adapter = connection.getAdapter()
+  return typeof adapter.databaseExists === 'function' && !await adapter.databaseExists()
+}
 
-  const tables = extractTables(await loadModule(entry))
-  for (const table of tables) {
-    manager.connection().getSchemaRegistry().replace(table)
+async function readDatabaseSchema(connection: DatabaseContext): Promise<TableDefinition[]> {
+  try {
+    if (await isDatabaseMissing(connection)) {
+      throw new Error('the database does not exist. Run "holo migrate" to create it.')
+    }
+    await connection.initialize()
+    return await holoRuntimeInternals.createSchemaReader(connection).readGeneratedSchema()
+  } catch (error) {
+    throw new Error(`Unable to read the database schema of connection "${connection.getConnectionName()}": ${errorMessage(error)}`, { cause: error })
   }
 }
 
-async function writeGeneratedSchemaArtifact(
+async function writeGeneratedSchema(
   manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
   outputPath: string | undefined,
   runtimeOutputPath: string | undefined,
 ): Promise<void> {
-  if (!outputPath && !runtimeOutputPath) {
-    return
-  }
-
-  const tables = manager.connection().getSchemaRegistry().list()
+  const tables = await readDatabaseSchema(manager.connection())
+  registerGeneratedTables(Object.fromEntries(tables.map(table => [table.tableName, table])))
   if (outputPath) {
     await writeTextFile(outputPath, renderGeneratedSchemaModule(tables))
   }
@@ -250,66 +218,40 @@ async function writeGeneratedSchemaArtifact(
   }
 }
 
-function syncGeneratedSchemaFromManager(
-  manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
-): void {
-  registerGeneratedTables(Object.fromEntries(
-    manager.connection().getSchemaRegistry().list().map(table => [table.tableName, table]),
-  ))
-}
-
-async function hydrateGeneratedSchemaFromRanMigrations(
-  manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
-  migrations: readonly RuntimeMigration[],
-): Promise<void> {
-  const migrationService = createMigrationService(manager.connection(), migrations)
-  const ranNames = new Set(
-    (await migrationService.status())
-      .filter(status => status.status === 'ran')
-      .map(status => status.name),
-  )
-
-  if (ranNames.size === 0) {
-    return
+async function loadRuntimeItem<TValue>(
+  entry: RuntimeModuleEntry,
+  matcher: (value: unknown) => value is TValue,
+  label: string,
+): Promise<TValue> {
+  const item = resolveExport(await loadModule(entry.url), matcher)
+  if (!item) {
+    throw new Error(`Registered ${label} "${entry.sourcePath}" does not export a Holo ${label}.`)
   }
-
-  const realConnection = manager.connection()
-  const dryRunConnection = createSchemaHydrationConnection(realConnection)
-  const schema = createSchemaService(dryRunConnection)
-
-  await replayRanMigrationsInDryRunScope(
-    dryRunConnection,
-    migrations,
-    ranNames,
-    { db: dryRunConnection, schema },
-  )
-
-  for (const table of dryRunConnection.getSchemaRegistry().list()) {
-    realConnection.getSchemaRegistry().replace(table)
-  }
+  return item
 }
 
 async function loadRuntimeItems<TValue>(
-  entries: readonly string[],
+  entries: readonly RuntimeModuleEntry[],
   matcher: (value: unknown) => value is TValue,
   label: string,
 ): Promise<TValue[]> {
   const items: TValue[] = []
-
   for (const entry of entries) {
-    const item = resolveExport(await loadModule(entry), matcher)
-    if (!item) {
-      throw new Error(`Registered ${label} "${entry}" does not export a Holo ${label}.`)
-    }
-    items.push(item)
+    items.push(await loadRuntimeItem(entry, matcher, label))
   }
-
   return items
 }
 
-async function loadMigrations(entries: readonly string[]): Promise<RuntimeMigration[]> {
-  const migrations = await loadRuntimeItems(entries, isMigration, 'migration')
-  return migrations.map((migration, index) => normalizeRuntimeMigration(entries[index] ?? '', migration))
+async function loadMigrations(entries: readonly RuntimeModuleEntry[]): Promise<RuntimeMigration[]> {
+  const migrations: RuntimeMigration[] = []
+  for (const entry of entries) {
+    const migration = await loadRuntimeItem(entry, isMigration, 'migration')
+    migrations.push({
+      ...migration,
+      name: typeof migration.name === 'string' ? migration.name : inferRuntimeMigrationName(entry.sourcePath),
+    })
+  }
+  return migrations
 }
 
 async function loadPublishedMigrations(
@@ -354,7 +296,7 @@ async function loadAllMigrations(): Promise<RuntimeMigration[]> {
   return migrations
 }
 
-async function loadSeeders(entries: readonly string[]): Promise<RuntimeSeeder[]> {
+async function loadSeeders(entries: readonly RuntimeModuleEntry[]): Promise<RuntimeSeeder[]> {
   return loadRuntimeItems(entries, isSeeder, 'seeder')
 }
 
@@ -374,7 +316,7 @@ function printExecutedItems(
   }
 }
 
-function payloadEntries(entries: readonly string[] | undefined): readonly string[] {
+function payloadEntries(entries: readonly RuntimeModuleEntry[] | undefined): readonly RuntimeModuleEntry[] {
   return entries ?? []
 }
 
@@ -397,63 +339,61 @@ const applicationRuntime = payload.kind === 'seed' || payload.kind === 'media:re
   : undefined
 const manager = applicationRuntime?.manager ?? resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
 if (!applicationRuntime) {
-  await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db)
+  await loadProjectDatabaseDrivers(projectRoot, resolvedRuntimeConfig.db, {
+    createMissingDatabases: payload.kind === 'migrate' || payload.kind === 'fresh',
+  })
   configureDB(manager)
 }
-const migrations = payload.kind === 'migrate' || payload.kind === 'hydrate-schema' || payload.kind === 'fresh' || payload.kind === 'rollback'
+const writeProjectGeneratedSchema = () => writeGeneratedSchema(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+
+async function writeGeneratedSchemaAfterFailedRun(failure: unknown): Promise<unknown> {
+  try {
+    await writeProjectGeneratedSchema()
+    return failure
+  } catch (error) {
+    return new Error(`${errorMessage(failure)}\nUnable to write the Generated schema after the failed run: ${errorMessage(error)}`, { cause: failure })
+  }
+}
+
+async function changeSchema<TResult>(change: () => Promise<TResult>): Promise<TResult> {
+  const result = await change().catch(async (error: unknown) => {
+    throw await writeGeneratedSchemaAfterFailedRun(error)
+  })
+  await writeProjectGeneratedSchema()
+  return result
+}
+const migrations = isSchemaChangingKind(payload.kind)
   ? await loadAllMigrations()
   : []
 
 try {
-  if (!applicationRuntime) {
+  if (!applicationRuntime && payload.kind !== 'generate-schema') {
     await manager.initializeAll()
   }
 
   if (payload.kind === 'migrate') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
-    const migrator = createMigrationService(manager.connection(), migrations)
-    const result = payload.options?.isolated === true
-      ? await migrator.migrateIsolated(payload.options)
-      : { kind: 'ran' as const, executed: await migrator.migrate(payload.options ?? {}) }
-    if (result.kind === 'skipped') {
+    const migrate = () => changeSchema(() => createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {}))
+    const run = payload.options?.isolated === true
+      ? await runWithMigrationLock(projectRoot, migrate)
+      : { kind: 'ran' as const, result: await migrate() }
+    if (run.kind === 'skipped') {
       writeOutput('Another migration run holds the migration lock; no migrations were executed.')
     } else {
-      await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
-      printExecutedItems(result.executed, 'No migrations were executed.', 'Migrations executed:')
+      printExecutedItems(run.result, 'No migrations were executed.', 'Migrations executed:')
     }
-  } else if (payload.kind === 'hydrate-schema') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
-    writeOutput('Generated schema metadata refreshed.')
+  } else if (payload.kind === 'generate-schema') {
+    await writeProjectGeneratedSchema()
+    writeOutput('Generated schema written from the database.')
   } else if (payload.kind === 'fresh') {
-    const schema = createSchemaService(manager.connection())
-    await dropAllTablesForFresh(manager.connection(), schema)
-    manager.connection().getSchemaRegistry().clear()
-
-    const executed = await createMigrationService(manager.connection(), migrations).migrate({})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
-    syncGeneratedSchemaFromManager(manager)
+    const executed = await changeSchema(async () => {
+      await dropAllTablesForFresh(manager.connection(), createSchemaService(manager.connection()))
+      return createMigrationService(manager.connection(), migrations).migrate({})
+    })
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
-
-    if (payload.options?.seed) {
-      const seeded = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed({
-        ...(Array.isArray(payload.options.only) ? { only: payload.options.only } : {}),
-        quietly: payload.options.quietly === true,
-        force: payload.options.force === true,
-        environment: typeof payload.options.environment === 'string' ? payload.options.environment : 'development',
-      })
-      printExecutedItems(seeded, 'No seeders were executed.', 'Seeders executed:')
-    }
   } else if (payload.kind === 'rollback') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
-    const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+    const rolledBack = await changeSchema(() => createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {}))
     printExecutedItems(rolledBack, 'No migrations were rolled back.', 'Migrations rolled back:')
   } else if (payload.kind === 'seed') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
     const executed = await createSeederService(manager.connection(), await loadSeeders(payloadEntries(payload.seeders))).seed(payload.options ?? {})
     printExecutedItems(executed, 'No seeders were executed.', 'Seeders executed:')
   } else if (payload.kind === 'media:regenerate') {

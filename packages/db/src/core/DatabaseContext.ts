@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getRootDatabaseContext, registerDatabaseContext } from './contextOwnership'
-import { beginSchemaMutationScope, commitSchemaMutationScope, rollbackSchemaMutationScope } from '../schema/mutationState'
 import { createFactoryService, type FactoryService } from '../factories/FactoryService'
 import { createMigrationService, type MigrationService } from '../migrations/MigrationService'
 import { createModelEventService, type ModelEventService } from '../model/ModelEventService'
@@ -10,13 +9,14 @@ import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
-import { createSchemaRegistry, type SchemaRegistry } from '../schema/SchemaRegistry'
 import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
+import { advanceSchemaGeneration } from './schemaGeneration'
+import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -61,10 +61,6 @@ type TransactionCallbackState = {
   afterRollback: TransactionCallback[]
 }
 
-type TransactionFrame = {
-  open: boolean
-}
-
 type RootAttemptState = {
   rollbackFailed: boolean
 }
@@ -103,7 +99,6 @@ type ContextInternals = {
   logger?: DatabaseLogger
   security: SecurityPolicy
   concurrency: ConcurrencyOptions
-  schemaRegistry: SchemaRegistry
   modelRegistry: ModelRegistry
   runtime: RuntimeState
   scope: ScopeState
@@ -142,7 +137,6 @@ export class DatabaseContext {
   private readonly _logger?: DatabaseLogger
   private readonly _security: SecurityPolicy
   private readonly _concurrency: ConcurrencyOptions
-  private readonly _schemaRegistry: SchemaRegistry
   private readonly _modelRegistry: ModelRegistry
   private readonly _runtime: RuntimeState
   private readonly _scope: ScopeState
@@ -171,7 +165,6 @@ export class DatabaseContext {
     this._logger = options.logger
     this._security = createSecurityPolicy(options.security)
     this._concurrency = 'concurrency' in options ? { ...options.concurrency } : {}
-    this._schemaRegistry = ('schemaRegistry' in options ? options.schemaRegistry : undefined) ?? createSchemaRegistry()
     this._modelRegistry = ('modelRegistry' in options ? options.modelRegistry : undefined) ?? createModelRegistry()
     this._runtime = 'runtime' in options
       ? options.runtime
@@ -244,10 +237,6 @@ export class DatabaseContext {
 
   getConcurrencyOptions(): ConcurrencyOptions {
     return { ...this._concurrency }
-  }
-
-  getSchemaRegistry(): SchemaRegistry {
-    return this._schemaRegistry
   }
 
   getModelRegistry(): ModelRegistry {
@@ -380,6 +369,21 @@ export class DatabaseContext {
     ), options)
   }
 
+  async executeSchemaStatement(
+    statement: CompiledStatement,
+    options?: DatabaseOperationOptions,
+  ): Promise<DriverExecutionResult> {
+    const transaction = currentRootTransaction(this)
+    if (transaction) {
+      transaction.schemaChanged = true
+    }
+    try {
+      return await this.executeCompiled(statement, options)
+    } finally {
+      advanceSchemaGeneration()
+    }
+  }
+
   async transaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
     options?: DatabaseTransactionOptions,
@@ -471,7 +475,7 @@ export class DatabaseContext {
       scope: 'transaction',
       depth: 1,
     }
-    const frame: TransactionFrame = { open: true }
+    const frame: TransactionFrame = { open: true, schemaChanged: false }
     let transaction: DatabaseContext | undefined
     let commitStarted = false
 
@@ -505,13 +509,11 @@ export class DatabaseContext {
         )
         transaction = child
 
-        beginSchemaMutationScope(child, this)
         let value: T
         try {
-          value = await this._runTransactionCallback(child, callback)
+          value = await runInRootTransaction(this, frame, () => this._runTransactionCallback(child, callback))
         } catch (error) {
           await this._callTransactionHook('rollback', rollbackAdapter)
-          rollbackSchemaMutationScope(child)
           throw error
         }
 
@@ -520,12 +522,14 @@ export class DatabaseContext {
           await this._callTransactionHook('commit', () => this._adapter.commit())
         } catch (commitError) {
           await this._rollbackAdapterTransaction().catch(() => undefined)
-          rollbackSchemaMutationScope(child)
           runCommitFailureRestores(child)
           throw commitError
         }
 
-        commitSchemaMutationScope(child)
+        if (frame.schemaChanged) {
+          advanceSchemaGeneration()
+        }
+
         return { value, transaction: child, entry }
       })
     }
@@ -637,14 +641,13 @@ export class DatabaseContext {
       options,
       savepointName,
     )
-    const frame: TransactionFrame = { open: true }
+    const frame: TransactionFrame = { open: true, schemaChanged: false }
     const tx = this._createChildContext({
       kind: 'savepoint',
       depth: this._scope.depth + 1,
       savepointName,
     }, this._createTransactionCallbackState(), frame)
     let released = false
-    beginSchemaMutationScope(tx, this)
 
     try {
       const value = await this._runTransactionCallback(tx, callback)
@@ -655,7 +658,6 @@ export class DatabaseContext {
         savepointName,
       )
       released = true
-      commitSchemaMutationScope(tx)
       this._mergeCommittedTransactionCallbacks(tx)
       return { kind: 'committed', value, entry }
     } catch (error) {
@@ -666,19 +668,15 @@ export class DatabaseContext {
       try {
         await this._callTransactionHook(
           'rollbackToSavepoint',
-          () => this._adapter.rollbackToSavepoint!(savepointName),
+          () => this._adapter.rollbackToSavepoint!(savepointName).finally(advanceSchemaGeneration),
           undefined,
           savepointName,
         )
       } catch (rollbackError) {
-        if (isDatabaseConcurrencyError(error)) {
-          rollbackSchemaMutationScope(tx)
-        }
         markFailedRollback(rollbackError)
         moveCommitFailureRestores(tx, this)
         return { kind: 'rollback-failed', rollbackError, entry }
       }
-      rollbackSchemaMutationScope(tx)
       return { kind: 'rolled-back', error, transaction: tx, entry }
     } finally {
       frame.open = false
@@ -702,7 +700,6 @@ export class DatabaseContext {
       logger: this._logger,
       security: this._security,
       concurrency: this._concurrency,
-      schemaRegistry: this._schemaRegistry,
       modelRegistry: this._modelRegistry,
       runtime: this._runtime,
       scope,

@@ -2,6 +2,7 @@ import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { TableDefinition } from '../schema/types'
+import { assertColumnWritable, ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -47,7 +48,9 @@ export class PivotMutation {
     if (Object.keys(attributes).length === 0) return 0
     const [existing] = await this.read(this.connection, [id])
     if (!existing || !this.changed(existing, attributes)) return 0
-    await this.query(this.connection).where(this.context.relatedColumn, id).update(this.timestampAttributes(attributes, false))
+    const values = this.timestampAttributes(attributes, false)
+    this.assertColumnsWritable(Object.keys(values))
+    await this.query(this.connection).where(this.context.relatedColumn, id).update(values)
     return 1
   }
 
@@ -55,6 +58,7 @@ export class PivotMutation {
     const normalized = this.normalize(ids, attributes)
     const entries = kind === 'attach' ? normalized : this.dedupe(normalized)
     for (const entry of entries) this.validate(entry.attributes)
+    this.assertColumnsWritable(entries.flatMap(entry => Object.keys(entry.attributes)))
     const result: Result = { attached: [], detached: [], updated: [] }
     if (kind !== 'sync' && entries.length === 0) return result
 
@@ -91,11 +95,12 @@ export class PivotMutation {
   }
 
   private async execute(connection: DatabaseContext, actions: readonly Action[]): Promise<void> {
-    const timestamp = new Date().toISOString()
+    const timestamp = new Date()
     const timestamped = this.context.timestamps ? actions.map(action => action.kind === 'delete' ? action : {
       ...action,
       attributes: this.timestampAttributes(action.attributes, action.kind === 'insert', timestamp),
     }) : actions
+    this.assertColumnsWritable(timestamped.flatMap(action => this.writtenColumns(action)))
     let offset = 0
     while (offset < timestamped.length) {
       const action = timestamped[offset]!
@@ -129,7 +134,13 @@ export class PivotMutation {
     }
   }
 
-  private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date().toISOString()): Attributes {
+  private writtenColumns(action: Action): string[] {
+    if (action.kind === 'delete') return []
+    const columns = Object.keys(action.attributes)
+    return action.kind === 'insert' ? [...Object.keys(this.context.scope), this.context.relatedColumn, ...columns] : columns
+  }
+
+  private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date()): Attributes {
     if (!this.context.timestamps) return attributes
     return {
       ...attributes,
@@ -163,6 +174,12 @@ export class PivotMutation {
         throw new SecurityError(`Pivot attribute "${column}" on relation "${this.context.relationName}" must be declared with withPivot(...) before it can be written.`)
       }
     }
+  }
+
+  private assertColumnsWritable(columns: readonly string[]): void {
+    const table = this.context.table
+    if (typeof table === 'string') return
+    for (const column of new Set(columns)) assertColumnWritable(column, ownEntry(table.columns, column), 'computed')
   }
 
   private changed(existing: Attributes, attributes: Attributes): boolean {

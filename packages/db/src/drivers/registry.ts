@@ -9,6 +9,7 @@ export type DatabaseDriverConnection = Pick<HoloProjectConnectionConfig, 'max' |
   readonly password?: string
   readonly database?: string
   readonly ssl?: boolean | Record<string, unknown>
+  readonly schema?: string
 }
 
 export type DatabaseDriverFactory = {
@@ -65,6 +66,7 @@ export class DeferredDatabaseDriverAdapter implements DriverAdapter {
   async disconnect(): Promise<void> { if (this.adapter || this.pending) await (await this.resolve()).disconnect() }
   isConnected(): boolean { return this.adapter?.isConnected() ?? false }
   getMutationReturningPermissionQuery(tableName: string): CompiledStatement | undefined { return this.adapter?.getMutationReturningPermissionQuery?.(tableName) }
+  async databaseExists(): Promise<boolean> { return await (await this.resolve()).databaseExists?.() ?? true }
   async ensureDatabaseExists(): Promise<void> { await (await this.resolve()).ensureDatabaseExists?.() }
   isDatabaseMissingError(error: unknown): boolean { return this.adapter?.isDatabaseMissingError?.(error) ?? false }
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> { return (await this.resolve()).runWithTransactionScope?.(callback) ?? callback() }

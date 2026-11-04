@@ -2,7 +2,6 @@ import type { SupportedDatabaseDriver } from '@holo-js/db'
 import {
   createMigrationFileName,
 } from '@holo-js/db'
-import { relativeImportPath } from '../../templates'
 import {
   normalizeScaffoldOptionalPackages,
   sanitizePackageName,
@@ -97,7 +96,7 @@ export function renderAuthEnvFiles(
   }
 }
 
-export function renderAuthUserModel(_generatedSchemaImportPath = '../../.holo-js/generated/schema.generated'): string {
+export function renderAuthUserModel(): string {
   return [
     'import { defineModel } from \'@holo-js/db\'',
     '',
@@ -199,13 +198,6 @@ export function renderAuthorizationAbilitiesReadme(): string {
     'Export `defineAbility(...)` definitions from `@holo-js/authorization`.',
     '',
   ].join('\n')
-}
-
-export function resolveAuthUserModelSchemaImportPath(
-  userModelPath: string,
-  generatedSchemaPath: string,
-): string {
-  return relativeImportPath(userModelPath, generatedSchemaPath)
 }
 
 export function renderAuthMigration(slug: AuthMigrationSlug): string {
@@ -507,6 +499,7 @@ export function renderScaffoldDatabaseConfig(
       '    main: {',
       "      driver: env('DB_DRIVER', 'sqlite'),",
       '      url: env(\'DB_URL\', \'./storage/database.sqlite\'),',
+      '      logging: env(\'DB_LOGGING\', false),',
       '    },',
       '  },',
       '})',
@@ -534,6 +527,8 @@ export function renderScaffoldDatabaseConfig(
     `      username: env('DB_USERNAME', '${username}'),`,
     '      password: env(\'DB_PASSWORD\'),',
     `      database: env('DB_DATABASE', '${packageName}'),`,
+    ...(options.databaseDriver === 'mysql' ? ['      ssl: env(\'DB_SSL\', false),'] : []),
+    '      logging: env(\'DB_LOGGING\', false),',
     ...(schemaLine ? [
       schemaLine,
       `      max: env('DB_POOL_MAX', ${postgresBudgetDefaults.DB_POOL_MAX}),`,

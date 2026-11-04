@@ -1,10 +1,14 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
 import { PooledTransactionClients } from './drivers/PooledTransactionClients'
 import { getApplicationTimezone } from './applicationTimezone'
-import { formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatWallClock, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from './sqliteDateTime'
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
 import { getQueryBounds } from './query/queryBounds'
+import { createSchemaReader } from './schema/introspection'
+import { useGeneratedSchemaConnection } from './schema/generated'
+import { resolveRuntimeDefaultConnectionName } from './runtime'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
 export {
@@ -90,7 +94,6 @@ export {
   column,
   ColumnBuilder,
   clearGeneratedTables,
-  createSchemaDiff,
   defineGeneratedTable,
   diffSchema,
   getGeneratedTableDefinition,
@@ -102,13 +105,11 @@ export {
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
   renderGeneratedSchemaRuntimeModule,
-  SchemaRegistry,
   TableDefinitionBuilder,
   TableMutationBuilder,
   compileDialectDefaultLiteral,
   DIALECT_VECTOR_SUPPORT,
   DIALECT_ID_STRATEGY_MAP,
-  createSchemaRegistry,
   SchemaService,
   DIALECT_LOGICAL_TYPE_MAP,
   SQLSchemaCompiler,
@@ -314,7 +315,6 @@ export type {
   IntrospectedColumn,
   IntrospectedForeignKey,
   IntrospectedIndex,
-  SchemaSyncPlan,
   SchemaColumnMismatch,
   SchemaDiff,
   SchemaForeignKeyMismatch,
@@ -325,12 +325,9 @@ export type {
   GeneratedMigrationTemplate,
   MigrationContext,
   MigrationDefinition,
-  MigrationExecutionPolicy,
-  MigrationSquashPlan,
   MigrationStatus,
   MigrationTemplateKind,
   MigrationTemplateOptions,
-  IsolatedMigrationResult,
   MigrateOptions,
   RollbackOptions,
 } from './migrations'
@@ -358,6 +355,7 @@ export type {
   RegisteredModels,
   ModelAttributeKey,
   ModelCastDefinition,
+  ModelCastedTable,
   ModelDefinition,
   DynamicRelationResolver,
   ModelInsertPayload,
@@ -403,6 +401,9 @@ export type {
 } from './query'
 
 export const holoRuntimeInternals = Object.freeze({
+  createSchemaReader,
+  resolveRuntimeDefaultConnectionName,
+  useGeneratedSchemaConnection,
   getQueryBounds,
   PooledTransactionClients,
   whereColumnNotExpiredByDatabaseClock,
@@ -412,6 +413,9 @@ export const holoRuntimeInternals = Object.freeze({
   formatWithOffset,
   parseCalendarDate,
   parseWallClockTimestamp,
+  SERVER_WALL_CLOCK_AMBIGUITY,
+  formatSQLiteDateTime,
+  parseSQLiteDateTime,
   driverErrorCodes,
   isDatabaseDeadlockError,
 })

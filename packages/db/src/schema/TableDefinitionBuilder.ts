@@ -1,5 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { column, type AnyColumnBuilder, type ColumnInput } from './columns'
+import { SOFT_DELETE_COLUMN_NAME, softDeleteColumn, TIMESTAMP_COLUMN_NAMES, timestampColumn } from './conventionalColumns'
 import { defineTable, type BoundTableDefinition, type DefineTableOptions } from './defineTable'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
 import { resolveConventionalIndexName } from './generatedNames'
@@ -82,8 +83,13 @@ class TableCreateColumnBuilder<
     return this
   }
 
-  generated(): this {
-    this.builderRef.builder = this.builderRef.builder.generated()
+  storedAs(expression: string): this {
+    this.builderRef.builder = this.builderRef.builder.storedAs(expression)
+    return this
+  }
+
+  virtualAs(expression: string): this {
+    this.builderRef.builder = this.builderRef.builder.virtualAs(expression)
     return this
   }
 
@@ -121,8 +127,8 @@ class TableCreateColumnBuilder<
     return this
   }
 
-  foreign(columnName: string): TableCreateForeignKeyBuilder<TName, TColumns> {
-    return this.root.foreign(columnName)
+  foreign(columnName: string, constraintName?: string): TableCreateForeignKeyBuilder<TName, TColumns> {
+    return this.root.foreign(columnName, constraintName)
   }
 
   foreignId<TColumnName extends string>(
@@ -491,8 +497,12 @@ class TableCreateForeignKeyBuilder<
     private readonly root: TableDefinitionBuilder<TName, TColumns>,
     private readonly builderRef: ColumnReference,
     columnName: string,
+    constraintName?: string,
   ) {
     this.foreignKeyState = new ForeignKeyBuilderState(columnName)
+    if (constraintName) {
+      this.builderRef.builder = this.builderRef.builder.constraintName(constraintName)
+    }
   }
 
   references(columnName: string): this {
@@ -569,12 +579,16 @@ export class TableDefinitionBuilder<
   private readonly columns: Record<string, ColumnInput> = {}
   private readonly columnRefs = new Map<string, ColumnReference>()
   private readonly indexes: TableIndexDefinition[] = []
+  private primaryKeyName?: string
+  private primaryKeyColumns?: readonly string[]
 
   constructor(readonly tableName: TName) {}
 
   build(): BoundTableDefinition<TName, TColumns> {
     const options: DefineTableOptions = {
       indexes: Object.freeze([...this.indexes]),
+      primaryKeyName: this.primaryKeyName,
+      primaryKeyColumns: this.primaryKeyColumns,
     }
 
     return defineTable(this.tableName, this.columns as TColumns, options) as BoundTableDefinition<TName, TColumns>
@@ -799,25 +813,41 @@ export class TableDefinitionBuilder<
     return this
   }
 
-  foreign(columnName: string): TableCreateForeignKeyBuilder<TName, TColumns> {
+  primary(columns: readonly string[], name?: string): this {
+    for (const columnName of columns) {
+      const builderRef = this.columnRefs.get(columnName)
+      if (!builderRef) {
+        throw new SchemaError(`Cannot add unknown column "${columnName}" to the primary key. Declare the column first.`)
+      }
+
+      builderRef.builder = builderRef.builder.primaryKey()
+    }
+
+    this.primaryKeyName = name
+    this.primaryKeyColumns = columns
+    return this
+  }
+
+  foreign(columnName: string, constraintName?: string): TableCreateForeignKeyBuilder<TName, TColumns> {
     const builderRef = this.columnRefs.get(columnName)
     if (!builderRef) {
       throw new SchemaError(`Cannot attach a foreign key to unknown column "${columnName}". Declare the column first.`)
     }
 
-    return new TableCreateForeignKeyBuilder(this, builderRef, columnName)
+    return new TableCreateForeignKeyBuilder(this, builderRef, columnName, constraintName)
   }
 
   timestamps(): TableDefinitionBuilder<TName, WithTimestamps<TColumns>> {
-    this.timestamp('created_at').defaultNow()
-    this.timestamp('updated_at').defaultNow()
+    for (const columnName of TIMESTAMP_COLUMN_NAMES) {
+      this.column(columnName, timestampColumn())
+    }
     return this as unknown as TableDefinitionBuilder<TName, WithTimestamps<TColumns>>
   }
 
-  softDeletes<TColumnName extends string = 'deleted_at'>(
-    columnName = 'deleted_at' as TColumnName,
+  softDeletes<TColumnName extends string = typeof SOFT_DELETE_COLUMN_NAME>(
+    columnName = SOFT_DELETE_COLUMN_NAME as TColumnName,
   ): TableDefinitionBuilder<TName, WithSoftDeletes<TColumns, TColumnName>> {
-    this.timestamp(columnName).nullable()
+    this.column(columnName, softDeleteColumn())
     return this as unknown as TableDefinitionBuilder<TName, WithSoftDeletes<TColumns, TColumnName>>
   }
 

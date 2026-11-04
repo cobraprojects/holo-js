@@ -6,12 +6,12 @@ import {
   type CacheDatabaseTableColumnDefinition,
   type CacheDatabaseTableDefinition,
 } from '@holo-js/cache-db'
-import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   getRegistryMigrationSlug,
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
+  normalizeCacheMigrationName,
 } from './migrations'
 import type { IoStreams } from './cli-types'
 import { loadConfigWithNormalizers } from './project/load-config'
@@ -73,10 +73,6 @@ export async function loadCacheConfig(projectRoot: string) {
   }
 
   return cacheConfig
-}
-
-export function normalizeCacheMigrationName(tableName: string): string {
-  return normalizeMigrationSlug(`create_${tableName.replaceAll('.', '_')}_cache_table`)
 }
 
 function escapeSingleQuotedString(value: string): string {

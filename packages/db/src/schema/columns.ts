@@ -5,6 +5,7 @@ import type {
   AnyColumnDefinition,
   ColumnDefaultKind,
   ColumnDefinition,
+  ComputedColumn,
   ForeignKeyReference,
   IdGenerationStrategy,
   LogicalColumnKind,
@@ -31,6 +32,8 @@ type ColumnMetadata = {
   idStrategy?: IdGenerationStrategy
   enumValues?: readonly string[]
   vectorDimensions?: number
+  computed?: ComputedColumn
+  explicitNotNull?: true
 }
 
 type VectorOptions = {
@@ -47,6 +50,7 @@ export class ColumnBuilder<
   THasDefault extends boolean = false,
   TGenerated extends boolean = false,
   TPrimaryKey extends boolean = false,
+  TComputed extends boolean = false,
 > {
   private readonly metadata: ColumnMetadata
 
@@ -63,15 +67,15 @@ export class ColumnBuilder<
     }
   }
 
-  notNull(): ColumnBuilder<TType, false, THasDefault, TGenerated, TPrimaryKey> {
-    return this.clone({ nullable: false })
+  notNull(): ColumnBuilder<TType, false, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+    return this.clone({ nullable: false, explicitNotNull: true })
   }
 
-  nullable(): ColumnBuilder<TType, true, THasDefault, TGenerated, TPrimaryKey> {
-    return this.clone({ nullable: true })
+  nullable(): ColumnBuilder<TType, true, THasDefault, TGenerated, TPrimaryKey, TComputed> {
+    return this.clone({ nullable: true, explicitNotNull: undefined })
   }
 
-  default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey> {
+  default(value: unknown): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
     return this.clone({
       hasDefault: true,
       defaultKind: 'value',
@@ -79,7 +83,7 @@ export class ColumnBuilder<
     })
   }
 
-  defaultNow(): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey> {
+  defaultNow(): ColumnBuilder<TType, TNullable, true, TGenerated, TPrimaryKey, TComputed> {
     return this.clone({
       hasDefault: true,
       defaultKind: 'now',
@@ -87,19 +91,15 @@ export class ColumnBuilder<
     })
   }
 
-  generated(): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey> {
-    return this.clone({ generated: true })
-  }
-
-  primaryKey(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, true> {
+  primaryKey(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, true, TComputed> {
     return this.clone({ primaryKey: true })
   }
 
-  unique(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  unique(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.clone({ unique: true })
   }
 
-  references(columnName: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  references(columnName: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     assertValidIdentifierSegment(columnName, 'Foreign key column')
 
     return this.clone({
@@ -107,7 +107,7 @@ export class ColumnBuilder<
     })
   }
 
-  on(table: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  on(table: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     assertValidIdentifierPath(table, 'Foreign key table')
 
     return this.clone({
@@ -116,7 +116,7 @@ export class ColumnBuilder<
     })
   }
 
-  constraintName(name: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  constraintName(name: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     assertValidIdentifierSegment(name, 'Foreign key name')
 
     return this.clone({
@@ -127,7 +127,7 @@ export class ColumnBuilder<
   constrained(
     table?: string,
     columnName = 'id',
-  ): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  ): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     if (table) {
       assertValidIdentifierPath(table, 'Foreign key table')
     }
@@ -140,51 +140,59 @@ export class ColumnBuilder<
     })
   }
 
-  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.clone({
       referenceOnDelete: action,
     })
   }
 
-  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.clone({
       referenceOnUpdate: action,
     })
   }
 
-  cascadeOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  cascadeOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onDelete('cascade')
   }
 
-  restrictOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  restrictOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onDelete('restrict')
   }
 
-  nullOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  nullOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onDelete('set null')
   }
 
-  noActionOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  noActionOnDelete(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onDelete('no action')
   }
 
-  cascadeOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  cascadeOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onUpdate('cascade')
   }
 
-  restrictOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  restrictOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onUpdate('restrict')
   }
 
-  nullOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  nullOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onUpdate('set null')
   }
 
-  noActionOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  noActionOnUpdate(): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     return this.onUpdate('no action')
   }
 
-  toDefinition(options: ColumnBuildOptions): ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey> {
+  storedAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true> {
+    return this.clone({ generated: true, computed: { expression, stored: true } })
+  }
+
+  virtualAs(expression: string): ColumnBuilder<TType, TNullable, THasDefault, true, TPrimaryKey, true> {
+    return this.clone({ generated: true, computed: { expression, stored: false } })
+  }
+
+  toDefinition(options: ColumnBuildOptions): ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     assertValidIdentifierSegment(options.name, 'Column name')
 
     const resolvedName = this.metadata.name ?? options.name
@@ -226,6 +234,8 @@ export class ColumnBuilder<
       idStrategy: this.metadata.idStrategy,
       enumValues: this.metadata.enumValues,
       vectorDimensions: this.metadata.vectorDimensions,
+      explicitNotNull: this.metadata.explicitNotNull,
+      computed: this.metadata.computed as ColumnDefinition<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>['computed'],
     })
   }
 
@@ -234,10 +244,11 @@ export class ColumnBuilder<
     TNextHasDefault extends boolean = THasDefault,
     TNextGenerated extends boolean = TGenerated,
     TNextPrimaryKey extends boolean = TPrimaryKey,
+    TNextComputed extends boolean = TComputed,
   >(
     metadata: Partial<ColumnMetadata>,
-  ): ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey> {
-    return new ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey>(
+  ): ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed> {
+    return new ColumnBuilder<TType, TNextNullable, TNextHasDefault, TNextGenerated, TNextPrimaryKey, TNextComputed>(
       this.metadata.kind,
       metadata.name ?? this.metadata.name,
       {
@@ -346,7 +357,7 @@ export const column = {
   },
 }
 
-export type AnyColumnBuilder = ColumnBuilder<unknown, boolean, boolean, boolean, boolean>
+export type AnyColumnBuilder = ColumnBuilder<unknown, boolean, boolean, boolean, boolean, boolean>
 export type ColumnInput = AnyColumnBuilder | AnyColumnDefinition
 
 export function isColumnBuilder(value: ColumnInput): value is AnyColumnBuilder {

@@ -94,6 +94,10 @@ const drafts = await posts.where('status', 'draft').get()
 const published = await posts.where('status', 'published').get()
 ```
 
+Rows come back with the values the database driver returns, as in Laravel's query builder. For example, PostgreSQL returns `bigint` columns as strings, and SQLite and MySQL return booleans as `1` and `0`. Use a [model](/orm/) with [casts](/orm/casts) when you want typed attributes.
+
+On the default connection, a table name resolves through the Generated schema, the table definitions `holo migrate` and `holo build` write from your database. When the table is in it, Holo uses its columns and primary key to check the columns you name and to prepare the values you write and compare. The Generated schema describes only the default connection, so a table name on another connection uses no definition. A table that isn't in the Generated schema, such as one created earlier in the same script, uses no definition until the Generated schema is regenerated. Pass a table definition to `DB.table()` to use its columns right away.
+
 You can alias the table with `as`:
 
 ```ts
@@ -116,7 +120,7 @@ const events = await DB.table('events', 'analytics').get()
 const archived = await DB.table('posts').from('archived_posts').get()
 ```
 
-## Booleans in SQLite
+## Booleans
 
 Pass JavaScript booleans directly in filters, inserts, updates, and upserts, including queries started with a string table name:
 
@@ -127,7 +131,7 @@ await DB.table('users').where('id', 7).update({ active: true })
 const activeUsers = await DB.table('users').where('active', true).get()
 ```
 
-The SQLite driver binds scalar `true` as `1` and `false` as `0`; you don't need to register a table schema for this conversion. Query-builder rows keep SQLite's numeric values when read back. For boolean model attributes, use a [boolean cast](/orm/casts#built-in-casts). Booleans inside JSON values remain JSON booleans.
+As Laravel does, Holo binds scalar `true` as `1` and `false` as `0` on every driver, so a filter matches what an insert stored, and you don't need to register a table schema for this conversion. A column of a table definition you pass to `DB.table()` gets the value its type stores, so a PostgreSQL `boolean` column binds `true` and `false`. Query-builder rows keep the database's values when read back. For boolean model attributes, use a [boolean cast](/orm/casts#built-in-casts). Booleans inside JSON values remain JSON booleans.
 
 ## Get all rows
 
@@ -353,7 +357,7 @@ const postsPerUser = await DB.table('posts')
 
 When you pass a table **name**, rows are typed as `Record<string, unknown>`. You have two ways to get precise types.
 
-**Pass a table definition.** Holo generates a definition for every table in your migrations into `.holo-js/generated/schema.generated.ts` (Holo regenerates this file; don't edit it). Each table is exported in camelCase (`posts`, `postTags`, `users`). Pass one to `DB.table()` and column names autocomplete everywhere, and results carry the real column types:
+**Pass a table definition.** Holo generates a definition for every table in your database into `.holo-js/generated/schema.generated.ts` (Holo regenerates this file; don't edit it). Each table is exported in camelCase (`posts`, `postTags`, `users`). Pass one to `DB.table()` and column names autocomplete everywhere, and results carry the real column types:
 
 ```ts [server/lib/posts.ts]
 import { DB } from '@holo-js/db'

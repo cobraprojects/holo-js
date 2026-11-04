@@ -126,6 +126,8 @@ Change several columns at once with `incrementEach()` and `decrementEach()`:
 await User.where('id', user.id).incrementEach({ votes: 5, balance: 100 })
 ```
 
+These methods take only number, big integer and decimal columns that the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs.
+
 ### Update JSON columns
 
 Use `updateJson()` with a `->` path to change one key inside a JSON column:
@@ -192,6 +194,8 @@ await Product.query().upsert(
 ```
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
+
+The update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes
 
@@ -549,7 +553,7 @@ await post.save()
 
 ### set()
 
-Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column.
+Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column. A computed column made with `storedAs()` or `virtualAs()` is a readonly property, so `post.set('total', 1)` and `post.total = 1` are type errors. Calling either anyway throws `Column "total" is generated and cannot be written directly.` and leaves the model unchanged, so a later `save()` writes nothing to that column.
 
 ```ts
 post.set('status', 'review')

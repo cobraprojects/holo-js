@@ -1,8 +1,10 @@
+import { SchemaError } from '../core/errors'
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
 import { resolveGeneratedCheckName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
-import type { ColumnDefinition } from './types'
+import type { DDLStatement } from './ddl'
+import type { AnyColumnDefinition, ColumnDefinition } from './types'
 
 export class PostgresSchemaCompiler extends SQLSchemaCompiler {
   protected override getDialectLabel(): string {
@@ -17,16 +19,36 @@ export class PostgresSchemaCompiler extends SQLSchemaCompiler {
     return compileDialectDefaultLiteral('postgres', value)
   }
 
+  compileDropCheck(tableName: string, checkName: string): DDLStatement {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(checkName)}`,
+      source: `schema:dropCheck:${tableName}:${checkName}`,
+    }
+  }
+
+  compileRenameCheck(tableName: string, fromCheckName: string, toCheckName: string): DDLStatement {
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} RENAME CONSTRAINT ${this.quoteIdentifier(fromCheckName)} TO ${this.quoteIdentifier(toCheckName)}`,
+      source: `schema:renameCheck:${tableName}:${fromCheckName}:${toCheckName}`,
+    }
+  }
+
+  protected override compilesNotNull(column: AnyColumnDefinition): boolean {
+    return !column.nullable
+  }
+
   override compileAlterColumn(
     tableName: string,
     column: ColumnDefinition,
-    previousColumn?: ColumnDefinition,
   ): Array<{ sql: string, source: string }> {
     this.assertSupportedAlterColumnDefinition(column)
+    if (column.computed) {
+      throw new SchemaError(`PostgreSQL cannot change the expression of generated column "${column.name}". Drop and add the column instead.`)
+    }
     const tableIdentifier = this.compileIdentifierPath(tableName)
     const columnIdentifier = this.quoteIdentifier(column.name)
     const statements: Array<{ sql: string, source: string }> = []
-    if (column.kind === 'enum' || previousColumn?.kind === 'enum') {
+    if (column.kind === 'enum') {
       statements.push({
         sql: `ALTER TABLE ${tableIdentifier} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(resolveGeneratedCheckName(tableName, column.name))}`,
         source: `schema:alterColumn:${tableName}:${column.name}:dropCheck`,

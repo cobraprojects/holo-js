@@ -1,6 +1,6 @@
 import { SecurityError } from '../core/errors'
-import type { TableDefinition } from '../schema/types'
-import type { ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
+import type { ModelInsertPayload, ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
 import type { Entity } from './Entity'
 
 const reservedAttributeNames: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
@@ -8,6 +8,14 @@ const reservedAttributeNames: ReadonlySet<string> = new Set(['__proto__', 'const
 export function assertAttributeNameAllowed(name: string): void {
   if (reservedAttributeNames.has(name)) {
     throw new SecurityError(`Attribute "${name}" is reserved and cannot be assigned.`)
+  }
+}
+
+export type RejectedGeneratedColumns = 'computed' | 'generated'
+
+export function assertColumnWritable(columnName: string, column: AnyColumnDefinition | undefined, rejected: RejectedGeneratedColumns): void {
+  if (column?.[rejected]) {
+    throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
   }
 }
 
@@ -21,7 +29,7 @@ export type EntityConstructor = {
     TRelations extends RelationMap = RelationMap,
   >(
     repository: unknown,
-    attributes: Partial<ModelRecord<TTable>>,
+    attributes: Partial<ModelRecord<TTable>> | ModelInsertPayload<TTable>,
     exists?: boolean,
   ): Entity<TTable, TRelations>
   prototype: Entity<TableDefinition, RelationMap>
@@ -173,33 +181,53 @@ type EntityPropertyRepository = {
     table?: {
       columns?: Record<string, unknown>
     }
+    untyped?: boolean
     relations?: Record<string, unknown>
   }
   getRelationNames?(): readonly string[]
   resolveRelationProperty?(entity: unknown, key: string): unknown
 }
 
+function defineAttributeProperties<TRelations extends RelationMap>(
+  entity: EntityPropertyHost<TRelations>,
+  keys: readonly string[],
+): void {
+  for (const key of keys) {
+    if (key in entity) {
+      continue
+    }
+
+    Object.defineProperty(entity, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => entity.get(key),
+      set: (value: unknown) => {
+        entity.set(key, value)
+      },
+    })
+  }
+}
+
+export function exposeUntypedEntityAttributes<TRelations extends RelationMap>(
+  entity: EntityPropertyHost<TRelations>,
+  repo: EntityPropertyRepository | undefined,
+  attributes: Record<string, unknown>,
+): void {
+  if (repo?.definition?.untyped) {
+    defineAttributeProperties(entity, Object.keys(attributes))
+  }
+}
+
 export function initializeEntityModelProperties<TRelations extends RelationMap>(
   entity: EntityPropertyHost<TRelations>,
   repo: EntityPropertyRepository | undefined,
+  attributes: Record<string, unknown>,
 ): void {
   const columns = repo?.definition?.table?.columns
   if (columns && typeof columns === 'object') {
-    for (const key of Object.keys(columns)) {
-      if (key in entity) {
-        continue
-      }
-
-      Object.defineProperty(entity, key, {
-        configurable: true,
-        enumerable: true,
-        get: () => entity.get(key),
-        set: (value: unknown) => {
-          entity.set(key, value)
-        },
-      })
-    }
+    defineAttributeProperties(entity, Object.keys(columns))
   }
+  exposeUntypedEntityAttributes(entity, repo, attributes)
 
   const relationNames = typeof repo?.getRelationNames === 'function'
     ? repo.getRelationNames()

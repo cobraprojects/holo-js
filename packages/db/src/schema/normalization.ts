@@ -1,6 +1,7 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { formatWithOffset } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatWithOffset, parseWallClockTimestamp } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
 import type { SchemaDialectName } from './typeMapping'
 
@@ -43,7 +44,15 @@ function coerceBoolean(value: unknown): boolean | null | undefined {
   return Boolean(value)
 }
 
-export function parseInteger(value: unknown): unknown {
+export function booleanStorageValue(value: unknown): number | null | undefined {
+  if (value == null) {
+    return value as null | undefined
+  }
+
+  return coerceBoolean(value) ? 1 : 0
+}
+
+function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
@@ -56,6 +65,30 @@ export function parseInteger(value: unknown): unknown {
   return integer
 }
 
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+export function isCanonicalIntegerText(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value)
+}
+
+export function readIntegerKey(value: unknown): unknown {
+  if (!isCanonicalIntegerText(value)) {
+    return value
+  }
+
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : value
+}
+
+function parseIncrementingKey(value: unknown): unknown {
+  if (typeof value !== 'bigint' && !(typeof value === 'string' && /^-?\d+$/.test(value))) {
+    return parseInteger(value)
+  }
+
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : String(value)
+}
+
 function parseJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value
 }
@@ -64,12 +97,18 @@ function stringifyJson(value: unknown): unknown {
   return typeof value === 'string' ? value : JSON.stringify(value)
 }
 
-function parseDateLike(value: unknown): unknown {
+export function parseStoredDate(dialect: SchemaDialectName, value: unknown): unknown {
   if (value == null || value instanceof Date) {
     return value
   }
 
-  return new Date(String(value))
+  const text = String(value)
+  return parseOffsetFreeDateTime(dialect, text) ?? new Date(text)
+}
+
+function parseOffsetFreeDateTime(dialect: SchemaDialectName, text: string): Date | undefined {
+  if (dialect === 'sqlite') return parseSQLiteDateTime(text)
+  return parseWallClockTimestamp(text, getApplicationTimezone(), SERVER_WALL_CLOCK_AMBIGUITY[dialect])
 }
 
 const ISO_INSTANT_TEXT = /^((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)(Z|[+-](\d{2}):?(\d{2}))$/i
@@ -119,34 +158,61 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
   return Number.isNaN(instant.getTime()) ? undefined : { instant, fraction: match[8] }
 }
 
-function postgresZonedText(parsed: { instant: Date, fraction: string | undefined }): string {
-  const formatted = formatWithOffset(parsed.instant, getApplicationTimezone())
-  if (parsed.fraction === undefined) {
+const MILLISECOND_DIGITS = 3
+
+type ParsedInstant = { instant: Date, fraction: string | undefined }
+
+export type DateStorage = 'native' | 'text'
+
+function withPreciseFraction(formatted: string, fraction: string | undefined): string {
+  if (fraction === undefined || fraction.length <= MILLISECOND_DIGITS) {
     return formatted
   }
 
-  return formatted.replace(/\.\d{3}(?=[+-])/, `.${parsed.fraction.padEnd(6, '0').slice(0, 6)}`)
+  return formatted.replace(/\.\d{3}(?=[+Z-])/, `.${fraction.padEnd(6, '0').slice(0, 6)}`)
 }
 
-function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
-  if (dialect === 'sqlite') {
-    return value instanceof Date ? value.toISOString() : value
-  }
+function postgresZonedText(parsed: ParsedInstant): string {
+  return withPreciseFraction(formatWithOffset(parsed.instant, getApplicationTimezone()), parsed.fraction)
+}
 
+
+function parseInstant(value: unknown): ParsedInstant | undefined {
   if (value instanceof Date) {
-    return value
+    return Number.isNaN(value.getTime()) ? undefined : { instant: value, fraction: undefined }
   }
 
-  if (typeof value !== 'string') {
-    return value
+  return typeof value === 'string' ? parseIsoInstantText(value) : undefined
+}
+
+function normalizeSQLiteDateValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return formatSQLiteDateTime(value)
   }
 
-  const parsed = parseIsoInstantText(value)
+  const parsed = typeof value === 'string' ? parseIsoInstantText(value) : undefined
+  return parsed ? formatSQLiteDateTime(parsed.instant) : value
+}
+
+export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, storage: DateStorage = 'native'): unknown {
+  if (dialect === 'sqlite') {
+    return normalizeSQLiteDateValue(value)
+  }
+
+  const parsed = parseInstant(value)
   if (!parsed) {
     return value
   }
 
-  return dialect === 'postgres' ? postgresZonedText(parsed) : parsed.instant
+  if (dialect === 'mysql') {
+    return parsed.instant
+  }
+
+  if (storage === 'text') {
+    return parsed.instant.toISOString()
+  }
+
+  return value instanceof Date ? value : postgresZonedText(parsed)
 }
 
 function parseVectorString(value: string): number[] {
@@ -202,8 +268,20 @@ function stringifyVectorValue(value: unknown): unknown {
   return `[${parsed.join(',')}]`
 }
 
+export function storesJson(dialect: SchemaDialectName | undefined, column: AnyColumnDefinition): boolean {
+  return column.kind === 'json' || (dialect === 'sqlite' && column.kind === 'text')
+}
+
+export function storesText(column: AnyColumnDefinition): boolean {
+  return column.kind === 'string' || column.kind === 'text'
+}
+
 export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
+}
+
+export function readIntegerColumnValue(column: AnyColumnDefinition, value: unknown): unknown {
+  return column.kind === 'id' ? parseIncrementingKey(value) : parseInteger(value)
 }
 
 export function normalizeDialectReadValue(
@@ -213,7 +291,7 @@ export function normalizeDialectReadValue(
 ): unknown {
   switch (column.kind) {
     case 'id':
-      return column.idStrategy === 'autoIncrement' ? parseInteger(value) : value
+      return column.idStrategy === 'autoIncrement' ? parseIncrementingKey(value) : value
     case 'integer':
     case 'bigInteger':
       return parseInteger(value)
@@ -224,7 +302,7 @@ export function normalizeDialectReadValue(
     case 'date':
     case 'datetime':
     case 'timestamp':
-      return parseDateLike(value)
+      return parseStoredDate(dialect, value)
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)
@@ -241,24 +319,20 @@ export function normalizeDialectWriteValue(
   value: unknown,
 ): unknown {
   switch (column.kind) {
+    case 'integer':
+    case 'bigInteger':
+      return typeof value === 'boolean' ? Number(value) : value
     case 'boolean':
-      if (value == null) {
-        return value
-      }
-      {
-        const normalized = coerceBoolean(value)
-        if (dialect === 'postgres') {
-          return normalized
-        }
-
-        return normalized ? 1 : 0
-      }
+      return dialect === 'postgres' ? coerceBoolean(value) : booleanStorageValue(value)
     case 'json':
       return value == null ? value : stringifyJson(value)
     case 'date':
     case 'datetime':
     case 'timestamp':
       return dateLikeWriteValue(dialect, value)
+    case 'string':
+    case 'text':
+      return value instanceof Date ? dateLikeWriteValue(dialect, value, 'text') : value
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)

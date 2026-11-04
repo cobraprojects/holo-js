@@ -1,6 +1,7 @@
 import { SecurityError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
-import { normalizeDialectWriteValue } from '../schema/normalization'
+import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { formatSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { QueryJsonUpdateOperation } from './ast'
@@ -15,8 +16,13 @@ export function normalizeQueryWriteValue(
 ): unknown {
   if (value instanceof NumericAdjustment) return value
   const column = table?.columns[columnName]
-  if (!column) return driver === 'sqlite' && value instanceof Date ? value.toISOString() : value
+  if (!column) return normalizeDefinitionlessValue(driver, value)
   return normalizeDialectWriteValue(driver as SchemaDialectName, column as AnyColumnDefinition, value)
+}
+
+function normalizeDefinitionlessValue(driver: string, value: unknown): unknown {
+  if (typeof value === 'boolean') return booleanStorageValue(value)
+  return driver === 'sqlite' && value instanceof Date ? formatSQLiteDateTime(value) : value
 }
 
 export function normalizeQueryPredicateValue(
