@@ -302,6 +302,10 @@ A PostgreSQL connection's `schema` option now also sets the connection's `search
 
 On PostgreSQL, `schema.getTables()`, `getColumns()`, `getIndexes()` and `getForeignKeys()` read the schema that unqualified statements use, so they find the tables your migrations created. That is `schema`, or the first existing schema of a `search_path` that wins over it. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
 
+### PostgreSQL connections use `app.timezone` as their session time zone
+
+Holo now sets each PostgreSQL connection's session `TimeZone` to `app.timezone`, as it already did on MySQL. Before, the server's time zone applied, so on a server whose time zone isn't `app.timezone`, `defaultNow()` and `timestamps()` defaults on `timestamp` columns were written in the server's wall-clock time and read back off by the difference. Rows written that way keep their values; Holo doesn't rewrite them. To keep the server's time zone, set `TimeZone` in the URL's `options` parameter or in `PGOPTIONS`. See [PostgreSQL dates and time zones](/database/#postgresql-dates-and-time-zones).
+
 ## Upgrading from 0.5.5 to 0.5.6
 
 Update every installed `@holo-js/*` package to `0.5.6` together. Change the versions in `package.json` and run your package manager's install command, such as `npm install`. Keep your lockfile. No required migrations and no app code changes. The [changelog](https://github.com/cobraprojects/holo-js/blob/main/CHANGELOG.md#056---2026-11-01) lists the release changes.

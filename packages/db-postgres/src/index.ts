@@ -95,26 +95,28 @@ function parseAbsoluteUrl(connectionString: string): URL | undefined {
   return URL.canParse(connectionString) ? new URL(connectionString) : undefined
 }
 
-function withConfiguredSearchPath(
-  connectionString: string | undefined,
-  schema: string | undefined,
-): Pick<PoolConfig, 'connectionString' | 'options'> {
-  if (!schema) {
-    return { connectionString }
-  }
-
-  const searchPath = `-c search_path=${escapeStartupOptionValue(quoteDatabaseIdentifier(schema))}`
-  const url = connectionString ? parseAbsoluteUrl(connectionString) : undefined
+function withStartupOption(config: PoolConfig, option: string): PoolConfig {
+  const url = config.connectionString ? parseAbsoluteUrl(config.connectionString) : undefined
   const urlOptions = url?.searchParams.get('options')
   if (url && urlOptions) {
-    url.searchParams.set('options', `${searchPath} ${urlOptions}`)
-    return { connectionString: url.toString() }
+    url.searchParams.set('options', `${option} ${urlOptions}`)
+    return { ...config, connectionString: url.toString() }
   }
 
   return {
-    connectionString,
-    options: [searchPath, process.env.PGOPTIONS].filter(Boolean).join(' '),
+    ...config,
+    options: [option, config.options || process.env.PGOPTIONS].filter(Boolean).join(' '),
   }
+}
+
+function withConfiguredSearchPath(config: PoolConfig, schema: string | undefined): PoolConfig {
+  return schema
+    ? withStartupOption(config, `-c search_path=${escapeStartupOptionValue(quoteDatabaseIdentifier(schema))}`)
+    : config
+}
+
+function withApplicationTimeZone(config: PoolConfig): PoolConfig {
+  return withStartupOption(config, `-c TimeZone=${escapeStartupOptionValue(holoRuntimeInternals.getApplicationTimezone())}`)
 }
 
 function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
@@ -132,7 +134,7 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
 function createHoloPool(config?: PoolConfig): Pool {
-  const pool = new Pool({ ...config })
+  const pool = new Pool(withApplicationTimeZone({ ...config }))
   const sessions = new Set<PoolClient>()
   openPoolSessions.set(pool, sessions)
   pool.on('connect', (client) => {
@@ -416,8 +418,8 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   driver: 'postgres',
   supportsConcurrentTransactionScopes: true,
   create(connection) {
-    return createPostgresAdapter({ config: {
-      ...withConfiguredSearchPath(connection.url, connection.schema),
+    return createPostgresAdapter({ config: withConfiguredSearchPath({
+      connectionString: connection.url,
       host: connection.host,
       port: connection.port,
       user: connection.username,
@@ -428,6 +430,6 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
       connectionTimeoutMillis: connection.connectionTimeoutMillis,
       idleTimeoutMillis: connection.idleTimeoutMillis,
       application_name: connection.application_name,
-    } })
+    }, connection.schema) })
   },
 })
