@@ -9,7 +9,7 @@ import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
-import { createConnectionQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
+import { createAdapterQueryScheduler, isWithinExclusive, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
@@ -181,7 +181,7 @@ export class DatabaseContext {
       : {
           savepointCounter: 0,
           rootTransactionQueue: { tail: Promise.resolve() },
-          scheduler: createConnectionQueryScheduler({
+          scheduler: createAdapterQueryScheduler({
             connectionName: this._connectionName,
             supportsConcurrentQueries: this._dialect.capabilities.concurrentQueries,
             supportsWorkerThreads: this._dialect.capabilities.workerThreadExecution,
@@ -571,7 +571,7 @@ export class DatabaseContext {
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
     const scoped = runWithinScope ? () => runWithinScope(callback) : callback
     if (this._adapter.supportsConcurrentTransactionScopes === true) return scoped()
-    if (runWithinScope || scheduler.isWithinExclusive()) return scheduler.exclusive(scoped)
+    if (runWithinScope || isWithinExclusive(scheduler)) return scheduler.exclusive(scoped)
     return runSerialized(this._runtime.rootTransactionQueue, () => scheduler.exclusive(scoped))
   }
 

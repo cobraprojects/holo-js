@@ -1,6 +1,6 @@
 import { ConfigurationError, DatabaseError } from './errors'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { ConcurrencyOptions } from './types'
+import type { ConcurrencyOptions, DriverAdapter } from './types'
 
 export type SchedulingMode = 'concurrent' | 'serialized' | 'worker'
 
@@ -77,20 +77,23 @@ class ExclusiveGate {
   }
 }
 
-const connectionGates = new WeakMap<object, ExclusiveGate>()
+const adapterGates = new WeakMap<DriverAdapter, ExclusiveGate>()
 
-let shareConnectionGate: (scheduler: QueryScheduler, connection: object) => void
+let shareAdapterGate: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
+
+let readGate: (scheduler: QueryScheduler) => ExclusiveGate
 
 export class QueryScheduler {
   static {
-    shareConnectionGate = (scheduler, connection) => {
-      const gate = connectionGates.get(connection)
+    shareAdapterGate = (scheduler, adapter) => {
+      const gate = adapterGates.get(adapter)
       if (gate) {
         scheduler.gate = gate
       } else {
-        connectionGates.set(connection, scheduler.gate)
+        adapterGates.set(adapter, scheduler.gate)
       }
     }
+    readGate = scheduler => scheduler.gate
   }
 
   private readonly connectionName: string
@@ -205,10 +208,6 @@ export class QueryScheduler {
     return scheduled.result
   }
 
-  isWithinExclusive(): boolean {
-    return this.gate.isWithinExclusive()
-  }
-
   exclusive<T>(callback: () => Promise<T>): Promise<T> {
     return this.gate.exclusive(callback)
   }
@@ -272,8 +271,12 @@ export function createQueryScheduler(options: QuerySchedulerOptions): QuerySched
   return new QueryScheduler(options)
 }
 
-export function createConnectionQueryScheduler(options: QuerySchedulerOptions, connection: object): QueryScheduler {
+export function createAdapterQueryScheduler(options: QuerySchedulerOptions, adapter: DriverAdapter): QueryScheduler {
   const scheduler = new QueryScheduler(options)
-  shareConnectionGate(scheduler, connection)
+  shareAdapterGate(scheduler, adapter)
   return scheduler
+}
+
+export function isWithinExclusive(scheduler: QueryScheduler): boolean {
+  return readGate(scheduler).isWithinExclusive()
 }
