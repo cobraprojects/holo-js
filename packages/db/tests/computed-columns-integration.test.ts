@@ -217,6 +217,18 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     })).rejects.toThrow('PostgreSQL cannot change the expression of generated column "total". Drop and add the column instead.')
   })
 
+  it.runIf(driver === 'postgres')('applies no operation of a table() call whose change() redeclares a computed column on postgres', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+
+    await expect(schema.table(names.products, (table) => {
+      table.integer('discount').nullable()
+      table.integer('total').storedAs('price * quantity + 1').change()
+    })).rejects.toThrow('PostgreSQL cannot change the expression of generated column "total". Drop and add the column instead.')
+
+    const [products] = await readTables(db, [names.products])
+    expect(products!.columns.discount).toBeUndefined()
+  })
+
   it.runIf(driver === 'postgres')('creates a virtualAs column on postgres 18 or newer and rejects it with a clear error on older servers', async () => {
     const { db, schema } = await openDatabase(driver)
     const name = 'computed_virtual_postgres'

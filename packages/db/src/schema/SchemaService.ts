@@ -95,7 +95,8 @@ export class SchemaService {
     await callback(builder)
     const operations = builder.getOperations()
     this.assertTableMutationIndexNames(tableName, operations)
-    await this.assertSupportedColumns(operations.flatMap(operation => operation.kind === 'addColumn'
+    this.assertCompilableColumnChanges(tableName, operations)
+    await this.assertSupportedColumns(operations.flatMap(operation => operation.kind === 'addColumn' || operation.kind === 'alterColumn'
       ? [this.resolveColumnDefinition(operation.columnName, operation.column)]
       : []))
 
@@ -235,6 +236,19 @@ export class SchemaService {
 
   private resolveColumnDefinition(columnName: string, column: AnyColumnBuilder): AnyColumnDefinition {
     return column.toDefinition({ name: columnName })
+  }
+
+  private assertCompilableColumnChanges(
+    tableName: string,
+    operations: ReturnType<TableMutationBuilder['getOperations']>,
+  ): void {
+    if (this.isSqlite()) return
+    const compiler = this.createCompiler()
+    for (const operation of operations) {
+      if (operation.kind === 'alterColumn') {
+        compiler.compile(alterColumnOperation(tableName, this.resolveColumnDefinition(operation.columnName, operation.column)))
+      }
+    }
   }
 
   private async assertSupportedColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
