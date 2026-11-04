@@ -2847,6 +2847,11 @@ export async function prepareAuthUpdateInput(user, input) {
         const runtime = await createHolo(root, { envName: 'development' })
         await runtime.initialize()
         const schema = createSchemaService(DB.connection())
+        const dropTables = async () => {
+          await schema.dropTable('email_verification_tokens')
+          await schema.dropTable('verification_users')
+        }
+        await dropTables()
         try {
           await schema.createTable('verification_users', table => {
             table.id()
@@ -2866,8 +2871,7 @@ export async function prepareAuthUpdateInput(user, input) {
           await expect(runtime.auth!.verification.consume(expired.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
           Reflect.deleteProperty(globalThis, fixtureKey)
         } finally {
-          await schema.dropTable('email_verification_tokens')
-          await schema.dropTable('verification_users')
+          await dropTables()
         }
       },
     )
