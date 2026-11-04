@@ -9,7 +9,7 @@ import { createModelRegistry, type ModelRegistry } from '../model/ModelRegistry'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { assertPinnedStatementAllowed, currentPinnedConnection, enterPinnedStatement, isPinnedRestoreStatement, markPinnedTransactionStuck, runPinnedTransaction } from '../concurrency/pinnedConnection'
 import { createSecurityPolicy, redactBindings, redactSql, type SecurityPolicy } from '../security/policy'
-import { createQueryScheduler, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
+import { createAdapterQueryScheduler, isWithinExclusive, type QueryScheduler, type SchedulingMode } from './QueryScheduler'
 import { CapabilityError, ConfigurationError, DatabaseError, SecurityError, TransactionError } from './errors'
 import { createCapabilities } from './capabilities'
 import { markGenuineDatabaseContext } from './genuineContexts'
@@ -17,6 +17,7 @@ import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { advanceSchemaGeneration } from './schemaGeneration'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
+import { registerTransactionScopeEntry } from './transactionScope'
 import type { ModelDefinitionLike } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
@@ -128,6 +129,10 @@ let nextDatabaseContextId = 0
 const queryLoggerScope = new AsyncLocalStorage<true>()
 
 export class DatabaseContext {
+  static {
+    registerTransactionScopeEntry((context, callback) => context._runInTransactionScope(callback))
+  }
+
   private readonly _contextId: number
   private readonly _connectionName: string
   private readonly _schemaName?: string
@@ -171,12 +176,12 @@ export class DatabaseContext {
       : {
           savepointCounter: 0,
           rootTransactionQueue: { tail: Promise.resolve() },
-          scheduler: createQueryScheduler({
+          scheduler: createAdapterQueryScheduler({
             connectionName: this._connectionName,
             supportsConcurrentQueries: this._dialect.capabilities.concurrentQueries,
             supportsWorkerThreads: this._dialect.capabilities.workerThreadExecution,
             concurrency: this._concurrency,
-          }),
+          }, this._adapter),
         }
     this._scope = 'scope' in options ? options.scope : { kind: 'root', depth: 0 }
     this._transactionCallbacks = 'transactionCallbacks' in options ? options.transactionCallbacks : undefined
@@ -468,9 +473,6 @@ export class DatabaseContext {
     options: DatabaseTransactionOptions | undefined,
     state: RootAttemptState,
   ): Promise<CommittedRootTransaction<T>> {
-    const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
-      ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
-
     const entry: TransactionLog = {
       scope: 'transaction',
       depth: 1,
@@ -489,59 +491,55 @@ export class DatabaseContext {
     }
 
     const runTransaction = async (): Promise<CommittedRootTransaction<T>> => {
-      return runWithinScope(async () => {
-        const begin: { attempt?: Promise<void> } = {}
-        try {
-          await this._callTransactionHook('begin', () => {
-            begin.attempt = this._adapter.beginTransaction(options)
-            return begin.attempt
-          }, options)
-        } catch (error) {
-          if (begin.attempt) {
-            await begin.attempt.then(rollbackAdapter, () => undefined)
-          }
-          throw error
+      const begin: { attempt?: Promise<void> } = {}
+      try {
+        await this._callTransactionHook('begin', () => {
+          begin.attempt = this._adapter.beginTransaction(options)
+          return begin.attempt
+        }, options)
+      } catch (error) {
+        if (begin.attempt) {
+          await begin.attempt.then(rollbackAdapter, () => undefined)
         }
-        const child = this._createChildContext(
-          { kind: 'transaction', depth: 1 },
-          this._createTransactionCallbackState(),
-          frame,
-        )
-        transaction = child
+        throw error
+      }
+      const child = this._createChildContext(
+        { kind: 'transaction', depth: 1 },
+        this._createTransactionCallbackState(),
+        frame,
+      )
+      transaction = child
 
-        let value: T
-        try {
-          value = await runInRootTransaction(this, frame, () => this._runTransactionCallback(child, callback))
-        } catch (error) {
-          await this._callTransactionHook('rollback', rollbackAdapter)
-          throw error
-        }
+      let value: T
+      try {
+        value = await runInRootTransaction(this, frame, () => this._runTransactionCallback(child, callback))
+      } catch (error) {
+        await this._callTransactionHook('rollback', rollbackAdapter)
+        throw error
+      }
 
-        commitStarted = true
-        try {
-          await this._callTransactionHook('commit', () => this._adapter.commit())
-        } catch (commitError) {
-          await this._rollbackAdapterTransaction().catch(() => undefined)
-          runCommitFailureRestores(child)
-          throw commitError
-        }
+      commitStarted = true
+      try {
+        await this._callTransactionHook('commit', () => this._adapter.commit())
+      } catch (commitError) {
+        await this._rollbackAdapterTransaction().catch(() => undefined)
+        runCommitFailureRestores(child)
+        throw commitError
+      }
 
-        if (frame.schemaChanged) {
-          advanceSchemaGeneration()
-        }
+      if (frame.schemaChanged) {
+        advanceSchemaGeneration()
+      }
 
-        return { value, transaction: child, entry }
-      })
+      return { value, transaction: child, entry }
     }
 
     let committed: CommittedRootTransaction<T>
     try {
       await this._logger?.onTransactionStart?.(entry)
       const attempt = (): Promise<CommittedRootTransaction<T>> => this._adapter.supportsConcurrentTransactionScopes === true
-        ? this._runtime.scheduler.transaction(runTransaction)
-        : this._adapter.runWithTransactionScope
-          ? this._runtime.scheduler.exclusive(runTransaction)
-          : runSerialized(this._runtime.rootTransactionQueue, () => this._runtime.scheduler.exclusive(runTransaction))
+        ? this._runtime.scheduler.transaction(() => this._runInTransactionScope(runTransaction))
+        : this._runInTransactionScope(runTransaction)
       const pinned = currentPinnedConnection(this._adapter)
       committed = await (pinned ? runPinnedTransaction(pinned, attempt) : attempt())
     } catch (error) {
@@ -561,6 +559,15 @@ export class DatabaseContext {
     frame.open = false
     discardCommitFailureRestores(committed.transaction)
     return committed
+  }
+
+  private _runInTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
+    const scheduler = this._runtime.scheduler
+    const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
+    const scoped = runWithinScope ? () => runWithinScope(callback) : callback
+    if (this._adapter.supportsConcurrentTransactionScopes === true) return scoped()
+    if (runWithinScope || isWithinExclusive(scheduler)) return scheduler.exclusive(scoped)
+    return runSerialized(this._runtime.rootTransactionQueue, () => scheduler.exclusive(scoped))
   }
 
   private async _settleRolledBackTransaction(

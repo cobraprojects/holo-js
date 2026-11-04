@@ -19,6 +19,7 @@ import { inferColumnKind } from './introspection/definitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { runInTransactionScope } from '../core/transactionScope'
 import type { DDLStatement, UniqueBacking } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
 import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
@@ -126,9 +127,7 @@ export class SchemaService {
       return callback()
     }
 
-    return runPinnedConnection(adapter, () => (adapter.runWithTransactionScope
-      ? adapter.runWithTransactionScope(() => this.runWithoutForeignKeyConstraints(callback))
-      : this.runWithoutForeignKeyConstraints(callback)))
+    return runPinnedConnection(adapter, () => runInTransactionScope(this.connection, () => this.runWithoutForeignKeyConstraints(callback)))
   }
 
   private async restoreForeignKeyConstraints(): Promise<void> {
