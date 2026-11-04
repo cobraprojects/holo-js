@@ -47,7 +47,7 @@ export class SQLiteSchemaOperations {
       if (column.hasDefault && isGeneratedColumn(stored)) {
         throw new SchemaError(`SQLite cannot give column "${column.name}" on table "${tableName}" a default because it is a generated column.`)
       }
-      return withChangedColumn(table, stored, this.compiler.compileChangedColumn(tableName, column, readPreservedColumnConstraints(stored, column.computed !== undefined)))
+      return withChangedColumn(table, stored, this.compiler.compileChangedColumn(tableName, column, readPreservedColumnConstraints(stored, column)))
     })
   }
 

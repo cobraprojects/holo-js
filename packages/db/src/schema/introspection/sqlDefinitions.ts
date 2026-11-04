@@ -1,5 +1,6 @@
 import { findCreatedObjectName, type ForeignKeyConstraint, type KeyColumn, type StoredColumn, type StoredConstraint, type StoredTable } from './sqliteDefinitionGrammar'
 import { sameIdentifier, splitTokensOnCommas, tokenizeSql, type SqlToken } from './sqliteTokens'
+import type { AnyColumnDefinition } from '../types'
 
 const STRING_LITERAL_PATTERN = '\'(?:[^\']|\'\')*\''
 const DEFAULT_COLLATION = 'BINARY'
@@ -146,11 +147,13 @@ function withoutConstraints(table: StoredTable, matches: ConstraintMatcher): str
 
 const CHANGED_COLUMN_CONSTRAINTS = new Set<StoredConstraint['kind']>(['NOT NULL', 'NULL', 'DEFAULT'])
 
-export function readPreservedColumnConstraints(column: StoredColumn, redeclaresGenerated: boolean): string[] {
-  return column.constraints
-    .filter(constraint => !CHANGED_COLUMN_CONSTRAINTS.has(constraint.kind)
-      && !(redeclaresGenerated && constraint.kind === 'GENERATED')
-      && !isEnumCheckOn(constraint, column.name))
+function redeclares(changed: AnyColumnDefinition, constraint: StoredConstraint): boolean {
+  return CHANGED_COLUMN_CONSTRAINTS.has(constraint.kind) || (constraint.kind === 'GENERATED' && changed.computed !== undefined)
+}
+
+export function readPreservedColumnConstraints(stored: StoredColumn, changed: AnyColumnDefinition): string[] {
+  return stored.constraints
+    .filter(constraint => !redeclares(changed, constraint) && !isEnumCheckOn(constraint, stored.name))
     .map(constraint => constraint.text)
 }
 

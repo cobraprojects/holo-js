@@ -62,7 +62,7 @@ const DEFAULT_FOREIGN_KEY_ACTION = 'NO ACTION'
 class TokenCursor {
   index = 0
 
-  constructor(readonly sql: string, private readonly tokens: readonly SqlToken[]) {}
+  constructor(private readonly sql: string, private readonly tokens: readonly SqlToken[]) {}
 
   get done(): boolean {
     return this.index >= this.tokens.length
@@ -94,6 +94,10 @@ class TokenCursor {
     if (token?.kind !== 'group') this.fail()
     this.index += 1
     return token
+  }
+
+  expectGroupText(): string {
+    return sliceTokens(this.sql, this.expectGroup().children ?? [])
   }
 
   expectName(): string {
@@ -210,7 +214,7 @@ function skipDefaultValue(cursor: TokenCursor): void {
 function readGeneratedTail(cursor: TokenCursor): ConstraintBody {
   cursor.accept('GENERATED', 'ALWAYS')
   if (!cursor.accept('AS')) cursor.fail()
-  const expression = sliceTokens(cursor.sql, cursor.expectGroup().children ?? [])
+  const expression = cursor.expectGroupText()
   if (!cursor.accept('STORED')) cursor.accept('VIRTUAL')
   return { kind: 'GENERATED', expression }
 }
