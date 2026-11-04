@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   ConfigurationError, DatabaseError, HydrationError, TableQueryBuilder,
@@ -129,6 +129,25 @@ describe('native migration workflows', () => {
     const unavailable = defineMigration({ name: '2026_01_01_000003_unavailable', async up() {} })
     expect(await ranMigrationNames(createMigrationService(db, [migration, irreversible, unavailable])))
       .toEqual([migration.name, unavailable.name])
+  })
+
+  it.each([
+    { format: 'offset-free SQLite text', stored: '2026-11-04 12:00:00' },
+    { format: 'legacy ISO text', stored: '2026-11-04T12:00:00.000Z' },
+  ])('reports the UTC migration time stored as $format in a non-UTC process', async ({ stored }) => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    onTestFinished(() => {
+      if (previousTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimeZone
+    })
+    const db = createConnection()
+    const migration = tableMigration('2026_01_01_000001_valid', 'valid_records')
+    const migrator = createMigrationService(db, [migration])
+    await migrator.migrate()
+    await new TableQueryBuilder('_holo_migrations', db).update({ migrated_at: stored })
+
+    expect((await migrator.status())[0]?.migratedAt?.toISOString()).toBe('2026-11-04T12:00:00.000Z')
   })
 
   it('rejects corrupted native tracking metadata and preserves database errors', async () => {

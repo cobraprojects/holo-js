@@ -3,10 +3,14 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { column } from '../schema'
 import { defineTable } from '../schema/defineTable'
 import { createSchemaService } from '../schema/SchemaService'
+import { createGeneratedSchemaRefresh } from '../schema/generatedSchemaRefresh'
+import { parseStoredDate } from '../schema/normalization'
 import { assertMigrationName, defineMigration } from './defineMigration'
+import { MigrationSchemaService } from './MigrationSchemaService'
 import { ensureMigrationTable } from './ensureMigrationTable'
 import type { MigrationStartLog } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   MigrateOptions,
   MigrationContext,
@@ -111,13 +115,15 @@ export class MigrationService {
       .filter(migration => !ranNames.has(migration.name))
       .slice(0, step)
 
+    if (pending.length > 0) {
+      await this.registerDatabaseSchema()
+    }
     const executed: RegisteredMigrationDefinition[] = []
     for (const migration of pending) {
       const log = this.createMigrationLog(migration.name, 'up', nextBatch)
       await this.runMigrationLifecycle(log, async () => {
         await this.runMigrationTransaction(async (tx) => {
-          const context = this.createContext(tx)
-          await migration.up(context)
+          await migration.up(this.createContext(tx))
           await new TableQueryBuilder(migrationsTable, tx).insert({
             name: migration.name,
             batch: nextBatch,
@@ -165,6 +171,9 @@ export class MigrationService {
         .sort((left, right) => right.id - left.id)
         .slice(0, step)
 
+      if (toRollback.length > 0) {
+        await this.registerDatabaseSchema()
+      }
       const rolledBack: RegisteredMigrationDefinition[] = []
       for (const record of toRollback) {
         const migration = this.migrations.get(record.name)
@@ -175,9 +184,8 @@ export class MigrationService {
         const log = this.createMigrationLog(record.name, 'down', record.batch)
         await this.runMigrationLifecycle(log, async () => {
           await this.runMigrationTransaction(async (tx) => {
-            const context = this.createContext(tx)
             if (migration.down) {
-              await migration.down(context)
+              await migration.down(this.createContext(tx))
             }
 
             await new TableQueryBuilder(migrationsTable, tx)
@@ -237,10 +245,14 @@ export class MigrationService {
     return rows
   }
 
+  private async registerDatabaseSchema(): Promise<void> {
+    await createGeneratedSchemaRefresh(this.connection).refreshAll()
+  }
+
   private createContext(connection: DatabaseContext): MigrationContext {
     return {
       db: connection,
-      schema: createSchemaService(connection),
+      schema: new MigrationSchemaService(connection, createGeneratedSchemaRefresh(connection)),
     }
   }
 
@@ -293,8 +305,8 @@ export class MigrationService {
   }
 
   private normalizeMigratedAt(value: string | Date): Date {
-    const normalized = value instanceof Date ? value : new Date(value)
-    if (Number.isNaN(normalized.getTime())) {
+    const normalized = parseStoredDate(this.connection.getDriver() as SchemaDialectName, value)
+    if (!(normalized instanceof Date) || Number.isNaN(normalized.getTime())) {
       throw new HydrationError('Migration tracking contains an invalid migrated-at timestamp.')
     }
 

@@ -1229,6 +1229,112 @@ export default defineMigration({
 `)
 }
 
+async function writeDataMigrationProject(
+  projectRoot: string,
+  connection: Readonly<Record<string, string | number>>,
+  analytics: Readonly<Record<string, string | number>>,
+): Promise<void> {
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: ${JSON.stringify(connection)},
+    analytics: ${JSON.stringify(analytics)},
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'server/models/User.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('users', { fillable: ['name', 'nickname'] })
+`)
+  await writeProjectFile(projectRoot, 'server/models/Team.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('teams', { fillable: ['name', 'slug'], timestamps: false })
+`)
+  await writeProjectFile(projectRoot, 'server/models/Event.ts', `
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('events', { connectionName: 'analytics', fillable: ['name'], timestamps: false })
+`)
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+      table.string('nickname').nullable()
+      table.timestamps()
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+}
+
+async function writeDataMigrations(projectRoot: string): Promise<void> {
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000002_backfill_users.ts', `
+import { defineMigration } from '@holo-js/db'
+import User from '../../models/User'
+
+export default defineMigration({
+  async up() {
+    await User.create({ name: 'Ada' })
+    await User.where('name', 'Ada').update({ nickname: 'ada' })
+  },
+  async down() {
+    await User.where('name', 'Ada').delete()
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000003_create_teams.ts', `
+import { defineMigration } from '@holo-js/db'
+import Team from '../../models/Team'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('teams', (table) => {
+      table.id()
+      table.string('name')
+    })
+    await Team.create({ name: 'Core' })
+    await schema.table('teams', (table) => {
+      table.string('slug').nullable()
+    })
+    await Team.where('name', 'Core').update({ slug: 'core' })
+  },
+  async down({ schema }) {
+    await Team.where('name', 'Core').delete()
+    await schema.dropTable('teams')
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000004_create_events.ts', `
+import { DB, createSchemaService, defineMigration } from '@holo-js/db'
+import Event from '../../models/Event'
+
+export default defineMigration({
+  async up() {
+    await createSchemaService(DB.connection('analytics')).createTable('events', (table) => {
+      table.id()
+      table.string('name')
+    })
+    await Event.create({ name: 'signed_up' })
+  },
+  async down() {
+    await Event.where('name', 'signed_up').delete()
+    await createSchemaService(DB.connection('analytics')).dropTable('events')
+  },
+})
+`)
+}
+
 async function readGeneratedSchemaFiles(projectRoot: string): Promise<readonly string[]> {
   return Promise.all(['schema.generated.ts', 'schema.mjs'].map(file => readFile(join(projectRoot, '.holo-js/generated', file), 'utf8')))
 }
@@ -6404,8 +6510,53 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }, 60000)
   }
 
+  for (const database of schemaSourceDatabases) {
+    it.skipIf(!database.enabled)(`runs ${database.driver} migrations whose up and down use imported models on migrate, rollback and fresh`, async () => {
+      const projectRoot = await createTempProject()
+      tempDirs.push(projectRoot)
+      const suffix = randomUUID().replaceAll('-', '')
+      const databaseName = `holo_data_${suffix}`
+      const analyticsName = `holo_data_analytics_${suffix}`
+      await writeDataMigrationProject(projectRoot, database.connection(databaseName), database.connection(analyticsName))
+      await database.create(databaseName)
+      await database.create(analyticsName)
+      const readRows = async (name: string, table: string) => {
+        const connection = database.open(name, projectRoot)
+        try {
+          return (await connection.table(table).orderBy('id').get()).map(row => ({ ...row }))
+        } finally {
+          await connection.disconnect()
+        }
+      }
+      try {
+        const created = runCliProcess(projectRoot, ['migrate'])
+        expect(created.status, created.stderr || created.stdout).toBe(0)
+        await writeDataMigrations(projectRoot)
+
+        const migrated = runCliProcess(projectRoot, ['migrate'])
+        expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+        expect(await readRows(databaseName, 'users')).toEqual([expect.objectContaining({ name: 'Ada', nickname: 'ada' })])
+        expect(await readRows(databaseName, 'teams')).toEqual([expect.objectContaining({ name: 'Core', slug: 'core' })])
+        expect(await readRows(analyticsName, 'events')).toEqual([expect.objectContaining({ name: 'signed_up' })])
+
+        const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'], { env: { APP_ENV: 'development' } })
+        expect(rolledBack.status, rolledBack.stderr || rolledBack.stdout).toBe(0)
+        expect(rolledBack.stdout).toContain('2026_01_01_000002_backfill_users')
+        expect(await readRows(databaseName, 'users')).toEqual([])
+
+        const fresh = runCliProcess(projectRoot, ['migrate:fresh'], { env: { APP_ENV: 'development' } })
+        expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
+        expect(await readRows(databaseName, 'users')).toEqual([expect.objectContaining({ name: 'Ada', nickname: 'ada' })])
+        expect(await readRows(databaseName, 'teams')).toEqual([expect.objectContaining({ name: 'Core', slug: 'core' })])
+      } finally {
+        await database.drop(databaseName)
+        await database.drop(analyticsName)
+      }
+    }, 120000)
+  }
+
   it.each([
-    { failure: 'a top level that throws', source: 'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
+    { failure: 'a top level that throws', source:'throw new Error(\'migration module loaded\')\nexport default {}\n', reported: 'migration module loaded' },
     { failure: 'an import of a missing module', source: 'import \'holo-missing-migration-package\'\nexport default {}\n', reported: 'holo-missing-migration-package' },
   ])('runs prepare, build and dev without evaluating a migration with $failure, and migrate reports it', async ({ source, reported }) => {
     const projectRoot = await createTempProject()
