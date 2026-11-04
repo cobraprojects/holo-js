@@ -132,7 +132,7 @@ function toColumnDefinition(
     unique: uniqueColumns.has(column.name),
     ...(columnDefault.kind === 'now' ? { defaultKind: 'now' as const } : {}),
     ...(columnDefault.kind === 'literal' ? { defaultKind: 'value' as const, defaultValue: coerceDefaultValue(kind, columnDefault.value) } : {}),
-    ...(columnDefault.kind === 'expression' ? { defaultKind: 'value' as const, defaultValue: columnDefault.sql } : {}),
+    ...(columnDefault.kind === 'expression' ? { defaultKind: 'expression' as const, defaultValue: columnDefault.sql } : {}),
     ...(foreignKey ? { references: toForeignKeyReference(foreignKey) } : {}),
     ...(column.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
     ...(enumValues ? { enumValues } : {}),

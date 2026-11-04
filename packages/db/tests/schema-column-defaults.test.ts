@@ -1,15 +1,19 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { holoRuntimeInternals, renderGeneratedSchemaModule, type AnyColumnDefinition, type TableDefinition } from '../src'
+import { DB, SchemaError, column, holoRuntimeInternals, renderGeneratedSchemaModule, type AnyColumnDefinition, type TableDefinition } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
-type ReadDefault = 'none' | 'now' | { value: unknown }
+type ReadDefault = 'none' | 'now' | { value: unknown } | { expression: unknown }
 
 function readDefaults(table: TableDefinition): Record<string, { kind: string, default: ReadDefault }> {
   return Object.fromEntries(Object.values(table.columns).map((column: AnyColumnDefinition) => [column.name, {
     kind: column.kind,
-    default: !column.hasDefault ? 'none' : column.defaultKind === 'now' ? 'now' : { value: column.defaultValue },
+    default: !column.hasDefault
+      ? 'none'
+      : column.defaultKind === 'now'
+        ? 'now'
+        : column.defaultKind === 'expression' ? { expression: column.defaultValue } : { value: column.defaultValue },
   }]))
 }
 
@@ -79,6 +83,33 @@ const builderKinds = {
   mysql: { bigInteger: 'bigInteger', uuid: 'uuid', settings: 'json', seenAt: 'timestamp' },
 } as const
 
+const uuidExpressions = {
+  sqlite: 'lower(hex(randomblob(16)))',
+  postgres: 'gen_random_uuid()',
+  mysql: 'uuid()',
+} as const
+
+const UUID_LIKE = /^[0-9a-f-]{32,36}$/
+
+describe('expression column defaults', () => {
+  it('stores a DB.raw statement as an expression default', () => {
+    const definition = column.uuid().default(DB.raw('gen_random_uuid()')).toDefinition({ name: 'token' })
+
+    expect(definition).toMatchObject({ hasDefault: true, defaultKind: 'expression', defaultValue: 'gen_random_uuid()' })
+  })
+
+  it('rejects a DB.raw statement with bindings or empty SQL', () => {
+    expect(() => column.string().default(DB.raw('concat(?, uuid())', ['t-']))).toThrow(SchemaError)
+    expect(() => column.string().default(DB.raw('  '))).toThrow(SchemaError)
+  })
+
+  it('keeps other object defaults as validated values', () => {
+    const definition = column.json().default({ unsafe: true, sql: 'uuid()' }).toDefinition({ name: 'settings' })
+
+    expect(definition).toMatchObject({ defaultKind: 'value', defaultValue: { unsafe: true, sql: 'uuid()' } })
+  })
+})
+
 const expectedRawDefaults = {
   sqlite: {
     id: { kind: 'id', default: 'none' },
@@ -96,7 +127,7 @@ const expectedRawDefaults = {
     settings: { kind: 'text', default: { value: '{"a":1}' } },
     status: { kind: 'enum', default: { value: 'live' } },
     seen_at: { kind: 'datetime', default: 'now' },
-    token: { kind: 'text', default: { value: 'lower(hex(randomblob(4)))' } },
+    token: { kind: 'text', default: { expression: 'lower(hex(randomblob(4)))' } },
     missing: { kind: 'text', default: { value: null } },
   },
   postgres: {
@@ -115,7 +146,7 @@ const expectedRawDefaults = {
     settings: { kind: 'json', default: { value: { a: 1 } } },
     status: { kind: 'enum', default: { value: 'live' } },
     seen_at: { kind: 'timestamp', default: 'now' },
-    token: { kind: 'uuid', default: { value: 'gen_random_uuid()' } },
+    token: { kind: 'uuid', default: { expression: 'gen_random_uuid()' } },
   },
   mysql: {
     id: { kind: 'id', default: 'none' },
@@ -135,7 +166,7 @@ const expectedRawDefaults = {
     status: { kind: 'enum', default: { value: 'live' } },
     seen_at: { kind: 'timestamp', default: 'now' },
     seen_at_ms: { kind: 'datetime', default: 'now' },
-    token: { kind: 'string', default: { value: 'concat(_utf8mb4\'t-\',uuid())' } },
+    token: { kind: 'string', default: { expression: 'concat(_utf8mb4\'t-\',uuid())' } },
   },
 } as const
 
@@ -170,11 +201,12 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.uuid('public_id').default('00000000-0000-0000-0000-000000000000')
         table.timestamp('seen_at').defaultNow()
         table.string('nickname').nullable()
+        table.uuid('token').default(DB.raw(uuidExpressions[driver]))
       })
       await db.executeCompiled({ sql: rawTables[driver](rawTable), source: 'test:column-defaults' })
       const reader = createSchemaReader(db)
       const tables = [(await reader.readTable(builderTable))!, (await reader.readTable(rawTable))!]
-      return { tables }
+      return { db, tables }
     }
 
     it('reads each schema builder default as a literal of its column type or as now', async () => {
@@ -204,6 +236,43 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         public_id: { kind: kinds.uuid, default: { value: '00000000-0000-0000-0000-000000000000' } },
         seen_at: { kind: kinds.seenAt, default: 'now' },
         nickname: { kind: 'string', default: 'none' },
+        token: { kind: kinds.uuid, default: { expression: uuidExpressions[driver] } },
+      })
+    })
+
+    it('fills a DB.raw default from the database expression on insert', async () => {
+      const { db } = await openDefaultsDatabase()
+
+      await db.table(builderTable).insert({ nickname: 'a' })
+      await db.table(builderTable).insert({ nickname: 'b' })
+      const tokens = (await db.table(builderTable).select('token').get()).map(row => (row as { token: string }).token)
+
+      expect(tokens).toHaveLength(2)
+      expect(tokens.every(token => UUID_LIKE.test(token))).toBe(true)
+      expect(new Set(tokens).size).toBe(2)
+    })
+
+    it('changes a column to a DB.raw default', async () => {
+      const { db, schema } = await openDatabase(driver)
+      const name = `column_defaults_change_${driver}`
+      await schema.dropTable(name)
+      onTestFinished(() => schema.dropTable(name))
+      await schema.createTable(name, (table) => {
+        table.id()
+        table.uuid('token').nullable()
+        table.string('label')
+      })
+
+      await schema.table(name, (table) => {
+        table.uuid('token').default(DB.raw(uuidExpressions[driver])).change()
+      })
+      await db.table(name).insert({ label: 'a' })
+
+      const [row] = await db.table(name).select('token').get() as Array<{ token: string }>
+      expect(row!.token).toMatch(UUID_LIKE)
+      expect(readDefaults((await createSchemaReader(db).readTable(name))!).token).toEqual({
+        kind: builderKinds[driver].uuid,
+        default: { expression: uuidExpressions[driver] },
       })
     })
 

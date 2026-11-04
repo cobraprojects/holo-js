@@ -31,6 +31,10 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return compileDialectDefaultLiteral('sqlite', value)
   }
 
+  protected override compileDefaultExpression(column: AnyColumnDefinition): string {
+    return `(${super.compileDefaultExpression(column)})`
+  }
+
   protected override compileUniqueConstraints(): string[] {
     return []
   }

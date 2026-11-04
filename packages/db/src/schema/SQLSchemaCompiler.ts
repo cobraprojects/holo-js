@@ -398,6 +398,8 @@ export abstract class SQLSchemaCompiler {
       parts.push(`DEFAULT ${this.compileDefaultValue(column.defaultValue, column)}`)
     } else if (column.defaultKind === 'now') {
       parts.push(`DEFAULT ${this.compileCurrentTimestamp()}`)
+    } else if (column.defaultKind === 'expression') {
+      parts.push(`DEFAULT ${this.compileDefaultExpression(column)}`)
     }
 
     const foreignKeyConstraint = this.compileColumnForeignKeyConstraint(tableName, column)
@@ -429,6 +431,14 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected appendPrimaryKeyExtras(_parts: string[], _column: AnyColumnDefinition): void {}
+
+  protected compileDefaultExpression(column: AnyColumnDefinition): string {
+    if (typeof column.defaultValue !== 'string' || column.defaultValue.trim() === '') {
+      throw new SchemaError(`Column "${column.name}" has an expression default without SQL text.`)
+    }
+
+    return column.defaultValue
+  }
 
   protected compileCurrentTimestamp(): string {
     return 'CURRENT_TIMESTAMP'

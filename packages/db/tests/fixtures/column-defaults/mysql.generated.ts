@@ -1,4 +1,4 @@
-import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+import { DB, column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 export const columnDefaultsBuilderMysql = defineGeneratedTable("column_defaults_builder_mysql", {
   "id": column.id(),
@@ -20,6 +20,7 @@ export const columnDefaultsBuilderMysql = defineGeneratedTable("column_defaults_
   "public_id": column.uuid().default("00000000-0000-0000-0000-000000000000"),
   "seen_at": column.timestamp().defaultNow(),
   "nickname": column.string().nullable(),
+  "token": column.uuid().default(DB.raw("uuid()")),
 })
 
 export const columnDefaultsRawMysql = defineGeneratedTable("column_defaults_raw_mysql", {
@@ -40,7 +41,7 @@ export const columnDefaultsRawMysql = defineGeneratedTable("column_defaults_raw_
   "status": column.enum(["draft","live"]).default("live"),
   "seen_at": column.timestamp().defaultNow(),
   "seen_at_ms": column.datetime().defaultNow(),
-  "token": column.string().default("concat(_utf8mb4't-',uuid())"),
+  "token": column.string().default(DB.raw("concat(_utf8mb4't-',uuid())")),
 })
 
 declare module '@holo-js/db' {
