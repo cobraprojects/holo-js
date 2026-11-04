@@ -1,5 +1,5 @@
 /* v8 ignore file -- type declarations only */
-import type { ModelRecord } from '../model/types'
+import type { ModelInsertPayload, ModelRecord } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 
 export interface FactoryEntityReference<TTable extends TableDefinition = TableDefinition> {
@@ -20,8 +20,8 @@ export interface FactoryEntityReference<TTable extends TableDefinition = TableDe
 export interface FactoryModelReference<TTable extends TableDefinition = TableDefinition> {
   readonly definition: { table: TTable, morphClass?: string }
   getRepository(): unknown
-  make(values?: Partial<ModelRecord<TTable>>): FactoryEntityReference<TTable>
-  create(values?: Partial<ModelRecord<TTable>>): Promise<FactoryEntityReference<TTable>>
+  make(values?: ModelInsertPayload<TTable>): FactoryEntityReference<TTable>
+  create(values?: ModelInsertPayload<TTable>): Promise<FactoryEntityReference<TTable>>
   getConnectionName?(): string | undefined
 }
 
@@ -31,7 +31,7 @@ export interface FactoryContext<TModel extends FactoryModelReference = FactoryMo
 }
 
 export type FactoryAttributes<TModel extends FactoryModelReference>
-  = Partial<ModelRecord<TModel['definition']['table']>>
+  = ModelInsertPayload<TModel['definition']['table']>
 
 export type FactoryDefinition<TModel extends FactoryModelReference> = (
   context: FactoryContext<TModel>,

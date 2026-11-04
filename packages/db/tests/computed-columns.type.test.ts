@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from 'vitest'
-import { column, defineGeneratedTable, defineModel, hasMany, hasOne, type Entity, type InferInsert, type InferSelect, type InferUpdate } from '../src'
+import { column, defineFactory, defineGeneratedTable, defineModel, hasMany, hasOne, type Entity, type InferInsert, type InferSelect, type InferUpdate } from '../src'
 import type { computedBuilderSqlite, computedRawSqlite } from './fixtures/computed-columns/sqlite.generated'
 import type { computedBuilderPostgres, computedRawPostgres } from './fixtures/computed-columns/postgres.generated'
 import type { computedBuilderMysql, computedRawMysql } from './fixtures/computed-columns/mysql.generated'
@@ -136,3 +136,14 @@ it('keeps lookups on computed columns and infers the written entity', () => {
   expectTypeOf(write).toBeFunction()
 })
 
+it('rejects computed columns in factory overrides', () => {
+  const productFactory = defineFactory(products, () => ({ price: 1, quantity: 2, name: 'Pen' }))
+  const write = async () => {
+    await productFactory.create({ note: 'gift' })
+    // @ts-expect-error computed columns cannot be factory overrides
+    await productFactory.create({ total: 2 })
+    // @ts-expect-error computed columns cannot be factory overrides
+    await productFactory.make({ label: 'Pen' })
+  }
+  expectTypeOf(write).toBeFunction()
+})
