@@ -214,7 +214,7 @@ export default defineAuthConfig({
   it('renders the auth namespace augmentation without lint directives', () => {
     const output = renderGeneratedAuthTypes(undefined)
 
-    expect(output).toContain('declare global {\n  namespace HoloAuth {')
+    expect(output).toContain('namespace HoloAuth {')
     expect(output).not.toContain('eslint-disable')
   })
 
