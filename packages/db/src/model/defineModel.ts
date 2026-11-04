@@ -43,6 +43,7 @@ import type {
   ModelDateColumns,
   ModelDateOptions,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelScopesDefinition,
   ModelUpdatePayload,
@@ -505,16 +506,16 @@ function createStaticModelApi<
     onlyTrashed() {
       return this.getRepository().query().onlyTrashed()
     },
-    create(values: Partial<ModelRecord<TTable>>) {
+    create(values: ModelInsertPayload<TTable>) {
       return this.getRepository().create(values)
     },
-    createMany(values: readonly Partial<ModelRecord<TTable>>[]) {
+    createMany(values: readonly ModelInsertPayload<TTable>[]) {
       return this.getRepository().createMany(values)
     },
-    createQuietly(values: Partial<ModelRecord<TTable>>) {
+    createQuietly(values: ModelInsertPayload<TTable>) {
       return this.getRepository().createQuietly(values)
     },
-    createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]) {
+    createManyQuietly(values: readonly ModelInsertPayload<TTable>[]) {
       return this.getRepository().createManyQuietly(values)
     },
     update(id: unknown, values: ModelUpdatePayload<TTable>) {
@@ -523,10 +524,10 @@ function createStaticModelApi<
     prune() {
       return this.getRepository().prune()
     },
-    increment(column: ModelColumnName<TTable>, amount: number = 1, extraValues: Partial<ModelRecord<TTable>> = {}) {
+    increment(column: ModelColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().increment(column, amount, extraValues)
     },
-    decrement(column: ModelColumnName<TTable>, amount: number = 1, extraValues: Partial<ModelRecord<TTable>> = {}) {
+    decrement(column: ModelColumnName<TTable>, amount: number = 1, extraValues: ModelUpdatePayload<TTable> = {}) {
       return this.query().decrement(column, amount, extraValues)
     },
     delete(id: unknown) {
@@ -541,19 +542,19 @@ function createStaticModelApi<
     forceDelete(id: unknown) {
       return this.getRepository().forceDelete(id)
     },
-    updateOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    updateOrCreate(match: Partial<ModelRecord<TTable>>, values: ModelUpdatePayload<TTable> = {}) {
       return this.getRepository().updateOrCreate(match, values)
     },
-    upsert(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    upsert(match: Partial<ModelRecord<TTable>>, values: ModelUpdatePayload<TTable> = {}) {
       return this.getRepository().upsert(match, values)
     },
-    firstOrNew(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    firstOrNew(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().firstOrNew(match, values)
     },
-    firstOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    firstOrCreate(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().firstOrCreate(match, values)
     },
-    createOrFirst(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
+    createOrFirst(match: Partial<ModelRecord<TTable>>, values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().createOrFirst(match, values)
     },
     saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]) {
@@ -563,7 +564,7 @@ function createStaticModelApi<
       registerDynamicRelation(definition, name, resolver)
       return this
     },
-    make(values: Partial<ModelRecord<TTable>> = {}) {
+    make(values: ModelInsertPayload<TTable> = {}) {
       return this.getRepository().make(values)
     },
     hydrate(row: Partial<ModelRecord<TTable>>, sourceConnection?: DatabaseContext) {

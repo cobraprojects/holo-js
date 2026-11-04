@@ -2,7 +2,7 @@ import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
@@ -107,7 +107,7 @@ class EntityBase<
 
   constructor(
     repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>,
-    attributes: Partial<ModelRecord<TTable>>,
+    attributes: Partial<ModelRecord<TTable>> | ModelInsertPayload<TTable>,
     exists = true,
   ) {
     this.#repository = repository
@@ -207,7 +207,7 @@ class EntityBase<
     return await this.save()
   }
 
-  forceFill(values: Partial<ModelRecord<TTable>>): this {
+  forceFill(values: ModelUpdatePayload<TTable>): this {
     for (const key of Object.keys(values)) {
       assertAttributeNameAllowed(key)
     }

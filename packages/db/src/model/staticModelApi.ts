@@ -22,6 +22,7 @@ import type {
   ModelColumnName,
   ModelRecord,
   ModelDefinition,
+  ModelInsertPayload,
   ModelReference,
   ModelScopesDefinition,
   ModelScopeMethods,
@@ -300,32 +301,32 @@ export type StaticModelApi<
   avg(column: ModelColumnName<TTable>): Promise<number | null>
   min(column: ModelColumnName<TTable>): Promise<number | null>
   max(column: ModelColumnName<TTable>): Promise<number | null>
-  create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
+  create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
   create(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
-  createMany(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
+  createMany(values: readonly ModelInsertPayload<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   createMany(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
-  createQuietly(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
+  createQuietly(values: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
   createQuietly(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
-  createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
+  createManyQuietly(values: readonly ModelInsertPayload<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   update(id: ModelPrimaryKeyValue<TTable>, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
   prune(): Promise<number>
-  increment(column: ModelColumnName<TTable>, amount?: number, extraValues?: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult>
-  decrement(column: ModelColumnName<TTable>, amount?: number, extraValues?: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult>
+  increment(column: ModelColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
+  decrement(column: ModelColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>
   delete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
   destroy(ids: readonly ModelPrimaryKeyValue<TTable>[]): Promise<number>
   restore(id: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>
   forceDelete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
   withTrashed(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
   onlyTrashed(): ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
-  updateOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  upsert(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  createOrFirst(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
+  updateOrCreate(match: Partial<ModelRecord<TTable>>, values?: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
+  upsert(match: Partial<ModelRecord<TTable>>, values?: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
+  firstOrNew(match: Partial<ModelRecord<TTable>>, values?: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
+  firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
+  createOrFirst(match: Partial<ModelRecord<TTable>>, values?: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
   saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations, THidden>
-  make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
+  make(values?: ModelInsertPayload<TTable>): Entity<TTable, TRelations>
   hydrate(row: Partial<ModelRecord<TTable>>, sourceConnection?: DatabaseContext): Promise<Entity<TTable, TRelations>>
   getRepository(): ModelRepository<TTable, TScopes>
   getConnectionName(): string | undefined

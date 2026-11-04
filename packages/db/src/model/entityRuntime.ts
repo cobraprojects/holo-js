@@ -1,6 +1,6 @@
 import { SecurityError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
-import type { ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
+import type { ModelInsertPayload, ModelRecord, ModelRelationName, RelationMap, RelationMethodsOf } from './types'
 import type { Entity } from './Entity'
 
 const reservedAttributeNames: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
@@ -21,7 +21,7 @@ export type EntityConstructor = {
     TRelations extends RelationMap = RelationMap,
   >(
     repository: unknown,
-    attributes: Partial<ModelRecord<TTable>>,
+    attributes: Partial<ModelRecord<TTable>> | ModelInsertPayload<TTable>,
     exists?: boolean,
   ): Entity<TTable, TRelations>
   prototype: Entity<TableDefinition, RelationMap>

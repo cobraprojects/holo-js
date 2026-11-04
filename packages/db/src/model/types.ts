@@ -315,17 +315,17 @@ export interface BelongsToRelationMethods<TRelated> {
 /**
  * Methods available on HasOne/HasOneThrough relations when called as a method
  */
-export interface HasOneRelationMethods<TRelated> {
-  create(values: Record<string, unknown>): Promise<TRelated>
+export interface HasOneRelationMethods<TRelated, TValues = Record<string, unknown>> {
+  create(values: TValues): Promise<TRelated>
   save(related: TRelated): Promise<TRelated>
 }
 
 /**
  * Methods available on HasMany/HasManyThrough relations when called as a method
  */
-export interface HasManyRelationMethods<TRelated> {
-  create(values: Record<string, unknown>): Promise<TRelated>
-  createMany(values: readonly Record<string, unknown>[]): Promise<TRelated[]>
+export interface HasManyRelationMethods<TRelated, TValues = Record<string, unknown>> {
+  create(values: TValues): Promise<TRelated>
+  createMany(values: readonly TValues[]): Promise<TRelated[]>
   save(related: TRelated): Promise<TRelated>
   saveMany(related: readonly TRelated[]): Promise<TRelated[]>
 }
@@ -333,13 +333,13 @@ export interface HasManyRelationMethods<TRelated> {
 /**
  * Methods available on BelongsToMany relations when called as a method (e.g., post.tags())
  */
-export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>> {
+export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>, TValues = Record<string, unknown>> {
   attach(ids: unknown | readonly unknown[], attributes?: TPivot): Promise<void>
   detach(ids?: unknown | readonly unknown[]): Promise<number>
   sync(ids: unknown): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>
   toggle(ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }>
   updateExistingPivot(id: unknown, attributes: TPivot): Promise<number>
-  create(values: Record<string, unknown>): Promise<TRelated>
+  create(values: TValues): Promise<TRelated>
   save(related: TRelated): Promise<TRelated>
 }
 
@@ -350,27 +350,27 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
   = TRelation extends BelongsToRelationDefinition<infer TRelated>
     ? BelongsToRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
     : TRelation extends HasOneRelationDefinition<infer TRelated>
-      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
       : TRelation extends HasOneOfManyRelationDefinition<infer TRelated>
-        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
         : TRelation extends HasManyRelationDefinition<infer TRelated>
-          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
           : TRelation extends HasOneThroughRelationDefinition<infer TRelated>
-            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
             : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
-              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
               : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
-                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
-                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                   : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
-                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                     : TRelation extends MorphManyRelationDefinition<infer TRelated>
-                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphToManyRelationDefinition<infer TRelated>
-                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
-                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                         : never
 
 export interface RelationMap {

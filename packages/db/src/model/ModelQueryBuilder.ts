@@ -53,6 +53,7 @@ import type {
   ModelColumnReference,
   ModelJsonColumnPath,
   ModelDefinitionLike,
+  ModelInsertPayload,
   ModelRecord,
   ModelRelationName,
   ModelRelationPath,
@@ -68,6 +69,7 @@ import type {
   RelationMap,
   ResolveEagerLoads,
   SerializedEntityWithLoaded,
+  ModelUpdatePayload,
 } from './types'
 import type { ModelRepository } from './ModelRepository'
 
@@ -1878,7 +1880,7 @@ class ModelQueryBuilderBase<
     return (await this.findOrFail(value, column)).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>
   }
 
-  async update(values: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult> {
+  async update(values: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().update(this.repository.withWriteTimestamps(this.repository.sanitizeWritePayload(values, 'update'), 'update'))
   }
@@ -1894,7 +1896,7 @@ class ModelQueryBuilderBase<
   async increment(
     column: ModelColumnName<TTable>,
     amount = 1,
-    extraValues: Partial<ModelRecord<TTable>> = {},
+    extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().increment(
@@ -1907,7 +1909,7 @@ class ModelQueryBuilderBase<
   async decrement(
     column: ModelColumnName<TTable>,
     amount = 1,
-    extraValues: Partial<ModelRecord<TTable>> = {},
+    extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrement(
@@ -1919,7 +1921,7 @@ class ModelQueryBuilderBase<
 
   async incrementEach(
     columns: Partial<Record<ModelColumnName<TTable>, number>>,
-    extraValues: Partial<ModelRecord<TTable>> = {},
+    extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().incrementEach(
@@ -1930,7 +1932,7 @@ class ModelQueryBuilderBase<
 
   async decrementEach(
     columns: Partial<Record<ModelColumnName<TTable>, number>>,
-    extraValues: Partial<ModelRecord<TTable>> = {},
+    extraValues: ModelUpdatePayload<TTable> = {},
   ): Promise<DriverExecutionResult> {
     await this.repository.loadGuardableColumns()
     return this.getTableQueryBuilder().decrementEach(
@@ -1958,7 +1960,7 @@ class ModelQueryBuilderBase<
   }
 
   async upsert(
-    values: Partial<ModelRecord<TTable>> | readonly Partial<ModelRecord<TTable>>[],
+    values: ModelInsertPayload<TTable> | readonly ModelInsertPayload<TTable>[],
     uniqueBy: readonly ModelColumnName<TTable>[],
     updateColumns: readonly ModelColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {

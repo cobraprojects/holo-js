@@ -51,6 +51,7 @@ import type {
   ModelColumnName,
   ModelLifecycleEventName,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelReference,
   RelationDefinition,
@@ -338,7 +339,7 @@ export class ModelRepository<
 
   async firstOrNew(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -352,7 +353,7 @@ export class ModelRepository<
 
   async firstOrCreate(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -379,7 +380,7 @@ export class ModelRepository<
 
   async createOrFirst(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelInsertPayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     if (Object.keys(match).length === 0) {
       throw new HydrationError('createOrFirst() requires at least one attribute to match the existing row.')
@@ -408,7 +409,7 @@ export class ModelRepository<
       .reduce((query, [column, value]) => query.where(column as never, value), this.query())
   }
 
-  make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
+  make(values: ModelInsertPayload<TTable> = {}): Entity<TTable> {
     return new Entity(
       this,
       this.assertMassAssignable(applyPendingModelAttributes(this.definition, values)),
@@ -1377,18 +1378,18 @@ export class ModelRepository<
     }
   }
 
-  async create(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
     await this.loadGuardableColumns()
     this.assertMassAssignable(applyPendingModelAttributes(this.definition, values))
     return this.createRecord(values)
   }
 
-  async createQuietly(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  async createQuietly(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
     return withoutModelEvents(() => this.create(values))
   }
 
   async createMany(
-    values: readonly Partial<ModelRecord<TTable>>[],
+    values: readonly ModelInsertPayload<TTable>[],
   ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     const created: Entity<TTable>[] = []
     for (const value of values) {
@@ -1398,7 +1399,7 @@ export class ModelRepository<
   }
 
   async createManyQuietly(
-    values: readonly Partial<ModelRecord<TTable>>[],
+    values: readonly ModelInsertPayload<TTable>[],
   ): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
     return withoutModelEvents(() => this.createMany(values))
   }
@@ -1714,7 +1715,7 @@ export class ModelRepository<
     return withoutModelEvents(() => this.createManyRelatedEntities(entity, relationName, values))
   }
 
-  private async createRecord(values: Partial<ModelRecord<TTable>>): Promise<Entity<TTable>> {
+  private async createRecord(values: ModelInsertPayload<TTable>): Promise<Entity<TTable>> {
     return this.insertEntity(new Entity(this, values, false))
   }
 
@@ -1772,7 +1773,7 @@ export class ModelRepository<
 
   async upsert(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelUpdatePayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     const query = this.queryMatching(match)
 
@@ -1787,7 +1788,7 @@ export class ModelRepository<
 
   async updateOrCreate(
     match: Partial<ModelRecord<TTable>>,
-    values: Partial<ModelRecord<TTable>> = {},
+    values: ModelUpdatePayload<TTable> = {},
   ): Promise<Entity<TTable>> {
     return this.upsert(match, values)
   }

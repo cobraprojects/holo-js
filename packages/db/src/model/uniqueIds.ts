@@ -6,6 +6,7 @@ import { snapshotAttributes } from './entityRuntime'
 import type {
   ModelAttributeKey,
   ModelDefinition,
+  ModelInsertPayload,
   ModelRecord,
   ModelTrait,
   UniqueIdRuntimeConfig,
@@ -33,10 +34,13 @@ export function applyGeneratedUniqueIds<TTable extends TableDefinition>(
   return output
 }
 
-export function applyPendingModelAttributes<TTable extends TableDefinition>(
+export function applyPendingModelAttributes<
+  TTable extends TableDefinition,
+  TValues extends Partial<ModelRecord<TTable>> | ModelInsertPayload<TTable>,
+>(
   definition: ModelDefinition<TTable>,
-  values: Partial<ModelRecord<TTable>>,
-): Partial<ModelRecord<TTable>> {
+  values: TValues,
+): TValues {
   return Object.keys(definition.pendingAttributes).length === 0
     ? values
     : { ...snapshotAttributes(definition.pendingAttributes), ...values }
