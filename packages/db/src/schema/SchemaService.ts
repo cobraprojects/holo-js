@@ -3,7 +3,7 @@ import { reportError } from '@holo-js/kernel/error-reporting'
 import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createPrimaryKeyOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropPrimaryKeyOperation, dropTableOperation, dropUniqueOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
-import { assertJsonDefaultText } from './defaultLiterals'
+import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
@@ -255,8 +255,9 @@ export class SchemaService {
   }
 
   private assertSupportedColumnDefaults(columns: readonly AnyColumnDefinition[]): void {
+    const dialectLabel = this.createCompiler().getDialectLabel()
     for (const column of columns) {
-      if (column.defaultKind === 'value') assertJsonDefaultText(column.name, column.kind, column.defaultValue)
+      if (column.defaultKind === 'value') assertSupportedColumnDefaultValue(column.name, column.kind, column.defaultValue, dialectLabel)
     }
   }
 

@@ -398,6 +398,10 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
         table.string('label').nullable()
         table.json('meta_two').default('hello')
       })).rejects.toThrow(new SchemaError(message.replace('"meta"', '"meta_two"')))
+      await expect(schema.table(name, (table) => {
+        table.string('label').nullable()
+        table.integer('count').default(Number.NaN)
+      })).rejects.toThrow(SchemaError)
       expect(statements).toEqual([])
       expect((await schema.getColumns(name)).map(column => column.name)).toEqual(['id', 'meta'])
     })

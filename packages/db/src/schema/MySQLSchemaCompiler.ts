@@ -32,7 +32,7 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
     }
   }
 
-  protected override getDialectLabel(): string {
+  override getDialectLabel(): string {
     return 'MySQL'
   }
 

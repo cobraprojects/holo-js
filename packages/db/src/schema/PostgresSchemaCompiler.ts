@@ -7,7 +7,7 @@ import type { DDLStatement } from './ddl'
 import type { AnyColumnDefinition, ColumnDefinition } from './types'
 
 export class PostgresSchemaCompiler extends SQLSchemaCompiler {
-  protected override getDialectLabel(): string {
+  override getDialectLabel(): string {
     return 'Postgres'
   }
 

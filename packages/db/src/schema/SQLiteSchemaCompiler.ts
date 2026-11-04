@@ -9,7 +9,7 @@ import type { SQLiteDependentObject, SQLiteTableObject } from './introspection/s
 import type { AnyColumnDefinition, ColumnDefinition, ForeignKeyReference, TableIndexDefinition } from './types'
 
 export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
-  protected override getDialectLabel(): string {
+  override getDialectLabel(): string {
     return 'SQLite'
   }
 
