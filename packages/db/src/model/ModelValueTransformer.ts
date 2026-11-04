@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -146,7 +146,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
       return values
     }
 
-    const timestamp = new Date().toISOString()
+    const timestamp = this.freshTimestamp()
     const nextValues = { ...values }
 
     if (mode === 'create' && this.definition.createdAtColumn && typeof nextValues[this.definition.createdAtColumn] === 'undefined') {
@@ -238,8 +238,13 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
       case 'boolean':
         return booleanStorageValue(value)
       default:
-        return value
+        return value instanceof Date && this.getSchemaDialectName() === 'mysql' ? dateLikeWriteValue('mysql', value) : value
     }
+  }
+
+  freshTimestamp(): string {
+    const now = new Date()
+    return (this.getSchemaDialectName() === 'mysql' ? wholeSecondInstant(now) : now).toISOString()
   }
 
   private getSchemaDialectName(): SchemaDialectName {

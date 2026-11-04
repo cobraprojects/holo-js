@@ -160,6 +160,8 @@ function parseIsoInstantText(value: string): { instant: Date, fraction: string |
 
 const MILLISECOND_DIGITS = 3
 
+const MYSQL_FRACTIONAL_WALL_CLOCK = /^(\d{4,}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})\.\d+$/
+
 type ParsedInstant = { instant: Date, fraction: string | undefined }
 
 export type DateStorage = 'native' | 'text'
@@ -194,6 +196,12 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
+export function wholeSecondInstant(instant: Date): Date {
+  const time = instant.getTime()
+  const millisecond = ((time % 1000) + 1000) % 1000
+  return millisecond === 0 ? instant : new Date(time - millisecond)
+}
+
 export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, storage: DateStorage = 'native'): unknown {
   if (dialect === 'sqlite') {
     return normalizeSQLiteDateValue(value)
@@ -201,11 +209,11 @@ export function dateLikeWriteValue(dialect: SchemaDialectName, value: unknown, s
 
   const parsed = parseInstant(value)
   if (!parsed) {
-    return value
+    return dialect === 'mysql' && typeof value === 'string' ? value.replace(MYSQL_FRACTIONAL_WALL_CLOCK, '$1') : value
   }
 
   if (dialect === 'mysql') {
-    return parsed.instant
+    return wholeSecondInstant(parsed.instant)
   }
 
   if (storage === 'text') {

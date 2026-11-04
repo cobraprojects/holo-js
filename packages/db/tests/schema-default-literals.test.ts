@@ -24,9 +24,9 @@ describe('schema default literals', () => {
   it('writes PostgreSQL and MySQL Date defaults as wall-clock time in app.timezone', () => {
     configureConfigRuntime({ app: { timezone: 'America/New_York' } } as never)
     try {
-      const instant = new Date('2025-01-02T03:04:05.000Z')
-      expect(compileDialectDefaultLiteral('postgres', instant)).toBe('\'2025-01-01T22:04:05.000-05:00\'')
-      expect(compileDialectDefaultLiteral('mysql', instant)).toBe('\'2025-01-01 22:04:05.000\'')
+      const instant = new Date('2025-01-02T03:04:05.900Z')
+      expect(compileDialectDefaultLiteral('postgres', instant)).toBe('\'2025-01-01T22:04:05.900-05:00\'')
+      expect(compileDialectDefaultLiteral('mysql', instant)).toBe('\'2025-01-01 22:04:05\'')
     } finally {
       resetConfigRuntime()
     }

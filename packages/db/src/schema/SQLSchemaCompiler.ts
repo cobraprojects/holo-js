@@ -1,6 +1,7 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
+import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement, UniqueBacking } from './ddl'
@@ -457,48 +458,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected assertSupportedDefaultValue(value: unknown, column: AnyColumnDefinition): void {
-    if (!this.isSupportedDefaultValue(value)) {
-      throw new SchemaError(
-        `Column "${column.name}" has a default value that cannot be compiled safely for ${this.getDialectLabel()}.`,
-      )
-    }
-  }
-
-  protected isSupportedDefaultValue(value: unknown): boolean {
-    if (value === null) {
-      return true
-    }
-
-    if (typeof value === 'boolean' || typeof value === 'string') {
-      return true
-    }
-
-    if (typeof value === 'number') {
-      return Number.isFinite(value)
-    }
-
-    if (value instanceof Date) {
-      return Number.isFinite(value.getTime())
-    }
-
-    if (value instanceof Uint8Array) {
-      return false
-    }
-
-    if (Array.isArray(value)) {
-      return value.every(entry => this.isSupportedDefaultValue(entry))
-    }
-
-    if (typeof value === 'object') {
-      const prototype = Object.getPrototypeOf(value)
-      if (prototype !== Object.prototype && prototype !== null) {
-        return false
-      }
-
-      return Object.values(value as Record<string, unknown>).every(entry => this.isSupportedDefaultValue(entry))
-    }
-
-    return false
+    assertSupportedColumnDefaultValue(column.name, column.kind, value, this.getDialectLabel())
   }
 
   protected resolveIndexName(tableName: string, index: TableIndexDefinition): string {
@@ -517,7 +477,7 @@ export abstract class SQLSchemaCompiler {
     }
   }
 
-  protected abstract getDialectLabel(): string
+  abstract getDialectLabel(): string
   protected abstract compileColumnType(column: AnyColumnDefinition): string
   protected abstract compileDefaultValue(value: unknown, column: AnyColumnDefinition): string
 }

@@ -671,6 +671,14 @@ table.string('role').default('member')
 table.json('preferences').default({ theme: 'light' })
 ```
 
+On a `json()` column, a string is JSON text and is written as is, as with Laravel's `default(json_encode(...))`. Any other value is written as JSON. A string that isn't JSON text raises a `SchemaError` before any SQL runs, so pass `JSON.stringify('hello')` for the JSON string `"hello"`. `default(null)` defaults to SQL `NULL`.
+
+```ts
+table.json('tags').default('["new"]')
+table.json('label').default(JSON.stringify('hello'))
+table.json('retries').default(3)
+```
+
 To default to an SQL expression the database evaluates for each row, pass `DB.raw()`, as with Laravel's `default(DB::raw(...))`:
 
 ```ts
