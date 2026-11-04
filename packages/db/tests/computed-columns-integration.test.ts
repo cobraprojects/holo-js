@@ -74,6 +74,13 @@ async function openComputedDatabase(driver: Driver) {
   return { ...opened, names }
 }
 
+const POSTGRES_18 = 180000
+
+async function readPostgresVersion(db: DatabaseContext): Promise<number> {
+  const result = await db.queryCompiled<{ version: string }>({ sql: 'SELECT current_setting(\'server_version_num\') AS version', source: 'test:computed-columns' })
+  return Number(result.rows[0]?.version)
+}
+
 async function readTables(db: DatabaseContext, names: readonly string[]): Promise<TableDefinition[]> {
   const reader = createSchemaReader(db)
   return Promise.all(names.map(async name => (await reader.readTable(name))!))
@@ -198,14 +205,44 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     onTestFinished(async () => {
       if (await schema.hasTable(name)) await schema.dropTable(name)
     })
-    const version = Number((await db.queryCompiled<{ version: string }>({ sql: 'SELECT current_setting(\'server_version_num\') AS version', source: 'test:computed-columns' })).rows[0]?.version)
 
     const created = schema.createTable(name, (table) => {
+      table.id()
       table.integer('price')
       table.integer('doubled').virtualAs('price * 2')
     })
 
-    if (version >= 180000) await expect(created).resolves.toBeUndefined()
-    else await expect(created).rejects.toThrow('PostgreSQL 18 or newer is required for the virtualAs() column "doubled". Use storedAs() instead.')
+    if (await readPostgresVersion(db) < POSTGRES_18) {
+      await expect(created).rejects.toThrow('PostgreSQL 18 or newer is required for the virtualAs() column "doubled". Use storedAs() instead.')
+      expect(await schema.hasTable(name)).toBe(false)
+      return
+    }
+    await created
+    const tables = await readTables(db, [name])
+    expect(renderGeneratedSchemaModule(tables)).toContain('"doubled": column.integer().virtualAs("(price * 2)")')
+    await reloadGeneratedSchema(tables)
+    const Doubled = defineModel(name, { fillable: ['price', 'doubled'], timestamps: false })
+    const row = await Doubled.create({ price: 21 })
+    expect(Number((await Doubled.findOrFail(row.get('id'))).get('doubled'))).toBe(42)
+    await expect(Doubled.create({ price: 1, doubled: 5 })).rejects.toThrow('Column "doubled" is generated and cannot be written directly.')
+  })
+
+  it.runIf(driver === 'postgres')('applies no operation of a table() call whose virtualAs column the postgres server cannot create', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+
+    const altered = schema.table(names.products, (table) => {
+      table.integer('discount').nullable()
+      table.integer('doubled').virtualAs('price * 2')
+    })
+
+    if (await readPostgresVersion(db) < POSTGRES_18) {
+      await expect(altered).rejects.toThrow('PostgreSQL 18 or newer is required for the virtualAs() column "doubled". Use storedAs() instead.')
+      const [products] = await readTables(db, [names.products])
+      expect(products!.columns.discount).toBeUndefined()
+      return
+    }
+    await altered
+    const [products] = await readTables(db, [names.products])
+    expect([products!.columns.discount?.name, products!.columns.doubled?.computed]).toEqual(['discount', { expression: '(price * 2)', stored: false }])
   })
 })

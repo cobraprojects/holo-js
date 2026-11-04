@@ -6,6 +6,7 @@ import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
+import { PostgresVirtualColumns } from './PostgresVirtualColumns'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
 import { createSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements, runAtomically } from './ddlExecution'
@@ -20,8 +21,6 @@ import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DDLStatement, UniqueBacking } from './ddl'
 import type { DatabaseTableStructure } from './introspection'
 import type { AnyColumnDefinition, LogicalColumnKind, TableDefinition, TableIndexDefinition } from './types'
-
-const POSTGRES_VIRTUAL_COLUMN_VERSION = 180000
 
 export interface IntrospectedColumn {
   name: string
@@ -50,10 +49,12 @@ export class SchemaService {
   private pinnedRestorePending = false
   private readonly sqlite: SQLiteSchemaOperations
   private readonly postgresEnumChecks: PostgresEnumChecks
+  private readonly postgresVirtualColumns: PostgresVirtualColumns
 
   constructor(private readonly connection: DatabaseContext) {
     this.sqlite = new SQLiteSchemaOperations(connection, callback => this.withoutForeignKeyConstraints(callback))
     this.postgresEnumChecks = new PostgresEnumChecks(connection)
+    this.postgresVirtualColumns = new PostgresVirtualColumns(connection)
   }
 
   getDialectName(): string {
@@ -94,6 +95,9 @@ export class SchemaService {
     await callback(builder)
     const operations = builder.getOperations()
     this.assertTableMutationIndexNames(tableName, operations)
+    await this.assertSupportedColumns(operations.flatMap(operation => operation.kind === 'addColumn'
+      ? [this.resolveColumnDefinition(operation.columnName, operation.column)]
+      : []))
 
     for (const operation of operations) {
       await this.executeTableMutation(tableName, operation)
@@ -233,20 +237,12 @@ export class SchemaService {
     return column.toDefinition({ name: columnName })
   }
 
-  private async assertSupportsVirtualColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
-    const virtualColumn = columns.find(column => column.computed?.stored === false)
-    if (!virtualColumn || !this.isPostgres()) return
-    const result = await this.connection.introspectCompiled<{ version: string }>({
-      sql: 'SELECT current_setting(\'server_version_num\') AS version',
-      source: 'schema:postgresServerVersion',
-    })
-    if (Number(result.rows[0]?.version) < POSTGRES_VIRTUAL_COLUMN_VERSION) {
-      throw new SchemaError(`PostgreSQL 18 or newer is required for the virtualAs() column "${virtualColumn.name}". Use storedAs() instead.`)
-    }
+  private async assertSupportedColumns(columns: readonly AnyColumnDefinition[]): Promise<void> {
+    if (this.isPostgres()) await this.postgresVirtualColumns.assertSupported(columns)
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
-    await this.assertSupportsVirtualColumns(Object.values(table.columns))
+    await this.assertSupportedColumns(Object.values(table.columns))
     const compiler = this.createCompiler()
     const indexes = compiler.resolveCreateTableIndexes(table)
     const tableStatement = compiler.compileTableCreation(table)
@@ -316,7 +312,6 @@ export class SchemaService {
       case 'addColumn': {
         this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        await this.assertSupportsVirtualColumns([definition])
         await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }
