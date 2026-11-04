@@ -191,6 +191,24 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect(await db.table(names.products).orderBy('id').pluck('note')).toEqual(['Ink (it\'s)', 'Pad (it\'s)'])
   })
 
+  it.runIf(driver === 'sqlite')('rejects reading a sqlite computed column whose expression its stored definition does not hold', async () => {
+    const { db } = await openDatabase(driver, {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          const introspect = target.introspect?.bind(target)
+          if (property !== 'introspect' || !introspect) return Reflect.get(target, property, target)
+          return async (...args: Parameters<typeof introspect>) => {
+            const result = await introspect(...args)
+            return { ...result, rows: result.rows.map(row => typeof row.sql === 'string' ? { ...row, sql: row.sql.replace(' AS (a * 2)', '') } : row) }
+          }
+        },
+      }),
+    })
+    await db.executeCompiled({ sql: 'CREATE TABLE "computed_unreadable" ("a" integer, "b" integer AS (a * 2))', source: 'test:computed-columns' })
+
+    await expect(createSchemaReader(db).readTable('computed_unreadable')).rejects.toThrow('SQLite cannot read the expression of computed column "b" on table "computed_unreadable".')
+  })
+
   it.runIf(driver === 'postgres')('rejects redeclaring a computed column expression through change() on postgres', async () => {
     const { schema, names } = await openComputedDatabase(driver)
 

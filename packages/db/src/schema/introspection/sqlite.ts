@@ -1,3 +1,4 @@
+import { SchemaError } from '../../core/errors'
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
@@ -30,9 +31,13 @@ const MAIN_SCHEMA = 'main'
 const BARE_IDENTIFIER_PATTERN = /^[A-Za-z_][\w$]*$/
 const TEMP_SCHEMA = 'temp'
 
-function readComputedColumn(row: ColumnRow, table: StoredTable | undefined): ComputedColumn | undefined {
-  const expression = row.hidden === 2 || row.hidden === 3 ? readGeneratedExpression(table && findStoredColumn(table, row.name)) : undefined
-  return expression === undefined ? undefined : { expression, stored: row.hidden === 3 }
+function readComputedColumn(tableName: string, row: ColumnRow, table: StoredTable | undefined): ComputedColumn | undefined {
+  if (row.hidden !== 2 && row.hidden !== 3) return undefined
+  const expression = readGeneratedExpression(table && findStoredColumn(table, row.name))
+  if (expression === undefined) {
+    throw new SchemaError(`SQLite cannot read the expression of computed column "${row.name}" on table "${tableName}".`)
+  }
+  return { expression, stored: row.hidden === 3 }
 }
 
 function readColumnDefault(storedDefault: string | null): DatabaseColumnDefault {
@@ -267,7 +272,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           default: readColumnDefault(row.dflt_value),
           primaryKey: row.pk > 0,
           autoIncrement: row.name === rowIdAlias,
-          computed: readComputedColumn(row, storedTable),
+          computed: readComputedColumn(tableName, row, storedTable),
         })),
         primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
         indexes,
