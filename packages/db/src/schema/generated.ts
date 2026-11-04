@@ -62,6 +62,10 @@ export function defineGeneratedTable<
   return defineTable(tableName, columns, options)
 }
 
+export function forgetGeneratedTable(tableName: string): void {
+  generatedTables.delete(tableName)
+}
+
 export function clearGeneratedTables(): void {
   generatedTables.clear()
 }
