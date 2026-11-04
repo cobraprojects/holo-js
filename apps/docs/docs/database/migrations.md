@@ -689,6 +689,12 @@ table.integer('total').storedAs('price * quantity')
 
 A model never writes a computed column. Its Generated schema keeps the column as `storedAs()` or `virtualAs()`, so insert and update types leave it out, and writing it through a model throws `Column "total" is generated and cannot be written directly.` The same holds for computed columns that tables created by raw SQL declare.
 
+As in Laravel, a computed column is nullable on SQLite and MySQL unless you chain [`notNull()`](#notnull), in either order. On PostgreSQL it is `NOT NULL` unless you chain [`nullable()`](#nullable), like any other column. The Generated schema follows the column the database made, so a model types a nullable computed column with `null`.
+
+```ts
+table.integer('total').storedAs('price * quantity').notNull()
+```
+
 ### virtualAs()
 
 Makes a computed column that the database works out from an SQL expression when you read the row, written as `GENERATED ALWAYS AS (expression) VIRTUAL`. SQLite and MySQL support it. PostgreSQL supports it from version 18; on older servers `createTable()` and `table()` throw `SchemaError` and create nothing, so use `storedAs()` there.
@@ -843,11 +849,11 @@ The column keeps its primary key, unique constraint and foreign key; change thos
 
 On SQLite, Holo rebuilds the table from the database: it reads the table's definition, replaces only the changed column, copies the rows, and restores the table's indexes and triggers. Every other column keeps its stored type, constraints and collation, including columns your migrations never declared, so tables created by raw SQL can be changed too.
 
-On SQLite, the changed column gets the new type, nullability and default, and keeps the rest of its stored definition: its `COLLATE` clause, its `CHECK` constraints other than an enum's list of values, and its generated expression, written as `GENERATED ALWAYS AS (...)` or the shorter `AS (...)`. Holo has no collation modifier, so you can't change a collation with `change()`. SQLite doesn't allow a default on a generated column, so `change()` throws `SchemaError` when you give a generated column a `default()`. Redeclare the column with [`storedAs()`](#storedas) or [`virtualAs()`](#virtualas) to replace its expression; SQLite works the values out again for every row.
+On SQLite, the changed column gets the new type, nullability and default, and keeps the rest of its stored definition: its `COLLATE` clause, its `CHECK` constraints other than an enum's list of values, and its generated expression, written as `GENERATED ALWAYS AS (...)` or the shorter `AS (...)`. Holo has no collation modifier, so you can't change a collation with `change()`. SQLite doesn't allow a default on a generated column, so `change()` throws `SchemaError` when you give a generated column a `default()`. Redeclare the column with [`storedAs()`](#storedas) or [`virtualAs()`](#virtualas) to replace its expression, or to turn an ordinary column into a computed one; SQLite works the values out again for every row.
 
 On PostgreSQL, `change()` throws `SchemaError` when the column is redeclared with `storedAs()` or `virtualAs()`, as in Laravel, because PostgreSQL can't change a generated column's expression. Drop the column and add it again instead.
 
-On MySQL, `change()` runs `MODIFY COLUMN` with the new definition, so the column gets the table's default collation in place of a collation it had. Redeclare a computed column with `storedAs()` or `virtualAs()`. Without them, a stored computed column becomes an ordinary column, and MySQL refuses to change a virtual one.
+On MySQL, `change()` runs `MODIFY COLUMN` with the new definition, so the column gets the table's default collation in place of a collation it had. Redeclare a computed column with `storedAs()` or `virtualAs()`. Without them, a stored computed column becomes an ordinary column, and MySQL refuses to change a virtual one. MySQL can turn an ordinary column into a computed one with `storedAs()`, but not with `virtualAs()`.
 
 As in Laravel, the rebuild runs with foreign key checks off, so rows in other tables that reference the rebuilt table are kept, even with `ON DELETE CASCADE`, and `RESTRICT` keys don't block it. Holo then checks every foreign key and puts the checks back as they were. If a foreign key would be left pointing at a missing row, `change()` throws `SchemaError` and the table is left unchanged. Inside a migration the checks are already off for the whole migration. Inside your own transaction SQLite can't turn them off, so `change()` throws `SchemaError` when another table references the rebuilt table; run it outside the transaction or in a migration.
 
