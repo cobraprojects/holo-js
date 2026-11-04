@@ -67,6 +67,7 @@ import {
   createSelectQueryPlan,
   createTableSource,
   createUpdateQueryPlan,
+  parseTableReference,
   appendSelections,
   appendAggregateSelection,
   appendRawSelection,
@@ -104,6 +105,7 @@ import type {
   QueryAggregateSelection,
   QueryDirection,
   QueryJsonUpdateOperation,
+  QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
   QueryDatePart,
@@ -185,6 +187,15 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
+}
+
+function joinedTable(table: TableReference): Pick<QueryJoinClause, 'table' | 'alias' | 'definition'> {
+  if (typeof table !== 'string') {
+    return { table: table.tableName, definition: table }
+  }
+
+  const { tableName, alias } = parseTableReference(table)
+  return alias === undefined ? { table: tableName } : { table: tableName, alias }
 }
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
@@ -1353,8 +1364,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'inner',
-      table: typeof table === 'string' ? table : table.tableName,
-      definition: typeof table === 'string' ? undefined : table,
+      ...joinedTable(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1381,8 +1391,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'left',
-      table: typeof table === 'string' ? table : table.tableName,
-      definition: typeof table === 'string' ? undefined : table,
+      ...joinedTable(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1409,8 +1418,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'right',
-      table: typeof table === 'string' ? table : table.tableName,
-      definition: typeof table === 'string' ? undefined : table,
+      ...joinedTable(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1499,8 +1507,7 @@ export class TableQueryBuilder<
   crossJoin(table: TableReference): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'cross',
-      table: typeof table === 'string' ? table : table.tableName,
-      definition: typeof table === 'string' ? undefined : table,
+      ...joinedTable(table),
     }))
   }
 
