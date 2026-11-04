@@ -1729,7 +1729,7 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.toAttributes(), 'create'))
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       await this.assertGuardableAttributes(entity.toAttributes())
-      const payload = this.sanitizeWritePayload(entity.toAttributes(), 'create', false, false)
+      const payload = this.sanitizeStoredValues(entity.toAttributes(), 'create')
       const hasPrimaryKeyValue = Object.prototype.hasOwnProperty.call(payload, this.definition.primaryKey)
       const query = this.query().getTableQueryBuilder()
       const result = hasPrimaryKeyValue
@@ -1740,7 +1740,7 @@ export class ModelRepository<
         ...(!hasPrimaryKeyValue && typeof result.lastInsertId !== 'undefined'
           ? { [this.definition.primaryKey]: result.lastInsertId }
           : {}),
-      } as ModelUpdatePayload<TTable>
+      } as Partial<ModelRecord<TTable>>
       marks.sqlCompleted()
       this.applyStoredValues(entity, attributes, {}, marks)
       await this.dispatchEvent('created', entity)
@@ -1827,16 +1827,26 @@ export class ModelRepository<
   sanitizeWritePayload(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
-    enforceGuards = true,
-    applyMutators = true,
   ): ModelUpdatePayload<TTable> {
+    return this.sanitizeWriteValues(values, mode, true) as ModelUpdatePayload<TTable>
+  }
+
+  private sanitizeStoredValues(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, mode: WriteMode): Partial<ModelRecord<TTable>> {
+    return this.sanitizeWriteValues(values, mode, false) as Partial<ModelRecord<TTable>>
+  }
+
+  private sanitizeWriteValues(
+    values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
+    mode: WriteMode,
+    applyWriteRules: boolean,
+  ): Record<string, unknown> {
     const entries = Object.entries(values)
 
     if (entries.length === 0) {
       return {}
     }
 
-    const sanitized = Object.fromEntries(entries.map(([key, value]) => {
+    return Object.fromEntries(entries.map(([key, value]) => {
       const { columnName, column } = findWriteColumn(this.definition, key)
 
       if (typeof value === 'undefined') {
@@ -1847,7 +1857,7 @@ export class ModelRepository<
         throw new SecurityError(`Column "${columnName}" is generated and cannot be written directly.`)
       }
 
-      if (enforceGuards) {
+      if (applyWriteRules) {
         this.assertWritableColumn(columnName, key)
       }
 
@@ -1859,10 +1869,8 @@ export class ModelRepository<
         return [key, value]
       }
 
-      return [key, applyMutators ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
+      return [key, applyWriteRules ? this.normalizeForStorage(key, value) : this.castForStorage(key, value)]
     }))
-
-    return sanitized as ModelUpdatePayload<TTable>
   }
 
   async saveEntity(entity: Entity<TTable>): Promise<Entity<TTable>> {
@@ -1889,7 +1897,7 @@ export class ModelRepository<
       this.applyWriteMutators(entity, this.changedKeysSince(entity, beforeTimestamps))
       const written = entity.getDirty()
       await this.assertGuardableAttributes(written)
-      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      const dirty = this.sanitizeStoredValues(written, 'update')
       if (Object.keys(dirty).length === 0) {
         return this.finishUnchangedSave(entity)
       }
@@ -1938,16 +1946,15 @@ export class ModelRepository<
 
   private applyStoredValues(
     entity: Entity<TTable>,
-    stored: ModelUpdatePayload<TTable>,
+    stored: Partial<ModelRecord<TTable>>,
     changes: Record<string, unknown>,
     marks: WriteMarks | undefined,
   ): void {
-    const storedValues = stored as Partial<ModelRecord<TTable>>
     entity.recordChanges(changes)
     try {
-      entity.forceFill(this.normalizeFromStorage(storedValues))
+      entity.forceFill(this.normalizeFromStorage(stored))
     } catch (error) {
-      entity.forceFill(storedValues)
+      entity.forceFill(stored)
       entity.finishSave()
       marks?.normalized()
       throw error
@@ -2019,7 +2026,7 @@ export class ModelRepository<
       entity.forceFill(this.applyTimestampDefaults(entity.getDirty() as Partial<ModelRecord<TTable>>, 'update'))
       this.applyWriteMutators(entity, Object.keys(entity.getDirty()))
       const written = entity.getDirty()
-      const dirty = this.sanitizeWritePayload(written, 'update', false, false)
+      const dirty = this.sanitizeStoredValues(written, 'update')
       const wrote = Object.keys(dirty).length > 0
       if (wrote) {
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(dirty)
