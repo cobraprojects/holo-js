@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { createDatabase, createDialect, createMigrationService, createSchemaService, defineMigration, type DatabaseLogger, type DriverAdapter } from '../src'
+import { createDatabase, createDialect, createMigrationService, createSchemaService, DB, defineMigration, type DatabaseLogger, type DriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 
 function deferred(): { promise: Promise<void>, resolve: () => void } {
@@ -151,6 +151,38 @@ describe('transaction scope ordering on one SQLite context', () => {
 
     expect(await db.table(parents).orderBy('id').pluck('name')).toEqual(['first', 'second'])
     expect(await db.table(children).pluck('parent_id')).toEqual([1])
+    expect(await readForeignKeys(adapter)).toBe(1)
+  }, 5_000)
+
+  it('finishes a root transaction that starts while adding a column with an expression default rebuilds the table', async () => {
+    const transactions = watchRootTransactions()
+    let held!: ReturnType<typeof holdNextTransactionScope>
+    const { db, schema, table, adapter } = await openDatabase('sqlite', {
+      logger: transactions.logger,
+      wrapAdapter: (created) => {
+        held = holdNextTransactionScope(created)
+        return held.adapter
+      },
+    })
+    await db.table(table).insert({ id: 1, name: 'first' })
+    const transaction = startFromAnotherChain(() => db.transaction(async (tx) => {
+      await tx.table(table).insert({ id: 2, name: 'transaction' })
+    }))
+
+    const scope = held.hold()
+    const change = schema.table(table.tableName, (builder) => { builder.string('token').default(DB.raw('lower(hex(randomblob(16)))')) })
+    await scope.entered
+    const started = transactions.nextStart()
+    transaction.start()
+    await started
+    await nextMacrotask()
+    scope.release()
+    await change
+    await transaction.done
+
+    const rows = await db.table(table.tableName).orderBy('id').get<{ id: number, token: string }>()
+    expect(rows.map(row => row.id)).toEqual([1, 2])
+    expect(rows.every(row => /^[0-9a-f]{32}$/.test(row.token))).toBe(true)
     expect(await readForeignKeys(adapter)).toBe(1)
   }, 5_000)
 
