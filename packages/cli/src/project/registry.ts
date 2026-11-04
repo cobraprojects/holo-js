@@ -624,7 +624,6 @@ export function renderGeneratedAuthTypes(
     ...imports,
     '',
     'declare global {',
-    '  // eslint-disable-next-line @typescript-eslint/no-namespace',
     '  namespace HoloAuth {',
     '    interface TypeRegistry {',
     ...guardsMember,
