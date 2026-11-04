@@ -13,7 +13,7 @@ import type {
 } from '../query/types'
 import type { DriverExecutionResult } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import type { InferInsert, TableDefinition } from '../schema/types'
+import type { TableDefinition } from '../schema/types'
 import type {
   RelationMap,
   DynamicRelationResolver,
@@ -303,13 +303,9 @@ export type StaticModelApi<
   min(column: ModelColumnName<TTable>): Promise<number | null>
   max(column: ModelColumnName<TTable>): Promise<number | null>
   create(values: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
-  create(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
   createMany(values: readonly ModelInsertPayload<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
-  createMany(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   createQuietly(values: ModelInsertPayload<TTable>): Promise<Entity<TTable, TRelations>>
-  createQuietly(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
   createManyQuietly(values: readonly ModelInsertPayload<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
-  createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations, Entity<TTable, TRelations>, TScopes>>
   update(id: ModelPrimaryKeyValue<TTable>, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
   prune(): Promise<number>
   increment(column: ModelArithmeticColumnName<TTable>, amount?: number, extraValues?: ModelUpdatePayload<TTable>): Promise<DriverExecutionResult>

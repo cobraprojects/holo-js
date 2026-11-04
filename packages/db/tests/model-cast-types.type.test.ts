@@ -61,24 +61,24 @@ it('keeps the database-derived type of a column without a cast', () => {
 it('accepts the cast types when creating and updating', () => {
   expectTypeOf<InsertPayload<typeof sqliteModel>>().toEqualTypeOf<{
     id?: number
-    flag_int: boolean
-    count_text: number
-    code_int: string
-    meta_text: unknown
-    meta_json: unknown
-    born_on: Date
-    seen_at: Date | null
-    stamp: Date
-    embedding: VectorValue
-    label: string
-    plain_json: string | null
-    plain_bool: boolean
-    nickname: string
+    flag_int?: boolean
+    count_text?: number
+    code_int?: string
+    meta_text?: unknown
+    meta_json?: unknown
+    born_on?: Date
+    seen_at?: Date | null
+    stamp?: Date
+    embedding?: VectorValue
+    label?: string
+    plain_json?: string | null
+    plain_bool?: boolean
+    nickname?: string
   }>()
   for (const model of [postgresModel, mysqlModel]) {
-    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('flag_int').toEqualTypeOf<boolean>()
-    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('born_on').toEqualTypeOf<Date>()
-    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('embedding').toEqualTypeOf<VectorValue>()
+    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('flag_int').toEqualTypeOf<boolean | undefined>()
+    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('born_on').toEqualTypeOf<Date | undefined>()
+    expectTypeOf<InsertPayload<typeof model>>().toHaveProperty('embedding').toEqualTypeOf<VectorValue | undefined>()
   }
   for (const model of [sqliteModel, postgresModel, mysqlModel]) {
     expectTypeOf<UpdatePayload<typeof model>>().toHaveProperty('flag_int').toEqualTypeOf<boolean | undefined>()

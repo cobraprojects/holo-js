@@ -15,7 +15,7 @@ it('types the model timestamps of a SQLite table created before 0.6 as dates', (
   expectTypeOf<Record['updated_at']>().toEqualTypeOf<Date | null>()
   expectTypeOf<Record['deleted_at']>().toEqualTypeOf<Date | null>()
   expectTypeOf<Record['birthday']>().toEqualTypeOf<string | null>()
-  expectTypeOf<InsertPayload<typeof User>['created_at']>().toEqualTypeOf<Date | null>()
+  expectTypeOf<InsertPayload<typeof User>['created_at']>().toEqualTypeOf<Date | null | undefined>()
   expectTypeOf<UpdatePayload<typeof User>['updated_at']>().toEqualTypeOf<Date | null | undefined>()
 })
 
