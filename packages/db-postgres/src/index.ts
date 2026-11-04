@@ -1,5 +1,5 @@
 import { holoRuntimeInternals } from '@holo-js/db'
-import { Pool, types, type PoolClient, type PoolConfig } from 'pg'
+import { Client, Pool, types, type ClientConfig, type PoolClient, type PoolConfig } from 'pg'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -91,30 +91,28 @@ function escapeStartupOptionValue(value: string): string {
   return value.replace(/[\\\s]/g, character => `\\${character}`)
 }
 
-function parseAbsoluteUrl(connectionString: string): URL | undefined {
-  return URL.canParse(connectionString) ? new URL(connectionString) : undefined
+function sessionStartupOptions(schema: string | undefined): string {
+  const settings: [string, string][] = [['TimeZone', holoRuntimeInternals.getApplicationTimezone()]]
+  if (schema) {
+    settings.push(['search_path', quoteDatabaseIdentifier(schema)])
+  }
+
+  return settings.map(([name, value]) => `-c ${name}=${escapeStartupOptionValue(value)}`).join(' ')
 }
 
-function withConfiguredSearchPath(
-  connectionString: string | undefined,
-  schema: string | undefined,
-): Pick<PoolConfig, 'connectionString' | 'options'> {
-  if (!schema) {
-    return { connectionString }
+type ConnectionParametersClient = new (config?: ClientConfig) => { connectionParameters?: { options?: string } }
+
+function withSessionStartupClient(base: NonNullable<PoolConfig['Client']>, schema: string | undefined): NonNullable<PoolConfig['Client']> {
+  class HoloClient extends (base as unknown as ConnectionParametersClient) {
+    constructor(config?: ClientConfig) {
+      super(config)
+      if (this.connectionParameters) {
+        this.connectionParameters.options = [sessionStartupOptions(schema), this.connectionParameters.options].filter(Boolean).join(' ')
+      }
+    }
   }
 
-  const searchPath = `-c search_path=${escapeStartupOptionValue(quoteDatabaseIdentifier(schema))}`
-  const url = connectionString ? parseAbsoluteUrl(connectionString) : undefined
-  const urlOptions = url?.searchParams.get('options')
-  if (url && urlOptions) {
-    url.searchParams.set('options', `${searchPath} ${urlOptions}`)
-    return { connectionString: url.toString() }
-  }
-
-  return {
-    connectionString,
-    options: [searchPath, process.env.PGOPTIONS].filter(Boolean).join(' '),
-  }
+  return HoloClient as unknown as NonNullable<PoolConfig['Client']>
 }
 
 function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
@@ -131,8 +129,8 @@ function stripDatabaseFromConnectionString(connectionString: string): { database
 
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
-function createHoloPool(config?: PoolConfig): Pool {
-  const pool = new Pool({ ...config })
+function createHoloPool(config?: PoolConfig, schema?: string): Pool {
+  const pool = new Pool({ ...config, Client: withSessionStartupClient(config?.Client ?? Client, schema) })
   const sessions = new Set<PoolClient>()
   openPoolSessions.set(pool, sessions)
   pool.on('connect', (client) => {
@@ -416,18 +414,21 @@ export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freez
   driver: 'postgres',
   supportsConcurrentTransactionScopes: true,
   create(connection) {
-    return createPostgresAdapter({ config: {
-      ...withConfiguredSearchPath(connection.url, connection.schema),
-      host: connection.host,
-      port: connection.port,
-      user: connection.username,
-      password: connection.password,
-      database: connection.database,
-      ssl: connection.ssl,
-      max: connection.max,
-      connectionTimeoutMillis: connection.connectionTimeoutMillis,
-      idleTimeoutMillis: connection.idleTimeoutMillis,
-      application_name: connection.application_name,
-    } })
+    return createPostgresAdapter({
+      config: {
+        connectionString: connection.url,
+        host: connection.host,
+        port: connection.port,
+        user: connection.username,
+        password: connection.password,
+        database: connection.database,
+        ssl: connection.ssl,
+        max: connection.max,
+        connectionTimeoutMillis: connection.connectionTimeoutMillis,
+        idleTimeoutMillis: connection.idleTimeoutMillis,
+        application_name: connection.application_name,
+      },
+      createPool: config => createHoloPool(config, connection.schema),
+    })
   },
 })
