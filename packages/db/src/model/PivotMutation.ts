@@ -45,11 +45,12 @@ export class PivotMutation {
 
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
-    this.assertColumnsWritable(Object.keys(this.timestampAttributes(attributes, false)))
     if (Object.keys(attributes).length === 0) return 0
     const [existing] = await this.read(this.connection, [id])
     if (!existing || !this.changed(existing, attributes)) return 0
-    await this.query(this.connection).where(this.context.relatedColumn, id).update(this.timestampAttributes(attributes, false))
+    const values = this.timestampAttributes(attributes, false)
+    this.assertColumnsWritable(Object.keys(values))
+    await this.query(this.connection).where(this.context.relatedColumn, id).update(values)
     return 1
   }
 
@@ -99,7 +100,7 @@ export class PivotMutation {
       ...action,
       attributes: this.timestampAttributes(action.attributes, action.kind === 'insert', timestamp),
     }) : actions
-    this.assertColumnsWritable(timestamped.flatMap(action => action.kind === 'delete' ? [] : Object.keys(action.attributes)))
+    this.assertColumnsWritable(timestamped.flatMap(action => this.writtenColumns(action)))
     let offset = 0
     while (offset < timestamped.length) {
       const action = timestamped[offset]!
@@ -131,6 +132,12 @@ export class PivotMutation {
         })))
       }
     }
+  }
+
+  private writtenColumns(action: Action): string[] {
+    if (action.kind === 'delete') return []
+    const columns = Object.keys(action.attributes)
+    return action.kind === 'insert' ? [...Object.keys(this.context.scope), this.context.relatedColumn, ...columns] : columns
   }
 
   private timestampAttributes(attributes: Attributes, inserting: boolean, timestamp = new Date()): Attributes {

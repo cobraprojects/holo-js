@@ -264,6 +264,69 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect(rows.map(row => [Number(row.quantity), row.updated_at !== null, String(row.created_at) === String(row.updated_at)])).toEqual([[3, true, true]])
   })
 
+  it('rejects attaching through a pivot whose relationship key column is computed before writing any pivot row', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+    const pivotName = `computed_product_keys_${driver}`
+    const dropPivot = async () => {
+      if (await schema.hasTable(pivotName)) await schema.dropTable(pivotName)
+    }
+    await dropPivot()
+    onTestFinished(dropPivot)
+    await schema.createTable(pivotName, (table) => {
+      table.integer('tag_id')
+      table.integer('quantity')
+      table.integer('product_id').storedAs('tag_id')
+    })
+    const [products, pivot] = await readTables(db, [names.products, pivotName])
+    await reloadGeneratedSchema([products!])
+    const Tag = defineModel(names.products, { timestamps: false })
+    const Product = defineModel(names.products, {
+      fillable: ['price', 'quantity', 'name'],
+      timestamps: false,
+      relations: {
+        tags: belongsToMany(() => Tag, pivot!, 'product_id', 'tag_id').withPivot('quantity'),
+      },
+    })
+    const product = await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+
+    await expect(product.attach('tags', product.get('id'), { quantity: 4 })).rejects.toThrow('Column "product_id" is generated and cannot be written directly.')
+    expect(await db.table(pivotName).get()).toEqual([])
+  })
+
+  it('returns 0 for a no-op updateExistingPivot on a pivot whose updated_at is computed', async () => {
+    const { db, schema, names } = await openComputedDatabase(driver)
+    const pivotName = `computed_product_noop_${driver}`
+    const dropPivot = async () => {
+      if (await schema.hasTable(pivotName)) await schema.dropTable(pivotName)
+    }
+    await dropPivot()
+    onTestFinished(dropPivot)
+    await schema.createTable(pivotName, (table) => {
+      table.integer('product_id')
+      table.integer('tag_id')
+      table.integer('quantity')
+      table.timestamp('created_at').nullable()
+      table.timestamp('updated_at').nullable().storedAs('created_at')
+    })
+    const [products, pivot] = await readTables(db, [names.products, pivotName])
+    await reloadGeneratedSchema([products!])
+    const Tag = defineModel(names.products, { timestamps: false })
+    const Product = defineModel(names.products, {
+      fillable: ['price', 'quantity', 'name'],
+      timestamps: false,
+      relations: {
+        tags: belongsToMany(() => Tag, pivot!, 'product_id', 'tag_id').withPivot('quantity').withTimestamps(),
+      },
+    })
+    const product = await Product.create({ price: 2, quantity: 3, name: 'Ink' })
+    await db.table(pivotName).insert({ product_id: product.get('id'), tag_id: product.get('id'), quantity: 1 })
+
+    expect(await product.updateExistingPivot('tags', product.get('id'), {})).toBe(0)
+    expect(await product.updateExistingPivot('tags', product.get('id'), { quantity: 1 })).toBe(0)
+    await expect(product.updateExistingPivot('tags', product.get('id'), { quantity: 2 })).rejects.toThrow('Column "updated_at" is generated and cannot be written directly.')
+    expect((await db.table(pivotName).get()).map(row => Number(row.quantity))).toEqual([1])
+  })
+
   it('rejects computed timestamp and soft delete columns before any SQL runs', async () => {
     const { db, schema } = await openDatabase(driver)
     const name = `computed_stamps_${driver}`

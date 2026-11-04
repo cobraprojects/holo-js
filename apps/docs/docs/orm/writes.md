@@ -553,7 +553,7 @@ await post.save()
 
 ### set()
 
-Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column.
+Assigns one attribute on an instance. It's the same as assigning the property directly, and it throws a `SecurityError` for a guarded column. A computed column made with `storedAs()` or `virtualAs()` is a readonly property, so `post.set('total', 1)` and `post.total = 1` are type errors.
 
 ```ts
 post.set('status', 'review')
