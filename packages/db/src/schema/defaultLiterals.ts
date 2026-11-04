@@ -2,6 +2,7 @@ import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { formatWallClock, formatWithOffset } from '../applicationTime'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
+import { SchemaError } from '../core/errors'
 import type { LogicalColumnKind } from './types'
 
 export type SchemaDefaultDialectName = 'sqlite' | 'postgres' | 'mysql'
@@ -65,4 +66,21 @@ export function compileColumnDefaultLiteral(
   }
 
   return compileDialectStringLiteral(dialect, typeof value === 'string' ? value : JSON.stringify(value))
+}
+
+function isJsonText(value: string): boolean {
+  try {
+    JSON.parse(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function assertJsonDefaultText(columnName: string, kind: LogicalColumnKind, value: unknown): void {
+  if (kind === 'json' && typeof value === 'string' && !isJsonText(value)) {
+    throw new SchemaError(
+      `Column "${columnName}" has a json default that is not JSON text. Pass JSON text, such as JSON.stringify('hello'), or a value.`,
+    )
+  }
 }

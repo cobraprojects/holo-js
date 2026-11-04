@@ -1,6 +1,7 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
+import { assertJsonDefaultText } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
 import type { AnyColumnDefinition, ForeignKeyReference, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement, UniqueBacking } from './ddl'
@@ -456,12 +457,6 @@ export abstract class SQLSchemaCompiler {
       .join('.')
   }
 
-  assertSupportedColumnDefault(column: AnyColumnDefinition): void {
-    if (column.defaultKind === 'value') {
-      this.assertSupportedDefaultValue(column.defaultValue, column)
-    }
-  }
-
   protected assertSupportedDefaultValue(value: unknown, column: AnyColumnDefinition): void {
     if (!this.isSupportedDefaultValue(value)) {
       throw new SchemaError(
@@ -469,11 +464,7 @@ export abstract class SQLSchemaCompiler {
       )
     }
 
-    if (column.kind === 'json' && typeof value === 'string' && !isJsonText(value)) {
-      throw new SchemaError(
-        `Column "${column.name}" has a json default that is not JSON text. Pass JSON text, such as JSON.stringify('hello'), or a value.`,
-      )
-    }
+    assertJsonDefaultText(column.name, column.kind, value)
   }
 
   protected isSupportedDefaultValue(value: unknown): boolean {
@@ -532,13 +523,4 @@ export abstract class SQLSchemaCompiler {
   protected abstract getDialectLabel(): string
   protected abstract compileColumnType(column: AnyColumnDefinition): string
   protected abstract compileDefaultValue(value: unknown, column: AnyColumnDefinition): string
-}
-
-function isJsonText(value: string): boolean {
-  try {
-    JSON.parse(value)
-    return true
-  } catch {
-    return false
-  }
 }
