@@ -31,12 +31,18 @@ export interface ForeignKeyReference {
   onUpdate?: string
 }
 
+export interface ComputedColumn {
+  readonly expression: string
+  readonly stored: boolean
+}
+
 export interface ColumnDefinition<
   _TType = unknown,
   TNullable extends boolean = false,
   THasDefault extends boolean = false,
   TGenerated extends boolean = false,
   TPrimaryKey extends boolean = false,
+  TComputed extends boolean = false,
 > {
   readonly kind: LogicalColumnKind
   readonly name: string
@@ -51,9 +57,10 @@ export interface ColumnDefinition<
   readonly idStrategy?: IdGenerationStrategy
   readonly enumValues?: readonly string[]
   readonly vectorDimensions?: number
+  readonly computed?: TComputed extends true ? ComputedColumn : never
 }
 
-export type AnyColumnDefinition = ColumnDefinition<unknown, boolean, boolean, boolean, boolean>
+export type AnyColumnDefinition = ColumnDefinition<unknown, boolean, boolean, boolean, boolean, boolean>
 export type TableColumnsShape = Record<string, AnyColumnDefinition>
 
 export interface TableDefinition<
@@ -75,27 +82,36 @@ export interface TableIndexDefinition {
 }
 
 export type ColumnSelectType<TColumn extends AnyColumnDefinition>
-  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean, boolean>
     ? TNullable extends true ? TValue | null : TValue
     : never
 
 export type ColumnInsertType<TColumn extends AnyColumnDefinition>
-  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean, boolean>
     ? TNullable extends true ? TValue | null : TValue
     : never
 
-export type OptionalInsertKeys<TColumns extends TableColumnsShape> = {
+type ComputedKeys<TColumns extends TableColumnsShape> = {
   [K in keyof TColumns]:
-  TColumns[K] extends ColumnDefinition<unknown, boolean, infer THasDefault, infer TGenerated, boolean>
+  TColumns[K] extends ColumnDefinition<unknown, boolean, boolean, boolean, boolean, infer TComputed>
+    ? [TComputed] extends [true] ? K : never
+    : never
+}[keyof TColumns]
+
+type WritableKeys<TColumns extends TableColumnsShape> = Exclude<keyof TColumns, ComputedKeys<TColumns>>
+
+export type OptionalInsertKeys<TColumns extends TableColumnsShape> = {
+  [K in WritableKeys<TColumns>]:
+  TColumns[K] extends ColumnDefinition<unknown, boolean, infer THasDefault, infer TGenerated, boolean, boolean>
     ? THasDefault extends true
       ? K
       : TGenerated extends true
         ? K
         : never
     : never
-}[keyof TColumns]
+}[WritableKeys<TColumns>]
 
-export type RequiredInsertKeys<TColumns extends TableColumnsShape> = Exclude<keyof TColumns, OptionalInsertKeys<TColumns>>
+export type RequiredInsertKeys<TColumns extends TableColumnsShape> = Exclude<WritableKeys<TColumns>, OptionalInsertKeys<TColumns>>
 
 export type InferSelect<TTable extends TableDefinition> = {
   [K in keyof TTable['columns']]: ColumnSelectType<TTable['columns'][K]>
@@ -108,5 +124,5 @@ export type InferInsert<TTable extends TableDefinition> = {
 }
 
 export type InferUpdate<TTable extends TableDefinition> = Partial<{
-  [K in keyof TTable['columns']]: ColumnInsertType<TTable['columns'][K]>
+  [K in WritableKeys<TTable['columns']>]: ColumnInsertType<TTable['columns'][K]>
 }>

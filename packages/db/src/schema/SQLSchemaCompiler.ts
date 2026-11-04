@@ -376,6 +376,7 @@ export abstract class SQLSchemaCompiler {
     const parts = [
       this.quoteIdentifier(column.name),
       this.compileColumnType(column),
+      ...(column.computed ? [`GENERATED ALWAYS AS (${column.computed.expression}) ${column.computed.stored ? 'STORED' : 'VIRTUAL'}`] : []),
     ]
 
     if (column.primaryKey) {

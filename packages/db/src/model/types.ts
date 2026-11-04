@@ -811,8 +811,8 @@ type CastValue<TCastName, TColumnValue>
       : TCastName extends keyof BuiltInCastValues ? BuiltInCastValues[TCastName] : TColumnValue
 
 type CastedColumn<TColumn extends AnyColumnDefinition, TCast>
-  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, infer THasDefault, infer TGenerated, infer TPrimaryKey>
-    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, infer THasDefault, infer TGenerated, infer TPrimaryKey, infer TComputed>
+    ? ColumnDefinition<CastValue<BuiltInCastNameOf<TCast>, TValue>, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed>
     : never
 
 type CastedColumns<TColumns extends TableColumnsShape, TCasts extends ModelCastMap> = {
@@ -825,7 +825,7 @@ type CastedTable<TTable extends TableDefinition, TCasts extends ModelCastMap>
 
 type KnownCasts<TCasts extends ModelCastMap> = string extends keyof TCasts ? EmptyModelCastMap : TCasts
 
-type ColumnValueOf<TColumn> = TColumn extends ColumnDefinition<infer TValue, boolean, boolean, boolean, boolean> ? TValue : never
+type ColumnValueOf<TColumn> = TColumn extends ColumnDefinition<infer TValue, boolean, boolean, boolean, boolean, boolean> ? TValue : never
 
 type ModelDateCasts<TTable extends TableDefinition, TDateColumns extends string, TCasts extends ModelCastMap> = {
   readonly [K in Extract<Exclude<TDateColumns, keyof KnownCasts<TCasts>>, keyof TTable['columns']> as string extends ColumnValueOf<TTable['columns'][K]> ? K : never]: 'datetime'

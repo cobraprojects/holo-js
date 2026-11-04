@@ -194,6 +194,16 @@ class TableColumnMutationBuilder {
     return this
   }
 
+  storedAs(expression: string): this {
+    this.operation.column = this.operation.column.storedAs(expression)
+    return this
+  }
+
+  virtualAs(expression: string): this {
+    this.operation.column = this.operation.column.virtualAs(expression)
+    return this
+  }
+
   primaryKey(): this {
     this.operation.column = this.operation.column.primaryKey()
     return this

@@ -83,6 +83,16 @@ class TableCreateColumnBuilder<
     return this
   }
 
+  storedAs(expression: string): this {
+    this.builderRef.builder = this.builderRef.builder.storedAs(expression)
+    return this
+  }
+
+  virtualAs(expression: string): this {
+    this.builderRef.builder = this.builderRef.builder.virtualAs(expression)
+    return this
+  }
+
   primaryKey(): this {
     this.builderRef.builder = this.builderRef.builder.primaryKey()
     return this

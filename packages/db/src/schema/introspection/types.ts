@@ -1,4 +1,6 @@
 /* v8 ignore file -- type declarations only */
+import type { ComputedColumn } from '../types'
+
 export type SchemaReadingDialect = 'sqlite' | 'postgres' | 'mysql'
 
 export type DatabaseColumnDefault
@@ -17,7 +19,7 @@ export interface DatabaseColumnStructure {
   readonly default: DatabaseColumnDefault
   readonly primaryKey: boolean
   readonly autoIncrement: boolean
-  readonly computed: boolean
+  readonly computed?: ComputedColumn
 }
 
 export interface DatabaseIndexStructure {

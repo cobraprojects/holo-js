@@ -1,10 +1,11 @@
 import { splitTablePath } from '../identifiers'
 import { parseSqlDefault } from './defaults'
 import { createIntrospect } from './introspect'
-import { readEnumChecks, readForeignKeys, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
-import { parseCreateTableSql, type ForeignKeyConstraint } from './sqliteDefinitionGrammar'
+import { findStoredColumn, readEnumChecks, readForeignKeys, readGeneratedExpression, readStringLength, type IndexKeyColumn } from './sqlDefinitions'
+import { parseCreateTableSql, type ForeignKeyConstraint, type StoredTable } from './sqliteDefinitionGrammar'
 import { readNamesInSql, sameIdentifier, sameIdentifiers } from './sqliteTokens'
 import type { DatabaseContext } from '../../core/DatabaseContext'
+import type { ComputedColumn } from '../types'
 import type { DatabaseColumnDefault, DatabaseForeignKeyStructure, DatabaseIndexStructure, DatabaseTableStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
@@ -28,6 +29,11 @@ type SchemaObjectRow = SQLiteDependentObject & { tbl_name: string }
 const MAIN_SCHEMA = 'main'
 const BARE_IDENTIFIER_PATTERN = /^[A-Za-z_][\w$]*$/
 const TEMP_SCHEMA = 'temp'
+
+function readComputedColumn(row: ColumnRow, table: StoredTable | undefined): ComputedColumn | undefined {
+  const expression = row.hidden === 2 || row.hidden === 3 ? readGeneratedExpression(table && findStoredColumn(table, row.name)) : undefined
+  return expression === undefined ? undefined : { expression, stored: row.hidden === 3 }
+}
 
 function readColumnDefault(storedDefault: string | null): DatabaseColumnDefault {
   const columnDefault = parseSqlDefault(storedDefault)
@@ -261,7 +267,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
           default: readColumnDefault(row.dflt_value),
           primaryKey: row.pk > 0,
           autoIncrement: row.name === rowIdAlias,
-          computed: row.hidden === 2 || row.hidden === 3,
+          computed: readComputedColumn(row, storedTable),
         })),
         primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
         indexes,

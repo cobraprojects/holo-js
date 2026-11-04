@@ -2,10 +2,11 @@ import { splitTablePath } from '../identifiers'
 import { createIntrospect } from './introspect'
 import { readForeignKeyColumns, readStringLength } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
+import type { ComputedColumn } from '../types'
 import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
-type ColumnRow = { table_schema: string, name: string, data_type: string, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string }
+type ColumnRow = { table_schema: string, name: string, data_type: string, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string, generation_expression: string | null }
 type IndexRow = { name: string, non_unique: number | string, column_name: string | null, sub_part: number | null, expression: string | null }
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 
@@ -13,6 +14,7 @@ const SCHEMA_BINDING = 'COALESCE(?, DATABASE())'
 const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?$|^now\(\)$/i
 const TEMPORAL_TYPE_PATTERN = /^(?:timestamp|datetime)\b/i
 const DEFAULT_GENERATED_PATTERN = /\bDEFAULT_GENERATED\b/i
+const COMPUTED_KIND_PATTERN = /\b(VIRTUAL|STORED) GENERATED\b/i
 const INFORMATION_SCHEMA_ESCAPE_PATTERN = /\\(.)/gs
 const SINGLE_STRING_LITERAL_PATTERN = /^(?:_\w+\s*)?'((?:[^'\\]|\\.|'')*)'$/s
 const MYSQL_STRING_LITERAL_PATTERN = /'((?:[^'\\]|\\.|'')*)'/gs
@@ -30,6 +32,13 @@ function readExpressionDefault(storedExpression: string): DatabaseColumnDefault 
   return literal === undefined
     ? { kind: 'expression', sql: expression }
     : { kind: 'literal', value: decodeMySQLStringLiteral(literal) }
+}
+
+function readComputedColumn(row: ColumnRow): ComputedColumn | undefined {
+  const kind = COMPUTED_KIND_PATTERN.exec(row.extra)?.[1]
+  return kind === undefined || !row.generation_expression
+    ? undefined
+    : { expression: row.generation_expression.replace(INFORMATION_SCHEMA_ESCAPE_PATTERN, '$1'), stored: kind.toUpperCase() === 'STORED' }
 }
 
 function readColumnDefault(row: ColumnRow): DatabaseColumnDefault {
@@ -88,7 +97,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
-      const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, extra AS extra FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
+      const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, extra AS extra, generation_expression AS generation_expression FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
       const resolvedSchema = columns.rows[0]?.table_schema
       if (resolvedSchema === undefined) return undefined
 
@@ -112,7 +121,7 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
           default: readColumnDefault(row),
           primaryKey: primaryKeyColumns.includes(row.name),
           autoIncrement: /\bauto_increment\b/i.test(row.extra),
-          computed: /\b(?:VIRTUAL|STORED) GENERATED\b/i.test(row.extra),
+          computed: readComputedColumn(row),
         })),
         primaryKeyColumns,
         indexes: groupedIndexes,

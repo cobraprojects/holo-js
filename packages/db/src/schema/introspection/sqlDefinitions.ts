@@ -120,7 +120,11 @@ export function findUnshadowedRowIdName(table: StoredTable): string | undefined 
 }
 
 export function isGeneratedColumn(column: StoredColumn): boolean {
-  return column.constraints.some(constraint => constraint.kind === 'GENERATED')
+  return readGeneratedExpression(column) !== undefined
+}
+
+export function readGeneratedExpression(column: StoredColumn | undefined): string | undefined {
+  return column?.constraints.flatMap(constraint => constraint.kind === 'GENERATED' ? [constraint.expression] : [])[0]
 }
 
 function renderColumn(column: StoredColumn, constraints: readonly StoredConstraint[]): string {
@@ -142,9 +146,11 @@ function withoutConstraints(table: StoredTable, matches: ConstraintMatcher): str
 
 const CHANGED_COLUMN_CONSTRAINTS = new Set<StoredConstraint['kind']>(['NOT NULL', 'NULL', 'DEFAULT'])
 
-export function readPreservedColumnConstraints(column: StoredColumn): string[] {
+export function readPreservedColumnConstraints(column: StoredColumn, redeclaresGenerated: boolean): string[] {
   return column.constraints
-    .filter(constraint => !CHANGED_COLUMN_CONSTRAINTS.has(constraint.kind) && !isEnumCheckOn(constraint, column.name))
+    .filter(constraint => !CHANGED_COLUMN_CONSTRAINTS.has(constraint.kind)
+      && !(redeclaresGenerated && constraint.kind === 'GENERATED')
+      && !isEnumCheckOn(constraint, column.name))
     .map(constraint => constraint.text)
 }
 

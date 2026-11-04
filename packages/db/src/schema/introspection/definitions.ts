@@ -127,7 +127,7 @@ function toColumnDefinition(
     name: column.name,
     nullable: !column.notNull && !column.primaryKey,
     hasDefault: columnDefault.kind !== 'none',
-    generated: column.autoIncrement || column.computed,
+    generated: column.autoIncrement || column.computed !== undefined,
     primaryKey: column.primaryKey,
     unique: uniqueColumns.has(column.name),
     ...(columnDefault.kind === 'now' ? { defaultKind: 'now' as const } : {}),
@@ -137,6 +137,7 @@ function toColumnDefinition(
     ...(column.autoIncrement ? { idStrategy: 'autoIncrement' as const } : {}),
     ...(enumValues ? { enumValues } : {}),
     ...(vectorDimensions ? { vectorDimensions } : {}),
+    ...(column.computed ? { computed: column.computed } : {}),
   }
 }
 
