@@ -106,9 +106,10 @@ export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
+  const unions = plan.unions.map(union => resultColumnDefinitions(union.query))
   for (const [key, definition] of resultColumnDefinitions(plan)) {
     const reader = columnReader(dialect, definition)
-    if (reader) columns.set(key, reader)
+    if (reader && unions.every(union => columnReader(dialect, union.get(key)) === reader)) columns.set(key, reader)
   }
   return columns
 }

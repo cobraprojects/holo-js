@@ -388,11 +388,11 @@ describe('model relation slice', () => {
       id: column.id(),
       userId: column.integer(),
       roleId: column.integer(),
-      active: column.integer(),
+      active: column.boolean(),
     })
     await createTestTable(db, roleUsers)
     await db.table(roleUsers).insert([
-        { id: 100, userId: 1, roleId: 10, active: 1 },
+        { id: 100, userId: 1, roleId: 10, active: true },
       ])
 
     let Role: ReturnType<typeof defineModelFromTable<typeof roles>>
@@ -464,12 +464,12 @@ describe('model relation slice', () => {
       id: column.id(),
       userId: column.integer(),
       title: column.string(),
-      published: column.integer(),
+      published: column.boolean(),
     })
     await createTestTable(db, posts)
     await db.table(posts).insert([
-        { id: 10, userId: 1, title: 'Post A', published: 1 },
-        { id: 11, userId: 1, title: 'Post B', published: 0 },
+        { id: 10, userId: 1, title: 'Post A', published: true },
+        { id: 11, userId: 1, title: 'Post B', published: false },
       ])
 
     let constraintCalls = 0
@@ -478,7 +478,7 @@ describe('model relation slice', () => {
       relations: {
         posts: scopeRelation(hasMany(() => Post, 'userId'), query => {
           constraintCalls += 1
-          return query.where('published', 1)
+          return query.where('published', true)
         }),
       },
     })

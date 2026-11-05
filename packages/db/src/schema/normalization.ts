@@ -348,6 +348,7 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
 const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
 
 export function readNumericValue(value: unknown): number | undefined {
+  if (typeof value === 'boolean') return Number(value)
   if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
   if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
   const number = Number(value)
@@ -360,10 +361,6 @@ export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColu
 
 export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect !== 'postgres' && column.kind === 'boolean'
-}
-
-export function rewritesDriverValue(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
-  return readsAsSQLiteDecimal(dialect, column) || readsAsCoercedBoolean(dialect, column)
 }
 
 export function normalizeDialectReadValue(

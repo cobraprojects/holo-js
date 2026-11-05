@@ -6,6 +6,7 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
+import { coerceBoolean } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
@@ -1982,16 +1983,39 @@ export function createDatabaseMutationEvent(
   rows?: readonly Readonly<Record<string, unknown>>[],
   previousRows?: readonly Readonly<Record<string, unknown>>[],
 ): DatabaseMutationEvent {
+  const booleanColumns = mutationBooleanColumns(source, connectionName)
   return Object.freeze({
     connectionName,
     tableName: source.tableName,
     kind,
     predicates: collectQueryPredicateObservations(predicates),
-    previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
+    previousRows: previousRows ? readMutationRows(previousRows, booleanColumns) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
-    rows: rows ? Object.freeze([...rows]) : undefined,
-    values,
+    rows: rows ? readMutationRows(rows, booleanColumns) : undefined,
+    values: values && booleanColumns.length > 0 ? readMutationBooleans(values, booleanColumns) : values,
   })
+}
+
+function mutationBooleanColumns(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): readonly string[] {
+  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
+  return Object.entries(table?.columns ?? {}).filter(([, column]) => column.kind === 'boolean').map(([name]) => name)
+}
+
+function storesBooleanAsDriverValue(value: unknown): boolean {
+  return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
+}
+
+function readMutationBooleans(row: Readonly<Record<string, unknown>>, booleanColumns: readonly string[]): Readonly<Record<string, unknown>> {
+  const columns = booleanColumns.filter(column => Object.hasOwn(row, column) && storesBooleanAsDriverValue(row[column]))
+  if (columns.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(columns.map(column => [column, coerceBoolean(row[column])])) })
+}
+
+function readMutationRows(
+  rows: readonly Readonly<Record<string, unknown>>[],
+  booleanColumns: readonly string[],
+): readonly Readonly<Record<string, unknown>>[] {
+  return Object.freeze(booleanColumns.length === 0 ? [...rows] : rows.map(row => readMutationBooleans(row, booleanColumns)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {

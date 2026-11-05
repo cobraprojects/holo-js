@@ -523,7 +523,7 @@ On PostgreSQL, `change()` drops `<table>_<column>_check` and adds it again with 
 
 Adds a true or false column. It becomes `BOOLEAN` on PostgreSQL and `TINYINT(1)` on MySQL and SQLite. The TypeScript type is `boolean`.
 
-Models and typed `DB.table()` queries read the value as `true` or `false` on every database. MySQL and SQLite store booleans as `1` and `0`, so Holo converts them when it reads a boolean column. Raw queries return what the database driver returns. On MySQL and SQLite, a realtime query that reads, groups or orders by a boolean column, or eager-loads a relation or pivot with one, runs again when its table changes, instead of patching its result.
+Models and typed `DB.table()` queries read the value as `true` or `false` on every database. MySQL and SQLite store booleans as `1` and `0`, so Holo converts them when it reads a boolean column. Raw queries and name-only `DB.table('name')` queries return what the database driver returns. `sum()`, `avg()`, `min()` and `max()` count `true` as `1` and `false` as `0`. Realtime subscriptions read the boolean columns of changed rows the same way, so they keep patching their results; a name-only query that reads a boolean column runs again when its table changes.
 
 ```ts
 table.boolean('is_gift').default(false)

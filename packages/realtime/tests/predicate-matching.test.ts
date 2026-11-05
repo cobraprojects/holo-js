@@ -68,6 +68,18 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPredicateValue(1, createPredicate('amount', '=', 2))).toBe(false)
   })
 
+  it('compares a boolean with the one or zero a database binds for it', () => {
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', 1))).toBe(true)
+    expect(matchesPredicateValue(false, createPredicate('enabled', '=', 0))).toBe(true)
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', 0))).toBe(false)
+    expect(matchesPredicateValue(false, createPredicate('enabled', '!=', 1))).toBe(true)
+    expect(matchesPredicateValue(true, createPredicate('enabled', 'in', [1]))).toBe(true)
+    expect(matchesPredicateValue(1, createPredicate('enabled', '=', true))).toBe(true)
+    expect(compareValues(false, true)).toBe(-1)
+    expect(compareValues(true, 0)).toBe(1)
+    expect(compareValues(true, true)).toBe(0)
+  })
+
   it('matches row predicates and patched values without hiding missing columns', () => {
     const row = Object.freeze({ id: 1, status: 'draft', count: 1 })
 

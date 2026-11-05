@@ -98,7 +98,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { rewritesDriverValue, storesJson } from '../schema/normalization'
+import { readsAsCoercedBoolean, readsAsSQLiteDecimal, storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -2053,23 +2053,26 @@ export class TableQueryBuilder<
     })
   }
 
-  private observesRewrittenColumn(): boolean {
+  private observesUnpatchableColumn(): boolean {
     const dialect = this.connection.getDriver() as SchemaDialectName
-    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
+    const source = this.source.table
+    const unpatchable = this.plan.source.table
+      ? (definition: AnyColumnDefinition) => readsAsSQLiteDecimal(dialect, definition)
+      : (definition: AnyColumnDefinition) => readsAsCoercedBoolean(dialect, definition)
+    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, source]])
     for (const join of this.plan.joins) {
       if (join.table) tables.set(join.alias ?? join.table, join.definition ?? getConnectionGeneratedTableDefinition(join.table, this.connection.getConnectionName()))
     }
-    const readsRewritten = (column: string): boolean => {
+    const readsUnpatchable = (column: string): boolean => {
       const separator = column.lastIndexOf('.')
-      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tableForQualifier(tables, column.slice(0, separator))
+      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? source : tableForQualifier(tables, column.slice(0, separator))
       const name = column.slice(separator + 1)
-      const columns = Object.entries(table?.columns ?? {})
-      return columns.some(([key, definition]) => (name === '*' || key === name) && rewritesDriverValue(dialect, definition))
+      return Object.entries(table?.columns ?? {}).some(([key, definition]) => (name === '*' || key === name) && unpatchable(definition))
     }
-    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsRewritten(`${table}.*`)))
-      || this.plan.selections.some(selection => selection.kind === 'column' && readsRewritten(selection.column))
-      || this.plan.groupBy.some(readsRewritten)
-      || this.plan.orderBy.some(order => order.kind === 'column' && readsRewritten(order.column))
+    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsUnpatchable(`${table}.*`)))
+      || this.plan.selections.some(selection => selection.kind === 'column' && readsUnpatchable(selection.column))
+      || this.plan.groupBy.some(readsUnpatchable)
+      || this.plan.orderBy.some(order => order.kind === 'column' && readsUnpatchable(order.column))
   }
 
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
@@ -2089,7 +2092,7 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
-    if (observation?.patchable && this.observesRewrittenColumn()) {
+    if (observation?.patchable && this.observesUnpatchableColumn()) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }
@@ -3680,7 +3683,7 @@ export class TableQueryBuilder<
     return rows.flatMap((row) => {
       const value = row[column]
       if (value === null) return []
-      const numericValue = this.normalizeNumericResult(value)
+      const numericValue = this.normalizeNumericResult(typeof value === 'boolean' ? Number(value) : value)
       if (numericValue === undefined) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }

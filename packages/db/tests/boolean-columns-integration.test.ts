@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
@@ -47,6 +47,43 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
     expect(await DB.table(flags).select('enabled as active').where('label', 'on').first()).toEqual({ active: true })
   })
 
+  it('aggregates a boolean column as ones and zeros', async () => {
+    const { flags } = await openFlags(driver)
+    await DB.table(flags).insert([
+      { label: 'on', enabled: true },
+      { label: 'also on', enabled: true },
+      { label: 'off', enabled: false },
+    ])
+
+    expect(await DB.table(flags).sum('enabled')).toBe(2)
+    expect(await DB.table(flags).avg('enabled')).toBeCloseTo(2 / 3)
+    expect(await DB.table(flags).min('enabled')).toBe(0)
+    expect(await DB.table(flags).max('enabled')).toBe(1)
+    const Flag = defineModel(flags, { timestamps: false })
+    expect(await Flag.sum('enabled')).toBe(2)
+    expect(await Flag.max('enabled')).toBe(1)
+  })
+
+  it('aggregates a related boolean column as ones and zeros', async () => {
+    const { flags, schema } = await openFlags(driver)
+    const ownersName = `holo_flag_owners_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ownersName, (table) => {
+      table.id()
+      table.integer('flag_id')
+      table.boolean('approved')
+    })
+    onTestFinished(() => schema.dropTable(ownersName))
+    const owners = defineGeneratedTable(ownersName, { id: column.id(), flag_id: column.integer(), approved: column.boolean() })
+    const Owner = defineModel(owners, { timestamps: false })
+    const Flag = defineModel(flags, { timestamps: false, relations: { owners: hasMany(() => Owner, 'flag_id') } })
+    await DB.table(flags).insert({ id: 1, label: 'on', enabled: true })
+    await DB.table(owners).insert([{ flag_id: 1, approved: true }, { flag_id: 1, approved: false }, { flag_id: 1, approved: true }])
+
+    const flag = await Flag.withSum('owners', 'approved').withMax('owners', 'approved').firstOrFail()
+
+    expect(flag.toJSON()).toMatchObject({ owners_sum_approved: 2, owners_max_approved: 1 })
+  })
+
   it('matches model reads of the same boolean columns', async () => {
     const { flags } = await openFlags(driver)
     const Flag = defineModel(flags, { fillable: ['label', 'enabled', 'archived'], timestamps: false })
@@ -77,6 +114,25 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
       .first()
 
     expect(row).toEqual({ enabled: true })
+  })
+
+  it.runIf(driver !== 'postgres')('reads a union column as a boolean only when every branch reads a boolean there', async () => {
+    const { flags, schema } = await openFlags(driver)
+    const countsName = `holo_flag_counts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(countsName, (table) => {
+      table.id()
+      table.integer('enabled')
+    })
+    onTestFinished(() => schema.dropTable(countsName))
+    const counts = defineGeneratedTable(countsName, { id: column.id(), enabled: column.integer() })
+    await DB.table(flags).insert([{ label: 'on', enabled: true }, { label: 'off', enabled: false }])
+    await DB.table(counts).insert({ enabled: 42 })
+
+    const mixed = await DB.table(flags).select('enabled').unionAll(DB.table(counts).select('enabled')).get()
+    const flagsOnly = await DB.table(flags).select('enabled').where('label', 'on').unionAll(DB.table(flags).select('enabled').where('label', 'off')).get()
+
+    expect(mixed.map(row => Number(row.enabled)).sort((left, right) => left - right)).toEqual([0, 1, 42])
+    expect(flagsOnly.map(row => row.enabled).sort()).toEqual([false, true])
   })
 
   it('reads cached boolean rows as booleans', async () => {
