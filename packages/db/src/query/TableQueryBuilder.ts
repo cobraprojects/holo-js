@@ -473,7 +473,8 @@ export class TableQueryBuilder<
     negated = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection)
+    const nestedPlan = { ...createSelectQueryPlan(this.source), joins: this.plan.joins }
+    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection, nestedPlan, undefined, internalPlanHandoff)
     const callbackResult = callback(nestedBuilder)
     const result = callbackResult instanceof TableQueryBuilder ? callbackResult : nestedBuilder
     const predicates = result.getPlan().predicates as readonly QueryPredicateNode[]

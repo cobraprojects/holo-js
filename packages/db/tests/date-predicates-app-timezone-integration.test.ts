@@ -143,6 +143,8 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
     await expect(joined().whereDate(`${others.tableName}.day`, '2026-11-05').pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
     await expect(joined().where(`${others.tableName}.day`, losAngelesNoonNov5).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
     await expect(joined().whereIn(`${others.tableName}.day`, [losAngelesNoonNov5]).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
+    await expect(joined().where(query => query.where(`${others.tableName}.day`, losAngelesNoonNov5)).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
+    await expect(joined().whereNot(query => query.where(`${others.tableName}.day`, losAngelesNoonNov5)).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['model', 'later'])
   })
 
   it('matches calendar text by its own day on a table without a column definition', async () => {
