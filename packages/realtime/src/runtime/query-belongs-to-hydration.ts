@@ -219,10 +219,11 @@ async function fetchGroupedBelongsToRelatedRows(
     .where(target.ownerKey, 'in', values)
     .get()
 
+  const requestedValues = new Set(values)
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const ownerKey = row[target.ownerKey]
-    if (typeof ownerKey === 'undefined') {
+    if (typeof ownerKey === 'undefined' || !requestedValues.has(ownerKey)) {
       return undefined
     }
 

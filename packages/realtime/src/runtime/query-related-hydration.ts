@@ -296,10 +296,11 @@ async function fetchGroupedRelatedHydrationRows(
   }
 
   const rows = await builder.get()
+  const requestedValues = new Set(values)
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
-    if (typeof localKey === 'undefined') {
+    if (typeof localKey === 'undefined' || !requestedValues.has(localKey)) {
       return undefined
     }
 
@@ -332,10 +333,11 @@ function groupRelatedTopOneRows(
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
+  const requestedValues = new Set(values)
   const rowsByLocalKey = new Map<unknown, BackfillRows>()
   for (const row of rows) {
     const localKey = readBackfilledValue(connection, hydration.relatedTable, hydration.foreignKey, row[GROUPED_RELATED_ROW_ID_ALIAS])
-    if (typeof localKey === 'undefined') {
+    if (typeof localKey === 'undefined' || !requestedValues.has(localKey)) {
       return undefined
     }
 
