@@ -99,6 +99,7 @@ export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: s
     joins: plan.joins.map(join => join.table && !join.definition
       ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
       : join),
+    unions: plan.unions.map(union => ({ ...union, query: withResolvedDefinitions(union.query, connectionName) })),
   }
 }
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { DB, column, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
+import { DB, clearGeneratedTables, column, defineGeneratedTable, defineModel, hasMany, registerGeneratedTables, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
@@ -137,6 +137,28 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
       .unionAll(DB.table(flags).select('enabled').where('label', 'off').unionAll(DB.table(counts).select('enabled')))
       .get()
     expect(nested.map(row => Number(row.enabled)).sort((left, right) => left - right)).toEqual([0, 1, 42])
+  })
+
+  it('reads a union branch column through a joined table named by its registered definition', async () => {
+    const { flags, schema } = await openFlags(driver)
+    const ownersName = `holo_flag_holders_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ownersName, (table) => {
+      table.id()
+      table.integer('flag_id')
+      table.boolean('approved')
+    })
+    onTestFinished(() => schema.dropTable(ownersName))
+    const owners = defineGeneratedTable(ownersName, { id: column.id(), flag_id: column.integer(), approved: column.boolean() })
+    registerGeneratedTables({ [ownersName]: owners })
+    onTestFinished(() => clearGeneratedTables())
+    await DB.table(flags).insert({ id: 1, label: 'on', enabled: true })
+    await DB.table(owners).insert({ flag_id: 1, approved: false })
+
+    const rows = await DB.table(flags).select('enabled').where('label', 'on')
+      .unionAll(DB.table(flags).join(ownersName, `${ownersName}.flag_id`, '=', `${flags.tableName}.id`).select(`${ownersName}.approved as enabled`))
+      .get()
+
+    expect(rows.map(row => row.enabled).sort()).toEqual([false, true])
   })
 
   it.runIf(driver !== 'postgres')('reads union columns by position, whatever each branch names them', async () => {
