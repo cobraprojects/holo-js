@@ -1,4 +1,4 @@
-import { coerceBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, isStoredBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
@@ -148,6 +148,14 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
     if (Object.hasOwn(row, key)) values[key] = read(row[key])
   }
   return values
+}
+
+export function holdsUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
+  const booleanKeys = [...columns].filter(([, read]) => read === coerceBoolean).map(([key]) => key)
+  return booleanKeys.length > 0 && rows.some(row => booleanKeys.some((key) => {
+    const value = row[key]
+    return value != null && typeof value !== 'boolean' && !isStoredBoolean(value)
+  }))
 }
 
 export function readInsertedKey(

@@ -47,7 +47,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { holdsUnstoredBoolean, readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -215,6 +215,8 @@ function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table'
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
+const rowsReadFromUnstoredBooleans = new WeakSet<readonly Record<string, unknown>[]>()
+
 const GROUPED_AVERAGE_GROUP_KEY = '__holo_grouped_average_group'
 const GROUPED_AGGREGATE_VALUE_KEY = '__holo_grouped_aggregate_state_value'
 const GROUPED_AGGREGATE_ROW_COUNT_KEY = '__holo_grouped_aggregate_state_row_count'
@@ -2031,7 +2033,10 @@ export class TableQueryBuilder<
     if (!convertColumns) return rows
     const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
-    return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (convertedColumns.size === 0) return rows
+    const converted = rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (holdsUnstoredBoolean(rows, convertedColumns)) rowsReadFromUnstoredBooleans.add(converted)
+    return converted
   }
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
@@ -2089,7 +2094,7 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
-    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
+    if (observation?.patchable && (rowsReadFromUnstoredBooleans.has(rows) || this.observesSQLiteDecimalColumn())) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }

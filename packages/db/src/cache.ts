@@ -6,7 +6,7 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean } from './schema/normalization'
+import { coerceBoolean, isStoredBoolean } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
@@ -2016,9 +2016,6 @@ function isDriverScalar(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
 }
 
-function isStoredBoolean(value: unknown): boolean {
-  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
-}
 
 function readsBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
   return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]!.kind === 'boolean'

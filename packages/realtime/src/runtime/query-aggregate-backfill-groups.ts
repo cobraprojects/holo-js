@@ -130,7 +130,7 @@ export function collectGroupedAggregateQueries(
         candidate.aggregate
         && candidateGroupPredicate
         && aggregateQueriesShareGroupScope(query, candidate)
-        && (candidate === query || queryHasAggregateBackfillMutation(candidate, candidateGroupPredicate, backfills))
+        && (candidate === query || (candidate.patchable && queryHasAggregateBackfillMutation(candidate, candidateGroupPredicate, backfills)))
       ) {
         queries.push(candidate)
         addGroupedAggregateValue(values, candidateGroupPredicate.value)
