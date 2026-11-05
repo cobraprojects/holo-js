@@ -24,6 +24,10 @@ type Context = {
 const bindingBudget = 900
 const SUB_MILLISECOND_TEXT = /\.\d{3}\d*[1-9]/
 
+function bindableId(id: unknown): unknown {
+  return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
+}
+
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
   return id instanceof Date || ArrayBuffer.isView(id)
 }
@@ -55,11 +59,12 @@ export class PivotMutation {
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
-    const [existing] = await this.read(this.connection, [id])
+    const key = bindableId(id)
+    const [existing] = await this.read(this.connection, [key])
     if (!existing || !this.changed(existing, attributes)) return 0
     const values = this.timestampAttributes(attributes, false)
     this.assertColumnsWritable(Object.keys(values))
-    await this.query(this.connection).where(this.context.relatedColumn, id).update(values)
+    await this.query(this.connection).where(this.context.relatedColumn, key).update(values)
     return 1
   }
 
@@ -160,14 +165,14 @@ export class PivotMutation {
 
   private normalize(ids: unknown, attributes: Attributes = {}): Entry[] {
     if (ids == null) return []
-    if (Array.isArray(ids)) return ids.map(id => ({ id, attributes: { ...attributes } }))
+    if (Array.isArray(ids)) return ids.map(id => ({ id: bindableId(id), attributes: { ...attributes } }))
     if (typeof ids === 'object' && !isScalarObjectId(ids)) {
       return Object.entries(ids as Record<string, Attributes>).map(([id, value]) => ({
         id: /^-?\d+$/.test(id) ? Number(id) : id,
         attributes: { ...(value ?? {}) },
       }))
     }
-    return [{ id: ids, attributes: { ...attributes } }]
+    return [{ id: bindableId(ids), attributes: { ...attributes } }]
   }
 
   private keyIdentity(value: unknown): unknown {
@@ -178,7 +183,9 @@ export class PivotMutation {
   private readKey(value: unknown): unknown {
     const kind = this.context.relatedKey?.kind
     if (kind !== 'date' && kind !== 'datetime' && kind !== 'timestamp') return value
-    return typeof value === 'string' && SUB_MILLISECOND_TEXT.test(value) ? value : parseStoredDate(this.context.dialect, value)
+    if (typeof value === 'string' && SUB_MILLISECOND_TEXT.test(value)) return value
+    const parsed = parseStoredDate(this.context.dialect, value)
+    return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {

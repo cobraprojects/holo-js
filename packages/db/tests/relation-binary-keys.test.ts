@@ -276,6 +276,9 @@ describe('relation loading over binary keys', () => {
     expect(await db.table(ownerSlot).count()).toBe(0)
 
     const adminBytes = new Uint8Array(admin)
+    await owner.attach('roles', admin)
+    expect(await owner.syncWithoutDetaching('roles', new DataView(admin.buffer, admin.byteOffset, admin.byteLength))).toEqual({ attached: [], detached: [], updated: [] })
+    await owner.detach('roles')
     await owner.attach('roles', adminBytes)
     expect(await owner.syncWithoutDetaching('roles', [adminBytes, admin])).toEqual({ attached: [], detached: [], updated: [] })
     expect(await owner.toggle('roles', adminBytes)).toEqual({ attached: [], detached: [adminBytes] })
@@ -329,6 +332,9 @@ describe('relation loading over binary keys', () => {
 
     expect(await owner.sync('slots', { [first]: { note: 'changed' } })).toEqual({ attached: [], detached: [second], updated: [first] })
     expect(await db.table(ownerSlot).get()).toEqual([{ ownerId: 1, startsAt: first, note: 'changed' }])
+
+    await db.table(ownerSlot).insert([{ ownerId: 1, startsAt: 'never' }, { ownerId: 1, startsAt: 'someday' }])
+    expect(await owner.sync('slots', [first, 'never'])).toEqual({ attached: [], detached: ['someday'], updated: [] })
   })
 
   it('matches unsafe big integer pivot ids on an untyped pivot table', async () => {
