@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB, column, defineModel, defineGeneratedTable, resetDB } from '../src'
+import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -49,7 +50,9 @@ async function createProducts(driver: typeof drivers[number]) {
 }
 
 describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await cache.flush().catch(() => undefined)
+    resetCacheRuntime()
     resetDB()
   })
 
@@ -157,6 +160,24 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     const query = DB.table(name).join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).orderBy('id').limit(1)
     expect(Number(await query[kind](`${name}.price`))).toBe(10)
     expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).orderBy('id').limit(1)[kind](`${name}.price`)).toBe(10)
+  })
+
+  it.each(kinds)('%s keeps cached joined rows and each qualified aggregate under an explicit cache key apart', async (kind) => {
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    const { name, ordersName } = await createProducts(driver)
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
+    const cacheKey = `aggregates-${name}-${kind}`
+
+    const query = DB.table(name).join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).cache({ key: cacheKey, ttl: 60 })
+    const rows = await query.get()
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
+    expect(await query.get()).toEqual(rows)
+
+    const modelQuery = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).cache({ key: `${cacheKey}-model`, ttl: 60 })
+    const modelRows = (await modelQuery.get()).map(entity => entity.toAttributes())
+    expect(await modelQuery[kind](`${name}.price`)).toBe(expected[kind])
+    expect((await modelQuery.get()).map(entity => entity.toAttributes())).toEqual(modelRows)
   })
 
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {

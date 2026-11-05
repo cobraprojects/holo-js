@@ -2469,10 +2469,11 @@ class ModelQueryBuilderBase<
   } {
     if (!column.split('->', 1)[0]!.includes('.')) return { query: this, column }
 
-    const { key, joined, selections } = this.tableQuery[resolveAggregateSource](column, true)
+    const { key, joined, selections, cache } = this.tableQuery[resolveAggregateSource](column, true)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
-    return { query: this.clone(this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>), column: key }
+    const projected = this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>
+    return { query: this.clone(cache ? projected.cache(cache) : projected), column: key }
   }
 
   private extractNumericValues(

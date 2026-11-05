@@ -1899,7 +1899,12 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
-  [resolveAggregateSource](column: string, modelRow = false): { readonly key: string, readonly joined: boolean, readonly selections: readonly string[] } {
+  [resolveAggregateSource](column: string, modelRow = false): {
+    readonly key: string
+    readonly joined: boolean
+    readonly selections: readonly string[]
+    readonly cache?: NormalizedQueryCacheConfig
+  } {
     const root = column.split('->', 1)[0]!
     const qualifier = root.slice(0, root.lastIndexOf('.'))
     const join = typeof this.resolveSourceColumnName(root) === 'undefined'
@@ -1921,7 +1926,7 @@ export class TableQueryBuilder<
         : !this.plan.distinct && this.plan.groupBy.length === 0
             ? [wildcard(source)]
             : [...this.selectedSourceColumns().map(({ name, alias }) => name === '*' ? wildcard(source) : `${source}.${name}${alias ? ` as ${alias}` : ''}`), `${source}.${key}`]
-    return { key, joined: !!join, selections }
+    return { key, joined: !!join, selections, cache: this.plan.joins.length > 0 ? this.projectAggregate(selections).queryCacheConfig : undefined }
   }
 
   cache(
@@ -3623,6 +3628,21 @@ export class TableQueryBuilder<
     return result
   }
 
+  private projectAggregate(selections: readonly string[]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const projected = this.clone(appendSelections(this.plan, selections))
+    const cacheConfig = this.queryCacheConfig
+    if (!cacheConfig?.key) return projected
+
+    const key = `${cacheConfig.key}:${resolveQueryCacheKey(projected.toSQL(), this.connection.getConnectionName(), { ...cacheConfig, key: undefined })}`
+    return new TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>(
+      (this.source.table ?? this.source.tableName) as TTableOrName,
+      this.connection,
+      projected.getPlan(),
+      { ...cacheConfig, key },
+      internalPlanHandoff,
+    )
+  }
+
   private selectedSourceColumns(): readonly { readonly name: string, readonly alias?: string }[] {
     return this.plan.selections.flatMap((selection) => {
       if (selection.kind !== 'column' || !selection.column.includes('.')) return []
@@ -3642,7 +3662,7 @@ export class TableQueryBuilder<
     if (this.plan.joins.length === 0) return { query: this, key, column: key }
 
     return {
-      query: this.clone(appendSelections(this.plan, selections)),
+      query: this.projectAggregate(selections),
       key: aggregateValueKey,
       column: joined ? column : key,
     }
