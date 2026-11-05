@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, dateLikeWriteValue, storesDate, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarDateWriteValue, dateLikeWriteValue, storesDate, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -189,6 +189,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return column ? storesText(column) || storesDate(column) : this.definition.untyped
   }
 
+  private holdsCalendarDate(key: string): boolean {
+    return ownEntry(this.definition.table.columns, key)?.kind === 'date'
+      && !ownEntry(this.definition.casts, key)
+      && this.isModelDateColumn(key)
+  }
+
   private hasBuiltInDateCast(key: string): boolean {
     const name = this.parseBuiltInCast(this.resolveCast(key))?.name
     return name === 'date' || name === 'datetime' || name === 'timestamp'
@@ -218,6 +224,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
+    if (this.holdsCalendarDate(key)) {
+      return calendarDateWriteValue(value)
+    }
+
     if (this.hasBuiltInDateCast(key)) {
       return dateLikeWriteValue(this.getSchemaDialectName(), value, column && storesText(column) ? 'text' : 'native')
     }

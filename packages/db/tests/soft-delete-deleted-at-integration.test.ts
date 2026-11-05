@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
+import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { column, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
@@ -27,6 +28,42 @@ async function createPostsTable(driver: typeof drivers[number]) {
     created_at: column.timestamp().nullable(),
     updated_at: column.timestamp().nullable(),
     deleted_at: column.timestamp().nullable(),
+  })
+}
+
+function useTokyoAppAt(now: Date): void {
+  const previousTimeZone = process.env.TZ
+  configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+  process.env.TZ = 'America/New_York'
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(now)
+  onTestFinished(() => {
+    vi.useRealTimers()
+    resetConfigRuntime()
+    if (previousTimeZone === undefined) delete process.env.TZ
+    else process.env.TZ = previousTimeZone
+  })
+}
+
+async function createDatePostsTable(driver: typeof drivers[number]) {
+  const { schema } = await openDatabase(driver)
+  const name = `date_posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  onTestFinished(async () => {
+    await schema.dropTable(name)
+  })
+  await schema.createTable(name, (table) => {
+    table.id()
+    table.string('title')
+    table.date('created_at').nullable()
+    table.date('updated_at').nullable()
+    table.date('deleted_at').nullable()
+  })
+  return defineGeneratedTable(name, {
+    id: column.id(),
+    title: column.string(),
+    created_at: column.date().nullable(),
+    updated_at: column.date().nullable(),
+    deleted_at: column.date().nullable(),
   })
 }
 
@@ -68,5 +105,45 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     const fresh = await Post.withTrashed().findOrFail(post.id)
     expect(typeof post.deleted_at).toBe('string')
     expect(post.deleted_at).toEqual(fresh.deleted_at)
+  })
+
+  it('holds model timestamps on DATE columns as the calendar date a fresh read returns', async () => {
+    useTokyoAppAt(new Date('2026-03-04T20:00:00.123Z'))
+    const Post = defineModel(await createDatePostsTable(driver), { fillable: ['title'], softDeletes: true })
+    const midnight = new Date('2026-03-04T15:00:00.000Z')
+    const fresh = async () => Post.withTrashed().findOrFail(post.id)
+
+    const post = await Post.create({ title: 'Draft' })
+
+    expect(post.created_at).toEqual(midnight)
+    expect(post.updated_at).toEqual(midnight)
+    expect((await fresh()).created_at).toEqual(midnight)
+    expect((await fresh()).updated_at).toEqual(midnight)
+
+    vi.setSystemTime(new Date('2026-03-05T16:00:00.000Z'))
+    const nextMidnight = new Date('2026-03-05T15:00:00.000Z')
+    post.title = 'Edited'
+    await post.save()
+
+    expect(post.created_at).toEqual(midnight)
+    expect(post.updated_at).toEqual(nextMidnight)
+    expect((await fresh()).updated_at).toEqual(nextMidnight)
+
+    vi.setSystemTime(new Date('2026-03-06T16:00:00.000Z'))
+    const deletedMidnight = new Date('2026-03-06T15:00:00.000Z')
+    await post.delete()
+
+    expect(post.deleted_at).toEqual(deletedMidnight)
+    expect(post.updated_at).toEqual(deletedMidnight)
+    expect(post.isDirty()).toBe(false)
+    expect((await fresh()).deleted_at).toEqual(deletedMidnight)
+    expect((await fresh()).updated_at).toEqual(deletedMidnight)
+
+    vi.setSystemTime(new Date('2026-03-07T16:00:00.000Z'))
+    await post.restore()
+
+    expect(post.deleted_at).toBeNull()
+    expect(post.updated_at).toEqual(new Date('2026-03-07T15:00:00.000Z'))
+    expect((await fresh()).updated_at).toEqual(post.updated_at)
   })
 })
