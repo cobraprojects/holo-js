@@ -230,6 +230,7 @@ async function deliverPatchedQueryEntry(
       )
     }
 
+    rebindSiblingObservations(entry, data, pathKey)
     await deliverPatchedQueryData(
       entry,
       data,
@@ -291,6 +292,7 @@ async function deliverPatchedQueryEntry(
       )
     }
 
+    rebindSiblingObservations(entry, data, firstPathKey, secondPathKey)
     await deliverPatchedQueryData(
       entry,
       data,
@@ -315,6 +317,7 @@ async function deliverPatchedQueryEntry(
   let delayedTargetIndexes: number[] | undefined
   const patchOperations: RealtimeSubscriptionPatchOperation[] | undefined = shouldCreatePatchOperations ? [] : undefined
   const patchedOperationPathKeys = shouldCreatePatchOperations ? new Set<string>() : undefined
+  const patchedPathKeys = new Set<string>()
   for (let patchIndex = -1; ; patchIndex += 1) {
     let patch: PatchedQueryResult | PatchedQueryDelivery
     let index: number
@@ -336,6 +339,7 @@ async function deliverPatchedQueryEntry(
     const target = entry.patchTargets[index]
     const pathKey = readPatchPathKey(query, target)
     const nextQuery = createPatchedQueryObservation(query, patch.value, pathKey)
+    patchedPathKeys.add(pathKey)
     if (patchOperations && patchedOperationPathKeys && !patchedOperationPathKeys.has(pathKey)) {
       const previousValue = target?.currentValue ?? (path.length === 0 ? data : getValueAtPath(data, path))
       patchedOperationPathKeys.add(pathKey)
@@ -385,6 +389,7 @@ async function deliverPatchedQueryEntry(
     ? finishTopLevelPathReplacement(data, topLevelReplacementState).value
     : replacePatchedQueryDataWithPlan(data, firstPatch, additionalPatches)
   updateDelayedTargets(entry, data, firstDelayedTargetIndex, delayedTargetIndexes)
+  rebindSiblingObservations(entry, data, ...patchedPathKeys)
 
   await deliverPatchedQueryData(
     entry,
@@ -392,6 +397,38 @@ async function deliverPatchedQueryEntry(
     queries,
     patchOperations ? compactPatchOperations(patchOperations) : EMPTY_PATCH_OPERATIONS,
   )
+}
+
+function rebindSiblingObservations(
+  entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
+  data: unknown,
+  ...patchedPathKeys: readonly string[]
+): void {
+  const { queries } = entry
+  for (let index = 0; index < queries.length; index += 1) {
+    const query = queries[index]
+    if (query?.resultBound !== true) {
+      continue
+    }
+
+    const target = entry.patchTargets[index]
+    const pathKey = readPatchPathKey(query, target)
+    if (!patchedPathKeys.includes(pathKey)) {
+      continue
+    }
+
+    const path = query.resultPath ?? EMPTY_RESULT_PATH
+    const value = path.length === 0 ? data : getValueAtPath(data, path)
+    if (Object.is(query.result, value)) {
+      continue
+    }
+
+    const nextQuery = createPatchedQueryObservation(query, value, pathKey)
+    queries[index] = nextQuery
+    if (target) {
+      entry.patchTargets[index] = updatePatchedQueryPatchTarget(target, nextQuery, value, data, path, pathKey)
+    }
+  }
 }
 
 function canSkipCoveredHydratedMutationValueTarget(
