@@ -142,12 +142,11 @@ function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
     return true
   }
 
-  if (plan.selections.some(selection => selection.kind !== 'column' || selection.alias === column)) {
+  if (plan.selections.some(selection => selection.kind !== 'column' || typeof selection.alias !== 'undefined')) {
     return false
   }
 
   return plan.selections.some(selection => selection.kind === 'column'
-    && typeof selection.alias === 'undefined'
     && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
 }
 
