@@ -112,7 +112,7 @@ function assertRawPlaceholderBindings(sql: string, bindings: readonly unknown[],
 }
 
 function assertQualifiedIdentifier(value: string, kind: string): void {
-  const parts = value.split('.')
+  const parts = tablePathSegments(value)
   if (parts.length === 0 || parts.some(part => !IDENTIFIER_PATTERN.test(part))) {
     throw new SecurityError(`${kind} "${value}" is not a valid identifier.`)
   }
