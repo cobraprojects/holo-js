@@ -116,7 +116,7 @@ async function openKeyFixtures(driver: Driver, kind: KeyKind) {
       morphOwners: morphedByMany(() => Owner, 'taggable', taggables, 'tag_id'),
     },
   })
-  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts }
+  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts, tagsTable: names.tags, ownersTable: names.owners }
 }
 
 async function openDecimalOwnerFixtures(driver: Driver) {
@@ -213,9 +213,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     })
 
     it('filters and counts belongsToMany', async () => {
-      const { Owner, Tag } = await openKeyFixtures(driver, kind)
+      const { Owner, Tag, tagsTable, ownersTable } = await openKeyFixtures(driver, kind)
 
       expect(valuesOf(await Owner.has('tags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('tags', query => query.from(`${tagsTable} as t`).where('t.name', 'red')).orderBy('id').get())).toEqual([1])
+      expect(valuesOf(await Tag.whereHas('owners', query => query.from(`${ownersTable} as o`).where('o.name', 'second')).orderBy('id').get())).toEqual([2])
       expect(valuesOf(await Owner.whereHas('tags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Owner.whereDoesntHave('tags').orderBy('id').get())).toEqual([3])
       expect(valuesOf(await Owner.withCount('tags').orderBy('id').get(), 'tags_count')).toEqual([2, 1, 0])
@@ -238,9 +240,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     })
 
     it('filters and counts morphToMany and morphedByMany', async () => {
-      const { Owner, Tag } = await openKeyFixtures(driver, kind)
+      const { Owner, Tag, tagsTable, ownersTable } = await openKeyFixtures(driver, kind)
 
       expect(valuesOf(await Owner.has('morphTags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('morphTags', query => query.from(`${tagsTable} as t`).where('t.name', 'red')).orderBy('id').get())).toEqual([1])
+      expect(valuesOf(await Tag.whereHas('morphOwners', query => query.from(`${ownersTable} as o`).where('o.name', 'second')).orderBy('id').get())).toEqual([2])
       expect(valuesOf(await Owner.whereHas('morphTags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Owner.whereDoesntHave('morphTags').orderBy('id').get())).toEqual([3])
       expect(valuesOf(await Owner.withCount('morphTags').orderBy('id').get(), 'morphTags_count')).toEqual([2, 1, 0])
