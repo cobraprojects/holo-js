@@ -102,7 +102,8 @@ function ordersByModelColumn(plan: SelectQueryPlan, modelColumns: readonly strin
 
 function projectUnionBranch(branch: SelectQueryPlan, driver: string, leadingModelColumns: boolean): SelectQueryPlan {
   const selections = orderModelColumnsLast(branch, expandSelections(branch, driver))
-  const leading = leadingModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
+  const selectsJoinedColumns = selections.some(selection => selectionRole(branch.source, selection) === 'joined')
+  const leading = leadingModelColumns && selectsJoinedColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
   return Object.freeze({
     ...branch,
     selections: Object.freeze([...leading, ...selections]),

@@ -202,6 +202,9 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const { products, orders, joined } = await createFixture(driver)
     await DB.table(orders).where('id', 101).update({ id: 103 })
 
+    const ownOnly = joined().select(`${products}.*`).where(`${orders}.id`, 102).union(joined().select(`${products}.*`).where(`${orders}.id`, 103)).orderBy('id')
+    expect(attributes(await ownOnly.get()).map(({ id, price }) => [id, price])).toEqual([[1, 10], [2, 20]])
+
     const union = joined().where(`${orders}.id`, 102).union(joined().where(`${orders}.id`, 103)).orderBy('id')
     if (driver !== 'sqlite') {
       await expect(union.get()).rejects.toThrow(driver === 'postgres' ? 'ORDER BY "id" is ambiguous' : `Column 'id' in order clause is ambiguous`)
