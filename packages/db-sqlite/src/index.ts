@@ -49,7 +49,11 @@ const heldTransactionScopes = new AsyncLocalStorage<ReadonlyMap<string | SQLiteA
 
 function normalizeBinding(value: unknown): unknown {
   if (typeof value === 'boolean') {
-    return Number(value)
+    return BigInt(value)
+  }
+
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return BigInt(value)
   }
 
   return value instanceof Date ? holoRuntimeInternals.formatSQLiteDateTime(value) : value

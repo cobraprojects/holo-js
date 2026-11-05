@@ -2809,8 +2809,9 @@ export class TableQueryBuilder<
   async upsert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     uniqueBy: readonly string[],
-    updateColumns: readonly string[] = [],
+    requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -3438,7 +3439,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    const amounts = this.resolveArithmeticColumns(requestedAmounts)
+    const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
@@ -3459,7 +3460,7 @@ export class TableQueryBuilder<
     if (rows.length === 0) return { affectedRows: 0, lastInsertId: undefined }
 
     const adjustments = Object.fromEntries(Object.entries(amounts).map(([column, amount]) => [column, new NumericAdjustment(amount)]))
-    const values = { ...extraValues, ...adjustments }
+    const values = { ...this.resolveSourceColumnKeys(extraValues, 'update'), ...adjustments }
     if (typeof this.plan.limit === 'undefined' && typeof this.plan.offset === 'undefined') {
       return this.update(values)
     }
@@ -3471,20 +3472,23 @@ export class TableQueryBuilder<
     return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
   }
 
-  private resolveArithmeticColumns(amounts: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
-    const resolved: Record<string, number> = {}
-    for (const [column, amount] of Object.entries(amounts)) {
+  private resolveSourceColumnKeys<TValue>(
+    values: Readonly<Record<string, TValue>> | readonly (readonly [string, TValue])[],
+    operation: 'update' | 'upsert' | 'increment/decrement',
+  ): Readonly<Record<string, TValue>> {
+    const resolved: Record<string, TValue> = {}
+    for (const [column, value] of Array.isArray(values) ? values : Object.entries(values)) {
       const pathStart = column.indexOf('->')
       const root = pathStart === -1 ? column : column.slice(0, pathStart)
       const rootName = this.resolveSourceColumnName(root)
       if (typeof rootName === 'undefined') {
-        throw new CompilerError(`Cannot increment/decrement column "${column}" outside table "${this.source.tableName}".`)
+        throw new CompilerError(`Cannot ${operation} column "${column}" outside table "${this.source.tableName}".`)
       }
       const columnName = rootName + column.slice(root.length)
       if (Object.hasOwn(resolved, columnName)) {
-        throw new CompilerError(`Cannot increment/decrement column "${columnName}" more than once.`)
+        throw new CompilerError(`Cannot ${operation} column "${columnName}" more than once.`)
       }
-      resolved[columnName] = amount
+      resolved[columnName] = value
     }
 
     return resolved
@@ -3633,7 +3637,7 @@ export class TableQueryBuilder<
     return normalizeQueryUpdateValues(
       this.source.table,
       this.connection.getDriver(),
-      values,
+      this.resolveSourceColumnKeys(values, 'update'),
       value => this.parseJsonPath(value, false, 'update'),
     )
   }
