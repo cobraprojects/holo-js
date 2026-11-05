@@ -828,7 +828,7 @@ function rebindDatabaseQueryObservation(
       limit: query.limit,
       offset: query.offset,
       orderBy: query.orderBy,
-      patchable: query.patchable && !(aggregate?.column !== undefined && readsBooleanColumn(query.table, aggregate.column)),
+      patchable: query.patchable && !(aggregate?.column !== undefined && isBooleanColumn(query.table, aggregate.column)),
       pagination: query.pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
@@ -2016,19 +2016,18 @@ function isDriverScalar(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
 }
 
-
-function readsBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
-  return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]!.kind === 'boolean'
+function isBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
+  return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]?.kind === 'boolean'
 }
 
 function convertedBooleanColumns(table: TableDefinition | undefined, records: readonly Readonly<Record<string, unknown>>[]): readonly string[] {
   if (!table) return []
-  return Object.freeze(Object.keys(table.columns).filter(column => readsBooleanColumn(table, column)
+  return Object.freeze(Object.keys(table.columns).filter(column => isBooleanColumn(table, column)
     && records.some(record => Object.hasOwn(record, column) && isDriverScalar(record[column]))))
 }
 
-function holdsUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return table !== undefined && Object.keys(row).some(key => readsBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
+function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
 function readBooleanColumns(
@@ -2040,7 +2039,7 @@ function readBooleanColumns(
   if (!table) return row
   const booleanKeys = Object.keys(row).filter((key) => {
     const selection = selections.find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && readsBooleanColumn(table, selection ? selection.column : key)
+    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
   })
   if (booleanKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
@@ -2367,7 +2366,7 @@ export async function invalidateQueryCacheDependencies(
 
 export const queryCacheInternals = {
   getRootDatabaseContext,
-  holdsUnreadBoolean,
+  hasUnreadBoolean,
   readFetchedRow,
   readMutationRow,
   setMutationPreviousRowsRequirement,

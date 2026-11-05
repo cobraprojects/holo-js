@@ -108,7 +108,7 @@ export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyC
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
-function knowsEveryPosition(columns: readonly SelectedColumn[]): boolean {
+function hasEveryPosition(columns: readonly SelectedColumn[]): boolean {
   return columns.every(([key]) => key !== UNKNOWN_COLUMNS)
 }
 
@@ -116,28 +116,28 @@ function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
   return plan.unions.flatMap(union => [union.query, ...unionBranches(union.query)])
 }
 
-function unionBranchesRead(
+function createUnionReaderCheck(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
   const selected = selectedResultColumns(plan)
   const branches = unionBranches(plan).map(selectedResultColumns)
-  if (!knowsEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !knowsEveryPosition(branch))) {
+  if (!hasEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !hasEveryPosition(branch))) {
     return () => false
   }
   return (key, reader) => {
     const position = selected.map(([selectedKey]) => selectedKey).lastIndexOf(key)
-    return branches.every(branch => columnReader(dialect, branch[position]![1]) === reader)
+    return branches.every(branch => columnReader(dialect, branch[position]?.[1]) === reader)
   }
 }
 
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
-  const branchesRead = unionBranchesRead(dialect, plan)
+  const unionReads = createUnionReaderCheck(dialect, plan)
   for (const [key, definition] of resultColumnDefinitions(plan)) {
     const reader = columnReader(dialect, definition)
-    if (reader && branchesRead(key, reader)) columns.set(key, reader)
+    if (reader && unionReads(key, reader)) columns.set(key, reader)
   }
   return columns
 }
@@ -150,7 +150,7 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
   return values
 }
 
-export function holdsUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
+export function hasUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
   const booleanKeys = [...columns].filter(([, read]) => read === coerceBoolean).map(([key]) => key)
   return booleanKeys.length > 0 && rows.some(row => booleanKeys.some((key) => {
     const value = row[key]

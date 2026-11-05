@@ -158,7 +158,7 @@ export async function tryPatchObservedQuery(
   return UNPATCHED_RESULT
 }
 
-function readsColumns(query: DatabaseQueryObservation, columns: readonly string[]): boolean {
+function hasReadColumn(query: DatabaseQueryObservation, columns: readonly string[]): boolean {
   const selections = query.selections ?? []
   return selections.length === 0
     || selections.some(selection => columns.includes(selection.column))
@@ -173,7 +173,7 @@ function readsConvertedColumnsAsDriverValues(
   return query.table === undefined && mutations.some(mutation => mutation.connectionName === query.connectionName
     && mutation.tableName === query.tableName
     && mutation.convertedColumns !== undefined
-    && readsColumns(query, mutation.convertedColumns))
+    && hasReadColumn(query, mutation.convertedColumns))
 }
 
 function insertsRowsWithUnknownPrimaryKey(

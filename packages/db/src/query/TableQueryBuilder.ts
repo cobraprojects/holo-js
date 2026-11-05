@@ -47,7 +47,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { holdsUnstoredBoolean, readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { hasUnstoredBoolean, readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -2035,7 +2035,7 @@ export class TableQueryBuilder<
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
     if (convertedColumns.size === 0) return rows
     const converted = rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
-    if (holdsUnstoredBoolean(rows, convertedColumns)) rowsReadFromUnstoredBooleans.add(converted)
+    if (hasUnstoredBoolean(rows, convertedColumns)) rowsReadFromUnstoredBooleans.add(converted)
     return converted
   }
 
