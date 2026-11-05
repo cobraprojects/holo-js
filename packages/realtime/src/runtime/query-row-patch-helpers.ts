@@ -1,3 +1,4 @@
+import { readPrimaryKey } from './predicate-matching'
 import {
   rowsContainExactId,
 } from './query-row-matching'
@@ -24,7 +25,7 @@ export function readMutationRowsContainExactQueryId(
   }
 
   context.rowsContainExactQueryIdCached = true
-  context.rowsContainExactQueryId = rowsContainExactId(mutation.rows ?? EMPTY_RECORD_ROWS, context.exactQueryId)
+  context.rowsContainExactQueryId = rowsContainExactId(mutation.rows ?? EMPTY_RECORD_ROWS, context.exactQueryId, readPrimaryKey(context))
   return context.rowsContainExactQueryId
 }
 
@@ -40,6 +41,7 @@ export function readPreviousMutationRowsContainExactQueryId(
   context.previousRowsContainExactQueryId = rowsContainExactId(
     mutation.previousRows ?? EMPTY_RECORD_ROWS,
     context.exactQueryId,
+    readPrimaryKey(context),
   )
   return context.previousRowsContainExactQueryId
 }
@@ -50,5 +52,5 @@ export function findRowIndexByIdentity(
   identity: unknown,
 ): number | undefined | typeof DUPLICATE_ROW_IDENTITY {
   const rowIdentityIndex = readQueryRowIdentityIndex(query, rows)
-  return rowIdentityIndex ? rowIdentityIndex.get(identity) : findUniqueRowIndexByIdentityValue(rows, identity)
+  return rowIdentityIndex ? rowIdentityIndex.get(identity) : findUniqueRowIndexByIdentityValue(rows, identity, readPrimaryKey(query))
 }

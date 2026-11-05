@@ -97,11 +97,12 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(readMutationValueKeys({ predicates: [] })).toEqual([])
     expect(readMutationValueKeys({ predicates: [], values: { status: 'published' } })).toEqual(['status'])
     expect(readMutationValueKeys({ predicates: [], valueKeys: ['title'] })).toEqual(['title'])
-    expect(createPredicateMatchContext([statusPredicate], NO_EXACT_ID_PREDICATE)).toEqual({
+    expect(createPredicateMatchContext([statusPredicate], NO_EXACT_ID_PREDICATE, 'id')).toEqual({
       exactId: NO_EXACT_ID_PREDICATE,
       firstPredicate: statusPredicate,
       predicateCount: 1,
       predicates: [statusPredicate],
+      primaryKey: 'id',
     })
     expect(createMutationPredicateMatchContext({
       firstPredicate: idPredicate,
@@ -112,6 +113,7 @@ describe('@holo-js/realtime predicate matching', () => {
       firstPredicate: idPredicate,
       predicateCount: 2,
       predicates: [statusPredicate],
+      primaryKey: 'id',
     })
 
     expect(rowValuesChanged({ title: 'Old' }, { title: 'Old' }, ['title'])).toBe(false)
