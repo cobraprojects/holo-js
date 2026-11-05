@@ -1,5 +1,3 @@
-import { splitTablePath } from '../identifiers'
-
 export type SqlTokenKind = 'word' | 'quotedIdentifier' | 'string' | 'literal' | 'group' | 'symbol'
 
 export interface SqlToken {
@@ -148,12 +146,6 @@ export function sameIdentifier(left: string, right: string | undefined): boolean
 
 export function sameSQLiteSchema(left: string | undefined, right: string | undefined): boolean {
   return sameIdentifier(left ?? 'main', right ?? 'main')
-}
-
-export function sameSQLiteTablePath(left: string, right: string): boolean {
-  const leftPath = splitTablePath(left)
-  const rightPath = splitTablePath(right)
-  return sameIdentifier(leftPath.table, rightPath.table) && sameSQLiteSchema(leftPath.schema, rightPath.schema)
 }
 
 export function sameIdentifiers(left: readonly string[], right: readonly string[]): boolean {

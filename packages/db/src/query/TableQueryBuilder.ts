@@ -122,6 +122,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -2928,6 +2929,7 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
+    validateQueryPlan(createTruncateQueryPlan(this.source))
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))

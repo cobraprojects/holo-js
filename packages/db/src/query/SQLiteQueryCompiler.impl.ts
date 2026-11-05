@@ -3,7 +3,7 @@ import { formatSQLiteDateTime } from '../sqliteDateTime'
 import type { CompiledStatement } from '../core/types'
 import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
-import { sameIdentifier, sameSQLiteTablePath } from '../schema/introspection/sqliteTokens'
+import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
@@ -116,7 +116,11 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     const requested = splitTablePath(tableReference)
     if (requested.schema === undefined) return super.compileAllColumnsOf(tableReference, plan)
     const sources = [plan.source, ...plan.joins.map(join => ({ tableName: join.table, alias: join.alias }))]
-    const aliased = sources.find(source => source.alias !== undefined && source.tableName !== undefined && sameSQLiteTablePath(source.tableName, tableReference))
+    const named = (source: { tableName?: string }) => {
+      const path = source.tableName === undefined ? undefined : splitTablePath(source.tableName)
+      return path?.schema !== undefined && sameIdentifier(path.schema, requested.schema) && sameIdentifier(path.table, requested.table)
+    }
+    const aliased = sources.find(source => source.alias !== undefined && named(source))
     if (aliased) {
       throw new CompilerError(`SQLite cannot select "${tableReference}.*" because table "${tableReference}" is aliased as "${aliased.alias}". Select "${aliased.alias}.*" instead.`)
     }
@@ -124,9 +128,8 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     if (expanded.length > 1) {
       throw new CompilerError(`SQLite cannot select "${tableReference}.*" because more than one table in the query is named "${requested.table}". Alias the tables and select "alias.*" instead.`)
     }
-    const [source] = expanded
-    if (source !== undefined && (source.alias !== undefined || !sameSQLiteTablePath(source.tableName!, tableReference))) {
-      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because "${requested.table}" in this query does not name table "${tableReference}".`)
+    if (expanded.length === 0 || expanded[0]!.alias !== undefined || !named(expanded[0]!)) {
+      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because no table in the query is "${tableReference}" without an alias. Qualify the table the same way or select "${requested.table}.*".`)
     }
     return `${this.quoteIdentifier(requested.table)}.*`
   }

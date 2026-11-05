@@ -34,6 +34,7 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('table paths with more t
     await expect(DB.table('a.b.c').insert({ id: 1 })).rejects.toThrow(error)
     await expect(DB.table('a.b.c').where('id', 1).update({ id: 2 })).rejects.toThrow(error)
     await expect(DB.table('a.b.c').where('id', 1).delete()).rejects.toThrow(error)
+    await expect(DB.table('a.b.c').truncate()).rejects.toThrow(error)
     await expect(DB.table('a.b.c as t').get()).rejects.toThrow(error)
     await expect(DB.table('users').join('a.b.c', 'a.b.c.id', '=', 'users.id').get())
       .rejects.toThrow(new SecurityError('Join table "a.b.c" must be a table name or a schema-qualified table name.'))
