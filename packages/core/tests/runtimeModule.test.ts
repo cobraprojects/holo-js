@@ -967,16 +967,24 @@ console.log(JSON.stringify({ copy: loaded.copy }))
       'export { destructured }',
       'const { url: asserted } = <ImportMeta>import.meta',
       'export { asserted }',
+      'export const directory = import.meta.dirname',
+      "export const file = import.meta['filename']",
+      'const { dirname: destructuredDirectory, filename: destructuredFile } = import.meta',
+      'export { destructuredDirectory, destructuredFile }',
       'export function assign(value: string) { try { import.meta.url = value } catch { return \'rejected\' } return import.meta.url }',
       'export const dotted = import.meta.url',
       '',
     ].join('\n'))
-    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { escaped: string, element: string, destructured: string, asserted: string, dotted: string, assign(value: string): string }
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { escaped: string, element: string, destructured: string, asserted: string, dotted: string, directory: string, file: string, destructuredDirectory: string, destructuredFile: string, assign(value: string): string }
     const sourceUrl = pathToFileURL(entryPath).href
     expect(loaded.escaped).toBe('escaped')
     expect(loaded.element).toBe(sourceUrl)
     expect(loaded.destructured).toBe(sourceUrl)
     expect(loaded.asserted).toBe(sourceUrl)
+    expect(loaded.directory).toBe(dirname(entryPath))
+    expect(loaded.file).toBe(entryPath)
+    expect(loaded.destructuredDirectory).toBe(dirname(entryPath))
+    expect(loaded.destructuredFile).toBe(entryPath)
     expect(loaded.dotted).toBe(sourceUrl)
     expect(typeof loaded.assign('file:///elsewhere')).toBe('string')
   })

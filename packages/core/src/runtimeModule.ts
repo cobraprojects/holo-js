@@ -713,17 +713,29 @@ function createSourceModuleUrlPlugin(): Plugin {
           ts.forEachChild(node, collectIdentifiers)
         }
         collectIdentifiers(source)
-        const urlFunction = unusedHelperName('__holoMetaUrl', '__holoUrl', 13, contents, identifiers)
+        const sourceValues = {
+          url: JSON.stringify(pathToFileURL(path).href),
+          dirname: JSON.stringify(dirname(path)),
+          filename: JSON.stringify(path),
+        }
+        type SourceProperty = keyof typeof sourceValues
+        const propertyFunctions: Record<SourceProperty, string> = {
+          url: unusedHelperName('__holoMetaUrl', '__holoUrl', 13, contents, identifiers),
+          dirname: unusedHelperName('__holoMetaDir', '__holoDir', 13, contents, identifiers),
+          filename: unusedHelperName('__holoMetaFil', '__holoFil', 13, contents, identifiers),
+        }
         const metaFunction = unusedHelperName('__hMeta00', '__hMeta', 9, contents, identifiers)
         const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
-        const isUrlRead = (node: TypeScriptNode): boolean => (
-          ts.isPropertyAccessExpression(node) && node.name.text === 'url' && isImportMeta(node.expression)
-        ) || (
-          ts.isElementAccessExpression(node)
-          && isImportMeta(node.expression)
-          && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
-          && node.argumentExpression.text === 'url'
-        )
+        const asSourceProperty = (name: string): SourceProperty | undefined => Object.hasOwn(sourceValues, name) ? name as SourceProperty : undefined
+        const sourcePropertyRead = (node: TypeScriptNode): SourceProperty | undefined => {
+          if (ts.isPropertyAccessExpression(node) && isImportMeta(node.expression)) return asSourceProperty(node.name.text)
+          if (ts.isElementAccessExpression(node)
+            && isImportMeta(node.expression)
+            && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))) {
+            return asSourceProperty(node.argumentExpression.text)
+          }
+          return undefined
+        }
         const isAssignmentTarget = (node: TypeScriptNode): boolean => {
           let current = node
           let parent = current.parent
@@ -769,7 +781,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         }
         const fragments: string[] = []
         let cursor = 0
-        let usesUrlFunction = false
+        const usedProperties = new Set<SourceProperty>()
         let usesMetaFunction = false
         const replace = (node: TypeScriptNode, functionName: string) => {
           const start = node.getStart(source)
@@ -778,9 +790,10 @@ function createSourceModuleUrlPlugin(): Plugin {
         }
 
         function visit(node: TypeScriptNode): void {
-          if (isUrlRead(node) && !isAssignmentTarget(node)) {
-            replace(node, urlFunction)
-            usesUrlFunction = true
+          const property = sourcePropertyRead(node)
+          if (property && !isAssignmentTarget(node)) {
+            replace(node, propertyFunctions[property])
+            usedProperties.add(property)
             return
           }
           if (isDestructuredImportMeta(node)) {
@@ -793,10 +806,9 @@ function createSourceModuleUrlPlugin(): Plugin {
 
         visit(source)
         if (cursor === 0) return { contents, loader }
-        const sourceUrl = JSON.stringify(pathToFileURL(path).href)
         fragments.push(contents.slice(cursor))
-        if (usesUrlFunction) fragments.push(`\nfunction ${urlFunction}() { return ${sourceUrl} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return { ...import.meta, url: ${sourceUrl} } }\n`)
+        for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
