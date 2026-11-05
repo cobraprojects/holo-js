@@ -10,20 +10,22 @@ import {
 export function matchesExactRowIdentity(
   row: Readonly<Record<string, unknown>>,
   identity: unknown,
+  primaryKey: string,
 ): boolean | undefined {
-  return hasRecordKey(row, 'id') ? rowIdentity(row) === identity : undefined
+  return hasRecordKey(row, primaryKey) ? rowIdentity(row, primaryKey) === identity : undefined
 }
 
 export function matchesPatchedExactRowIdentity(
   row: Readonly<Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
   identity: unknown,
+  primaryKey: string,
 ): boolean | undefined {
-  if (hasRecordKey(values, 'id')) {
-    return values.id === identity
+  if (hasRecordKey(values, primaryKey)) {
+    return values[primaryKey] === identity
   }
 
-  return matchesExactRowIdentity(row, identity)
+  return matchesExactRowIdentity(row, identity, primaryKey)
 }
 
 export function exactIdsDiffer(
@@ -36,13 +38,14 @@ export function exactIdsDiffer(
 export function rowsContainExactId(
   rows: readonly Readonly<Record<string, unknown>>[],
   exactId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  primaryKey: string,
 ): boolean | undefined {
   if (exactId === NO_EXACT_ID_PREDICATE) {
     return undefined
   }
 
   for (const row of rows) {
-    const matches = matchesExactRowIdentity(row, exactId)
+    const matches = matchesExactRowIdentity(row, exactId, primaryKey)
     if (typeof matches === 'undefined') {
       return undefined
     }
@@ -58,6 +61,7 @@ export function rowsContainExactId(
 export function mutationRowsContainExactId(
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
   exactId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  primaryKey: string,
 ): boolean | undefined {
-  return rowsContainExactId(rows ?? EMPTY_RECORD_ROWS, exactId)
+  return rowsContainExactId(rows ?? EMPTY_RECORD_ROWS, exactId, primaryKey)
 }

@@ -4,6 +4,7 @@ import {
 } from './query-metadata'
 import {
   NO_EXACT_ID_PREDICATE,
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
 } from './predicate-matching'
 import {
@@ -112,6 +113,7 @@ function exactRowBackfillQueriesShareScope(
     && readQueryExactIdPredicateValue(candidate) !== NO_EXACT_ID_PREDICATE
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
+    && readPrimaryKey(query) === readPrimaryKey(candidate)
     && selectionsEqual(query.selections ?? [], candidate.selections ?? [])
 }
 
@@ -163,6 +165,8 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(query.connectionName)
     + ',"exactRowIds":'
     + stableStringify(values)
+    + ',"primaryKey":'
+    + stableStringify(readPrimaryKey(query))
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
@@ -179,23 +183,24 @@ async function fetchGroupedExactRowBackfill(
     return undefined
   }
 
+  const primaryKey = readPrimaryKey(query)
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   const selections = query.selections ?? []
   const usesHiddenIdentity = selections.length > 0
   if (usesHiddenIdentity) {
     builder = builder.select(...[
       ...selections.map(createBackfillSelection),
-      `id as ${GROUPED_ROW_ID_ALIAS}`,
+      `${primaryKey} as ${GROUPED_ROW_ID_ALIAS}`,
     ])
   }
 
   const rows = await builder
-    .where('id', 'in', values)
+    .where(primaryKey, 'in', values)
     .get()
 
   const rowsById = new Map<unknown, BackfillRows>()
   for (const row of rows) {
-    const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row.id
+    const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey]
     if (typeof id === 'undefined') {
       return undefined
     }

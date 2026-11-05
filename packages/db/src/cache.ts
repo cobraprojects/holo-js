@@ -238,6 +238,7 @@ export interface DatabaseQueryObservation {
   readonly patchable: boolean
   readonly pagination?: DatabaseQueryPaginationObservation
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
   readonly relation?: DatabaseQueryRelationObservation
   readonly result?: unknown
   readonly resultPath?: readonly DatabaseQueryResultPathSegment[]
@@ -299,6 +300,7 @@ export interface DatabaseMutationEvent {
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
+  readonly primaryKey?: string
   readonly rows?: readonly Readonly<Record<string, unknown>>[]
   readonly values?: Readonly<Record<string, unknown>>
 }
@@ -1301,15 +1303,6 @@ function getColumnName(column: string): string {
   return column.split('.').at(-1)!
 }
 
-function getPrimaryKeyColumn(plan: SelectQueryPlan): string {
-  const columns = plan.source.table?.columns
-  if (!columns) {
-    return 'id'
-  }
-
-  return Object.values(columns).find(column => column.primaryKey)?.name ?? 'id'
-}
-
 function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
   const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   if (!table) return 'id'
@@ -1592,13 +1585,14 @@ function hasRequiredProjectionSelection(
   return selections.some(selection => selection.column === column && selection.resultKey === column)
 }
 
-function isExactPrimaryKeySingleResultProjection(plan: SelectQueryPlan): boolean {
+function isExactPrimaryKeySingleResultProjection(plan: SelectQueryPlan, primaryKey: string): boolean {
   return plan.limit === 1
-    && typeof findExactPrimaryKeyValue(plan.predicates, getPrimaryKeyColumn(plan)) !== 'undefined'
+    && typeof findExactPrimaryKeyValue(plan.predicates, primaryKey) !== 'undefined'
 }
 
 function isPatchableProjectionObservation(
   plan: SelectQueryPlan,
+  primaryKey: string,
   selections: readonly DatabaseQuerySelectionObservation[],
   predicates: readonly DatabaseQueryPredicateObservation[],
   orderBy: readonly DatabaseQueryOrderObservation[],
@@ -1611,12 +1605,12 @@ function isPatchableProjectionObservation(
     return true
   }
 
-  const needsProjectedPrimaryKey = !isExactPrimaryKeySingleResultProjection(plan)
+  const needsProjectedPrimaryKey = !isExactPrimaryKeySingleResultProjection(plan, primaryKey)
   const requiredColumns = new Set<string>([
     ...orderBy.map(order => order.column),
   ])
   if (needsProjectedPrimaryKey) {
-    requiredColumns.add(getPrimaryKeyColumn(plan))
+    requiredColumns.add(primaryKey)
   }
 
   for (const column of requiredColumns) {
@@ -1784,7 +1778,11 @@ function isPatchableGroupedAggregateObservation(plan: SelectQueryPlan): boolean 
     && plan.predicates.every(predicate => isPatchablePredicateObservation(predicate))
 }
 
-function isPatchableQueryObservation(plan: SelectQueryPlan): boolean {
+function isPatchableQueryObservation(plan: SelectQueryPlan, primaryKey: string | undefined): boolean {
+  if (primaryKey === undefined) {
+    return false
+  }
+
   const predicates = collectQueryPredicateObservations(plan.predicates)
   const orderBy = collectQueryOrderObservations(plan)
   const selections = collectQuerySelectionObservations(plan)
@@ -1798,7 +1796,7 @@ function isPatchableQueryObservation(plan: SelectQueryPlan): boolean {
     && plan.having.length === 0
     && plan.joins.length === 0
     && isPatchableOffsetObservation(plan, orderBy)
-    && isPatchableProjectionObservation(plan, selections, predicates, orderBy)
+    && isPatchableProjectionObservation(plan, primaryKey, selections, predicates, orderBy)
     && plan.unions.length === 0
     && plan.orderBy.every(order => order.kind === 'column')
     && plan.predicates.every(predicate => isPatchablePredicateObservation(predicate)))
@@ -1897,10 +1895,11 @@ function createDatabaseQueryObservationFromPlan(
   connectionName: string,
   dependencies: readonly string[],
   result?: unknown,
-  patchable = isPatchableQueryObservation(plan),
+  patchable?: boolean,
   groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
+  const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
   return Object.freeze({
     connectionName,
     belongsToHydrations: undefined,
@@ -1911,9 +1910,10 @@ function createDatabaseQueryObservationFromPlan(
     limit: plan.limit,
     offset: plan.offset,
     orderBy: collectQueryOrderObservations(plan),
-    patchable,
+    patchable: patchable ?? isPatchableQueryObservation(plan, primaryKey),
     pagination: undefined,
     predicates: collectQueryPredicateObservations(plan.predicates),
+    primaryKey,
     result,
     selections: collectQuerySelectionObservations(plan),
   })
@@ -1958,7 +1958,7 @@ export function createDatabaseQueryFallbackObservation(
 export function createDatabaseMutationEvent(
   kind: DatabaseMutationEvent['kind'],
   connectionName: string,
-  tableName: string,
+  source: Pick<QuerySource, 'tableName' | 'table'>,
   predicates: readonly QueryPredicateNode[] = [],
   values?: Readonly<Record<string, unknown>>,
   rows?: readonly Readonly<Record<string, unknown>>[],
@@ -1966,10 +1966,11 @@ export function createDatabaseMutationEvent(
 ): DatabaseMutationEvent {
   return Object.freeze({
     connectionName,
-    tableName,
+    tableName: source.tableName,
     kind,
     predicates: collectQueryPredicateObservations(predicates),
     previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
+    primaryKey: resolveRowDependencyKey(source, connectionName),
     rows: rows ? Object.freeze([...rows]) : undefined,
     values,
   })

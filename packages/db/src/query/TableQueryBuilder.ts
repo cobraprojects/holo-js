@@ -3260,7 +3260,7 @@ export class TableQueryBuilder<
         createTableCacheDependency(connectionName, this.source.tableName),
         createTableRowWildcardCacheDependency(connectionName, this.source.tableName),
       ],
-      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source.tableName)] : [],
+      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source)] : [],
     )
   }
 
@@ -3275,20 +3275,23 @@ export class TableQueryBuilder<
       return
     }
 
+    const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(this.source.table)
     const mutations = hasInvalidationListeners
       ? [
           createDatabaseMutationEvent(
             kind,
             this.connection.getConnectionName(),
-            this.source.tableName,
+            this.source,
             [],
             undefined,
             rows.length === 1
               && typeof lastInsertId !== 'undefined'
-              && !Object.prototype.hasOwnProperty.call(rows[0], 'id')
+              && typeof primaryKey !== 'undefined'
+              && otherPrimaryKeys.length === 0
+              && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
               ? Object.freeze([Object.freeze({
                   ...rows[0],
-                  id: lastInsertId,
+                  [primaryKey]: lastInsertId,
                 })])
               : rows,
             previousRows,
@@ -3335,7 +3338,7 @@ export class TableQueryBuilder<
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
           this.connection.getConnectionName(),
-          this.source.tableName,
+          this.source,
           this.plan.predicates,
           hasValues ? values : undefined,
           capturedRows?.rows,
@@ -3369,7 +3372,7 @@ export class TableQueryBuilder<
       return createDatabaseMutationEvent(
         'update',
         this.connection.getConnectionName(),
-        this.source.tableName,
+        this.source,
         primaryKeys.map(key => ({ kind: 'comparison' as const, column: key, operator: '=', value: previousRow?.[key] ?? row[key] })),
         Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
         [row],

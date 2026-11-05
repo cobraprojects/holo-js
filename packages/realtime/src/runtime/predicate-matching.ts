@@ -9,6 +9,7 @@ export type PredicateMatchContext = {
   readonly firstPredicate?: DatabaseQueryPredicateObservation
   readonly predicateCount: number
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
 }
 
 export type PredicateMutation = {
@@ -16,6 +17,7 @@ export type PredicateMutation = {
   readonly firstPredicate?: DatabaseQueryPredicateObservation
   readonly predicateCount?: number
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
   readonly values?: Readonly<Record<string, unknown>>
   readonly valueKeys?: readonly string[]
 }
@@ -23,6 +25,7 @@ export type PredicateMutation = {
 export type PredicateQuery = {
   readonly exactId?: unknown | typeof NO_EXACT_ID_PREDICATE
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
 }
 
 export const NO_EXACT_ID_PREDICATE = Symbol('no exact id predicate')
@@ -215,12 +218,14 @@ export function matchesPredicates(
 export function createPredicateMatchContext(
   predicates: readonly DatabaseQueryPredicateObservation[],
   exactId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  primaryKey: string,
 ): PredicateMatchContext {
   return {
     exactId,
     firstPredicate: predicates[0],
     predicateCount: predicates.length,
     predicates,
+    primaryKey,
   }
 }
 
@@ -233,15 +238,21 @@ export function createMutationPredicateMatchContext(
     firstPredicate: readMutationFirstPredicate(mutation),
     predicateCount: readMutationPredicateCount(mutation),
     predicates: mutation.predicates,
+    primaryKey: readPrimaryKey(mutation),
   }
+}
+
+export function readPrimaryKey(source: { readonly primaryKey?: string }): string {
+  return source.primaryKey ?? 'id'
 }
 
 function readExactIdPredicateValue(
   predicates: readonly DatabaseQueryPredicateObservation[],
+  primaryKey: string,
 ): unknown | typeof NO_EXACT_ID_PREDICATE {
   let exactId: unknown | typeof NO_EXACT_ID_PREDICATE = NO_EXACT_ID_PREDICATE
   for (const predicate of predicates) {
-    if (predicate.column !== 'id' || predicate.operator !== '=') {
+    if (predicate.column !== primaryKey || predicate.operator !== '=') {
       continue
     }
 
@@ -256,13 +267,18 @@ function readExactIdPredicateValue(
 }
 
 export function readQueryExactIdPredicateValue(query: PredicateQuery): unknown | typeof NO_EXACT_ID_PREDICATE {
-  return Object.prototype.hasOwnProperty.call(query, 'exactId') ? query.exactId : readExactIdPredicateValue(query.predicates)
+  return Object.prototype.hasOwnProperty.call(query, 'exactId')
+    ? query.exactId
+    : readExactIdPredicateValue(query.predicates, readPrimaryKey(query))
 }
 
-export function readMutationExactIdPredicateValue(mutation: PredicateMutation): unknown | typeof NO_EXACT_ID_PREDICATE {
-  return Object.prototype.hasOwnProperty.call(mutation, 'exactId')
+export function readMutationExactIdPredicateValue(
+  mutation: PredicateMutation,
+  primaryKey = readPrimaryKey(mutation),
+): unknown | typeof NO_EXACT_ID_PREDICATE {
+  return Object.prototype.hasOwnProperty.call(mutation, 'exactId') && readPrimaryKey(mutation) === primaryKey
     ? mutation.exactId
-    : readExactIdPredicateValue(mutation.predicates)
+    : readExactIdPredicateValue(mutation.predicates, primaryKey)
 }
 
 export function readMutationValueKeys(mutation: PredicateMutation): readonly string[] {

@@ -1,0 +1,201 @@
+import { clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
+import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
+
+type Row = Readonly<Record<string, unknown>>
+
+const adapter = createSQLiteAdapter({ filename: ':memory:' })
+
+beforeEach(async () => {
+  await adapter.initialize()
+  const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+})
+
+afterEach(async () => {
+  resetRealtimeRuntime()
+  resetDB()
+  clearGeneratedTables()
+  resetDatabaseDependencyInvalidationListeners()
+  await adapter.disconnect()
+})
+
+function mutate(handler: Parameters<typeof defineRealtimeMutation>[0]['handler']) {
+  return executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+}
+
+async function subscribe<TResult>(read: (db: Parameters<Parameters<typeof defineRealtimeQuery>[0]['handler']>[0]['db']) => Promise<TResult>) {
+  const snapshots: TResult[] = []
+  let reads = 0
+  const query = defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
+    reads += 1
+    return await read(db)
+  } })
+  await subscribeRealtimeQuery(query, {}, { onData: (snapshot) => { snapshots.push(snapshot.data as TResult) }, onError: (error) => { throw error } })
+  return { snapshots, reads: () => reads }
+}
+
+describe('a Generated-schema table keyed on code', () => {
+  beforeEach(async () => {
+    registerGeneratedTables({
+      countries: defineGeneratedTable('countries', {
+        code: column.string().primaryKey(),
+        id: column.integer(),
+        name: column.string(),
+      }),
+    })
+    await adapter.execute('CREATE TABLE countries (code TEXT PRIMARY KEY, id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO countries VALUES ('DE', 1, 'Germany'), ('FR', 1, 'France'), ('IT', 2, 'Italy')")
+  })
+
+  it('patches the changed row of a list subscription', async () => {
+    const live = await subscribe(db => db.table('countries').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'FR').update({ name: 'République' })
+    })
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').delete()
+    })
+
+    expect(live.snapshots).toEqual([
+      [
+        { code: 'DE', id: 1, name: 'Germany' },
+        { code: 'FR', id: 1, name: 'France' },
+        { code: 'IT', id: 2, name: 'Italy' },
+      ],
+      [
+        { code: 'DE', id: 1, name: 'Germany' },
+        { code: 'FR', id: 1, name: 'République' },
+        { code: 'IT', id: 2, name: 'Italy' },
+      ],
+      [
+        { code: 'FR', id: 1, name: 'République' },
+        { code: 'IT', id: 2, name: 'Italy' },
+      ],
+    ])
+    expect(live.reads()).toBe(1)
+  })
+
+  it('patches the changed row of a projected list subscription', async () => {
+    const live = await subscribe(db => db.table('countries').select('code', 'name').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'FR').update({ name: 'République' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { code: 'DE', name: 'Germany' },
+      { code: 'FR', name: 'République' },
+      { code: 'IT', name: 'Italy' },
+    ])
+    expect(live.reads()).toBe(1)
+  })
+
+  it('shows inserted rows in a list subscription', async () => {
+    const live = await subscribe(db => db.table('countries').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').insert({ code: 'ES', id: 1, name: 'Spain' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { code: 'DE', id: 1, name: 'Germany' },
+      { code: 'ES', id: 1, name: 'Spain' },
+      { code: 'FR', id: 1, name: 'France' },
+      { code: 'IT', id: 2, name: 'Italy' },
+    ])
+  })
+
+  it('patches the subscribed row of a detail subscription and ignores other rows', async () => {
+    const live = await subscribe(db => db.table('countries').where('code', 'FR').first())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').update({ name: 'Deutschland' })
+    })
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'FR').update({ name: 'République' })
+    })
+
+    expect(live.snapshots).toEqual([
+      { code: 'FR', id: 1, name: 'France' },
+      { code: 'FR', id: 1, name: 'République' },
+    ])
+    expect(live.reads()).toBe(1)
+  })
+
+  it('patches a list subscription when the changed row is matched by its id column', async () => {
+    const live = await subscribe(db => db.table('countries').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('id', 2).update({ name: 'Italia' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { code: 'DE', id: 1, name: 'Germany' },
+      { code: 'FR', id: 1, name: 'France' },
+      { code: 'IT', id: 2, name: 'Italia' },
+    ])
+  })
+})
+
+describe('Generated-schema tables without a single-column primary key', () => {
+  it('re-runs a composite-key list subscription instead of patching', async () => {
+    registerGeneratedTables({
+      seats: defineGeneratedTable('seats', {
+        id: column.integer(),
+        row_no: column.integer().primaryKey(),
+        seat_no: column.integer().primaryKey(),
+        label: column.string(),
+      }),
+    })
+    await adapter.execute('CREATE TABLE seats (id INTEGER NOT NULL, row_no INTEGER NOT NULL, seat_no INTEGER NOT NULL, label TEXT NOT NULL, PRIMARY KEY (row_no, seat_no))')
+    await adapter.execute("INSERT INTO seats VALUES (1, 1, 1, 'aisle'), (1, 1, 2, 'window')")
+    const live = await subscribe(db => db.table('seats').orderBy('seat_no').get())
+    await mutate(async ({ db }) => {
+      await db.table('seats').where('row_no', 1).where('seat_no', 2).update({ label: 'middle' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { id: 1, row_no: 1, seat_no: 1, label: 'aisle' },
+      { id: 1, row_no: 1, seat_no: 2, label: 'middle' },
+    ])
+    expect(live.reads()).toBe(2)
+  })
+
+  it('re-runs a keyless list subscription instead of patching', async () => {
+    registerGeneratedTables({
+      events: defineGeneratedTable('events', {
+        id: column.integer(),
+        name: column.string(),
+      }, { primaryKeyColumns: [] }),
+    })
+    await adapter.execute('CREATE TABLE events (id INTEGER NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO events VALUES (1, 'opened'), (2, 'closed')")
+    const live = await subscribe(db => db.table('events').orderBy('name').get())
+    await mutate(async ({ db }) => {
+      await db.table('events').where('name', 'opened').update({ name: 'reopened' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { id: 2, name: 'closed' },
+      { id: 1, name: 'reopened' },
+    ])
+    expect(live.reads()).toBe(2)
+  })
+})
+
+describe('a Generated-schema table keyed on id', () => {
+  it('keeps patching rows by id', async () => {
+    registerGeneratedTables({
+      posts: defineGeneratedTable('posts', { id: column.id(), title: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO posts VALUES (1, 'First'), (2, 'Second')")
+    const live = await subscribe(db => db.table('posts').orderBy('id').get())
+    await mutate(async ({ db }) => {
+      await db.table('posts').where('id', 2).update({ title: 'Updated' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([{ id: 1, title: 'First' }, { id: 2, title: 'Updated' }])
+    expect(live.reads()).toBe(1)
+  })
+})

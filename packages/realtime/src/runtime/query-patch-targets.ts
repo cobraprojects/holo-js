@@ -3,6 +3,7 @@ import {
 } from './dependencies'
 import {
   hasRecordKey,
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
 } from './predicate-matching'
 import {
@@ -120,6 +121,7 @@ export function createPatchedQueryObservation(
     patchPlan: query.patchPlan?.resultPathKey === resultPathKey ? query.patchPlan : undefined,
     predicateColumns: readQueryPredicateColumns(query),
     predicates: query.predicates,
+    primaryKey: query.primaryKey,
     relation: query.relation,
     projectedIdentityColumn: readQueryProjectedIdentityColumn(query),
     result,
@@ -127,7 +129,7 @@ export function createPatchedQueryObservation(
     resultPath: query.resultPath ?? EMPTY_RESULT_PATH,
     resultPathKey,
     relatedHydrations: query.relatedHydrations,
-    rowIdentityIndex: createQueryRowIdentityIndex(result),
+    rowIdentityIndex: createQueryRowIdentityIndex(result, readPrimaryKey(query)),
     rowWindowMode: readQueryRowWindowMode(query),
     rowBackfillKeyPrefix: query.rowBackfillKeyPrefix,
     scalarColumn: query.scalarColumn,

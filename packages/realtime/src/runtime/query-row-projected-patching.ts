@@ -4,6 +4,7 @@ import type {
 import {
   NO_EXACT_ID_PREDICATE,
   hasRecordKey,
+  readPrimaryKey,
 } from './predicate-matching'
 import {
   hasQueryOrderBy,
@@ -228,7 +229,7 @@ function tryApplyProjectedExactMutationValues(
     return undefined
   }
 
-  if (hasRecordKey(mutation.values, 'id') && mutation.values.id !== context.exactQueryId) {
+  if (hasRecordKey(mutation.values, readPrimaryKey(context)) && mutation.values[readPrimaryKey(context)] !== context.exactQueryId) {
     return { patched: true, rows: EMPTY_RECORD_ROWS }
   }
 

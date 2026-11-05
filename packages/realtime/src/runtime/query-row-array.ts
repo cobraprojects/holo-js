@@ -1,3 +1,4 @@
+import { readPrimaryKey } from './predicate-matching'
 import {
   readQueryRowIdentityIndex,
   rowIdentity,
@@ -180,6 +181,7 @@ function readIdentityRowIndexes(
 export function removeRowsByIdentityValues(
   rows: readonly Readonly<Record<string, unknown>>[],
   removedIdentities: ReadonlySet<unknown>,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] {
   let nextRows: ScannedRowsState | undefined
   for (let index = 0; index < rows.length; index += 1) {
@@ -188,7 +190,7 @@ export function removeRowsByIdentityValues(
       continue
     }
 
-    if (!removedIdentities.has(rowIdentity(row))) {
+    if (!removedIdentities.has(rowIdentity(row, primaryKey))) {
       if (nextRows) {
         appendScannedRow(nextRows, rows, index, row)
       }
@@ -206,13 +208,14 @@ export function removeRowsByIdentityValuesLazily(
   rows: readonly Readonly<Record<string, unknown>>[],
   nextRows: Readonly<Record<string, unknown>>[] | undefined,
   removedIdentities: ReadonlySet<unknown>,
+  primaryKey: string,
 ): LazyRowsMutationResult {
   const targetRows = nextRows ?? rows
   if (nextRows) {
     let writeIndex = 0
     for (let readIndex = 0; readIndex < nextRows.length; readIndex += 1) {
       const row = nextRows[readIndex]
-      if (!row || removedIdentities.has(rowIdentity(row))) {
+      if (!row || removedIdentities.has(rowIdentity(row, primaryKey))) {
         continue
       }
 
@@ -231,7 +234,7 @@ export function removeRowsByIdentityValuesLazily(
       continue
     }
 
-    if (removedIdentities.has(rowIdentity(row))) {
+    if (removedIdentities.has(rowIdentity(row, primaryKey))) {
       mutableRows ??= createScannedRowsState()
       skipScannedRow(mutableRows, targetRows, index)
       continue
@@ -249,6 +252,7 @@ export function removeRowsByTwoIdentityValues(
   rows: readonly Readonly<Record<string, unknown>>[],
   firstRemovedIdentity: unknown,
   secondRemovedIdentity: unknown,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] {
   let nextRows: ScannedRowsState | undefined
   for (let index = 0; index < rows.length; index += 1) {
@@ -257,7 +261,7 @@ export function removeRowsByTwoIdentityValues(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (identity !== firstRemovedIdentity && identity !== secondRemovedIdentity) {
       if (nextRows) {
         appendScannedRow(nextRows, rows, index, row)
@@ -277,6 +281,7 @@ export function removeRowsByTwoIdentityValuesLazily(
   nextRows: Readonly<Record<string, unknown>>[] | undefined,
   firstRemovedIdentity: unknown,
   secondRemovedIdentity: unknown,
+  primaryKey: string,
 ): LazyRowsMutationResult {
   const targetRows = nextRows ?? rows
   if (nextRows) {
@@ -287,7 +292,7 @@ export function removeRowsByTwoIdentityValuesLazily(
         continue
       }
 
-      const identity = rowIdentity(row)
+      const identity = rowIdentity(row, primaryKey)
       if (identity === firstRemovedIdentity || identity === secondRemovedIdentity) {
         continue
       }
@@ -307,7 +312,7 @@ export function removeRowsByTwoIdentityValuesLazily(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (identity === firstRemovedIdentity || identity === secondRemovedIdentity) {
       mutableRows ??= createScannedRowsState()
       skipScannedRow(mutableRows, targetRows, index)
@@ -329,7 +334,7 @@ export function removeRowsByIdentityValuesFromQueryRows(
 ): readonly Readonly<Record<string, unknown>>[] {
   const rowIdentityIndex = readQueryRowIdentityIndex(query, rows)
   if (!rowIdentityIndex) {
-    return removeRowsByIdentityValues(rows, removedIdentities)
+    return removeRowsByIdentityValues(rows, removedIdentities, readPrimaryKey(query))
   }
 
   return removeRowsByIndexes(rows, readIdentityRowIndexes(rowIdentityIndex, removedIdentities))
@@ -349,7 +354,7 @@ export function removeRowsByIdentityValuesFromQueryRowsLazily(
     }
   }
 
-  return removeRowsByIdentityValuesLazily(rows, nextRows, removedIdentities)
+  return removeRowsByIdentityValuesLazily(rows, nextRows, removedIdentities, readPrimaryKey(query))
 }
 
 export function removeRowsByTwoIdentityValuesFromQueryRows(
@@ -360,7 +365,7 @@ export function removeRowsByTwoIdentityValuesFromQueryRows(
 ): readonly Readonly<Record<string, unknown>>[] {
   const rowIdentityIndex = readQueryRowIdentityIndex(query, rows)
   if (!rowIdentityIndex) {
-    return removeRowsByTwoIdentityValues(rows, firstRemovedIdentity, secondRemovedIdentity)
+    return removeRowsByTwoIdentityValues(rows, firstRemovedIdentity, secondRemovedIdentity, readPrimaryKey(query))
   }
 
   return removeRowsByIndexes(
@@ -384,7 +389,7 @@ export function removeRowsByTwoIdentityValuesFromQueryRowsLazily(
     }
   }
 
-  return removeRowsByTwoIdentityValuesLazily(rows, nextRows, firstRemovedIdentity, secondRemovedIdentity)
+  return removeRowsByTwoIdentityValuesLazily(rows, nextRows, firstRemovedIdentity, secondRemovedIdentity, readPrimaryKey(query))
 }
 
 export function removeRowByIdentityValueFromQueryRows(
@@ -394,7 +399,7 @@ export function removeRowByIdentityValueFromQueryRows(
 ): readonly Readonly<Record<string, unknown>>[] {
   const rowIdentityIndex = readQueryRowIdentityIndex(query, rows)
   if (!rowIdentityIndex) {
-    return removeRowByIdentityValue(rows, removedIdentity)
+    return removeRowByIdentityValue(rows, removedIdentity, readPrimaryKey(query))
   }
 
   const rowIndex = rowIdentityIndex.get(removedIdentity)
@@ -415,12 +420,13 @@ export function removeRowByIdentityValueFromQueryRowsLazily(
     }
   }
 
-  return removeRowByIdentityValueLazily(rows, nextRows, removedIdentity)
+  return removeRowByIdentityValueLazily(rows, nextRows, removedIdentity, readPrimaryKey(query))
 }
 
 function removeRowByIdentityValue(
   rows: readonly Readonly<Record<string, unknown>>[],
   removedIdentity: unknown,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] {
   let nextRows: ScannedRowsState | undefined
   for (let index = 0; index < rows.length; index += 1) {
@@ -429,7 +435,7 @@ function removeRowByIdentityValue(
       continue
     }
 
-    if (rowIdentity(row) !== removedIdentity) {
+    if (rowIdentity(row, primaryKey) !== removedIdentity) {
       if (nextRows) {
         appendScannedRow(nextRows, rows, index, row)
       }
@@ -447,13 +453,14 @@ function removeRowByIdentityValueLazily(
   rows: readonly Readonly<Record<string, unknown>>[],
   nextRows: Readonly<Record<string, unknown>>[] | undefined,
   removedIdentity: unknown,
+  primaryKey: string,
 ): LazyRowsMutationResult {
   const targetRows = nextRows ?? rows
   if (nextRows) {
     let writeIndex = 0
     for (let readIndex = 0; readIndex < nextRows.length; readIndex += 1) {
       const row = nextRows[readIndex]
-      if (!row || rowIdentity(row) === removedIdentity) {
+      if (!row || rowIdentity(row, primaryKey) === removedIdentity) {
         continue
       }
 
@@ -472,7 +479,7 @@ function removeRowByIdentityValueLazily(
       continue
     }
 
-    if (rowIdentity(row) === removedIdentity) {
+    if (rowIdentity(row, primaryKey) === removedIdentity) {
       mutableRows ??= createScannedRowsState()
       skipScannedRow(mutableRows, targetRows, index)
       continue

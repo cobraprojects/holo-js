@@ -5,6 +5,7 @@ import {
   matchesPatchedPredicate,
   matchesPredicates,
   readMutationValueKeys,
+  readPrimaryKey,
   valueKeysChangeColumns,
 } from './predicate-matching'
 import {
@@ -227,7 +228,7 @@ function applyCursorDeleteMutation(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, readPrimaryKey(query))
     if (typeof identity === 'undefined') {
       return undefined
     }
@@ -237,7 +238,7 @@ function applyCursorDeleteMutation(
       return undefined
     }
 
-    const remainingRows = removeCursorRowByIdentity(nextRows, identity)
+    const remainingRows = removeCursorRowByIdentity(nextRows, identity, readPrimaryKey(query))
     if (remainingRows) {
       nextRows = remainingRows
     }
@@ -278,7 +279,7 @@ function applyCursorPatchedPreviousRowsMutation(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, readPrimaryKey(query))
     if (typeof identity === 'undefined') {
       return undefined
     }
@@ -289,7 +290,7 @@ function applyCursorPatchedPreviousRowsMutation(
         return undefined
       }
 
-      const remainingRows = removeCursorRowByIdentity(nextRows, identity)
+      const remainingRows = removeCursorRowByIdentity(nextRows, identity, readPrimaryKey(query))
       if (remainingRows) {
         nextRows = remainingRows
       }
@@ -301,7 +302,7 @@ function applyCursorPatchedPreviousRowsMutation(
       ...row,
       ...mutation.values,
     })
-    const rowIndex = nextRows.findIndex(candidate => rowIdentity(candidate) === identity)
+    const rowIndex = nextRows.findIndex(candidate => rowIdentity(candidate, readPrimaryKey(query)) === identity)
     if (!previousMatches && nextMatches) {
       if (rowIndex >= 0) {
         return undefined
@@ -358,8 +359,9 @@ function matchesPatchedPredicates(
 function removeCursorRowByIdentity(
   rows: readonly Readonly<Record<string, unknown>>[],
   identity: unknown,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
-  const index = rows.findIndex(row => rowIdentity(row) === identity)
+  const index = rows.findIndex(row => rowIdentity(row, primaryKey) === identity)
   if (index < 0) {
     return undefined
   }

@@ -3,6 +3,7 @@ import type {
 } from './dependencies'
 import {
   matchesPredicates,
+  readPrimaryKey,
 } from './predicate-matching'
 import {
   UNCHANGED_QUERY_RESULT,
@@ -129,7 +130,7 @@ function projectCursorVisibleRows(
   }
 
   const previousRows = isRecordArray(query.result) ? query.result : []
-  const previousById = new Map(previousRows.map(row => [rowIdentity(row), row]))
+  const previousById = new Map(previousRows.map(row => [rowIdentity(row, readPrimaryKey(context)), row]))
   const projectedRows: Readonly<Record<string, unknown>>[] = []
   for (const row of rows) {
     const projected = projectRowWithContext(context, row)
@@ -137,7 +138,7 @@ function projectCursorVisibleRows(
       return undefined
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, readPrimaryKey(context))
     const previous = typeof identity === 'undefined' ? undefined : previousById.get(identity)
     const resultKeys = Object.keys(projected)
     const unchanged = previous
@@ -215,6 +216,7 @@ function applyCursorWrapperDeleteMutation(
     return undefined
   }
 
+  const primaryKey = readPrimaryKey(query)
   let nextRows = rows
   let nextRowCount = rowCount
   let changed = false
@@ -228,7 +230,7 @@ function applyCursorWrapperDeleteMutation(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (typeof identity === 'undefined') {
       return undefined
     }
@@ -238,7 +240,7 @@ function applyCursorWrapperDeleteMutation(
       return undefined
     }
 
-    const remainingRows = removeCursorWrapperRowByIdentity(nextRows, identity)
+    const remainingRows = removeCursorWrapperRowByIdentity(nextRows, identity, primaryKey)
     if (remainingRows) {
       nextRows = remainingRows
     }
@@ -262,15 +264,16 @@ function applyCursorWrapperReturnedRowsMutation(
     return undefined
   }
 
+  const primaryKey = readPrimaryKey(query)
   let nextRows = rows
   let changed = false
   for (const row of mutation.rows) {
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (typeof identity === 'undefined') {
       return undefined
     }
 
-    const index = nextRows.findIndex(candidate => rowIdentity(candidate) === identity)
+    const index = nextRows.findIndex(candidate => rowIdentity(candidate, primaryKey) === identity)
     const matches = matchesPredicates(row, query.predicates)
     if (typeof matches === 'undefined') {
       return undefined
@@ -309,8 +312,9 @@ function applyCursorWrapperReturnedRowsMutation(
 function removeCursorWrapperRowByIdentity(
   rows: readonly Readonly<Record<string, unknown>>[],
   identity: unknown,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
-  const index = rows.findIndex(row => rowIdentity(row) === identity)
+  const index = rows.findIndex(row => rowIdentity(row, primaryKey) === identity)
   if (index < 0) {
     return undefined
   }

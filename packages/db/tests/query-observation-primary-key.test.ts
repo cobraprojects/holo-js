@@ -1,0 +1,73 @@
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { DB, clearGeneratedTables, column, queryCacheInternals, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
+import type { DatabaseMutationEvent } from '../src/cache'
+import { defineTable } from './support/internal'
+import { openDatabase } from './support/database'
+
+async function openTable(name: string, columns: Parameters<typeof defineTable>[1], options: Parameters<typeof defineTable>[2] = {}, ddl: string) {
+  const { adapter } = await openDatabase('sqlite')
+  registerGeneratedTables({ [name]: defineTable(name, columns, options) })
+  onTestFinished(() => clearGeneratedTables())
+  await adapter.execute(ddl)
+}
+
+function observe(query: ReturnType<typeof DB.table>) {
+  return queryCacheInternals.createDatabaseQueryObservation(query.getPlan(), 'default', [])
+}
+
+function captureMutations(): DatabaseMutationEvent[] {
+  const mutations: DatabaseMutationEvent[] = []
+  onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
+  queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+    mutations.push(...event.mutations ?? [])
+  })
+  return mutations
+}
+
+describe('query observations and mutation events carry the table primary key', () => {
+  it('identifies rows of a table keyed on code by code', async () => {
+    await openTable('countries', { code: column.string().primaryKey(), id: column.integer(), name: column.string() }, {}, 'CREATE TABLE countries (code TEXT PRIMARY KEY, id INTEGER, name TEXT)')
+    await DB.table('countries').insert({ code: 'FR', id: 1, name: 'France' })
+    const mutations = captureMutations()
+
+    const list = observe(DB.table('countries').orderBy('name'))
+    const projected = observe(DB.table('countries').select('code', 'name').orderBy('name'))
+    const projectedWithoutKey = observe(DB.table('countries').select('id', 'name').orderBy('name'))
+    const detail = observe(DB.table('countries').select('name').where('code', 'FR').limit(1))
+    await DB.table('countries').where('code', 'FR').update({ name: 'République' })
+
+    expect([list, projected, projectedWithoutKey, detail].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
+      ['code', true],
+      ['code', true],
+      ['code', false],
+      ['code', true],
+    ])
+    expect(mutations.map(mutation => mutation.primaryKey)).toEqual(['code'])
+  })
+
+  it('makes composite-key and keyless table observations unpatchable', async () => {
+    await openTable('seats', { id: column.integer(), row_no: column.integer().primaryKey(), seat_no: column.integer().primaryKey() }, {}, 'CREATE TABLE seats (id INTEGER, row_no INTEGER, seat_no INTEGER, PRIMARY KEY (row_no, seat_no))')
+    await openTable('events', { id: column.integer(), name: column.string() }, { primaryKeyColumns: [] }, 'CREATE TABLE events (id INTEGER, name TEXT)')
+
+    expect([observe(DB.table('seats')), observe(DB.table('events'))].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
+      [undefined, false],
+      [undefined, false],
+    ])
+  })
+
+  it('keeps id as the key of tables without schema metadata', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    await adapter.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)')
+
+    expect([observe(DB.table('notes'))].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([['id', true]])
+  })
+
+  it('publishes an inserted row under its generated auto-increment key', async () => {
+    await openTable('tickets', { ticket_no: column.id(), label: column.string() }, {}, 'CREATE TABLE tickets (ticket_no INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT)')
+    const mutations = captureMutations()
+
+    await DB.table('tickets').insert({ label: 'first' })
+
+    expect(mutations.map(mutation => [mutation.primaryKey, mutation.rows])).toEqual([['ticket_no', [{ label: 'first', ticket_no: 1 }]]])
+  })
+})
