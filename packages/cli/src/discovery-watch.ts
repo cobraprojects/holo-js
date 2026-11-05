@@ -393,6 +393,9 @@ async function collectStartupPaths(
     || pluginWatches.some(watch => watch.packageRoot !== undefined && pathIsWithin(path, watch.packageRoot))
   const paths = new Set<string>()
   const pending = roots.filter(root => !isExcluded(root))
+  for (const root of pending) {
+    if (await stat(resolve(projectRoot, root)).catch(() => undefined)) paths.add(root)
+  }
   while (pending.length > 0) {
     const directory = pending.pop() as string
     const entries = await readdir(resolve(projectRoot, directory), { withFileTypes: true }).catch(() => [])
