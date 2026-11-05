@@ -110,7 +110,7 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       'counted through relations': (Author: Library['Author']) => Author.query().withCount('reviews').withCount('posts').orderBy('id').getJson(),
       'summed through relations': (Author: Library['Author']) => Author.query().withSum('reviews', 'id').withCount('posts').orderBy('id').getJson(),
       'nested in a relation callback': async (Author: Library['Author'], Post: Library['Post']) => ({
-        mentors: await Author.query().with('mentees', query => query.with('reviews')).where('id', 1).getJson(),
+        mentors: await Author.query().with('mentees', query => query.with('reviews', ordered).orderBy('id')).where('id', 1).getJson(),
         posts: await Post.query().orderBy('id').getJson(),
       }),
       'loading relations of the related rows': async (Author: Library['Author'], _Post: Library['Post'], _Review: Library['Review'], User: Library['User']) => ({

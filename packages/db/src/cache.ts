@@ -565,13 +565,13 @@ export function recordDatabaseQueryRefreshObservation(connectionName: string, ta
   }))
 }
 
-export function refreshTruncatedDatabaseQueryObservations(count: number): void {
+export function demoteDatabaseQueryObservationsToRefresh(count: number): void {
   const state = databaseDependencyCollector.getStore()
   if (!state) {
     return
   }
 
-  for (const observation of state.queries.slice(Math.max(0, count))) {
+  for (const observation of state.queries.slice(count)) {
     recordDatabaseQueryRefreshObservation(observation.connectionName, observation.tableName)
   }
 
