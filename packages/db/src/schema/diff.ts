@@ -169,19 +169,19 @@ async function resolveReferencedTable(
   if (ownerSchema === undefined) return referencedTableName
   const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
-  return canonicalTableName(tableLocations, ownerSchema, referencedSchema, referenced.table)
+  return canonicalTableName(tableLocations, owner.schema === undefined ? ownerSchema : undefined, referencedSchema, referenced.table)
 }
 
 async function canonicalTableName(
   tableLocations: TableLocator,
-  ownerSchema: string,
+  unqualifiedSchema: string | undefined,
   schemaName: string,
   tableName: string,
 ): Promise<string> {
   const location = await tableLocations.table(`${schemaName}.${tableName}`)
   const schema = location?.schema ?? schemaName
   const table = location?.table ?? tableName
-  return schema === ownerSchema ? table : `${schema}.${table}`
+  return schema === unqualifiedSchema ? table : `${schema}.${table}`
 }
 
 async function canonicalActualForeignKeys(
@@ -194,7 +194,7 @@ async function canonicalActualForeignKeys(
   if (ownerSchema === undefined) return foreignKeys
   return Promise.all(foreignKeys.map(async (foreignKey) => {
     const { schema = ownerSchema, table } = splitTablePath(foreignKey.table)
-    return { ...foreignKey, table: await canonicalTableName(tableLocations, ownerSchema, schema, table) }
+    return { ...foreignKey, table: await canonicalTableName(tableLocations, undefined, schema, table) }
   }))
 }
 

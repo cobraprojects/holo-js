@@ -184,6 +184,27 @@ describe('native schema diff', () => {
     })
   })
 
+  it('reports an unqualified reference that the search path cannot resolve on postgres', async () => {
+    const { schema, adapter } = await openDatabase('postgres')
+    const tenant = `holo_tenant_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => { await adapter.execute(`DROP SCHEMA IF EXISTS "${tenant}" CASCADE`) })
+    await adapter.execute(`CREATE SCHEMA "${tenant}"`)
+    await adapter.execute(`CREATE TABLE "${tenant}".customers (id BIGINT PRIMARY KEY)`)
+    await adapter.execute(`CREATE TABLE "${tenant}".orders (id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL REFERENCES "${tenant}".customers (id))`)
+    const orders = defineTable(`${tenant}.orders`, {
+      id: column.bigInteger().primaryKey(),
+      customer_id: column.bigInteger().references('id').on('customers'),
+    })
+
+    const diff = await diffSchema(schema, [orders])
+
+    expect(diff.tables[0]).toMatchObject({
+      missingForeignKeys: ['customer_id->customers.id'],
+      extraForeignKeys: [`customer_id->${tenant}.customers.id`],
+      hasChanges: true,
+    })
+  })
+
   it('resolves an unqualified foreign key reference through the whole search path on postgres', async () => {
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
     const first = `holo_first_${suffix}`
