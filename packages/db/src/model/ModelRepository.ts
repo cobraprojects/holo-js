@@ -155,6 +155,11 @@ function hasDefinition<TTable extends TableDefinition>(
   return 'definition' in reference
 }
 
+function loadedRelationJson<TTable extends TableDefinition>(entity: Entity<TTable>, relationName: string): unknown {
+  const loaded = entity.getRelation<unknown>(relationName)
+  return isEntity(loaded) ? loaded.toJSON() : null
+}
+
 function isEntity(value: unknown): value is Entity {
   return value instanceof Entity
 }
@@ -971,6 +976,7 @@ export class ModelRepository<
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
+          result: loadedRelationJson(entity, relationName),
         }, resultPath, 'limited'))
         continue
       }
@@ -1003,6 +1009,7 @@ export class ModelRepository<
           operator: '=' as const,
           value: parentKey,
         })]),
+        result: loadedRelationJson(entity, relationName),
         selections: [],
         tableName: related.definition.table.tableName,
       }), resultPath, 'limited'))

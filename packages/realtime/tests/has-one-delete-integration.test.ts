@@ -124,12 +124,15 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     expect(subscription.current.data).toEqual(await handler())
   })
 
-  it('keeps columns a handler removes from a hasOne row out of the next row', async () => {
+  it.each([
+    ['removes', (post: Record<string, unknown>) => { delete post.score }],
+    ['rewrites', (post: Record<string, unknown>) => { post.title = '[redacted]' }],
+  ] as const)('keeps fields a handler %s on a hasOne row hidden on the next row', async (_name, redact) => {
     const { db, posts, Author } = await openAuthors(driver)
     const handler = async () => {
       const authors = await db.model(Author).query().with({ post: query => query.orderBy('id') }).orderBy('id').getJson() as { post: Record<string, unknown> | null }[]
       for (const author of authors) {
-        if (author.post) delete author.post.score
+        if (author.post) redact(author.post)
       }
       return authors
     }
@@ -138,7 +141,6 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
 
     expect(subscription.current.data).toEqual(await handler())
-    expect(JSON.stringify(subscription.current.data)).not.toContain('"score"')
   })
 
   it('loads the next matching row for latestOfMany', async () => {
