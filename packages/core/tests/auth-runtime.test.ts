@@ -2847,23 +2847,32 @@ export async function prepareAuthUpdateInput(user, input) {
         const runtime = await createHolo(root, { envName: 'development' })
         await runtime.initialize()
         const schema = createSchemaService(DB.connection())
-        await schema.createTable('verification_users', table => {
-          table.id()
-          table.string('email')
-          table.timestamp('email_verified_at').nullable()
-        })
-        await DB.table('verification_users').insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
-        await createVerificationTokenTable()
-        const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
-        await expect(DB.transaction(() => runtime.auth!.verification.consume(token.plainTextToken))).rejects.toThrow('native save failed')
-        await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
-          id: 1, email: 'ava@example.com', email_verified_at: expect.anything(),
-        })
-        const databaseDeadline = new Date(Date.now() - 10_000)
-        vi.setSystemTime(Date.now() - 60_000)
-        const expired = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' }, { expiresAt: databaseDeadline })
-        await expect(runtime.auth!.verification.consume(expired.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
-        Reflect.deleteProperty(globalThis, fixtureKey)
+        const dropTables = async () => {
+          await schema.dropTable('email_verification_tokens')
+          await schema.dropTable('verification_users')
+        }
+        await dropTables()
+        try {
+          await schema.createTable('verification_users', table => {
+            table.id()
+            table.string('email')
+            table.timestamp('email_verified_at').nullable()
+          })
+          await DB.table('verification_users').insert({ id: 1, email: 'ava@example.com', email_verified_at: null })
+          await createVerificationTokenTable()
+          const token = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' })
+          await expect(DB.transaction(() => runtime.auth!.verification.consume(token.plainTextToken))).rejects.toThrow('native save failed')
+          await expect(runtime.auth!.verification.consume(token.plainTextToken)).resolves.toMatchObject({
+            id: 1, email: 'ava@example.com', email_verified_at: expect.anything(),
+          })
+          const databaseDeadline = new Date(Date.now() - 10_000)
+          vi.setSystemTime(Date.now() - 60_000)
+          const expired = await runtime.auth!.verification.create({ id: 1, email: 'ava@example.com' }, { expiresAt: databaseDeadline })
+          await expect(runtime.auth!.verification.consume(expired.plainTextToken)).rejects.toThrow('This verification link is invalid or has expired.')
+          Reflect.deleteProperty(globalThis, fixtureKey)
+        } finally {
+          await dropTables()
+        }
       },
     )
   })
