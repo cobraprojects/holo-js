@@ -2,7 +2,7 @@ import { assertValidTablePath } from '../identifiers'
 import { toTableDefinition } from './definitions'
 import { createMySQLSchemaReader } from './mysql'
 import { createPostgresSchemaReader } from './postgres'
-import { createSQLiteSchemaReader } from './sqlite'
+import { createSQLiteSchemaReader, qualifyWithMainSchema } from './sqlite'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { TableDefinition } from '../types'
 import type { DatabaseTableStructure, DialectSchemaReader, TableLocation } from './types'
@@ -71,4 +71,8 @@ export function locateTable(connection: DatabaseContext, tableName: string): Pro
 export function resolveReferencedTableSchema(connection: DatabaseContext, tableName: string, ownerSchema: string): Promise<string | undefined> {
   assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).resolveReferencedTableSchema(tableName, ownerSchema)
+}
+
+export function listedTablePath(connection: DatabaseContext, tableName: string): string {
+  return connection.getDialect().name === 'sqlite' ? qualifyWithMainSchema(tableName) : tableName
 }

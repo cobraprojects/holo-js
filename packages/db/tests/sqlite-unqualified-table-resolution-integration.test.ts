@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { holoRuntimeInternals, resetDB } from '../src'
+import { diffSchema, holoRuntimeInternals, resetDB } from '../src'
+import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
 
 async function openSQLite(statements: readonly string[]) {
@@ -243,5 +244,22 @@ describe('SQLite unqualified table resolution', () => {
 
     expect(columnsOf('items')).toEqual(['id', 'main_only'])
     expect(columnsOf('orders')).toEqual(['id', 'total'])
+  })
+
+  it('diffs main tables against their declarations even when temp tables shadow them', async () => {
+    const { db, schema } = await openSQLite([
+      'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY NOT NULL, "main_only" TEXT)',
+      'CREATE INDEX "main"."main_idx" ON "items" ("main_only")',
+    ])
+    const declared = (await createSchemaReader(db).readGeneratedSchema()).filter(table => table.tableName === 'items')
+    await db.executeCompiled({ sql: 'CREATE TABLE "temp"."items" ("id" TEXT, "temp_only" TEXT)', source: 'schema' })
+
+    const unqualified = await diffSchema(schema, declared)
+    const qualified = await diffSchema(schema, declared.map(table => defineTable('main.items', table.columns, { indexes: table.indexes })))
+
+    expect(unqualified.extraTables).not.toContain('items')
+    expect(unqualified.tables.map(table => [table.table, table.hasChanges])).toEqual([['items', false]])
+    expect(qualified.extraTables).not.toContain('items')
+    expect(qualified.tables.map(table => [table.table, table.hasChanges])).toEqual([['main.items', false]])
   })
 })
