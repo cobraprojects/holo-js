@@ -102,7 +102,7 @@ import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimary
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
-import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
+import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -3475,12 +3475,12 @@ export class TableQueryBuilder<
   }
 
   private async resolveQueryTextMatching(): Promise<QueryTextMatching> {
-    if (!isMySQLConnection(this.connection) || !writesTextLiterals(this.plan.predicates, [])) {
+    if (!isMySQLConnection(this.connection)) {
       return textMatchesAnyNumber(this.connection)
     }
 
     const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
-    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : true
+    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
   }
 
   private async invalidateMutationQueries(

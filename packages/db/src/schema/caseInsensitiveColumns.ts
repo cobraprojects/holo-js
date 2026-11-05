@@ -20,7 +20,7 @@ export type TextColumnCollations = {
 
 export type CaseInsensitiveColumns = ReadonlySet<string> | 'all' | TextColumnCollations
 
-type MySQLColumnRow = { name: string, collation_name: string | null, pad_attribute: string | null }
+type MySQLColumnRow = { name: string, data_type: string, collation_name: string | null, pad_attribute: string | null }
 type ColumnReader = (reader: DatabaseContext) => Promise<CaseInsensitiveColumns>
 
 type CaseInsensitiveColumnsEntry = {
@@ -50,13 +50,20 @@ WHERE a.attrelid = to_regclass($1)
     )
   )`
 
-const MYSQL_COLUMN_COLLATIONS_SQL = `SELECT c.column_name AS name, c.collation_name AS collation_name, l.pad_attribute AS pad_attribute
+const MYSQL_COLUMN_COLLATIONS_SQL = `SELECT c.column_name AS name, c.data_type AS data_type, c.collation_name AS collation_name, l.pad_attribute AS pad_attribute
 FROM information_schema.columns c
 LEFT JOIN information_schema.collations l ON l.collation_name = c.collation_name
 WHERE c.table_schema = COALESCE(?, DATABASE()) AND c.table_name = ?`
 
 const MYSQL_EXACT_COLLATION_PATTERN = /_bin$/i
 const MYSQL_NO_PAD = 'NO PAD'
+const MYSQL_PADDED_DATA_TYPE = 'char'
+const LOOSE_TEXT_COLUMN: TextColumn = { exact: false, padSpace: true }
+
+export const UNKNOWN_TEXT_COLUMNS: TextColumnCollations = {
+  findTextColumn: () => LOOSE_TEXT_COLUMN,
+  numbersMatchText: true,
+}
 const SQLITE_EXACT_COLLATION = 'BINARY'
 const MAX_QUALIFIED_NAME_PARTS = 3
 
@@ -118,7 +125,7 @@ function createMySQLReader(connection: DatabaseContext, tableName: string): Colu
       if (row.collation_name !== null) {
         columns.set(row.name.toLowerCase(), {
           exact: MYSQL_EXACT_COLLATION_PATTERN.test(row.collation_name),
-          padSpace: row.pad_attribute?.toUpperCase() !== MYSQL_NO_PAD,
+          padSpace: row.data_type.toLowerCase() === MYSQL_PADDED_DATA_TYPE || row.pad_attribute?.toUpperCase() !== MYSQL_NO_PAD,
         })
       }
     }

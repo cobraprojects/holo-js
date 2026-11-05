@@ -1485,18 +1485,11 @@ function queryTextMayMatchOtherValues(column: string, value: unknown, textMatchi
     return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
   }
 
-  if (typeof value !== 'string') {
-    return false
-  }
-
   if (typeof textMatching === 'boolean') {
-    return textMatching || isNumericText(value)
+    return typeof value === 'string' && (textMatching || isNumericText(value))
   }
 
-  const textColumn = textMatching.findTextColumn(column)
-  return textColumn === undefined
-    || (textColumn.padSpace && value.endsWith(' '))
-    || (!textMatching.numbersMatchText && isNumericText(value))
+  return comparesLoosely(column, value, textMatching) || (!textMatching.numbersMatchText && isNumericText(value))
 }
 
 function containsText(value: unknown): boolean {

@@ -41,7 +41,7 @@ async function createCountries(driver: Driver, codeType = driver === 'postgres' 
   })
   await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
   return {
-    cachedLabel: async (value: string) => (await DB.table(name).where('code', value).cache(60).first())?.label,
+    cachedLabel: async (value: string | number) => (await DB.table(name).where('code', value).orderBy('code').cache(60).first())?.label,
     update: (value: string | number, label: string) => DB.table(name).where('code', value).update({ label }),
     upsert: (value: string, label: string) => DB.table(name).upsert({ code: value, label }, ['code'], ['label']),
     writeBehindTheCache: (value: string, label: string) => adapter.execute(`UPDATE ${name} SET label = '${label}' WHERE code = '${value}'`),
@@ -202,6 +202,16 @@ describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_bin ke
     expect(await countries.cachedLabel('FR')).toBe('Zero')
   })
 
+  it('refreshes a cached read by a number after an update of text mysql converts to that number', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
+    expect(await countries.cachedLabel(0)).toBe('Germany')
+    await countries.writeBehindTheCache('DE', 'Hidden')
+
+    await countries.update('FR', 'République')
+
+    expect(await countries.cachedLabel(0)).toBe('Hidden')
+  })
+
   it('refreshes a cached read by a key with trailing spaces after an update matched by the key without them', async () => {
     const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
     expect(await countries.cachedLabel('FR  ')).toBe('France')
@@ -232,6 +242,17 @@ describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_0900_b
     await countries.update('FR  ', 'République')
 
     expect(await countries.cachedLabel('FR')).toBe('France')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a CHAR utf8mb4_0900_bin key on mysql', () => {
+  it('refreshes a cached read by key after an upsert of the key with trailing spaces mysql strips on store', async () => {
+    const countries = await createCountries('mysql', 'CHAR(16) COLLATE utf8mb4_0900_bin')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.upsert('FR  ', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
   })
 })
 
