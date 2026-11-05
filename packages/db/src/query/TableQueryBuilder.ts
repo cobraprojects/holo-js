@@ -3167,10 +3167,9 @@ export class TableQueryBuilder<
       previousRows.push(Object.freeze({ ...previousRow }))
     }
 
-    const hasUnpairedStringMatch = result.rows.some((candidate, index) => !usedResultIndexes.has(index)
-      && rows.some(row => uniqueBy.every(column => candidate[column] === row[column]
-        || (typeof candidate[column] === 'string' && typeof row[column] === 'string'))))
-    return hasUnpairedStringMatch ? undefined : Object.freeze(previousRows)
+    const hasUnpairedPossibleMatch = result.rows.some((candidate, index) => !usedResultIndexes.has(index)
+      && rows.some(row => uniqueBy.every(column => !valuesDiffer(candidate[column], row[column]))))
+    return hasUnpairedPossibleMatch ? undefined : Object.freeze(previousRows)
   }
 
   private rowsMatchUniqueBy(
@@ -3693,4 +3692,10 @@ export function whereColumnNotExpiredByDatabaseClock<
   }
 
   return append(`${quoted} > CURRENT_TIMESTAMP(3)`, [])
+}
+
+function valuesDiffer(left: unknown, right: unknown): boolean {
+  return left !== right
+    && typeof left === typeof right
+    && (typeof left === 'number' || typeof left === 'bigint' || typeof left === 'boolean')
 }

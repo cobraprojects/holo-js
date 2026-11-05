@@ -445,6 +445,23 @@ describe('a Generated-schema table with a numeric key that is not id', () => {
     ])
   })
 
+  it('moves a row in a list subscription when an upsert matches a unique value of another type', async () => {
+    registerGeneratedTables({
+      tags: defineGeneratedTable('tags', { code: column.integer().primaryKey(), id: column.integer(), name: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE tags (code INTEGER PRIMARY KEY, id INTEGER NOT NULL UNIQUE, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO tags VALUES (1, 11, 'First'), (2, 12, 'Second')")
+    const live = await subscribe(db => db.table('tags').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('tags').upsert({ code: 3, id: '12', name: 'Second' }, ['id'], ['code'])
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { code: 1, id: 11, name: 'First' },
+      { code: 3, id: 12, name: 'Second' },
+    ])
+  })
+
   it('moves a row in a list subscription when a batch upsert changes its key through an intermediate row', async () => {
     registerGeneratedTables({
       tags: defineGeneratedTable('tags', { code: column.integer().primaryKey(), id: column.integer(), name: column.string() }),
