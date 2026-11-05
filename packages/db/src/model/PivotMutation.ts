@@ -94,9 +94,9 @@ export class PivotMutation {
       }
       if (detachMissing) {
         const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
-        for (const [key, row] of current) {
+        for (const row of rows) {
           const id = row[this.context.relatedColumn]
-          if (!desired.has(key) && typeof id !== 'undefined') {
+          if (!desired.has(this.keyIdentity(this.readKey(id))) && typeof id !== 'undefined') {
             actions.push({ kind: 'delete', id, attributes: {} })
             result.detached.push(this.readKey(id))
           }

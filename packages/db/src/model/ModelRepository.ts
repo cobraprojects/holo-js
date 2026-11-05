@@ -3992,8 +3992,7 @@ export class ModelRepository<
     }
     const connection = this.getConnection()
     const table = this.resolvePivotTable(relation.pivotTable, connection)
-    const relatedKey = (typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn))
-      ?? ownEntry(this.resolveRelatedRepository(relation.related).definition.table.columns, relation.relatedKey)
+    const relatedKey = typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn)
     return new PivotMutation({
       table,
       scope,

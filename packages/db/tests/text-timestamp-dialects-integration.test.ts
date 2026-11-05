@@ -131,6 +131,38 @@ describe.each(drivers)('timestamps stored in TEXT columns on %s', (driver) => {
     expect(await DB.table(names.ownerSlot).count()).toBe(0)
   })
 
+  it('keeps distinct text pivot keys of an untyped pivot table apart', async () => {
+    const { schema } = await openDatabase(driver)
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `text_key_owners_${suffix}`, slots: `text_key_slots_${suffix}`, ownerSlot: `text_key_owner_slot_${suffix}` }
+    onTestFinished(async () => {
+      for (const name of Object.values(names)) await schema.dropTable(name)
+    })
+    await schema.createTable(names.owners, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await schema.createTable(names.slots, (table) => {
+      table.timestamp('starts_at').primaryKey()
+    })
+    await schema.createTable(names.ownerSlot, (table) => {
+      table.integer('owner_id')
+      table.string('starts_at')
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.id(), name: column.string() })
+    const slots = defineGeneratedTable(names.slots, { starts_at: column.timestamp().primaryKey() })
+    const Slot = defineModel(slots, { timestamps: false })
+    const Owner = defineModel(owners, { fillable: ['name'], timestamps: false, relations: { slots: belongsToMany(() => Slot, names.ownerSlot, 'owner_id', 'starts_at', 'id', 'starts_at') } })
+    const owner = await Owner.create({ name: 'Ada' })
+    await DB.table(names.ownerSlot).insert([
+      { owner_id: owner.id, starts_at: '2026-01-02 03:04:05.000001' },
+      { owner_id: owner.id, starts_at: '2026-01-02 03:04:05.000002' },
+    ])
+
+    expect(await owner.sync('slots', [])).toEqual({ attached: [], detached: ['2026-01-02 03:04:05.000001', '2026-01-02 03:04:05.000002'], updated: [] })
+    expect(await DB.table(names.ownerSlot).count()).toBe(0)
+  })
+
   it('round-trips withTimestamps pivot text through eager loading', async () => {
     useTokyoAppInNewYorkProcess()
     const { names, Role, User } = await createTextTimestampTables(driver)
