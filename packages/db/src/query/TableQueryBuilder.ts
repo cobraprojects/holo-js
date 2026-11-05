@@ -14,6 +14,7 @@ import {
   invalidateQueryCacheDependencies,
   runQueryCacheOperation,
   createDatabaseMutationEvent,
+  resolveRowDependencyKey,
   createTableCacheDependency,
   createTableRowWildcardCacheDependency,
   createDatabaseQueryFallbackObservation,
@@ -3275,7 +3276,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(this.source.table)
+    const primaryKey = resolveRowDependencyKey(this.source, this.connection.getConnectionName())
     const mutations = hasInvalidationListeners
       ? [
           createDatabaseMutationEvent(
@@ -3287,7 +3288,6 @@ export class TableQueryBuilder<
             rows.length === 1
               && typeof lastInsertId !== 'undefined'
               && typeof primaryKey !== 'undefined'
-              && otherPrimaryKeys.length === 0
               && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
               ? Object.freeze([Object.freeze({
                   ...rows[0],

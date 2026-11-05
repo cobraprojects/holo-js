@@ -229,7 +229,8 @@ function tryApplyProjectedExactMutationValues(
     return undefined
   }
 
-  if (hasRecordKey(mutation.values, readPrimaryKey(context)) && mutation.values[readPrimaryKey(context)] !== context.exactQueryId) {
+  const primaryKey = readPrimaryKey(context)
+  if (hasRecordKey(mutation.values, primaryKey) && mutation.values[primaryKey] !== context.exactQueryId) {
     return { patched: true, rows: EMPTY_RECORD_ROWS }
   }
 

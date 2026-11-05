@@ -58,6 +58,7 @@ export type DatabaseQueryObservation = {
 export type DatabaseQueryBelongsToHydrationObservation = {
   readonly foreignKey: string
   readonly ownerKey: string
+  readonly primaryKey?: string
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string

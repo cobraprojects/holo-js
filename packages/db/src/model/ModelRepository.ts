@@ -9,6 +9,7 @@ import {
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
+  resolveRowDependencyKey,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
@@ -785,6 +786,7 @@ export class ModelRepository<
           : Object.freeze([createTableCacheDependency(target.connectionName, target.tableName)])
         const resultPath = createPath(index, key)
         const data = entity.toJSON() as Readonly<Record<string, unknown>>
+        const primaryKey = resolveRowDependencyKey({ tableName: target.tableName }, target.connectionName)
         recordDatabaseQueryObservation(Object.freeze({
           aggregate: aggregate.kind === 'exists'
             ? Object.freeze({
@@ -795,13 +797,14 @@ export class ModelRepository<
           connectionName: target.connectionName,
           dependencies,
           orderBy: [],
-          patchable: true,
+          patchable: primaryKey !== undefined,
           ...serializedFlag(modelNeedsSerialization(this.definition)),
           predicates: Object.freeze([Object.freeze({
             column: target.column,
             operator: '=' as const,
             value: target.value,
           })]),
+          primaryKey,
           result: data[key],
           resultPath,
           selections: [],
@@ -893,17 +896,19 @@ export class ModelRepository<
         predicateDependency!,
       ])
 
+      const primaryKey = resolveRowDependencyKey(related.definition.table, related.getConnectionName())
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: relatedRowsArePatchable(related) && primaryKey !== undefined,
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignKey,
           operator: '=' as const,
           value: parentKey,
         })]),
+        primaryKey,
         resultPath: createPath(index, relationName),
         selections: [],
         tableName: related.definition.table.tableName,

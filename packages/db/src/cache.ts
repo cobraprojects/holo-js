@@ -253,6 +253,7 @@ export interface DatabaseQueryObservation {
 export interface DatabaseQueryBelongsToHydrationObservation {
   readonly foreignKey: string
   readonly ownerKey: string
+  readonly primaryKey?: string
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -590,6 +591,7 @@ export function rebindDatabaseQueryObservationPagination(
       patchable: query.patchable,
       pagination: undefined,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result: data,
       resultPath: query.resultPath,
@@ -612,6 +614,7 @@ export function rebindDatabaseQueryObservationPagination(
       patchable: query.patchable,
       pagination,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result: meta,
       resultPath: undefined,
@@ -660,6 +663,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       patchable: query.patchable,
       pagination: undefined,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result: data,
       resultPath: query.resultPath,
@@ -682,6 +686,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       patchable: query.patchable,
       pagination,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result: meta.nextCursor,
       resultPath: Object.freeze(['nextCursor']),
@@ -723,6 +728,7 @@ export function disableDatabaseQueryObservationPatching(
       patchable: false,
       pagination: query.pagination,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result: query.result,
       resultPath: query.resultPath,
@@ -811,6 +817,7 @@ function rebindDatabaseQueryObservation(
       patchable: query.patchable,
       pagination: query.pagination,
       predicates: query.predicates,
+      primaryKey: query.primaryKey,
       relation: query.relation,
       result,
       resultPath: query.resultPath,
@@ -1303,7 +1310,7 @@ function getColumnName(column: string): string {
   return column.split('.').at(-1)!
 }
 
-function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
+export function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
   const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   if (!table) return 'id'
   const [primaryKey, ...otherPrimaryKeys] = listTablePrimaryKeyColumns(table)

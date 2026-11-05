@@ -1,4 +1,4 @@
-import { clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
+import { belongsTo, clearGeneratedTables, column, defineModel, hasMany, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -121,6 +121,70 @@ describe('a Generated-schema table keyed on code', () => {
       { code: 'FR', id: 1, name: 'République' },
     ])
     expect(live.reads()).toBe(1)
+  })
+
+  it('keeps a detail subscription on its row when another row sharing its id value changes', async () => {
+    const live = await subscribe(db => db.table('countries').where('id', 1).where('name', 'France').first())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').update({ name: 'France' })
+    })
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').delete()
+    })
+
+    expect(live.snapshots.at(-1)).toEqual({ code: 'FR', id: 1, name: 'France' })
+  })
+
+  it('patches the changed row of a paginated subscription', async () => {
+    const live = await subscribe(db => db.table('countries').orderBy('code').paginate(10))
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').delete()
+    })
+
+    expect((live.snapshots.at(-1) as { data: unknown }).data).toEqual([
+      { code: 'FR', id: 1, name: 'France' },
+      { code: 'IT', id: 2, name: 'Italy' },
+    ])
+  })
+
+  it('patches the eager-loaded parent of a model subscription by its key', async () => {
+    await adapter.execute('CREATE TABLE cities (code TEXT PRIMARY KEY, country_code TEXT NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO cities VALUES ('PAR', 'FR', 'Paris'), ('ROM', 'IT', 'Rome')")
+    const Country = defineModel('countries', { timestamps: false })
+    const City = defineModel(defineGeneratedTable('cities', { code: column.string().primaryKey(), country_code: column.string(), name: column.string() }), {
+      timestamps: false,
+      relations: { country: belongsTo(() => Country, 'country_code', 'code') },
+    })
+    const live = await subscribe(db => db.model(City).query().with('country').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').update({ name: 'Deutschland' })
+    })
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'FR').update({ name: 'République' })
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([
+      { code: 'PAR', country_code: 'FR', name: 'Paris', country: { code: 'FR', id: 1, name: 'République' } },
+      { code: 'ROM', country_code: 'IT', name: 'Rome', country: { code: 'IT', id: 2, name: 'Italy' } },
+    ])
+  })
+
+  it('patches the eager-loaded children of a model subscription by their key', async () => {
+    await adapter.execute('CREATE TABLE cities (code TEXT PRIMARY KEY, id INTEGER NOT NULL, country_code TEXT NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO cities VALUES ('LYO', 1, 'FR', 'Lyon'), ('PAR', 1, 'FR', 'Paris')")
+    const City = defineModel(defineGeneratedTable('cities', { code: column.string().primaryKey(), id: column.integer(), country_code: column.string(), name: column.string() }), { timestamps: false })
+    const Country = defineModel('countries', {
+      timestamps: false,
+      relations: { cities: hasMany(() => City, 'country_code', 'code') },
+    })
+    const live = await subscribe(db => db.model(Country).query().where('code', 'FR').with('cities').get())
+    await mutate(async ({ db }) => {
+      await db.table('cities').where('code', 'PAR').delete()
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([
+      { code: 'FR', id: 1, name: 'France', cities: [{ code: 'LYO', id: 1, country_code: 'FR', name: 'Lyon' }] },
+    ])
   })
 
   it('patches a list subscription when the changed row is matched by its id column', async () => {
