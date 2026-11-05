@@ -757,3 +757,39 @@ it('replays no change at resume when a declared watch root stays missing during 
   await settled()
   expect(changes).toEqual([])
 })
+
+it('replays every declared watch root the non-recursive watcher gains during startup, even inside another', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
+  await write(root, 'resources/demo/nested/Edited.ts')
+  await declarePluginWatchRoots(root, ['resources', 'resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual(expect.arrayContaining([
+    { path: 'resources', kind: 'changed' },
+    { path: 'resources/demo', kind: 'changed' },
+  ]))
+  expect(changes).toHaveLength(2)
+})
+
+it('replays a folder gained under an existing watch root even when a new outer root is gained around it', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
+  await write(root, 'resources/demo/fresh/Edited.ts')
+  await declarePluginWatchRoots(root, ['resources', 'resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual(expect.arrayContaining([
+    { path: 'resources', kind: 'changed' },
+    { path: 'resources/demo/fresh', kind: 'changed' },
+  ]))
+  expect(changes).toHaveLength(2)
+})

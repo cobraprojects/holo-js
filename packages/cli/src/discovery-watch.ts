@@ -485,7 +485,9 @@ export async function startDiscoveryWatch({
       ...currentRoots.filter(root => !startupRoots.includes(root) && !watchedDirectories.includes(resolve(projectRoot, root))),
       ...currentRoots.filter(root => eventPaths.some(path => pathIsWithin(root, path))),
     ])].filter(path => isDiscoveryRelevantPath(path, project, pluginWatches))
-    return gained.filter(path => !gained.some(other => other !== path && pathIsWithin(path, other)))
+    return gained.filter(path => !gained.some(other => other !== path
+      && pathIsWithin(path, other)
+      && currentRoots.every(root => !pathIsWithin(path, root) || pathIsWithin(other, root))))
   }
 
   const classify = async (
