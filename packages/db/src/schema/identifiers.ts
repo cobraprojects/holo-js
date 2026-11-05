@@ -8,7 +8,7 @@ export function assertValidIdentifierSegment(identifier: string, context: string
   }
 }
 
-export function assertValidIdentifierPath(identifier: string, context: string): void {
+function assertValidIdentifierPath(identifier: string, context: string): void {
   if (!identifier.trim()) {
     throw new SchemaError(`${context} must not be empty.`)
   }
@@ -20,6 +20,13 @@ export function assertValidIdentifierPath(identifier: string, context: string): 
 
   for (const segment of segments) {
     assertValidIdentifierSegment(segment, context)
+  }
+}
+
+export function assertValidTablePath(identifier: string, context: string): void {
+  assertValidIdentifierPath(identifier, context)
+  if (identifier.split('.').length > 2) {
+    throw new SchemaError(`${context} "${identifier}" must be a table name or a schema-qualified table name.`)
   }
 }
 
