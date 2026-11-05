@@ -1,5 +1,6 @@
 import { holoRuntimeInternals } from '@holo-js/db'
 import { Client, Pool, types, type ClientConfig, type PoolClient, type PoolConfig } from 'pg'
+import { parse as parseConnectionString } from 'pg-connection-string'
 import type {
   CompiledStatement,
   DatabaseDriverFactory,
@@ -115,18 +116,6 @@ function withSessionStartupClient(base: NonNullable<PoolConfig['Client']>, schem
   return HoloClient as unknown as NonNullable<PoolConfig['Client']>
 }
 
-function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
-  const parsed = new URL(connectionString)
-  const database = parsed.pathname.replace(/^\/+/, '')
-
-  parsed.pathname = '/postgres'
-
-  return {
-    database: database ? decodeURIComponent(database) : undefined,
-    connectionString: parsed.toString(),
-  }
-}
-
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
 function createHoloPool(config?: PoolConfig, schema?: string): Pool {
@@ -158,6 +147,23 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
     return undefined
   }
 
+  if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
+    const { connectionString, database: _database, ...bootstrapConfig } = config
+    const resolved = parseConnectionString(connectionString)
+    if (!resolved.database || resolved.database === 'postgres') {
+      return undefined
+    }
+
+    return {
+      database: resolved.database,
+      config: {
+        ...bootstrapConfig,
+        ...resolved,
+        database: 'postgres',
+      } as PoolConfig,
+    }
+  }
+
   if (typeof config.database === 'string' && config.database.trim().length > 0) {
     const { database, ...bootstrapConfig } = config
     if (database === 'postgres') {
@@ -169,21 +175,6 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
       config: {
         ...bootstrapConfig,
         database: 'postgres',
-      },
-    }
-  }
-
-  if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
-    const stripped = stripDatabaseFromConnectionString(config.connectionString)
-    if (!stripped.database || stripped.database === 'postgres') {
-      return undefined
-    }
-
-    return {
-      database: stripped.database,
-      config: {
-        ...config,
-        connectionString: stripped.connectionString,
       },
     }
   }
