@@ -107,6 +107,17 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     expect(subscription.current.data).toEqual(await handler())
   })
 
+  it('keeps a hasOne whose constraint selects without its foreign key equal to a fresh load', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const handler = () => db.model(Author).query().with({ post: query => query.select('id', 'title') }).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 3).delete() }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).insert({ id: 4, author_id: 2, title: 'newest', score: 0 }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('loads the next matching row for latestOfMany', async () => {
     const { db, posts, Author } = await openAuthors(driver)
     const handler = () => db.model(Author).query().with('latestPost').orderBy('id').getJson()

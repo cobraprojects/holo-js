@@ -137,6 +137,12 @@ export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, r
   return { numeric: isNumericKeyColumn(parentKey) || isNumericKeyColumn(relatedKey) }
 }
 
+function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
+  return plan.selections.length === 0 || plan.selections.some(selection => selection.kind === 'column'
+    && typeof selection.alias === 'undefined'
+    && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
+}
+
 export async function retrieveRelation(
   keys: readonly unknown[],
   createQuery: () => ModelQueryBuilder,
@@ -152,7 +158,7 @@ export async function retrieveRelation(
   const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column))
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
-  const rowsPatchable = !paginated && probe.canPatchLoadedRows()
+  const rowsPatchable = !paginated && selectsRelationColumn(probe.getTableQueryBuilder().getPlan(), column) && probe.canPatchLoadedRows()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
