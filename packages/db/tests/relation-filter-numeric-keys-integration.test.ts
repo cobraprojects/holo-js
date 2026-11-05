@@ -373,4 +373,27 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(valuesOf(await Item.has('owner').get())).toEqual([10])
     expect(valuesOf(await Item.has('coded').get())).toEqual([10])
   })
+
+  it.runIf(driver === 'postgres')('matches nothing for a text key too long for a number', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const tag = suffix()
+    const names = { owners: `fl_owners_${tag}`, items: `fl_items_${tag}` }
+    await createTable(schema, names.owners, (table) => {
+      table.bigInteger('id').primaryKey()
+    })
+    await createTable(schema, names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.text('owner_id')
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.bigInteger().primaryKey() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.text() })
+    await DB.table(owners).insert([{ id: 1 }])
+    await DB.table(items).insert([{ id: 10, owner_id: '1' }, { id: 20, owner_id: '9'.repeat(131073) }])
+    const Owner = defineModel(owners, { timestamps: false })
+    const Item = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+
+    expect(valuesOf(await Item.has('owner').orderBy('id').get())).toEqual([10])
+    expect(valuesOf(await Item.whereDoesntHave('owner').orderBy('id').get())).toEqual([20])
+  })
 })
