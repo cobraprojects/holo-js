@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { column, defineGeneratedTable, defineModel, hasOne } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -124,5 +124,49 @@ describe.each(drivers)('realtime inserts read back the stored rows on %s', (driv
     await expectFresh()
     await mutate(() => db.table(members).upsert({ id: 1, email: 'first@example.com', name: 'keyed', score: 9 }, ['id'], ['name']))
     await expectFresh()
+  })
+
+  it('patches a related row an eager-loaded hasOne receives with the defaults the database fills in', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const authorsName = `holo_read_back_authors_${suffix}`
+    const postsName = `holo_read_back_posts_${suffix}`
+    await schema.createTable(authorsName, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await schema.createTable(postsName, (table) => {
+      table.id()
+      table.bigInteger('author_id')
+      table.string('title')
+      table.integer('score').default(0)
+    })
+    onTestFinished(async () => {
+      await schema.dropTable(postsName)
+      await schema.dropTable(authorsName)
+    })
+    const authors = defineGeneratedTable(authorsName, { id: column.id(), name: column.string() })
+    const posts = defineGeneratedTable(postsName, { id: column.id(), author_id: column.bigInteger(), title: column.string(), score: column.integer().default(0) })
+    await db.table(authors).insert([{ name: 'first' }, { name: 'second' }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const Post = defineModel(posts, { timestamps: false, fillable: ['author_id', 'title', 'score'] })
+    const Author = defineModel(authors, { timestamps: false, relations: { post: hasOne(() => Post, 'author_id') } })
+    const handler = () => db.model(Author).query().with('post').orderBy('id').getJson()
+    const errors: unknown[] = []
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, {
+      onData: () => {},
+      onError: (error) => { errors.push(error) },
+    })
+    const expectFresh = async () => {
+      expect({ errors, data: subscription.current.data }).toEqual({ errors: [], data: await handler() })
+    }
+
+    await mutate(() => db.table(posts).insert({ author_id: 1, title: 'table insert' }))
+    await expectFresh()
+    await mutate(() => db.model(Post).create({ author_id: 2, title: 'created' }))
+    await expectFresh()
+
+    expect(JSON.stringify(subscription.current.data)).toContain('"title":"created","score":0')
   })
 })
