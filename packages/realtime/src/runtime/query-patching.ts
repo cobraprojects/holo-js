@@ -76,7 +76,7 @@ export async function tryPatchObservedQuery(
     return await tryPatchGroupedAggregateQuery(query, target.currentValue, mutations, backfills)
   }
 
-  if (insertsRowsWithoutPrimaryKey(query, mutations)) {
+  if (insertsRowsWithUnknownPrimaryKey(query, mutations)) {
     return UNPATCHED_RESULT
   }
 
@@ -149,7 +149,7 @@ export async function tryPatchObservedQuery(
   return UNPATCHED_RESULT
 }
 
-function insertsRowsWithoutPrimaryKey(
+function insertsRowsWithUnknownPrimaryKey(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
 ): boolean {
@@ -157,5 +157,17 @@ function insertsRowsWithoutPrimaryKey(
   return mutations.some(mutation => (mutation.kind === 'insert' || mutation.kind === 'upsert')
     && mutation.connectionName === query.connectionName
     && mutation.tableName === query.tableName
-    && mutation.rows?.some(row => !hasRecordKey(row, primaryKey)))
+    && (
+      mutation.rows?.some(row => !hasRecordKey(row, primaryKey))
+      || upsertChangesPrimaryKey(mutation, primaryKey)
+    ))
+}
+
+function upsertChangesPrimaryKey(mutation: DatabaseMutationEvent, primaryKey: string): boolean {
+  if (mutation.kind !== 'upsert' || !mutation.previousRows) {
+    return false
+  }
+
+  const keys = new Set((mutation.rows ?? []).map(row => row[primaryKey]))
+  return mutation.previousRows.some(row => !keys.has(row[primaryKey]))
 }
