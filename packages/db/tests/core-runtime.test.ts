@@ -8,14 +8,14 @@ import {
   resetDB, unsafeSql, type DatabaseLogger,
 } from '../src'
 import { defineModelFromTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase, postgresIntegration } from './support/database'
 
 type QueryErrorLog = Parameters<NonNullable<DatabaseLogger['onQueryError']>>[0]
 type QuerySuccessLog = Parameters<NonNullable<DatabaseLogger['onQuerySuccess']>>[0]
 
 beforeEach(() => resetDB())
 
-const drivers = ['sqlite', 'postgres', 'mysql'] as const
+const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
 describe('native database contexts', () => {
   it.each(drivers)('commits writes and rolls back failed callbacks on %s', async driver => {
@@ -111,7 +111,7 @@ describe('native database contexts', () => {
     })
   })
 
-  it('routes simultaneous named connections without leaking ambient scopes', async () => {
+  it.runIf(postgresIntegration)('routes simultaneous named connections without leaking ambient scopes', async () => {
     const first = await openDatabase('sqlite', { connectionName: 'first' })
     const second = await openDatabase('postgres', { connectionName: 'second' })
     configureDB(createConnectionManager({ defaultConnection: 'first', connections: { first: first.db, second: second.db } }))
@@ -257,7 +257,7 @@ describe('native database contexts', () => {
     expect(await outside).toBe(1)
   })
 
-  it('reports a query rejected by the queue limit to the start and error hooks, in that order', async () => {
+  it.runIf(postgresIntegration)('reports a query rejected by the queue limit to the start and error hooks, in that order', async () => {
     const events: string[] = []
     const { db } = await openDatabase('postgres', {
       concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
@@ -284,7 +284,7 @@ describe('native database contexts', () => {
     expect(events).toEqual(['start:test:rejected', 'error:QUERY_SCHEDULER_BACKPRESSURE'])
   })
 
-  it('times out and aborts native PostgreSQL work without poisoning later reads', async () => {
+  it.runIf(postgresIntegration)('times out and aborts native PostgreSQL work without poisoning later reads', async () => {
     const starts: string[] = []
     const { db, table } = await openDatabase('postgres', { logger: { onQueryStart() { starts.push('start') } } })
     const sql = 'SELECT pg_sleep(0.1)'
@@ -326,7 +326,7 @@ describe('native database contexts', () => {
     await db.disconnect()
     expect(db.isConnected()).toBe(false)
   })
-  it('enforces native PostgreSQL scheduler backpressure and accepts later work', async () => {
+  it.runIf(postgresIntegration)('enforces native PostgreSQL scheduler backpressure and accepts later work', async () => {
     let notifyStarted = () => {}
     const { db, table } = await openDatabase('postgres', {
       concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },

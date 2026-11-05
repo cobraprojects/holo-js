@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { DB, clearGeneratedTables, column, defineModel, queryCacheInternals, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { mysqlIntegration, openDatabase } from './support/database'
 
 async function openTable(name: string, columns: Parameters<typeof defineTable>[1], options: Parameters<typeof defineTable>[2] = {}, ddl: string, driver: 'sqlite' | 'mysql' = 'sqlite') {
   const { adapter } = await openDatabase(driver)
@@ -123,7 +123,7 @@ describe('query observations and mutation events carry the table primary key', (
     expect(mutations.map(mutation => [mutation.primaryKey, mutation.rows])).toEqual([['ticket_no', [{ label: 'first', ticket_no: 1 }]]])
   })
 
-  it('publishes an inserted row without a key when the database generates a key that is not auto-increment', async () => {
+  it.runIf(mysqlIntegration)('publishes an inserted row without a key when the database generates a key that is not auto-increment', async () => {
     const name = `regions_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     const adapter = await openTable(name, { code: column.string().primaryKey(), name: column.string() }, {}, `CREATE TABLE ${name} (code VARCHAR(8) PRIMARY KEY DEFAULT 'XX', name TEXT)`, 'mysql')
     try {

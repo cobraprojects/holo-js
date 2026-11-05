@@ -8,19 +8,15 @@ import {
   resetDB,
   resolveRuntimeConnectionManagerOptions,
 } from '../src'
+import { postgresIntegration, postgresTestConnection } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
-const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
-const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
-const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
-const password = process.env.HOLO_POSTGRES_PASSWORD
-const database = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
-const config = { host, port, user: username, password, database }
 const schemaName = `holo_dropped_${randomUUID().replaceAll('-', '')}`
 
 function connectToTestSchema() {
-  const manager = resolveRuntimeConnectionManagerOptions({ db: { connections: { main: { driver: 'postgres', host, port, username, password, database, schema: schemaName } } } })
+  const { user, ...connection } = postgresTestConnection()
+  const manager = resolveRuntimeConnectionManagerOptions({ db: { connections: { main: { driver: 'postgres', ...connection, username: user, schema: schemaName } } } })
   configureDB(manager)
   onTestFinished(async () => {
     await manager.disconnectAll()
@@ -30,7 +26,7 @@ function connectToTestSchema() {
 }
 
 function openAdapter() {
-  const connection = createPostgresAdapter({ config })
+  const connection = createPostgresAdapter({ config: postgresTestConnection() })
   onTestFinished(async () => { await connection.disconnect() })
   return connection
 }
@@ -54,7 +50,7 @@ async function waitForBlockedReader(observer: ReturnType<typeof openAdapter>, re
 }
 
 async function readWhileDropCommits<T>(tableName: string, read: () => Promise<T>): Promise<T> {
-  const dropper = createPostgresAdapter({ config })
+  const dropper = createPostgresAdapter({ config: postgresTestConnection() })
   let dropOpen = false
   onTestFinished(async () => {
     if (dropOpen) await dropper.rollback()
@@ -76,10 +72,11 @@ async function readWhileDropCommits<T>(tableName: string, read: () => Promise<T>
   return settled.value
 }
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL schema introspection of a concurrently dropped table', () => {
-  const admin = createPostgresAdapter({ config })
+describe.skipIf(!postgresIntegration)('PostgreSQL schema introspection of a concurrently dropped table', () => {
+  let admin: ReturnType<typeof createPostgresAdapter>
 
   beforeAll(async () => {
+    admin = createPostgresAdapter({ config: postgresTestConnection() })
     await admin.execute(`CREATE SCHEMA ${schemaName}`)
   })
 

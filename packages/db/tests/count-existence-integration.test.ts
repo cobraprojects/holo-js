@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { DB, defineModel, queryCacheInternals, resetDB } from '../src'
 import type { QuerySuccessLog } from '../src/core/types'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 describe('database count and existence', () => {
   afterEach(() => resetDB())
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('returns only aggregate results on %s and preserves query cardinality', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('returns only aggregate results on %s and preserves query cardinality', async driver => {
     const logs: QuerySuccessLog[] = []
     const { table } = await openDatabase(driver, {
       logger: { onQuerySuccess: entry => { logs.push(entry) } },

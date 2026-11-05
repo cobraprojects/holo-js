@@ -6,6 +6,7 @@ import { mysqlDatabaseDriverFactory } from '@holo-js/db-mysql'
 import { postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 import { cacheDbInternals, createDatabaseCacheDriver } from '../src/index'
+import { mysqlTestConnection, postgresTestConnection } from '../../../tests/support/real-database'
 
 type ServerDriver = 'mysql' | 'postgres'
 
@@ -31,25 +32,8 @@ function integrationEnabled(driver: ServerDriver): boolean {
 }
 
 function connectionConfig(driver: ServerDriver): HoloProjectConnectionConfig {
-  if (driver === 'mysql') {
-    return {
-      driver,
-      host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-      username: process.env.HOLO_MYSQL_USER ?? 'root',
-      password: process.env.HOLO_MYSQL_PASSWORD,
-      database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-    }
-  }
-
-  return {
-    driver,
-    host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-    username: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-    password: process.env.HOLO_POSTGRES_PASSWORD,
-    database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-  }
+  const { user, ...connection } = driver === 'mysql' ? mysqlTestConnection() : postgresTestConnection()
+  return { driver, ...connection, username: user }
 }
 
 async function disposeDriver(driver: CacheDriverContract): Promise<void> {

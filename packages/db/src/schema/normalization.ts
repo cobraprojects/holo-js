@@ -86,6 +86,39 @@ export function readIntegerKey(value: unknown): unknown {
   return Number.isSafeInteger(integer) ? integer : value
 }
 
+const SQLITE_DECIMAL_PLACES = 2
+
+const EXPONENT_NUMBER_TEXT = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/
+
+function plainNumberText(value: number): string {
+  const text = String(value)
+  const match = EXPONENT_NUMBER_TEXT.exec(text)
+  if (!match) {
+    return text
+  }
+
+  const [, sign = '', lead = '', fraction = '', exponent = '0'] = match
+  const digits = `${lead}${fraction}`
+  const point = 1 + Number(exponent)
+  if (point <= 0) {
+    return `${sign}0.${'0'.repeat(-point)}${digits}`
+  }
+
+  return point >= digits.length ? `${sign}${digits.padEnd(point, '0')}` : `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
+}
+
+export function readSQLiteDecimal(value: unknown): unknown {
+  const text = typeof value === 'number' && Number.isFinite(value)
+    ? plainNumberText(value)
+    : typeof value === 'bigint' || isCanonicalIntegerText(value) ? String(value) : undefined
+  if (text === undefined) {
+    return value
+  }
+
+  const [integer = '', fraction = ''] = text.split('.')
+  return `${integer}.${fraction.padEnd(SQLITE_DECIMAL_PLACES, '0')}`
+}
+
 function parseJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value
 }
@@ -312,6 +345,19 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
 
+const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
+
+export function readNumericValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
+  if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
+  return dialect === 'sqlite' && column.kind === 'decimal'
+}
+
 export function normalizeDialectReadValue(
   dialect: SchemaDialectName,
   column: AnyColumnDefinition,
@@ -325,6 +371,8 @@ export function normalizeDialectReadValue(
       return parseInteger(value)
     case 'boolean':
       return coerceBoolean(value)
+    case 'decimal':
+      return dialect === 'sqlite' ? readSQLiteDecimal(value) : value
     case 'json':
       return parseJson(value)
     case 'date':

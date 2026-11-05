@@ -12,35 +12,37 @@ import {
   resetDB,
   resolveRuntimeConnectionManagerOptions,
 } from '../src'
+import { postgresIntegration, postgresTestConnection, testConnectionUrl } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
-const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
-const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
-const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
-const password = process.env.HOLO_POSTGRES_PASSWORD
-const adminDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
 const database = `holo_search_path_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-const postgresIntegration = process.env.HOLO_POSTGRES_INTEGRATION === '1'
+
+function searchPathConnection() {
+  return { ...postgresTestConnection(), database }
+}
 
 beforeAll(async () => {
   if (!postgresIntegration) return
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: adminDatabase } })
+  const admin = createPostgresAdapter({ config: postgresTestConnection() })
   await admin.execute(`CREATE DATABASE ${database}`)
   await admin.disconnect()
 })
 
 afterAll(async () => {
   if (!postgresIntegration) return
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: adminDatabase } })
+  const admin = createPostgresAdapter({ config: postgresTestConnection() })
   await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
   await admin.disconnect()
 })
 
+function structuredConnection() {
+  const { user, ...connection } = searchPathConnection()
+  return { ...connection, username: user }
+}
+
 function connectionUrl(searchPath?: string): string {
-  const url = new URL(`postgresql://${host}:${port}/${database}`)
-  url.username = username
-  if (password) url.password = password
+  const url = testConnectionUrl('postgresql', searchPathConnection())
   if (searchPath) url.searchParams.set('options', `-c statement_timeout=5000 -c search_path=${searchPath}`)
   return url.toString()
 }
@@ -50,7 +52,7 @@ function quoted(identifier: string): string {
 }
 
 async function createNotesTables(schemas: readonly string[], tableName: string): Promise<void> {
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database } })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     for (const schema of schemas.filter(name => name !== 'public')) await admin.execute(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
     await admin.execute(`DROP TABLE IF EXISTS public.${quoted(tableName)}`)
@@ -85,7 +87,7 @@ async function bodiesThroughQueriesAndModels(connection: Record<string, unknown>
 describe.skipIf(!postgresIntegration)('PostgreSQL search_path from the configured schema', () => {
   it.each([
     { mode: 'url', connection: (schema: string) => ({ url: connectionUrl(), schema }) },
-    { mode: 'structured', connection: (schema: string) => ({ host, port, username, password, database, schema }) },
+    { mode: 'structured', connection: (schema: string) => ({ ...structuredConnection(), schema }) },
   ])('reads and writes the configured schema through unqualified queries and models with $mode configuration', async ({ connection }) => {
     const suffix = randomUUID().replaceAll('-', '')
     const tenant = `Holo "tenant" ${suffix}`
@@ -140,7 +142,7 @@ describe.skipIf(!postgresIntegration)('PostgreSQL search_path from the configure
 })
 
 async function createSchemas(schemas: readonly string[]): Promise<void> {
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database } })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     for (const schema of schemas) await admin.execute(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
     await admin.disconnect()
@@ -149,7 +151,7 @@ async function createSchemas(schemas: readonly string[]): Promise<void> {
 }
 
 async function createTableWithColumn(schema: string, tableName: string, columnName: string): Promise<void> {
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database } })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     await admin.execute(`DROP TABLE IF EXISTS ${quoted(schema)}.${quoted(tableName)}`)
     await admin.disconnect()
