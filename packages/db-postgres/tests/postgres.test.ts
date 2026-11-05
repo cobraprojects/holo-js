@@ -8,7 +8,7 @@ import {
   type Entity, type TableDefinition,
 } from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
-import { postgresTestConnection } from '../../../tests/support/real-database'
+import { postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres', () => {
   it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
@@ -100,7 +100,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = createPostgresAdapter(mode === 'config'
       ? { config: { ...postgresTestConnection(), database } }
-      : { connectionString: `postgresql://${postgresTestConnection().user}@${postgresTestConnection().host}:${postgresTestConnection().port}/${encodeURIComponent(database)}` })
+      : { connectionString: testConnectionUrl('postgresql', { ...postgresTestConnection(), database }).toString() })
     try {
       await adapter.ensureDatabaseExists()
       await adapter.ensureDatabaseExists()
