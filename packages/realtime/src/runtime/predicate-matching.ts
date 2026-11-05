@@ -79,6 +79,7 @@ function comparesAsText(value: unknown): boolean {
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) return undefined
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }
