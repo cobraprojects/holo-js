@@ -65,7 +65,14 @@ async function readWhileDropCommits<T>(tableName: string, read: () => Promise<T>
   dropOpen = true
   await dropper.execute(`DROP TABLE ${schemaName}.${tableName}`)
   const result: Promise<Settled<T>> = read().then(value => ({ value }), (error: unknown) => ({ error }))
-  await waitForBlockedReader(observer, relationId, result)
+  try {
+    await waitForBlockedReader(observer, relationId, result)
+  } catch (error) {
+    await dropper.rollback()
+    dropOpen = false
+    await result
+    throw error
+  }
   await dropper.commit()
   dropOpen = false
   const settled = await result
@@ -110,6 +117,20 @@ describe.skipIf(!postgresIntegration)('PostgreSQL schema introspection of a conc
     })
 
     expect(structure).toBeUndefined()
+  }, 30_000)
+
+  it('reads a table for a role without usage on its schema', async () => {
+    const tableName = await createCheckedTable()
+    const role = `holo_reader_${randomUUID().replaceAll('-', '')}`
+    await admin.execute(`CREATE ROLE ${role} NOLOGIN`)
+    onTestFinished(async () => { await admin.execute(`DROP ROLE IF EXISTS ${role}`) })
+
+    const structure = await connectToTestSchema().transaction(async (tx) => {
+      await tx.queryCompiled({ sql: `SET LOCAL ROLE ${role}`, source: 'query' })
+      return holoRuntimeInternals.createSchemaReader(tx).readTableStructure(`${schemaName}.${tableName}`)
+    })
+
+    expect(structure?.columns.map(column => column.name)).toEqual(['id', 'status'])
   }, 30_000)
 
   it('leaves a table dropped during introspection out of the generated schema', async () => {
