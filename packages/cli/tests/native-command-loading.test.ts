@@ -99,18 +99,54 @@ it.each([['sync', 'relative'], ['sync', 'alias'], ['database', 'relative'], ['da
   }
 }, 30000)
 
-it('runs app commands that do not use a discovered job that fails to load', async () => {
+it('dispatches jobs and events added or removed since the last prepare without rewriting an unchanged registry', async () => {
   const { root, write } = await createProject()
   try {
     await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
-    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
-    await write('server/jobs/broken.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/commands/go.ts', "import { defineCommand } from '@holo-js/cli'\nimport { work } from '../services/work'\nexport default defineCommand({ description: 'Do the work', async run({ withRuntime }) { await withRuntime(work); console.log('done') } })")
+    await write('server/services/work.ts', 'export async function work() {}')
+    const run = async () => (await execute(process.execPath, [cli, 'go'], { cwd: root })).stdout.trim().split('\n')
+    expect(await run()).toEqual(['done'])
+    const registryPath = join(root, '.holo-js/generated/registry.json')
+    const preparedRegistry = await readFile(registryPath, 'utf8')
+    expect(await run()).toEqual(['done'])
+    await expect(readFile(registryPath, 'utf8')).resolves.toBe(preparedRegistry)
+
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle(payload: { n: number }) { console.log('handled ' + payload.n) } })")
+    await write('server/services/work.ts', "import Plain from '../jobs/plain'\nexport async function work() { await Plain.dispatch({ n: 1 }) }")
+    expect(await run()).toEqual(['handled 1', 'done'])
+
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ queue: 'reports', async handle(payload: { n: number }) { console.log('edited ' + payload.n) } })")
+    expect(await run()).toEqual(['edited 1', 'done'])
+    expect(JSON.parse(await readFile(registryPath, 'utf8')).jobs).toMatchObject([{ name: 'plain', queue: 'reports' }])
+
+    await write('server/events/requested.ts', "import { defineEvent } from '@holo-js/events'\nexport default defineEvent<{ n: number }>({ name: 'work.requested' })")
+    await write('server/listeners/log-request.ts', "import { defineListener } from '@holo-js/events'\nimport Requested from '../events/requested'\nexport default defineListener({ listensTo: [Requested], async handle(event) { console.log('heard ' + event.payload.n) } })")
+    await write('server/services/work.ts', "import Requested from '../events/requested'\nexport async function work() { await Requested.dispatch({ n: 2 }) }")
+    await rm(join(root, 'server/jobs/plain.ts'))
+    expect(await run()).toEqual(['heard 2', 'done'])
+    expect(JSON.parse(await readFile(registryPath, 'utf8')).jobs).toEqual([])
+
+    const currentRegistry = await readFile(registryPath, 'utf8')
+    expect(await run()).toEqual(['heard 2', 'done'])
+    await expect(readFile(registryPath, 'utf8')).resolves.toBe(currentRegistry)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60000)
+
+it('runs app commands that do not use a discovered job whose imports fail to load', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/support/label.ts', "export const label = 'plain'")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nimport { label } from '../support/label'\nexport default defineJob({ async handle() { console.log(label) } })")
     await write('server/commands/hello.ts', "export default { description: 'Say hello', async run() { console.log('hello') } }")
     await write('server/commands/plain/dispatch.ts', "import { defineCommand } from '@holo-js/cli'\nimport Plain from '../../jobs/plain'\nexport default defineCommand({ description: 'Dispatch a plain job', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({}) }) } })")
     expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
-    await write('server/jobs/broken.ts', "import { defineJob } from '@holo-js/queue'\nthrow new Error('broken job module')\nexport default defineJob({ async handle() {} })")
+    await write('server/support/label.ts', "throw new Error('broken job import')\nexport const label = 'plain'")
     expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
-    await expect(execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })).rejects.toThrow('broken job module')
+    await expect(execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })).rejects.toThrow('broken job import')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

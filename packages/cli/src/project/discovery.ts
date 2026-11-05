@@ -358,6 +358,7 @@ async function discoverProjectRegistry(
     : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const moduleValue = await modules.import(filePath)
     const exportedJob = resolveNamedExportEntry(
       moduleValue,
@@ -376,6 +377,7 @@ async function discoverProjectRegistry(
         loadedConfig.queue,
       ),
       exportName: exportedJob.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('job', jobs)
@@ -388,6 +390,7 @@ async function discoverProjectRegistry(
   const discoveredEventNamesBySourcePath = new Map<string, string>()
   for (const filePath of eventFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const exportedEvent = resolveNamedExportEntry(
       await modules.import(filePath),
       (value): value is object => hasEventDefinitionMarker(value),
@@ -404,6 +407,7 @@ async function discoverProjectRegistry(
       sourcePath: relativePath,
       name,
       exportName: exportedEvent.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('event', events)
@@ -412,6 +416,7 @@ async function discoverProjectRegistry(
   const listeners: GeneratedListenerRegistryEntry[] = []
   for (const filePath of listenerFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const exportedListener = resolveNamedExportEntry(
       await modules.import(filePath),
       (value): value is object => hasListenerDefinitionMarker(value),
@@ -450,6 +455,7 @@ async function discoverProjectRegistry(
       id: listenerId,
       eventNames,
       exportName: exportedListener.exportName,
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('listener', listeners.map(entry => ({
@@ -676,24 +682,38 @@ function withoutShadowedFailedCommands(
   })
 }
 
-async function isCommandRegistryCurrent(
+async function areSourceFilesCurrent(
+  projectRoot: string,
+  sourceRoot: string,
+  entries: readonly { readonly sourcePath: string, readonly sourceHash?: string }[],
+): Promise<boolean> {
+  const sourceFiles = await collectFiles(resolve(projectRoot, sourceRoot))
+  const registeredHashes = new Map(entries.map(entry => [entry.sourcePath, entry.sourceHash]))
+  if (sourceFiles.length !== registeredHashes.size) return false
+
+  for (const filePath of sourceFiles) {
+    const registeredHash = registeredHashes.get(makeProjectRelativePath(projectRoot, filePath))
+    if (registeredHash === undefined || registeredHash !== await hashSourceFile(filePath)) return false
+  }
+
+  return true
+}
+
+async function isCommandDiscoveryCurrent(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
   registry: GeneratedProjectRegistry,
 ): Promise<boolean> {
   if (registry.commands.some(entry => entry.loadFailed)) return false
   if (registry.paths.commands !== config.paths.commands) return false
+  if (registry.paths.jobs !== config.paths.jobs) return false
+  if (registry.paths.events !== config.paths.events) return false
+  if (registry.paths.listeners !== config.paths.listeners) return false
 
-  const commandFiles = await collectFiles(resolve(projectRoot, config.paths.commands))
-  const registeredHashes = new Map(registry.commands.map(entry => [entry.sourcePath, entry.sourceHash]))
-  if (commandFiles.length !== registeredHashes.size) return false
-
-  for (const filePath of commandFiles) {
-    const registeredHash = registeredHashes.get(makeProjectRelativePath(projectRoot, filePath))
-    if (registeredHash === undefined || registeredHash !== await hashSourceFile(filePath)) return false
-  }
-
-  return true
+  return await areSourceFilesCurrent(projectRoot, config.paths.commands, registry.commands)
+    && await areSourceFilesCurrent(projectRoot, config.paths.jobs, registry.jobs)
+    && await areSourceFilesCurrent(projectRoot, config.paths.events, registry.events)
+    && await areSourceFilesCurrent(projectRoot, config.paths.listeners, registry.listeners)
 }
 
 async function hashSourceFile(filePath: string): Promise<string | undefined> {
@@ -722,7 +742,7 @@ export async function discoverAppCommands(
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
 ): Promise<DiscoveredAppCommand[]> {
   const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
-  const registry = cachedRegistry && await isCommandRegistryCurrent(projectRoot, config, cachedRegistry)
+  const registry = cachedRegistry && await isCommandDiscoveryCurrent(projectRoot, config, cachedRegistry)
     ? cachedRegistry
     : await prepareProjectDiscovery(projectRoot, config)
 
