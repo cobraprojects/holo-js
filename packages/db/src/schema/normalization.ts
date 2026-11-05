@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp, startOfDayInTimezone } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -206,8 +206,7 @@ function spacedWallClock(value: unknown): unknown {
 export function calendarDateWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
   const instant = parseStoredCalendarDate(dialect, spacedWallClock(value))
   if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) return value
-  const timeZone = getApplicationTimezone()
-  return dialect === 'sqlite' ? formatSQLiteDateTime(startOfDayInTimezone(instant, timeZone)) : formatCalendarDate(instant, timeZone)
+  return formatCalendarDate(instant, getApplicationTimezone())
 }
 
 function parseStoredCalendarDate(dialect: SchemaDialectName, value: unknown): unknown {

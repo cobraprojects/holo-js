@@ -119,8 +119,9 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.updated_at).toEqual(midnight)
     expect((await fresh()).created_at).toEqual(midnight)
     expect((await fresh()).updated_at).toEqual(midnight)
-    expect(await Post.where('created_at', post.created_at).count()).toBe(1)
-    expect(await Post.where('created_at', '>=', midnight).where('created_at', '<', new Date('2026-03-05T15:00:00.000Z')).count()).toBe(1)
+    expect(await Post.whereDate('created_at', '2026-03-05').count()).toBe(1)
+    expect(await Post.whereToday('created_at').count()).toBe(1)
+    expect(await Post.whereBeforeToday('created_at').count()).toBe(0)
 
     vi.setSystemTime(new Date('2026-03-05T16:00:00.000Z'))
     const nextMidnight = new Date('2026-03-05T15:00:00.000Z')
@@ -160,7 +161,7 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.updated_at).toEqual((await fresh()).updated_at)
     expect(post.updated_at).toEqual(new Date('2026-03-06T15:00:00.000Z'))
     expect(post.created_at?.getUTCHours()).toBe(15)
-    expect(await Post.where('updated_at', post.updated_at).count()).toBe(1)
+    expect(await Post.whereDate('updated_at', '2026-03-07').count()).toBe(1)
 
     post.created_at = '2026-03-08' as never
     post.updated_at = '2026-03-09T01:00:00+09:00' as never
