@@ -49,8 +49,8 @@ export interface IntrospectedForeignKey {
 
 const schemaServiceConnections = new WeakMap<SchemaService, DatabaseContext>()
 
-export function readSchemaServiceTableStructure(schema: SchemaService, tableName: string): Promise<DatabaseTableStructure | undefined> {
-  return readTableStructure(schemaServiceConnections.get(schema)!, tableName)
+export function getSchemaServiceConnection(schema: SchemaService): DatabaseContext {
+  return schemaServiceConnections.get(schema)!
 }
 
 export class SchemaService {

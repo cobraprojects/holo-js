@@ -11,6 +11,7 @@ type IndexRow = { name: string, non_unique: number | string, column_name: string
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
 
 const SCHEMA_BINDING = 'COALESCE(?, DATABASE())'
+const BASE_TABLE_FILTER = 'table_type IN (\'BASE TABLE\', \'SYSTEM VERSIONED\')'
 const CURRENT_TIME_PATTERN = /^(?:CURRENT_TIMESTAMP|LOCALTIMESTAMP|LOCALTIME)(?:\(\d*\))?$|^now\(\)$/i
 const TEMPORAL_TYPE_PATTERN = /^(?:timestamp|datetime)\b/i
 const DEFAULT_GENERATED_PATTERN = /\bDEFAULT_GENERATED\b/i
@@ -90,13 +91,16 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
 
   return {
     async listTables() {
-      const result = await introspect<TableNameRow>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_type IN ('BASE TABLE', 'SYSTEM VERSIONED') ORDER BY table_name`, [configuredSchema], 'schema:introspect:tables')
+      const result = await introspect<TableNameRow>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND ${BASE_TABLE_FILTER} ORDER BY table_name`, [configuredSchema], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
+      const exists = await introspect<TableNameRow>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? AND ${BASE_TABLE_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
+      if (exists.rows.length === 0) return undefined
+
       const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, extra AS extra, generation_expression AS generation_expression FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
       const resolvedSchema = columns.rows[0]?.table_schema
       if (resolvedSchema === undefined) return undefined

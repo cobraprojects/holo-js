@@ -4,7 +4,9 @@ import type {
   TableDefinition,
   TableIndexDefinition,
 } from './types'
-import { readSchemaServiceTableStructure, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
+import { getSchemaServiceConnection, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
+import { readTableStructure } from './introspection'
+import { readPostgresSearchPathTableSchema } from './introspection/postgres'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
@@ -94,7 +96,7 @@ export async function diffSchema(
       continue
     }
 
-    const resolvedSchema = await resolveTableSchema(table.tableName)
+    const resolvedSchema = await resolveTableSchema.table(table.tableName)
     if (resolvedSchema === undefined) {
       missingTables.push(table.tableName)
       continue
@@ -108,7 +110,7 @@ export async function diffSchema(
   for (const name of actualTables) {
     if (unqualifiedNames.has(name)) continue
     const candidates = qualifiedLocations.filter(location => location.table === name)
-    const resolvedSchema = candidates.length > 0 ? await resolveTableSchema(name) : undefined
+    const resolvedSchema = candidates.length > 0 ? await resolveTableSchema.table(name) : undefined
     if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
   }
 
@@ -125,21 +127,35 @@ export async function diffSchema(
   }
 }
 
-type TableSchemaResolver = (tableName: string) => Promise<string | undefined>
+type TableSchemaLookup = (tableName: string) => Promise<string | undefined>
 
-function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
+interface TableSchemaResolver {
+  readonly table: TableSchemaLookup
+  readonly searchPath?: TableSchemaLookup
+}
+
+function memoizeTableSchemaLookup(lookup: TableSchemaLookup): TableSchemaLookup {
   const resolved = new Map<string, Promise<string | undefined>>()
   return (tableName) => {
     const cached = resolved.get(tableName)
     if (cached) return cached
-    const pending = readSchemaServiceTableStructure(schema, tableName).then(structure => structure?.schema)
+    const pending = lookup(tableName)
     resolved.set(tableName, pending)
     return pending
   }
 }
 
+function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
+  const connection = getSchemaServiceConnection(schema)
+  return {
+    table: memoizeTableSchemaLookup(async tableName => (await readTableStructure(connection, tableName))?.schema),
+    ...(/^postgres/.test(schema.getDialectName())
+      ? { searchPath: memoizeTableSchemaLookup(tableName => readPostgresSearchPathTableSchema(connection, tableName)) }
+      : {}),
+  }
+}
+
 async function resolveReferencedTable(
-  schema: SchemaService,
   resolveTableSchema: TableSchemaResolver,
   ownerTableName: string,
   referencedTableName: string,
@@ -147,9 +163,8 @@ async function resolveReferencedTable(
   const owner = splitTablePath(ownerTableName)
   const referenced = splitTablePath(referencedTableName)
   if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
-  const ownerSchema = await resolveTableSchema(ownerTableName)
-  const referencedSchema = referenced.schema
-    ?? (/^postgres/.test(schema.getDialectName()) ? await resolveTableSchema(referencedTableName) : ownerSchema)
+  const ownerSchema = await resolveTableSchema.table(ownerTableName)
+  const referencedSchema = referenced.schema ?? (resolveTableSchema.searchPath ? await resolveTableSchema.searchPath(referencedTableName) : ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
   return referencedSchema === ownerSchema ? referenced.table : `${referencedSchema}.${referenced.table}`
 }
@@ -246,7 +261,7 @@ async function diffTable(
 
   const expectedForeignKeys = await Promise.all(expectedColumns
     .filter((column): column is AnyColumnDefinition & { references: ForeignKeyReference & { table: string } } => Boolean(column.references?.table))
-    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(schema, resolveTableSchema, table.tableName, column.references.table))))
+    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(resolveTableSchema, table.tableName, column.references.table))))
   const expectedForeignKeyByName = new Map(expectedForeignKeys.map(foreignKey => [foreignKey.name, foreignKey]))
   const actualForeignKeyByName = new Map(actualForeignKeys.map(foreignKey => [normalizeActualForeignKeyName(foreignKey), foreignKey]))
   const missingForeignKeys = expectedForeignKeys

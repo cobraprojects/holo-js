@@ -37,6 +37,16 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
       expect((await schema.getColumns(`${tenant}.orders`)).map(column => column.name)).toEqual(['id', 'reference'])
     })
 
+    it.runIf(driver === 'mysql')('does not find views with a schema-qualified hasTable()', async () => {
+      const { schema, adapter, table } = await openDatabase(driver)
+      const view = `${table.tableName}_view`
+      onTestFinished(async () => { await adapter.execute(`DROP VIEW IF EXISTS ${view.split('.').map(part => `\`${part}\``).join('.')}`) })
+      await adapter.execute(`CREATE VIEW ${view.split('.').map(part => `\`${part}\``).join('.')} AS SELECT id FROM ${table.tableName.split('.').map(part => `\`${part}\``).join('.')}`)
+
+      expect(await schema.hasTable(view)).toBe(false)
+      expect(await schema.hasTable(view.split('.').at(-1)!)).toBe(false)
+    })
+
     it('creates typed columns, defaults, indexes, and constraints that accept valid records', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = `holo_schema_${randomUUID().replaceAll('-', '')}`

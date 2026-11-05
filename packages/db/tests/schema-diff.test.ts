@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
+import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { column, createDatabase, createDialect, diffSchema, createSchemaService, SchemaError } from '../src'
 import { defineTable } from './support/internal'
@@ -181,6 +182,57 @@ describe('native schema diff', () => {
     expect(diff.tables.find(entry => entry.table === `${tenant}.orders`)).toMatchObject({
       missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [],
     })
+  })
+
+  it('resolves an unqualified foreign key reference through the whole search path on postgres', async () => {
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
+    const first = `holo_first_${suffix}`
+    const billing = `holo_billing_${suffix}`
+    const users = `holo_users_${suffix}`
+    const adapter = createPostgresAdapter({ config: {
+      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
+      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
+      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
+      password: process.env.HOLO_POSTGRES_PASSWORD,
+      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+      options: `-c search_path=${first},public`,
+    } })
+    const db = createDatabase({ adapter, dialect: createDialect('postgres') })
+    const schema = createSchemaService(db)
+    onTestFinished(async () => {
+      try {
+        await adapter.execute(`DROP SCHEMA IF EXISTS "${billing}" CASCADE`)
+        await adapter.execute(`DROP SCHEMA IF EXISTS "${first}" CASCADE`)
+        await adapter.execute(`DROP TABLE IF EXISTS public."${users}"`)
+      } finally {
+        await db.disconnect()
+      }
+    })
+    await adapter.execute(`CREATE SCHEMA "${first}"`)
+    await adapter.execute(`CREATE SCHEMA "${billing}"`)
+    await adapter.execute(`CREATE TABLE public."${users}" (id BIGINT PRIMARY KEY)`)
+    await adapter.execute(`CREATE TABLE "${billing}".invoices (id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES "${users}" (id))`)
+    const invoices = defineTable(`${billing}.invoices`, {
+      id: column.bigInteger().primaryKey(),
+      user_id: column.bigInteger().references('id').on(users),
+    })
+
+    const diff = await diffSchema(schema, [invoices])
+
+    expect(diff.tables[0]).toMatchObject({ missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [] })
+  })
+
+  it('reports a schema-qualified view as a missing table on mysql', async () => {
+    const { schema, adapter, table } = await openDatabase('mysql')
+    const view = `${table.tableName}_view`
+    const quote = (path: string) => path.split('.').map(part => `\`${part}\``).join('.')
+    onTestFinished(async () => { await adapter.execute(`DROP VIEW IF EXISTS ${quote(view)}`) })
+    await adapter.execute(`CREATE VIEW ${quote(view)} AS SELECT id FROM ${quote(table.tableName)}`)
+
+    const diff = await diffSchema(schema, [defineTable(view, { id: column.integer().primaryKey() })])
+
+    expect(diff.missingTables).toEqual([view])
+    expect(diff.tables).toEqual([])
   })
 
   it('compares tables qualified with the main schema on sqlite', async () => {

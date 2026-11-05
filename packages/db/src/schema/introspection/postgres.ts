@@ -177,3 +177,12 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
     },
   }
 }
+
+export async function readPostgresSearchPathTableSchema(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  const result = await createIntrospect(connection)<TableRow>(
+    `SELECT n.nspname AS schema ${TABLE_RELATION} WHERE t.oid = pg_catalog.to_regclass(pg_catalog.quote_ident($1)) AND t.relkind IN ('r', 'p')`,
+    [tableName],
+    `schema:introspect:searchPath:${tableName}`,
+  )
+  return result.rows[0]?.schema
+}
