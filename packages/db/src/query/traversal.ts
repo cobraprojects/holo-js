@@ -60,7 +60,8 @@ export async function* queryBatches<
     if (traversal.column && sortRows) {
       const key = selectedColumn?.kind === 'column' ? selectedColumn.alias ?? selectedColumn.column.split('.').at(-1)! : traversal.column.split('.').at(-1)!
       const compare = traversal.direction === 'desc' ? compareChunkValuesDescending : compareChunkValuesAscending
-      rows.sort((left, right) => compare(left[key], right[key]))
+      const decimal = idDefinition?.kind === 'decimal'
+      rows.sort((left, right) => compare(left[key], right[key], decimal))
       rebindDatabaseQueryObservationResult(fetchedRows, rows)
     }
     const values = await transform(rows)

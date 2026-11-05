@@ -84,6 +84,28 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(snapshots.map(row => row.amount)).toEqual(snapshots.map(() => '12.30'))
   })
 
+  it('chunks by a decimal column in numeric order when the rows are sorted in memory', async () => {
+    const prices = await openPrices(driver)
+    await DB.table(prices).insert([
+      { label: 'ten', amount: '10.00' },
+      { label: 'two', amount: '2.00' },
+      { label: 'nine', amount: '9.00' },
+      { label: 'negative', amount: '-3.50' },
+    ])
+
+    const ascending: string[] = []
+    await DB.table(prices).select('amount').distinct().chunkById(2, (rows) => {
+      ascending.push(...rows.map(row => String(row.amount)))
+    }, 'amount')
+    const descending: string[] = []
+    await DB.table(prices).select('amount').distinct().chunkByIdDesc(2, (rows) => {
+      descending.push(...rows.map(row => String(row.amount)))
+    }, 'amount')
+
+    expect(ascending).toEqual(['-3.50', '2.00', '9.00', '10.00'])
+    expect(descending).toEqual(['10.00', '9.00', '2.00', '-3.50'])
+  })
+
   it('records grouped realtime state keyed by the decimal text that queries read', async () => {
     const prices = await openPrices(driver)
     await DB.table(prices).insert([
