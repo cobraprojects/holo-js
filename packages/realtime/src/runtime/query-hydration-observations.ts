@@ -43,13 +43,13 @@ export function rebindBelongsToObservations(
         const foreignKey = row[hydration.foreignKey]
         if (foreignKey === null || typeof foreignKey === 'undefined') continue
         const dependency = queryCacheInternals.createTablePredicateCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName, hydration.ownerKey, foreignKey)
-        if (!dependency) continue
+        const tableDependency = queryCacheInternals.createTableCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName)
         const related = row[hydration.relationKey]
         if (related !== null && !isRecord(related)) continue
         const resultPath: readonly RealtimePatchPathSegment[] = Object.freeze([...base, index, hydration.relationKey])
         next.push(Object.freeze({
           connectionName: hydration.relatedConnectionName,
-          dependencies: Object.freeze([queryCacheInternals.createTableCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName), dependency]),
+          dependencies: Object.freeze(dependency ? [tableDependency, dependency] : [tableDependency]),
           emptyRecordValue: null,
           limit: 1,
           orderBy: [],

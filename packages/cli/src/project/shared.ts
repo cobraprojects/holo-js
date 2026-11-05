@@ -73,12 +73,14 @@ export type GeneratedJobRegistryEntry = {
   readonly tries?: number
   readonly backoff?: number | readonly number[]
   readonly timeout?: number
+  readonly sourceHash?: string
 }
 
 export type GeneratedEventRegistryEntry = {
   readonly sourcePath: string
   readonly name: string
   readonly exportName?: string
+  readonly sourceHash?: string
 }
 
 export type GeneratedListenerRegistryEntry = {
@@ -86,6 +88,7 @@ export type GeneratedListenerRegistryEntry = {
   readonly id: string
   readonly eventNames: readonly string[]
   readonly exportName?: string
+  readonly sourceHash?: string
 }
 
 export type GeneratedBroadcastRegistryEntry = {

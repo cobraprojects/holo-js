@@ -1,4 +1,4 @@
-import { assertValidIdentifierPath } from '../identifiers'
+import { assertValidTablePath } from '../identifiers'
 import { toTableDefinition } from './definitions'
 import { createMySQLSchemaReader } from './mysql'
 import { createPostgresSchemaReader } from './postgres'
@@ -54,16 +54,16 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 }
 
 export function readTableStructure(connection: DatabaseContext, tableName: string): Promise<DatabaseTableStructure | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).readTableStructure(tableName)
 }
 
 export function locateTable(connection: DatabaseContext, tableName: string): Promise<TableLocation | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).locateTable(tableName)
 }
 
 export function resolveReferencedTableSchema(connection: DatabaseContext, tableName: string, ownerSchema: string): Promise<string | undefined> {
-  assertValidIdentifierPath(tableName, 'Table name')
+  assertValidTablePath(tableName, 'Table name')
   return createSchemaReader(connection).resolveReferencedTableSchema(tableName, ownerSchema)
 }
