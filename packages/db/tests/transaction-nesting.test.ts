@@ -1,11 +1,11 @@
 import { setTimeout } from 'node:timers/promises'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ConfigurationError, createDatabase, createDialect, resetDB, TransactionError, type DriverAdapter } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 beforeEach(() => resetDB())
 
-const drivers = ['sqlite', 'postgres', 'mysql'] as const
+const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 type Driver = (typeof drivers)[number]
 const concurrencyCodes = { sqlite: 'SQLITE_BUSY', postgres: '40P01', mysql: 'ER_LOCK_DEADLOCK' } as const
 
@@ -233,7 +233,7 @@ describe('transaction nesting and commit integrity', () => {
     await expect(db.transaction(async () => {}, { attempts })).rejects.toBeInstanceOf(ConfigurationError)
   })
 
-  it.each(['postgres', 'mysql'] as const)('retries a real deadlock victim on %s', async driver => {
+  it.each(integrationDrivers(['postgres', 'mysql']))('retries a real deadlock victim on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([{ id: 1, name: 'One' }, { id: 2, name: 'Two' }])
     const firstLocked = deferred()

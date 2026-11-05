@@ -3,7 +3,7 @@ import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { column, createDatabase, createDialect, diffSchema, createSchemaService, SchemaError } from '../src'
 import { defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 function openSQLiteSchema() {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -13,7 +13,7 @@ function openSQLiteSchema() {
 }
 
 describe('native schema diff', () => {
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('reports matching columns and indexes on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('reports matching columns and indexes on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const expected = defineTable(table.tableName.split('.').at(-1)!, table.columns)
     const diff = await diffSchema(schema, [expected])
@@ -26,7 +26,7 @@ describe('native schema diff', () => {
     })
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('reports no changes for unique columns with conventional and shortened names on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('reports no changes for unique columns with conventional and shortened names on %s', async driver => {
     const { schema } = await openDatabase(driver)
     const name = `holo_diff_unique_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`
     onTestFinished(() => schema.dropTable(name))
@@ -112,7 +112,7 @@ describe('native schema diff', () => {
     expect(diff.tables[0]!.extraForeignKeys).toEqual(['team_id->teams.id'])
   })
 
-  it.each(['sqlite', 'mysql'] as const)('rejects unsupported vector columns on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'mysql']))('rejects unsupported vector columns on %s', async driver => {
     const { db, table, schema } = await openDatabase(driver)
     await schema.table(table.tableName, table => { table.blob('embedding').nullable() })
     const vectors = defineTable(table.tableName.split('.').at(-1)!, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })

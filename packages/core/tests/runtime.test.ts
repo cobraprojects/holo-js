@@ -2156,7 +2156,7 @@ export default defineQueueConfig({
     expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
   })
 
-  it('clears the database runtime after PostgreSQL terminates its own active connection', async () => {
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('clears the database runtime after PostgreSQL terminates its own active connection', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/database.ts'), `

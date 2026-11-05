@@ -3,13 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
-
-const livePostgresConfig = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: 'postgres',
-  database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-}
+import { postgresTestConnection } from './support/database'
 
 async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>): Promise<T> {
   const previousTimeZone = process.env.TZ
@@ -27,7 +21,7 @@ async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>):
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres Date writes in app.timezone', () => {
   it('writes Date values through a typed model as app.timezone wall-clock time and reads back the same instant', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const table = `holo_pg_model_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, day DATE NOT NULL, at TIMESTAMP NOT NULL, instant TIMESTAMPTZ NOT NULL)`)
@@ -73,7 +67,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     '2025-04-31T00:00:00+02:00',
   ])('rejects zoned text with an impossible calendar value (%s) instead of writing a different instant', async (value) => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const table = `holo_pg_invalid_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL)`)
@@ -93,7 +87,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('writes an end-of-day zoned value as the instant it names, and rejects a leap second', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const table = `holo_pg_eod_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL)`)
@@ -117,7 +111,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('keeps microseconds from explicitly zoned text written through a typed model', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const table = `holo_pg_micro_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, at TIMESTAMP NOT NULL, instant TIMESTAMPTZ NOT NULL)`)
@@ -139,7 +133,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('matches and stores Date query values as app.timezone wall-clock time through the query builder', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const table = `holo_pg_query_${randomUUID().replaceAll('-', '')}`
       try {

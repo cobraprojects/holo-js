@@ -10,7 +10,7 @@ const livePostgresConfig = {
   database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
 }
 
-describe('@holo-js/db-postgres pool lifecycle', () => {
+describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres pool lifecycle', () => {
   it('reports and recovers from an idle pooled connection the server terminates', async () => {
     const applicationName = `holo_idle_${randomUUID()}`
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})

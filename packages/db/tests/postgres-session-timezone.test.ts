@@ -9,20 +9,27 @@ import {
   registerDatabaseDriverFactory,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
+  type DriverAdapter,
 } from '../src'
+import { postgresTestConnection } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
-const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
-const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
-const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
-const password = process.env.HOLO_POSTGRES_PASSWORD
-const adminDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
 const database = `holo_session_tz_${randomUUID().replaceAll('-', '').slice(0, 12)}`
 
+function sessionConnection() {
+  return { ...postgresTestConnection(), database }
+}
+
+function structuredConnection() {
+  const { user, ...connection } = sessionConnection()
+  return { ...connection, username: user }
+}
+
 function connectionUrl(options?: string): string {
+  const { host, port, user, password } = sessionConnection()
   const url = new URL(`postgresql://${host}:${port}/${database}`)
-  url.username = username
+  url.username = user
   if (password) url.password = password
   if (options) url.searchParams.set('options', options)
   return url.toString()
@@ -55,9 +62,10 @@ async function sessionTimeZone(config: PoolConfig): Promise<unknown> {
 }
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL session time zone follows app.timezone', () => {
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: adminDatabase } })
+  let admin: DriverAdapter
 
   beforeAll(async () => {
+    admin = createPostgresAdapter({ config: postgresTestConnection() })
     await admin.execute(`CREATE DATABASE ${database}`)
     await admin.execute(`ALTER DATABASE ${database} SET timezone = 'Etc/GMT-2'`)
   })
@@ -69,7 +77,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it.each([
     { mode: 'url', connection: () => ({ url: connectionUrl() }) },
-    { mode: 'structured', connection: () => ({ host, port, username, password, database }) },
+    { mode: 'structured', connection: structuredConnection },
   ])('reads defaultNow() and timestamps() defaults back in app.timezone on a UTC+2 server with $mode configuration', async ({ connection }) => {
     useAppTimezone('UTC')
     const db = connectTo(connection())
@@ -99,7 +107,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it('uses app.timezone for adapters created from a pg config', async () => {
     useAppTimezone('Asia/Tokyo')
-    expect(await sessionTimeZone({ host, port, user: username, password, database }))
+    expect(await sessionTimeZone(sessionConnection()))
       .toBe('Asia/Tokyo')
   })
 
@@ -137,8 +145,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it('uses app.timezone for a connection URL whose host is a query parameter', async () => {
     useAppTimezone('Asia/Tokyo')
+    const { host, port, user, password } = sessionConnection()
     const query = new URLSearchParams({ host, port: String(port), options: '-c statement_timeout=5000' })
-    const credentials = password ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}` : encodeURIComponent(username)
+    const credentials = password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}` : encodeURIComponent(user)
     const db = connectTo({ url: `postgresql://${credentials}@/${database}?${query.toString()}` })
     expect(await sessionSettings(db, 'TimeZone', 'statement_timeout')).toEqual({ TimeZone: 'Asia/Tokyo', statement_timeout: '5s' })
   })
@@ -151,7 +160,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it('lets a TimeZone in the pg options win over app.timezone', async () => {
     useAppTimezone('UTC')
-    expect(await sessionTimeZone({ host, port, user: username, password, database, options: '-c TimeZone=America/New_York' }))
+    expect(await sessionTimeZone({ ...sessionConnection(), options: '-c TimeZone=America/New_York' }))
       .toBe('America/New_York')
   })
 
@@ -162,7 +171,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
     useAppTimezone('UTC')
     vi.stubEnv('PGOPTIONS', '-c TimeZone=America/New_York')
     onTestFinished(() => { vi.unstubAllEnvs() })
-    const db = connectTo({ host, port, username, password, database, ...(schema ? { schema } : {}) })
+    const db = connectTo({ ...structuredConnection(), ...(schema ? { schema } : {}) })
     expect(await sessionSettings(db, 'TimeZone')).toEqual({ TimeZone: 'America/New_York' })
   })
 })

@@ -7,6 +7,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import { defineDatabaseConfig, normalizeDatabaseConfig, registerDatabaseDriverFactory, resolveRuntimeConnectionManagerOptions, type DatabaseLogger } from '../src'
+import { postgresIntegration, postgresTestConnection } from './support/database'
 
 type QuerySuccessLog = Parameters<NonNullable<DatabaseLogger['onQuerySuccess']>>[0]
 
@@ -38,15 +39,11 @@ describe('runtime database budgets', () => {
     await pending
   })
 
-  it.each(['url', 'structured'] as const)('preserves pool budgets and a redacted custom logger through %s configuration', async mode => {
+  it.runIf(postgresIntegration).each(['url', 'structured'] as const)('preserves pool budgets and a redacted custom logger through %s configuration', async mode => {
     const applicationName = `holo_budget_${randomUUID()}`
     const entries: QuerySuccessLog[] = []
     const logger: DatabaseLogger = { onQuerySuccess(entry) { entries.push(entry) } }
-    const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
-    const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
-    const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
-    const password = process.env.HOLO_POSTGRES_PASSWORD
-    const database = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
+    const { host, port, user: username, password, database } = postgresTestConnection()
     const url = new URL(`postgresql://${host}:${port}/${database}`)
     url.username = username
     if (password) url.password = password

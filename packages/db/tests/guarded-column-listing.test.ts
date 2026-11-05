@@ -6,6 +6,7 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineModel, resetDB } from '../src'
+import { postgresTestConnection } from './support/database'
 
 async function openAnalytics(columnName: string) {
   const defaultAdapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -36,13 +37,7 @@ function createSharedAdapter(driver: SharedDriver, filename: string) {
     return createSQLiteAdapter({ filename })
   }
 
-  return createPostgresAdapter({ config: {
-    host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-    user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-    password: process.env.HOLO_POSTGRES_PASSWORD,
-    database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-  } })
+  return createPostgresAdapter({ config: postgresTestConnection() })
 }
 
 async function openSharedDatabase(driver: SharedDriver) {

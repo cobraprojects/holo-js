@@ -12,7 +12,7 @@ import {
   type DatabaseContext,
   type TableDefinition,
 } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -259,7 +259,7 @@ describe('SQLite date columns created before 0.6', () => {
   })
 })
 
-for (const driver of ['postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['postgres', 'mysql'])) {
   describe(`${driver} model timestamps`, () => {
     it('keep reading, writing and filtering timestamp columns as dates', async () => {
       const { db, schema } = await openDatabase(driver)

@@ -28,7 +28,7 @@ const liveMySqlConfig = {
   database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
 }
 
-describe('@holo-js/db-mysql', () => {
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql', () => {
   it('connects to the selected integration database', async () => {
     const adapter = createMySQLAdapter({ config: liveMySqlConfig })
     try {

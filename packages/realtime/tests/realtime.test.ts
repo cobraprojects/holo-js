@@ -4128,7 +4128,7 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches limited ordered inserts with database-generated returned columns', async () => {
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('patches limited ordered inserts with database-generated returned columns', async () => {
     const adapter = createPostgresAdapter({ config: {
       host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
       port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),

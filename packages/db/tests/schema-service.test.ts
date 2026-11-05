@@ -4,7 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { errorReportingInternals, type HoloErrorReportContext } from '@holo-js/kernel/error-reporting'
 import { column, createDatabase, createDialect, createSchemaService, defineModel, type DriverAdapter, holoRuntimeInternals, SchemaError, TransactionError, unsafeSql } from '../src'
 import { defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -13,7 +13,7 @@ async function readTempViewsAndTriggers(adapter: DriverAdapter): Promise<string[
   return result.rows.map(row => row.name)
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`native ${driver} schema service`, () => {
     it('creates typed columns, defaults, indexes, and constraints that accept valid records', async () => {
       const { db, schema } = await openDatabase(driver)
