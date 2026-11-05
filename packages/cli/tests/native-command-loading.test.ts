@@ -75,13 +75,13 @@ it('runs app commands that deep-import packages without exports maps and keeps t
   }
 }, 30000)
 
-it.each(['sync', 'database'] as const)('runs an app command that dispatches a discovered job on the %s queue driver', async driver => {
+it.each([['sync', 'relative'], ['sync', 'alias'], ['database', 'relative'], ['database', 'alias']] as const)('runs an app command that dispatches a discovered job on the %s queue driver with %s imports', async (driver, importStyle) => {
   const { root, write } = await createProject()
   try {
     await write('config/database.ts', "import { defineDatabaseConfig } from '@holo-js/db'; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: './queue.sqlite' } } })")
     await write('config/queue.ts', `import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: '${driver}', failed: false, connections: { sync: { driver: 'sync' }, database: { driver: 'database', connection: 'main' } } })`)
     await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle(payload: { n: number }) { console.log(JSON.stringify({ handled: payload.n })) } })")
-    await write('server/commands/plain/dispatch.ts', `import { defineCommand } from '@holo-js/cli'\nimport Plain from '${driver === 'sync' ? '../../jobs/plain' : '@/server/jobs/plain'}'\nexport default defineCommand({ description: 'Dispatch a plain job', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({ n: 1 }) }); console.log(JSON.stringify({ dispatched: true })) } })`)
+    await write('server/commands/plain/dispatch.ts', `import { defineCommand } from '@holo-js/cli'\nimport Plain from '${importStyle === 'relative' ? '../../jobs/plain' : '@/server/jobs/plain'}'\nexport default defineCommand({ description: 'Dispatch a plain job', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({ n: 1 }) }); console.log(JSON.stringify({ dispatched: true })) } })`)
     if (driver === 'database') {
       await execute(process.execPath, [cli, 'queue:table'], { cwd: root })
       await execute(process.execPath, [cli, 'migrate'], { cwd: root })
@@ -94,6 +94,23 @@ it.each(['sync', 'database'] as const)('runs an app command that dispatches a di
       expect(worker.stdout).toContain('{"handled":1}')
       expect(worker.stdout).toContain('[queue] Stopped (empty). processed=1 released=0 failed=0')
     }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
+it('runs app commands that do not use a discovered job that fails to load', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/jobs/broken.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/commands/hello.ts', "export default { description: 'Say hello', async run() { console.log('hello') } }")
+    await write('server/commands/plain/dispatch.ts', "import { defineCommand } from '@holo-js/cli'\nimport Plain from '../../jobs/plain'\nexport default defineCommand({ description: 'Dispatch a plain job', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({}) }) } })")
+    expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
+    await write('server/jobs/broken.ts', "import { defineJob } from '@holo-js/queue'\nthrow new Error('broken job module')\nexport default defineJob({ async handle() {} })")
+    expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
+    await expect(execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })).rejects.toThrow('broken job module')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
