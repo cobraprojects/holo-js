@@ -77,7 +77,7 @@ On SQLite, Holo binds `true` and `false` as the integers `1` and `0`, and binds 
 
 ### PostgreSQL and MySQL
 
-Use either a connection URL or separate host settings. You can also set `ssl` next to a URL. It adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests.
+Use either a connection URL or separate host settings. When you set both, the URL wins: its host, port, credentials and database are used, and `holo migrate` creates the URL's database when it's missing, not the one `database` names. You can also set `ssl` next to a URL. It adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests.
 
 ```ts [config/database.ts]
 import { defineDatabaseConfig } from '@holo-js/db'
