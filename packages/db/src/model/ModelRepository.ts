@@ -1992,7 +1992,6 @@ export class ModelRepository<
         const written = this.softDeleteWrite(deletedAtColumn, deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
-        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.valueTransformer.resolveCast(deletedAtColumn), deletedAt) } as never)
         entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {

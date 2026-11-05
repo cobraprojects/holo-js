@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -186,7 +186,13 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     const column = ownEntry(this.definition.table.columns, key)
-    return column ? storesText(column) : this.definition.untyped
+    return column ? storesText(column) || storesDate(column) : this.definition.untyped
+  }
+
+  private holdsCalendarDate(key: string): boolean {
+    return ownEntry(this.definition.table.columns, key)?.kind === 'date'
+      && !ownEntry(this.definition.casts, key)
+      && this.isModelDateColumn(key)
   }
 
   private hasBuiltInDateCast(key: string): boolean {
@@ -218,6 +224,10 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
+    if (this.holdsCalendarDate(key)) {
+      return calendarMidnightWriteValue(this.getSchemaDialectName(), value)
+    }
+
     if (this.hasBuiltInDateCast(key)) {
       return dateLikeWriteValue(this.getSchemaDialectName(), value, column && storesText(column) ? 'text' : 'native')
     }
