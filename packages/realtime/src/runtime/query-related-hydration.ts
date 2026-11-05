@@ -296,9 +296,6 @@ async function fetchGroupedRelatedHydrationRows(
   }
 
   const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
-  if (!rows) {
-    return undefined
-  }
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
@@ -326,8 +323,7 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  const readRows = readBackfilledRows(hydration.relatedTable, rows.rows)
-  return readRows ? groupRelatedTopOneRows(readRows, values) : undefined
+  return groupRelatedTopOneRows(readBackfilledRows(hydration.relatedTable, rows.rows), values)
 }
 
 function groupRelatedTopOneRows(
@@ -482,10 +478,6 @@ async function fetchRelatedHydrationRows(
   const rows = readBackfilledRows(hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
     .get())
-  if (!rows) {
-    return undefined
-  }
-
   return validateRelatedHydrationRows(rows, hydration)
 }
 

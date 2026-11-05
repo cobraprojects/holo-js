@@ -30,9 +30,16 @@ export function readBackfilledRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
-): Readonly<Record<string, unknown>>[] | undefined {
-  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections))) return undefined
+): Readonly<Record<string, unknown>>[] {
+  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections))) throw new UnreadableBackfillError()
   return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
+}
+
+export class UnreadableBackfillError extends Error {
+  constructor() {
+    super('A backfilled boolean column holds a value other than 1 or 0.')
+    this.name = 'UnreadableBackfillError'
+  }
 }
 
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {

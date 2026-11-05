@@ -210,12 +210,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    const readRows = readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)
-    if (!readRows) {
-      return undefined
-    }
-
-    rowsById.set(id, Object.freeze(readRows))
+    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
   }
 
   for (const value of values) {
@@ -397,12 +392,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    const readRows = readBackfilledRows(query.table, [Object.freeze(result)], query.selections)
-    if (!readRows) {
-      return undefined
-    }
-
-    group.push(...readRows)
+    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
     rowsByGroup.set(groupValue, group)
   }
 
