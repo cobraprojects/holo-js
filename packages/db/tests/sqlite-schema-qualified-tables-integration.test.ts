@@ -418,6 +418,32 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await indexesOf(schema, 'archive.items')).toEqual([{ name: 'items_doubled_unique', unique: true, columns: ['doubled'] }])
   })
 
+  it('drops the inline unique of the table SQLite resolves when a temporary table shadows it', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "a" TEXT UNIQUE, "b" TEXT UNIQUE)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY, "b" TEXT UNIQUE, "a" TEXT UNIQUE)', source: 'schema' })
+
+    await schema.table('items', (table) => {
+      table.dropUnique('sqlite_autoindex_items_1')
+    })
+
+    await DB.table('temp.items').insert([{ id: 1, a: 'x', b: 'same' }, { id: 2, a: 'y', b: 'same' }])
+    await expect(DB.table('temp.items').insert([{ id: 3, a: 'dup', b: 'p' }, { id: 4, a: 'dup', b: 'q' }])).rejects.toThrow('UNIQUE constraint failed')
+    await expect(DB.table('main.items').insert([{ id: 1, a: 'm', b: 'n' }, { id: 2, a: 'o', b: 'n' }])).rejects.toThrow('UNIQUE constraint failed')
+  })
+
+  it('drops an inline unique on an unqualified attached table', async () => {
+    const { db, schema } = await openArchive()
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."items" ("id" INTEGER PRIMARY KEY, "code" TEXT UNIQUE)', source: 'schema' })
+
+    await schema.table('items', (table) => {
+      table.dropUnique('sqlite_autoindex_items_1')
+    })
+
+    await DB.table('archive.items').insert([{ id: 1, code: 'same' }, { id: 2, code: 'same' }])
+    expect(await DB.table('archive.items').count()).toBe(2)
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {

@@ -143,12 +143,13 @@ export class SQLiteSchemaOperations {
   }
 
   private async resolveInlineUniqueRewrite(tableName: string, indexName: string): Promise<UniqueRewrite | undefined> {
-    const index = (await readTableStructure(this.connection, tableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
+    const resolvedTableName = await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+    const index = (await readTableStructure(this.connection, resolvedTableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
     if (!index?.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined
     }
 
-    const indexKey = await readSQLiteIndexKey(this.connection, tableName, index.name)
+    const indexKey = await readSQLiteIndexKey(this.connection, resolvedTableName, index.name)
     return table => withoutUniquesBackingIndex(table, indexKey)
   }
 
