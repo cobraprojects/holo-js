@@ -134,4 +134,40 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
     expect((current.commentable!() as { id: number, commentable: unknown }[]).find(comment => comment.id === 200)?.commentable).toBeNull()
     expect(JSON.stringify(current.taggedPosts!())).not.toContain('Frequency Hopping')
   })
+
+  it('keeps a subscription that morph-loads a relation equal to a fresh read', async () => {
+    const { db, posts, comments, postType, Comment } = await openBlog(driver)
+    const reads = {
+      loadMorph: async () => {
+        const comment = await db.model(Comment).query().orderBy('id').first()
+        return (await comment!.loadMorph('commentable', {})).toJSON()
+      },
+      nestedLoadMorph: async () => {
+        const comment = await db.model(Comment).query().orderBy('id').first()
+        return (await comment!.loadMorph('commentable', { [postType]: ['comments'] })).toJSON()
+      },
+    }
+    const current: Record<string, () => unknown> = {}
+    for (const [name, handler] of Object.entries(reads)) {
+      const subscription = await subscribeRealtimeQuery(
+        defineRealtimeQuery({ access: 'public', handler }),
+        {},
+        { onData: () => {}, onError: (error) => { throw error } },
+      )
+      current[name] = () => subscription.current.data
+    }
+    const mutate = async (step: string, handler: () => Promise<unknown>) => {
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+      for (const [name, read] of Object.entries(reads)) {
+        expect(current[name]!(), `${name} after ${step}`).toEqual(JSON.parse(JSON.stringify(await read())))
+      }
+    }
+
+    await mutate('updating the post', () => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+    expect(current.loadMorph!()).toMatchObject({ id: 100, body: 'first', commentable: { id: 10, title: 'Analytical Engines' } })
+    await mutate('inserting a comment on the post', () => db.table(comments).insert({ id: 300, commentable_type: postType, commentable_id: 10, body: 'more' }))
+    expect(JSON.stringify(current.nestedLoadMorph!())).toContain('more')
+    await mutate('deleting the post', () => db.table(posts).where('id', 10).delete())
+    expect(current.loadMorph!()).toMatchObject({ id: 100, commentable: null })
+  })
 })

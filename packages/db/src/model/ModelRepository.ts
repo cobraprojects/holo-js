@@ -655,6 +655,15 @@ export class ModelRepository<
       throw new SecurityError(`Relation "${relationName}" does not support morph loading.`)
     }
 
+    await this.loadRequiringQueryRefresh(() => this.loadMorphTargets(entities, relationName, relation, mapping))
+  }
+
+  private async loadMorphTargets(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'morphTo' }>,
+    mapping: Readonly<Record<string, string | readonly string[] | Readonly<Record<string, RelationConstraint>>>>,
+  ): Promise<void> {
     const pending = entities.filter(entity => !entity.hasRelation(relationName))
     if (pending.length > 0) {
       await this.loadMorphToRelation(pending, relationName, relation)
