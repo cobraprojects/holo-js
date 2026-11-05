@@ -11,3 +11,7 @@ export function isPostgresConnection(connection: DatabaseContext): boolean {
 export function isMySQLConnection(connection: DatabaseContext): boolean {
   return connection.getDialect().name.startsWith('mysql')
 }
+
+export function textMatchesAnyNumber(connection: DatabaseContext): boolean {
+  return !isPostgresConnection(connection) && !isSQLiteConnection(connection)
+}
