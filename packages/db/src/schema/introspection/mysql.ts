@@ -3,10 +3,10 @@ import { createIntrospect } from './introspect'
 import { readForeignKeyColumns, readStringLength } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { ComputedColumn } from '../types'
-import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
+import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader, TableLocation } from './types'
 
 type TableNameRow = { name: string }
-type TableSchemaRow = { table_schema: string }
+type TableLocationRow = { table_schema: string, table_name: string }
 type ColumnRow = { table_schema: string, name: string, data_type: string, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string, generation_expression: string | null }
 type IndexRow = { name: string, non_unique: number | string, column_name: string | null, sub_part: number | null, expression: string | null }
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -90,20 +90,24 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
   const configuredSchema = connection.getSchemaName() ?? null
   const introspect = createIntrospect(connection)
 
+  async function locateTable(tableName: string): Promise<TableLocation | undefined> {
+    const { schema, table } = splitTablePath(tableName)
+    const result = await introspect<TableLocationRow>(`SELECT table_schema AS table_schema, table_name AS table_name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? AND ${BASE_TABLE_FILTER}`, [schema ?? configuredSchema, table], `schema:introspect:table:${tableName}`)
+    const row = result.rows[0]
+    return row && { schema: row.table_schema, table: row.table_name }
+  }
+
   return {
     async listTables() {
       const result = await introspect<TableNameRow>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND ${BASE_TABLE_FILTER} ORDER BY table_name`, [configuredSchema], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
-    async resolveTableSchema(tableName) {
-      const { schema, table } = splitTablePath(tableName)
-      const result = await introspect<TableSchemaRow>(`SELECT table_schema AS table_schema FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? AND ${BASE_TABLE_FILTER}`, [schema ?? configuredSchema, table], `schema:introspect:table:${tableName}`)
-      return result.rows[0]?.table_schema
-    },
+    locateTable,
 
     async resolveReferencedTableSchema(tableName, ownerSchema) {
-      return splitTablePath(tableName).schema ?? ownerSchema
+      const { schema = ownerSchema, table } = splitTablePath(tableName)
+      return (await locateTable(`${schema}.${table}`))?.schema ?? schema
     },
 
     async readTableStructure(tableName) {

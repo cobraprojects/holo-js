@@ -260,6 +260,51 @@ describe('native schema diff', () => {
     expect(diff.tables[0]).toMatchObject({ table: 'MAIN.teams', hasChanges: false })
   })
 
+  it('matches a qualified table by its stored name case-insensitively on sqlite', async () => {
+    const { adapter, schema } = openSQLiteSchema()
+    await adapter.execute('CREATE TABLE "Teams" (id INTEGER PRIMARY KEY NOT NULL)')
+
+    const diff = await diffSchema(schema, [defineTable('main.teams', { id: column.integer().primaryKey() })])
+
+    expect(diff.missingTables).toEqual([])
+    expect(diff.extraTables).toEqual([])
+  })
+
+  it('reports a table in an unattached schema as missing on sqlite', async () => {
+    const { schema } = openSQLiteSchema()
+
+    expect(await schema.hasTable('missing.orders')).toBe(false)
+    const diff = await diffSchema(schema, [defineTable('missing.orders', { id: column.id() })])
+
+    expect(diff.missingTables).toEqual(['missing.orders'])
+  })
+
+  it('matches qualified tables and references case-insensitively when mysql folds names', async ({ skip }) => {
+    const { schema, adapter, db } = await openDatabase('mysql')
+    const folding = await db.queryCompiled<{ folding: number | string }>({ sql: 'SELECT @@lower_case_table_names AS folding', bindings: [], source: 'test' })
+    if (Number(folding.rows[0]!.folding) === 0) skip()
+    const database = (process.env.HOLO_MYSQL_DATABASE ?? 'mysql').toUpperCase()
+    const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
+    const parents = `holo_parents_${suffix}`
+    const children = `holo_children_${suffix}`
+    onTestFinished(async () => {
+      await adapter.execute(`DROP TABLE IF EXISTS \`${children}\``)
+      await adapter.execute(`DROP TABLE IF EXISTS \`${parents}\``)
+    })
+    await adapter.execute(`CREATE TABLE \`${parents}\` (id BIGINT UNSIGNED PRIMARY KEY)`)
+    await adapter.execute(`CREATE TABLE \`${children}\` (id BIGINT UNSIGNED PRIMARY KEY, parent_id BIGINT UNSIGNED NOT NULL, FOREIGN KEY (parent_id) REFERENCES \`${parents}\` (id))`)
+    const declared = defineTable(`${database}.${children}`, {
+      id: column.bigInteger().primaryKey(),
+      parent_id: column.bigInteger().references('id').on(`${database}.${parents}`),
+    })
+
+    const diff = await diffSchema(schema, [declared])
+
+    expect(diff.missingTables).toEqual([])
+    expect(diff.extraTables).not.toContain(children)
+    expect(diff.tables[0]).toMatchObject({ missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [] })
+  })
+
   it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps an unqualified table that shares its name with a table in another schema on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const name = table.tableName.split('.').at(-1)!

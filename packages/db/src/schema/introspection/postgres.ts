@@ -4,10 +4,11 @@ import { createIntrospect } from './introspect'
 import { readForeignKeyColumns, readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { ComputedColumn } from '../types'
-import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
+import type { DatabaseEnumCheckStructure, DialectSchemaReader, TableLocation } from './types'
 
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
+type TableLocationRow = { schema: string, table: string }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -110,10 +111,11 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const introspect = createIntrospect(connection)
 
-  async function resolveTableSchema(tableName: string): Promise<string | undefined> {
+  async function locateTable(tableName: string): Promise<TableLocation | undefined> {
     const { schema, table } = splitTablePath(tableName)
-    const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
-    return exists.rows[0]?.schema
+    const exists = await introspect<TableLocationRow>(`SELECT n.nspname AS schema, t.relname AS table ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
+    const row = exists.rows[0]
+    return row && { schema: row.schema, table: row.table }
   }
 
   return {
@@ -122,7 +124,7 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
       return result.rows.map(row => row.name).sort()
     },
 
-    resolveTableSchema,
+    locateTable,
 
     async resolveReferencedTableSchema(tableName) {
       const { schema } = splitTablePath(tableName)
@@ -134,7 +136,7 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? null, table]
-      const resolvedSchema = await resolveTableSchema(tableName)
+      const resolvedSchema = (await locateTable(tableName))?.schema
       if (resolvedSchema === undefined) return undefined
 
       const columns = await introspect<ColumnRow>(COLUMNS_SQL, bindings, `schema:introspect:columns:${tableName}`)

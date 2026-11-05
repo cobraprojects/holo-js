@@ -58,9 +58,14 @@ export interface DatabaseTableStructure {
   readonly enumChecks: readonly DatabaseEnumCheckStructure[]
 }
 
+export interface TableLocation {
+  readonly schema: string
+  readonly table: string
+}
+
 export interface DialectSchemaReader {
   listTables(): Promise<string[]>
-  resolveTableSchema(tableName: string): Promise<string | undefined>
+  locateTable(tableName: string): Promise<TableLocation | undefined>
   resolveReferencedTableSchema(tableName: string, ownerSchema: string): Promise<string | undefined>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
 }

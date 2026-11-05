@@ -5,7 +5,7 @@ import type {
   TableIndexDefinition,
 } from './types'
 import { getSchemaServiceConnection, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
-import { resolveReferencedTableSchema, resolveTableSchema } from './introspection'
+import { locateTable, resolveReferencedTableSchema, type TableLocation } from './introspection'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
@@ -82,26 +82,25 @@ export async function diffSchema(
   tables: readonly TableDefinition[],
 ): Promise<SchemaDiff> {
   const actualTables = await schema.getTables()
-  const tableSchemas = createTableSchemaResolver(schema)
+  const tableLocations = createTableLocator(schema)
   const unqualifiedNames = new Set(tables.map(table => table.tableName).filter(name => splitTablePath(name).schema === undefined))
-  const qualifiedLocations: { readonly table: string, readonly schema: string }[] = []
+  const qualifiedLocations: TableLocation[] = []
   const existingTables: TableDefinition[] = []
   const missingTables: string[] = []
   for (const table of tables) {
-    const { schema: schemaName, table: tableName } = splitTablePath(table.tableName)
-    if (schemaName === undefined) {
+    if (splitTablePath(table.tableName).schema === undefined) {
       if (actualTables.includes(table.tableName)) existingTables.push(table)
       else missingTables.push(table.tableName)
       continue
     }
 
-    const resolvedSchema = await tableSchemas.table(table.tableName)
-    if (resolvedSchema === undefined) {
+    const location = await tableLocations.table(table.tableName)
+    if (location === undefined) {
       missingTables.push(table.tableName)
       continue
     }
 
-    qualifiedLocations.push({ table: tableName, schema: resolvedSchema })
+    qualifiedLocations.push(location)
     existingTables.push(table)
   }
 
@@ -109,13 +108,13 @@ export async function diffSchema(
   for (const name of actualTables) {
     if (unqualifiedNames.has(name)) continue
     const candidates = qualifiedLocations.filter(location => location.table === name)
-    const resolvedSchema = candidates.length > 0 ? await tableSchemas.table(name) : undefined
+    const resolvedSchema = candidates.length > 0 ? (await tableLocations.table(name))?.schema : undefined
     if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
   }
 
   const tableDiffs: TableSchemaDiff[] = []
   for (const table of existingTables) {
-    tableDiffs.push(await diffTable(schema, table, tableSchemas))
+    tableDiffs.push(await diffTable(schema, table, tableLocations))
   }
 
   return {
@@ -126,8 +125,8 @@ export async function diffSchema(
   }
 }
 
-interface TableSchemaResolver {
-  table(tableName: string): Promise<string | undefined>
+interface TableLocator {
+  table(tableName: string): Promise<TableLocation | undefined>
   reference(tableName: string, ownerSchema: string): Promise<string | undefined>
 }
 
@@ -142,11 +141,11 @@ function memoize<TResult>(lookup: (key: string) => Promise<TResult>): (key: stri
   }
 }
 
-function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
+function createTableLocator(schema: SchemaService): TableLocator {
   const connection = getSchemaServiceConnection(schema)
   const references = new Map<string, (tableName: string) => Promise<string | undefined>>()
   return {
-    table: memoize(tableName => resolveTableSchema(connection, tableName)),
+    table: memoize(tableName => locateTable(connection, tableName)),
     reference(tableName, ownerSchema) {
       let lookup = references.get(ownerSchema)
       if (!lookup) {
@@ -159,16 +158,16 @@ function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
 }
 
 async function resolveReferencedTable(
-  tableSchemas: TableSchemaResolver,
+  tableLocations: TableLocator,
   ownerTableName: string,
   referencedTableName: string,
 ): Promise<string> {
   const owner = splitTablePath(ownerTableName)
   const referenced = splitTablePath(referencedTableName)
   if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
-  const ownerSchema = await tableSchemas.table(ownerTableName)
+  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
   if (ownerSchema === undefined) return referencedTableName
-  const referencedSchema = await tableSchemas.reference(referencedTableName, ownerSchema)
+  const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
   return referencedSchema === ownerSchema ? referenced.table : `${referencedSchema}.${referenced.table}`
 }
@@ -176,7 +175,7 @@ async function resolveReferencedTable(
 async function diffTable(
   schema: SchemaService,
   table: TableDefinition,
-  tableSchemas: TableSchemaResolver,
+  tableLocations: TableLocator,
 ): Promise<TableSchemaDiff> {
   const [actualColumns, actualIndexes, actualForeignKeys] = await Promise.all([
     schema.getColumns(table.tableName),
@@ -265,7 +264,7 @@ async function diffTable(
 
   const expectedForeignKeys = await Promise.all(expectedColumns
     .filter((column): column is AnyColumnDefinition & { references: ForeignKeyReference & { table: string } } => Boolean(column.references?.table))
-    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(tableSchemas, table.tableName, column.references.table))))
+    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(tableLocations, table.tableName, column.references.table))))
   const expectedForeignKeyByName = new Map(expectedForeignKeys.map(foreignKey => [foreignKey.name, foreignKey]))
   const actualForeignKeyByName = new Map(actualForeignKeys.map(foreignKey => [normalizeActualForeignKeyName(foreignKey), foreignKey]))
   const missingForeignKeys = expectedForeignKeys

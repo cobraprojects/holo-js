@@ -14,7 +14,7 @@ import { executeStatements, runAtomically } from './ddlExecution'
 import { SQLiteSchemaOperations } from './SQLiteSchemaOperations'
 import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
-import { createSchemaReader, readTableStructure, resolveTableSchema } from './introspection'
+import { createSchemaReader, locateTable, readTableStructure } from './introspection'
 import { inferColumnKind } from './introspection/definitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
@@ -162,7 +162,7 @@ export class SchemaService {
 
   async hasTable(name: string): Promise<boolean> {
     assertValidIdentifierPath(name, 'Table name')
-    if (splitTablePath(name).schema !== undefined) return (await resolveTableSchema(this.connection, name)) !== undefined
+    if (splitTablePath(name).schema !== undefined) return (await locateTable(this.connection, name)) !== undefined
     const tables = await this.getTables()
     return tables.includes(name)
   }
