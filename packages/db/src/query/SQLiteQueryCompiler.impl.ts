@@ -94,7 +94,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return {
       sql: `SELECT "resolved"."schema" AS "schema", "resolved"."name" AS "name", (SELECT "bare"."schema" FROM (${resolve('')}) AS "bare") AS "bare_schema" FROM (SELECT 1) AS "probe" LEFT JOIN (${resolve(schema === undefined ? '' : 'AND "tables"."schema" = ? COLLATE NOCASE ')}) AS "resolved" ON 1 = 1`,
       bindings: schema === undefined ? [table, table] : [table, table, schema],
-      source: `query:select:${tableName}`,
+      source: `schema:introspect:tableIdentity:${tableName}`,
     }
   }
 

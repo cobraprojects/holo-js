@@ -1,7 +1,7 @@
 import { getRootDatabaseContext } from '../core/contextOwnership'
-import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { splitTablePath } from '../schema/identifiers'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { SelectQueryPlan, QueryPredicateNode } from './ast'
 
@@ -19,12 +19,8 @@ type TableIdentityEntry = {
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
 const canonicalNames = new Map<string, Map<string, string>>()
 
-function identityOwner(connection: DatabaseContext): object {
-  return currentRootTransaction(connection) ?? getRootDatabaseContext(connection)
-}
-
 function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
-  const owner = identityOwner(connection)
+  const owner = getRootDatabaseContext(connection)
   const existing = resolvedIdentities.get(owner)
   if (existing) return existing
   const created = new Map<string, TableIdentityEntry>()
@@ -40,7 +36,8 @@ function rememberCanonicalName(connectionName: string, tableName: string, identi
 
 function toCanonicalName(tableName: string, row: TableIdentityRow | undefined): string {
   if (!row?.schema || !row.name) return tableName
-  return row.schema === row.bare_schema ? row.name : `${row.schema}.${row.name}`
+  const { table } = splitTablePath(tableName)
+  return row.schema === row.bare_schema ? table : `${row.schema}.${table}`
 }
 
 async function lookupTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
@@ -55,6 +52,7 @@ export function canonicalTableName(connectionName: string, tableName: string): s
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
+  if (splitTablePath(tableName).schema === undefined) return tableName
   const identities = ownerIdentities(connection)
   const cached = identities.get(tableName)
   const entry = cached?.generation === currentSchemaGeneration()

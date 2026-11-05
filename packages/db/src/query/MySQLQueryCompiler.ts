@@ -12,7 +12,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return {
       sql: 'SELECT COALESCE(`tables`.`TABLE_SCHEMA`, ?, DATABASE()) AS `schema`, COALESCE(`tables`.`TABLE_NAME`, ?) AS `name`, DATABASE() AS `bare_schema` FROM (SELECT 1) AS `probe` LEFT JOIN information_schema.`TABLES` AS `tables` ON `tables`.`TABLE_SCHEMA` = COALESCE(?, DATABASE()) AND `tables`.`TABLE_NAME` = ?',
       bindings: [schema ?? null, table, schema ?? null, table],
-      source: `query:select:${tableName}`,
+      source: `schema:introspect:tableIdentity:${tableName}`,
     }
   }
 
