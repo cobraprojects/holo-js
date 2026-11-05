@@ -687,8 +687,8 @@ function unusedHelperName(preferred: string, prefix: string, width: number, cont
   }
 }
 
-function sameWidthReplacement(functionName: string, original: string): string {
-  const call = `${functionName}()`
+function sameWidthReplacement(functionName: string, original: string, parenthesized = false): string {
+  const call = parenthesized ? `(${functionName}())` : `${functionName}()`
   const lines = original.split(/(\r\n|\n|\r|\u2028|\u2029)/)
   if (lines.length === 1) return call.padEnd(original.length, ' ')
   const lastLine = lines.at(-1)!
@@ -724,7 +724,7 @@ function createSourceModuleUrlPlugin(): Plugin {
           dirname: unusedHelperName('__holoMetaDir', '__holoDir', 13, contents, identifiers),
           filename: unusedHelperName('__holoMetaFil', '__holoFil', 13, contents, identifiers),
         }
-        const metaFunction = unusedHelperName('__hMeta00', '__hMeta', 9, contents, identifiers)
+        const metaFunction = unusedHelperName('__hMeta', '__hM', 7, contents, identifiers)
         const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
         const asSourceProperty = (name: string): SourceProperty | undefined => Object.hasOwn(sourceValues, name) ? name as SourceProperty : undefined
         const sourcePropertyRead = (node: TypeScriptNode): SourceProperty | undefined => {
@@ -766,9 +766,21 @@ function createSourceModuleUrlPlugin(): Plugin {
         let cursor = 0
         const usedProperties = new Set<SourceProperty>()
         let usesMetaFunction = false
+        const calleelessNewEnds = new Set<number>()
+        const collectCalleelessNews = (node: TypeScriptNode): void => {
+          if (ts.isNewExpression(node) && node.expression.pos === node.expression.end) calleelessNewEnds.add(node.end)
+          ts.forEachChild(node, collectCalleelessNews)
+        }
+        collectCalleelessNews(source)
+        const isConstructedCallee = (node: TypeScriptNode): boolean => {
+          if (calleelessNewEnds.has(node.pos)) return true
+          let current = node
+          while ((ts.isPropertyAccessExpression(current.parent) || ts.isElementAccessExpression(current.parent)) && current.parent.expression === current) current = current.parent
+          return ts.isNewExpression(current.parent) && current.parent.expression === current
+        }
         const replace = (node: TypeScriptNode, functionName: string) => {
           const start = node.getStart(source)
-          fragments.push(contents.slice(cursor, start), sameWidthReplacement(functionName, contents.slice(start, node.end)))
+          fragments.push(contents.slice(cursor, start), sameWidthReplacement(functionName, contents.slice(start, node.end), isConstructedCallee(node)))
           cursor = node.end
         }
 

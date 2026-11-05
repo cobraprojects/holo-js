@@ -1017,6 +1017,8 @@ console.log(JSON.stringify({ copy: loaded.copy }))
     await mkdir(dirname(entryPath), { recursive: true })
     await writeFile(entryPath, [
       'const meta = import.meta',
+      "import.meta['Made'] = class { readonly kind = 'made' }",
+      'export const constructed = [new import.meta.Made().kind, new import.meta.Made, new import.meta[\'Made\']().kind, new (import.meta).Made().kind]',
       'const located = (value: ImportMeta) => [value.url, value.dirname, value.filename]',
       'export const aliased = [meta.url, meta.dirname, meta.filename]',
       'export const passed = located(import.meta)',
@@ -1033,7 +1035,7 @@ console.log(JSON.stringify({ copy: loaded.copy }))
       'export const shadowed = [Proxy, Reflect]',
       '',
     ].join('\n'))
-    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { aliased: string[], passed: string[], wrapped: string, spread: string, same: boolean, custom: string, resolved: string, dynamic: string[], frozen: string, shadowed: unknown[] }
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { aliased: string[], passed: string[], wrapped: string, spread: string, same: boolean, custom: string, resolved: string, dynamic: string[], frozen: string, shadowed: unknown[], constructed: unknown[] }
     const sourceUrl = pathToFileURL(entryPath).href
     expect(loaded.aliased).toEqual([sourceUrl, dirname(entryPath), entryPath])
     expect(loaded.passed).toEqual([sourceUrl, dirname(entryPath), entryPath])
@@ -1045,6 +1047,7 @@ console.log(JSON.stringify({ copy: loaded.copy }))
     expect(loaded.dynamic).toEqual([sourceUrl, entryPath])
     expect(loaded.frozen).toBe(sourceUrl)
     expect(loaded.shadowed).toEqual([undefined, undefined])
+    expect(loaded.constructed).toMatchObject(['made', { kind: 'made' }, 'made', 'made'])
   })
 
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
