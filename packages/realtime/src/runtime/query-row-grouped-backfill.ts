@@ -14,6 +14,8 @@ import {
   createBackfillQuery,
   createBackfillSelection,
   getBackfillDatabaseConnection,
+  observedTableKey,
+  readBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -172,7 +174,7 @@ function createGroupedExactRowBackfillKey(
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -208,7 +210,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    rowsById.set(id, Object.freeze([stripGroupedRowIdentity(row, usesHiddenIdentity)]))
+    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
   }
 
   for (const value of values) {
@@ -348,7 +350,7 @@ function createGroupedWindowBackfillKey(
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -367,10 +369,11 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(rows.rows, values)
+  return groupWindowRows(query, rows.rows, values)
 }
 
 function groupWindowRows(
+  query: DatabaseQueryObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
@@ -389,7 +392,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    group.push(Object.freeze(result))
+    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
     rowsByGroup.set(groupValue, group)
   }
 
