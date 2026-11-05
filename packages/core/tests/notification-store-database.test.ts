@@ -16,21 +16,10 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import notificationsMigration from '../../../apps/blog-next/server/db/migrations/2026_04_25_044032_create_notifications'
 import { createCoreNotificationStore } from '../src/portable/notificationPersistence'
+import { mysqlTestConnection, postgresTestConnection } from '../../../tests/support/real-database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
 
-const postgres = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-  password: process.env.HOLO_POSTGRES_PASSWORD,
-}
-const mysql = {
-  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-  user: process.env.HOLO_MYSQL_USER ?? 'root',
-  password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-}
 const enabled: Readonly<Record<Driver, boolean>> = {
   sqlite: true,
   postgres: process.env.HOLO_POSTGRES_INTEGRATION === '1',
@@ -41,8 +30,8 @@ function connect(driver: Driver, database: string): DatabaseContext {
   const adapter = driver === 'sqlite'
     ? createSQLiteAdapter({ filename: ':memory:' })
     : driver === 'postgres'
-      ? createPostgresAdapter({ config: { ...postgres, database, max: 2 } })
-      : createMySQLAdapter({ config: { ...mysql, database, connectionLimit: 2 } })
+      ? createPostgresAdapter({ config: { ...postgresTestConnection(), database, max: 2 } })
+      : createMySQLAdapter({ config: { ...mysqlTestConnection(), database, connectionLimit: 2 } })
   return new DatabaseContext({ connectionName: 'main', driver, dialect: createDialect(driver), adapter })
 }
 
@@ -58,7 +47,7 @@ async function withDatabase(driver: Driver, run: (connection: DatabaseContext) =
   }
 
   const name = `notifications_${randomUUID().replaceAll('-', '')}`
-  const admin = connect(driver, driver)
+  const admin = connect(driver, (driver === 'postgres' ? postgresTestConnection() : mysqlTestConnection()).database)
   const connection = connect(driver, name)
   try {
     await admin.executeCompiled({ sql: `CREATE DATABASE ${name}`, source: 'schema' })

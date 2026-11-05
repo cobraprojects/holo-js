@@ -12,6 +12,7 @@ import {
   type QueueReservedJob,
 } from '@holo-js/queue'
 import { createQueueDbRuntimeOptions } from '../src'
+import { mysqlTestConnection, postgresTestConnection } from '../../../tests/support/real-database'
 
 type ServerDriver = 'mysql' | 'postgres'
 
@@ -37,13 +38,7 @@ function connect(driver: ServerDriver, connectionName: string): DatabaseContext 
       driver,
       dialect: createDialect(driver),
       adapter: createMySQLAdapter({
-        config: {
-          host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-          port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-          user: process.env.HOLO_MYSQL_USER ?? 'root',
-          password: process.env.HOLO_MYSQL_PASSWORD,
-          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-        },
+        config: mysqlTestConnection(),
       }),
     })
   }
@@ -53,13 +48,7 @@ function connect(driver: ServerDriver, connectionName: string): DatabaseContext 
     driver,
     dialect: createDialect(driver),
     adapter: createPostgresAdapter({
-      config: {
-        host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-        port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-        database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-        user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-        password: process.env.HOLO_POSTGRES_PASSWORD,
-      },
+      config: postgresTestConnection(),
     }),
   })
 }

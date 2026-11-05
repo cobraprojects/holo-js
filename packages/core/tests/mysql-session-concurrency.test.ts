@@ -5,19 +5,15 @@ import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createDatabaseSessionStore, type SessionRecord } from '@holo-js/session'
 import migration from '../../../apps/blog-next/server/db/migrations/2026_04_25_044033_create_sessions'
 import { createCoreDatabaseSessionAdapter } from '../src/portable/sessionPersistence'
+import { mysqlTestConnection } from '../../../tests/support/real-database'
 
 it.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('persists concurrent new MySQL sessions without deadlocking and retains private flashes on rewrites', async () => {
   const name = `session_${randomUUID().replaceAll('-', '')}`
-  const config = {
-    host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-    user: process.env.HOLO_MYSQL_USER ?? 'root',
-    password: process.env.HOLO_MYSQL_PASSWORD,
-  }
+  const config = mysqlTestConnection()
   const connect = (database: string): DatabaseContext => new DatabaseContext({
     driver: 'mysql', dialect: createDialect('mysql'), adapter: createMySQLAdapter({ config: { ...config, database } }),
   })
-  const admin = connect('mysql')
+  const admin = connect(config.database)
   const connection = connect(name)
   try {
     await admin.executeCompiled({ sql: `CREATE DATABASE ${name}`, source: 'schema' })
