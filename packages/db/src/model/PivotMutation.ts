@@ -4,8 +4,7 @@ import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { parseStoredDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
-import { assertColumnWritable, ownEntry } from './entityRuntime'
-import { storedKeyIdentity } from './storedKeyCollections'
+import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -24,7 +23,7 @@ type Context = {
 
 const bindingBudget = 900
 
-function isScalarObjectId(id: object): boolean {
+function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
   return id instanceof Date || ArrayBuffer.isView(id)
 }
 
@@ -171,7 +170,8 @@ export class PivotMutation {
   }
 
   private keyIdentity(value: unknown): unknown {
-    return storedKeyIdentity(this.readKey(value))
+    const key = this.readKey(value)
+    return isScalarObjectId(key) ? canonicalStoredKey(key) : `value:${String(key)}`
   }
 
   private readKey(value: unknown): unknown {

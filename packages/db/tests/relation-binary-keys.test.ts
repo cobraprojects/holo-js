@@ -292,6 +292,25 @@ describe('relation loading over binary keys', () => {
     expect(await db.table(ownerSlot).count()).toBe(1)
   })
 
+  it('matches id map keys against non-integer numeric pivot keys', async () => {
+    const db = openSQLite()
+    const owners = defineTable('real_key_owners', { id: column.id(), name: column.string() })
+    const grades = defineTable('real_key_grades', { score: column.real().primaryKey() })
+    const ownerGrade = defineTable('real_key_owner_grade', { ownerId: column.integer(), score: column.real(), note: column.string().nullable() })
+    for (const table of [owners, grades, ownerGrade]) await createTestTable(db, table)
+    await db.table(owners).insert([{ id: 1, name: 'A' }])
+    await db.table(grades).insert([{ score: 1.5 }])
+    const Grade = defineModelFromTable(grades)
+    const Owner = defineModelFromTable(owners, {
+      relations: { grades: belongsToMany(() => Grade, ownerGrade, 'ownerId', 'score', 'id', 'score').withPivot('note') },
+    })
+    const owner = await Owner.findOrFail(1)
+
+    await owner.attach('grades', 1.5, { note: 'old' })
+    expect(await owner.sync('grades', { '1.5': { note: 'new' } })).toEqual({ attached: [], detached: [], updated: ['1.5'] })
+    expect(await db.table(ownerGrade).get()).toEqual([{ ownerId: 1, score: 1.5, note: 'new' }])
+  })
+
   it('matches unsafe big integer pivot ids on an untyped pivot table', async () => {
     const db = openSQLite()
     const owners = defineTable('big_key_owners', { id: column.id(), name: column.string() })
