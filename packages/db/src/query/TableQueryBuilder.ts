@@ -655,13 +655,18 @@ export class TableQueryBuilder<
   }
 
   private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
+    const columnName = this.resolveSourceColumnName(column)
+    return typeof columnName === 'undefined' ? undefined : this.getColumnDefinition(columnName)
+  }
+
+  private resolveSourceColumnName(column: string): string | undefined {
     const separator = column.lastIndexOf('.')
-    if (separator === -1) return this.getColumnDefinition(column)
+    if (separator === -1) return column
 
     const qualifier = column.slice(0, separator)
-    return qualifier === this.source.tableName || qualifier === this.source.alias
-      ? this.getColumnDefinition(column.slice(separator + 1))
-      : undefined
+    const tableName = this.source.tableName
+    const ownQualifiers = [tableName, tableName.slice(tableName.lastIndexOf('.') + 1), this.source.alias]
+    return ownQualifiers.includes(qualifier) ? column.slice(separator + 1) : undefined
   }
 
   private assertJsonRootColumn(column: string, methodName: string): void {
@@ -3406,9 +3411,10 @@ export class TableQueryBuilder<
   }
 
   private async adjustNumericColumns(
-    amounts: Readonly<Record<string, number>>,
+    requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
+    const amounts = this.resolveArithmeticColumns(requestedAmounts)
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
@@ -3439,6 +3445,25 @@ export class TableQueryBuilder<
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
     return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
+  }
+
+  private resolveArithmeticColumns(amounts: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
+    const resolved: Record<string, number> = {}
+    for (const [column, amount] of Object.entries(amounts)) {
+      const pathStart = column.indexOf('->')
+      const root = pathStart === -1 ? column : column.slice(0, pathStart)
+      const rootName = this.resolveSourceColumnName(root)
+      if (typeof rootName === 'undefined') {
+        throw new CompilerError(`Cannot increment/decrement column "${column}" outside table "${this.source.tableName}".`)
+      }
+      const columnName = rootName + column.slice(root.length)
+      if (Object.hasOwn(resolved, columnName)) {
+        throw new CompilerError(`Cannot increment/decrement column "${columnName}" more than once.`)
+      }
+      resolved[columnName] = amount
+    }
+
+    return resolved
   }
 
   private whereMultiColumns(
