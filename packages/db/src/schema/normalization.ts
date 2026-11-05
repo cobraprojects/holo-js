@@ -284,7 +284,7 @@ export function storesText(column: AnyColumnDefinition): boolean {
   return column.kind === 'string' || column.kind === 'text'
 }
 
-export function isDateColumn(column: AnyColumnDefinition): boolean {
+export function storesDate(column: AnyColumnDefinition): boolean {
   return column.kind === 'date' || column.kind === 'datetime' || column.kind === 'timestamp'
 }
 

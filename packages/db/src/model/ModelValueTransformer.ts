@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, dateLikeWriteValue, isDateColumn, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, dateLikeWriteValue, storesDate, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -186,7 +186,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     }
 
     const column = ownEntry(this.definition.table.columns, key)
-    return column ? storesText(column) || isDateColumn(column) : this.definition.untyped
+    return column ? storesText(column) || storesDate(column) : this.definition.untyped
   }
 
   private hasBuiltInDateCast(key: string): boolean {
