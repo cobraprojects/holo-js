@@ -58,6 +58,16 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPredicateValue(3, createPredicate('score', 'unknown', 1))).toBeUndefined()
   })
 
+  it('leaves a number compared with text undecided, since databases may compare them numerically', () => {
+    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', 12.3))).toBeUndefined()
+    expect(matchesPredicateValue(12.3, createPredicate('amount', '=', '12.30'))).toBeUndefined()
+    expect(matchesPredicateValue('12.30', createPredicate('amount', '!=', 12.3))).toBeUndefined()
+    expect(matchesPredicateValue('12.30', createPredicate('amount', 'in', [12.3]))).toBeUndefined()
+    expect(matchesPredicateValue('12.30', createPredicate('amount', 'not in', [12.3]))).toBeUndefined()
+    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', true))).toBe(false)
+    expect(matchesPredicateValue(1, createPredicate('amount', '=', 2))).toBe(false)
+  })
+
   it('matches row predicates and patched values without hiding missing columns', () => {
     const row = Object.freeze({ id: 1, status: 'draft', count: 1 })
 
