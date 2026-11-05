@@ -762,23 +762,8 @@ function createSourceModuleUrlPlugin(): Plugin {
           }
           return false
         }
-        const isDestructuredImportMeta = (node: TypeScriptNode): boolean => {
-          if (!isImportMeta(node)) return false
-          let current = node
-          let parent = current.parent
-          while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent) || ts.isTypeAssertionExpression(parent))) {
-            current = parent
-            parent = current.parent
-          }
-          if (!parent) return false
-          if (ts.isVariableDeclaration(parent)) return parent.initializer === current && ts.isObjectBindingPattern(parent.name)
-          if (ts.isBinaryExpression(parent) && parent.right === current && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-            let target: TypeScriptNode = parent.left
-            while (ts.isParenthesizedExpression(target)) target = target.expression
-            return ts.isObjectLiteralExpression(target)
-          }
-          return false
-        }
+        const isBareImportMeta = (node: TypeScriptNode): boolean => isImportMeta(node)
+          && !((ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) && node.parent.expression === node)
         const fragments: string[] = []
         let cursor = 0
         const usedProperties = new Set<SourceProperty>()
@@ -796,7 +781,7 @@ function createSourceModuleUrlPlugin(): Plugin {
             usedProperties.add(property)
             return
           }
-          if (isDestructuredImportMeta(node)) {
+          if (isBareImportMeta(node)) {
             replace(node, metaFunction)
             usesMetaFunction = true
             return
@@ -808,7 +793,10 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
+        if (usesMetaFunction) {
+          const sourceRead = (Object.keys(sourceValues) as SourceProperty[]).map(property => `key === '${property}' ? ${sourceValues[property]} : `).join('')
+          fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= new Proxy(import.meta, { get: (meta, key) => ${sourceRead}Reflect.get(meta, key) }) }\n`)
+        }
         return { contents: fragments.join(''), loader }
       })
     },

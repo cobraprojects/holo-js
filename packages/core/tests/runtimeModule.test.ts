@@ -1011,6 +1011,34 @@ console.log(JSON.stringify({ copy: loaded.copy }))
     expect(typeof loaded.assign('file:///elsewhere')).toBe('string')
   })
 
+  it('gives aliased import.meta values the source module location', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/meta-alias.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, [
+      'const meta = import.meta',
+      'const located = (value: ImportMeta) => [value.url, value.dirname, value.filename]',
+      'export const aliased = [meta.url, meta.dirname, meta.filename]',
+      'export const passed = located(import.meta)',
+      'export const wrapped = (import.meta).url',
+      'export const spread = { ...import.meta }.url',
+      'export const same = meta === import.meta',
+      "meta['custom'] = 'shared'",
+      "export const custom = (import.meta as ImportMeta & { custom?: string }).custom",
+      "export const resolved = typeof meta.resolve",
+      '',
+    ].join('\n'))
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { aliased: string[], passed: string[], wrapped: string, spread: string, same: boolean, custom: string, resolved: string }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.aliased).toEqual([sourceUrl, dirname(entryPath), entryPath])
+    expect(loaded.passed).toEqual([sourceUrl, dirname(entryPath), entryPath])
+    expect(loaded.wrapped).toBe(sourceUrl)
+    expect(loaded.spread).toBe(sourceUrl)
+    expect(loaded.same).toBe(true)
+    expect(loaded.custom).toBe('shared')
+    expect(loaded.resolved).toBe('function')
+  })
+
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')

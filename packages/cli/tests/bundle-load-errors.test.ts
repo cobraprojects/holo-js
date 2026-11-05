@@ -81,3 +81,18 @@ it('names the model source file when a model imports a missing package', async (
     await rm(root, { recursive: true, force: true })
   }
 }, 30000)
+
+it('names the helper source file when a helper requires a missing package through createRequire', async () => {
+  const { root, write } = await createProject()
+  try {
+    const migration = 'server/db/migrations/2026_01_01_000000_create_foo_table.ts'
+    await write('server/support/legacy.ts', "import { createRequire } from 'node:module'\nconst meta = import.meta\nconst require = createRequire(meta.url)\nexport const loaded = require('missing-legacy')\n")
+    await write(migration, "import { defineMigration } from '@holo-js/db'\nimport { loaded } from '../../support/legacy'\nexport default defineMigration({ async up() { loaded() } })\n")
+    const output = await failureOutput(root, ['migrate'])
+    expect(output).toMatch(/Cannot find module 'missing-legacy'\nRequire stack:\n- \S*\/server\/support\/legacy\.ts\n/)
+    expect(output).not.toContain(migration)
+    expect(output).not.toMatch(/\.holo-js|\.mjs/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
