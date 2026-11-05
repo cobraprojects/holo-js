@@ -285,6 +285,32 @@ describe('relation loading over binary keys', () => {
     expect(await owner.sync('slots', new Date(startsAt.getTime()))).toEqual({ attached: [], detached: [], updated: [] })
     expect(await owner.toggle('slots', [new Date(startsAt.getTime())])).toEqual({ attached: [], detached: [startsAt] })
     expect(await db.table(ownerSlot).count()).toBe(0)
+
+    await owner.attach('slots', '2026-01-02 03:04:05')
+    expect(await owner.syncWithoutDetaching('slots', [startsAt, '2026-01-02 03:04:05'])).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await owner.sync('slots', '2026-01-02 03:04:05')).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await db.table(ownerSlot).count()).toBe(1)
+  })
+
+  it('matches unsafe big integer pivot ids on an untyped pivot table', async () => {
+    const db = openSQLite()
+    const owners = defineTable('big_key_owners', { id: column.id(), name: column.string() })
+    const accounts = defineTable('big_key_accounts', { id: column.bigInteger().primaryKey() })
+    const ownerAccount = defineTable('big_key_owner_account', { ownerId: column.integer(), accountId: column.bigInteger() })
+    for (const table of [owners, accounts, ownerAccount]) await createTestTable(db, table)
+    const big = 9007199254740993n
+    await db.table(owners).insert([{ id: 1, name: 'A' }])
+    await db.table(accounts).insert([{ id: big }])
+    const Account = defineModelFromTable(accounts)
+    const Owner = defineModelFromTable(owners, {
+      relations: { accounts: belongsToMany(() => Account, 'big_key_owner_account', 'ownerId', 'accountId') },
+    })
+    const owner = await Owner.findOrFail(1)
+
+    await owner.attach('accounts', big)
+    expect(await owner.sync('accounts', [big])).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await owner.toggle('accounts', big)).toEqual({ attached: [], detached: [big] })
+    expect(await db.table(ownerAccount).count()).toBe(0)
   })
 
   it('attaches morphToMany and morphedByMany rows across blob keys', async () => {

@@ -1,7 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import { normalizeDialectReadValue } from '../schema/normalization'
+import { parseStoredDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, ownEntry } from './entityRuntime'
@@ -73,10 +73,10 @@ export class PivotMutation {
 
     await this.connection.transaction(async connection => {
       const rows = await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id))
-      const current = new Map(rows.map(row => [storedKeyIdentity(this.relatedKeyOf(row)), row]))
+      const current = new Map(rows.map(row => [this.keyIdentity(row[this.context.relatedColumn]), row]))
       const actions: Action[] = []
       for (const entry of entries) {
-        const existing = current.get(storedKeyIdentity(entry.id))
+        const existing = current.get(this.keyIdentity(entry.id))
         if (kind === 'toggle' && existing) {
           actions.push({ ...entry, kind: 'delete' })
           result.detached.push(entry.id)
@@ -89,12 +89,12 @@ export class PivotMutation {
         }
       }
       if (detachMissing) {
-        const desired = new Set(entries.map(entry => storedKeyIdentity(entry.id)))
+        const desired = new Set(entries.map(entry => this.keyIdentity(entry.id)))
         for (const [key, row] of current) {
           const id = row[this.context.relatedColumn]
           if (!desired.has(key) && typeof id !== 'undefined') {
             actions.push({ kind: 'delete', id, attributes: {} })
-            result.detached.push(this.relatedKeyOf(row))
+            result.detached.push(this.readKey(id))
           }
         }
       }
@@ -170,13 +170,17 @@ export class PivotMutation {
     return [{ id: ids, attributes: { ...attributes } }]
   }
 
-  private relatedKeyOf(row: Attributes): unknown {
-    const value = row[this.context.relatedColumn]
-    return this.context.relatedKey ? normalizeDialectReadValue(this.context.dialect, this.context.relatedKey, value) : value
+  private keyIdentity(value: unknown): unknown {
+    return storedKeyIdentity(this.readKey(value))
+  }
+
+  private readKey(value: unknown): unknown {
+    const kind = this.context.relatedKey?.kind
+    return kind === 'date' || kind === 'datetime' || kind === 'timestamp' ? parseStoredDate(this.context.dialect, value) : value
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {
-    return [...new Map(entries.map(entry => [storedKeyIdentity(entry.id), entry])).values()]
+    return [...new Map(entries.map(entry => [this.keyIdentity(entry.id), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {
