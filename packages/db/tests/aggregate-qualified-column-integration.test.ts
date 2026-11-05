@@ -180,6 +180,27 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect((await modelQuery.get()).map(entity => entity.toAttributes())).toEqual(modelRows)
   })
 
+  it.skipIf(driver === 'sqlite').each(kinds)('%s reads each of two same-named tables joined from different schemas', async (kind) => {
+    const { name } = await createProducts(driver)
+    const { adapter, schema } = await openDatabase(driver)
+    const schemaName = driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const tenant = uniqueName('holo_tenant')
+    const quote = (identifier: string) => driver === 'postgres' ? `"${identifier}"` : `\`${identifier}\``
+    onTestFinished(async () => {
+      await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(tenant)}${driver === 'postgres' ? ' CASCADE' : ''}`)
+    })
+    await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(tenant)}`)
+    await schema.createTable(`${tenant}.${name}`, (table) => {
+      table.id()
+      table.integer('price')
+    })
+    await DB.table(`${tenant}.${name}`).insert([{ id: 1, price: 1 }, { id: 2, price: 2 }, { id: 3, price: 3 }])
+
+    const query = DB.table(`${schemaName}.${name}`).join(`${tenant}.${name}`, `${tenant}.${name}.id`, '=', `${schemaName}.${name}.id`)
+    expect(Number(await query[kind](`${schemaName}.${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${tenant}.${name}.price`))).toBe(expected[kind] / 10)
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 

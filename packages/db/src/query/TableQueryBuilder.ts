@@ -1939,7 +1939,7 @@ export class TableQueryBuilder<
     }
     const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
     const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
-    const wildcard = (table: string) => `${table.slice(table.lastIndexOf('.') + 1)}.*`
+    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table}.*`
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
