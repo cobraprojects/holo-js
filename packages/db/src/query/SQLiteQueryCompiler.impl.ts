@@ -120,18 +120,18 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       const path = source.tableName === undefined ? undefined : splitTablePath(source.tableName)
       return path?.schema !== undefined && sameIdentifier(path.schema, requested.schema) && sameIdentifier(path.table, requested.table)
     }
-    const aliased = sources.find(source => source.alias !== undefined && named(source))
-    if (aliased) {
-      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because table "${tableReference}" is aliased as "${aliased.alias}". Select "${aliased.alias}.*" instead.`)
-    }
     const expanded = sources.filter(source => sameIdentifier(requested.table, source.alias ?? (source.tableName === undefined ? undefined : splitTablePath(source.tableName).table)))
     if (expanded.length > 1) {
       throw new CompilerError(`SQLite cannot select "${tableReference}.*" because more than one table in the query is named "${requested.table}". Alias the tables and select "alias.*" instead.`)
     }
-    if (expanded.length === 0 || expanded[0]!.alias !== undefined || !named(expanded[0]!)) {
-      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because no table in the query is "${tableReference}" without an alias. Qualify the table the same way or select "${requested.table}.*".`)
+    if (expanded.length === 1 && expanded[0]!.alias === undefined && named(expanded[0]!)) {
+      return `${this.quoteIdentifier(requested.table)}.*`
     }
-    return `${this.quoteIdentifier(requested.table)}.*`
+    const aliased = sources.find(source => source.alias !== undefined && named(source))
+    if (aliased) {
+      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because table "${tableReference}" is aliased as "${aliased.alias}". Select "${aliased.alias}.*" instead.`)
+    }
+    throw new CompilerError(`SQLite cannot select "${tableReference}.*" because no table in the query is "${tableReference}" without an alias. Qualify the table the same way or select "${requested.table}.*".`)
   }
 
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {

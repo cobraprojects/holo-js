@@ -383,6 +383,20 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table('main.products').select('main.products.*').get()).toEqual([])
   })
 
+  it('selects the unaliased table of a self-join through its qualified wildcard', async () => {
+    await openArchive()
+    await DB.table('main.products').insert([{ id: 1, name: 'first', price: 10 }, { id: 2, name: 'second', price: 20 }])
+
+    expect(await DB.table('main.products')
+      .join('main.products as p', 'p.id', '=', 'main.products.id')
+      .select('main.products.*', 'p.name as alias_name')
+      .orderBy('main.products.id')
+      .get()).toEqual([
+      { id: 1, name: 'first', price: 10, alias_name: 'first' },
+      { id: 2, name: 'second', price: 20, alias_name: 'second' },
+    ])
+  })
+
   it('applies the qualified wildcard checks to counts and pagination', async () => {
     await openArchive()
     await DB.table('main.products').insert({ id: 1, name: 'main', price: 10 })
