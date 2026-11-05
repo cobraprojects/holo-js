@@ -170,5 +170,14 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.created_at).toEqual((await fresh()).created_at)
     expect(post.updated_at).toEqual(new Date('2026-03-08T15:00:00.000Z'))
     expect(post.updated_at).toEqual((await fresh()).updated_at)
+
+    const wallClockMidnight = driver === 'sqlite' ? new Date('2026-03-05T15:00:00.000Z') : new Date('2026-03-04T15:00:00.000Z')
+    for (const wallClock of ['2026-03-05T23:34:56', '2026-03-05T23:34', '2026-03-05 23:34', '2026-03-05T23:34:56.123456']) {
+      post.created_at = wallClock as never
+      await post.save()
+
+      expect(post.created_at).toEqual(wallClockMidnight)
+      expect(post.created_at).toEqual((await fresh()).created_at)
+    }
   })
 })

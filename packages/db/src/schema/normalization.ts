@@ -196,8 +196,15 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
+const OFFSET_FREE_WALL_CLOCK = /^(\d{4,}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::(\d{2}(?:\.\d{1,6})?))?$/
+
+function spacedWallClock(value: unknown): unknown {
+  const match = typeof value === 'string' ? OFFSET_FREE_WALL_CLOCK.exec(value) : null
+  return match ? `${match[1]} ${match[2]}:${match[3] ?? '00'}` : value
+}
+
 export function calendarDateWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
-  const instant = parseStoredCalendarDate(dialect, value)
+  const instant = parseStoredCalendarDate(dialect, spacedWallClock(value))
   if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) return value
   const timeZone = getApplicationTimezone()
   return dialect === 'sqlite' ? formatSQLiteDateTime(startOfDayInTimezone(instant, timeZone)) : formatCalendarDate(instant, timeZone)
