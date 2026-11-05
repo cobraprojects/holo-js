@@ -699,21 +699,40 @@ async function areSourceFilesCurrent(
   return true
 }
 
-async function isCommandDiscoveryCurrent(
+async function areCommandsCurrent(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
   registry: GeneratedProjectRegistry,
 ): Promise<boolean> {
   if (registry.commands.some(entry => entry.loadFailed)) return false
   if (registry.paths.commands !== config.paths.commands) return false
+  return areSourceFilesCurrent(projectRoot, config.paths.commands, registry.commands)
+}
+
+async function areCommandDefinitionsCurrent(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+  registry: GeneratedProjectRegistry,
+): Promise<boolean> {
   if (registry.paths.jobs !== config.paths.jobs) return false
   if (registry.paths.events !== config.paths.events) return false
   if (registry.paths.listeners !== config.paths.listeners) return false
 
-  return await areSourceFilesCurrent(projectRoot, config.paths.commands, registry.commands)
-    && await areSourceFilesCurrent(projectRoot, config.paths.jobs, registry.jobs)
+  return await areSourceFilesCurrent(projectRoot, config.paths.jobs, registry.jobs)
     && await areSourceFilesCurrent(projectRoot, config.paths.events, registry.events)
     && await areSourceFilesCurrent(projectRoot, config.paths.listeners, registry.listeners)
+}
+
+async function loadCommandDiscoveryRegistry(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+): Promise<GeneratedProjectRegistry> {
+  const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
+  if (!cachedRegistry || !await areCommandsCurrent(projectRoot, config, cachedRegistry)) {
+    return prepareProjectDiscovery(projectRoot, config)
+  }
+  if (await areCommandDefinitionsCurrent(projectRoot, config, cachedRegistry)) return cachedRegistry
+  return prepareProjectDiscovery(projectRoot, config).catch(() => cachedRegistry)
 }
 
 async function hashSourceFile(filePath: string): Promise<string | undefined> {
@@ -741,10 +760,7 @@ export async function discoverAppCommands(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
 ): Promise<DiscoveredAppCommand[]> {
-  const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
-  const registry = cachedRegistry && await isCommandDiscoveryCurrent(projectRoot, config, cachedRegistry)
-    ? cachedRegistry
-    : await prepareProjectDiscovery(projectRoot, config)
+  const registry = await loadCommandDiscoveryRegistry(projectRoot, config)
 
   return withoutShadowedFailedCommands(registry.commands)
     .map(entry => ({

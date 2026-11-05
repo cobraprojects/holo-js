@@ -645,7 +645,7 @@ console.log(JSON.stringify({ shared: loaded[0].first === direct.first, lazy }))
     await mkdir(jobsRoot, { recursive: true })
     await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
     const definitionPath = join(jobsRoot, 'job.mjs')
-    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\n")
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\nexport const evaluatedFrom = new Error().stack\n")
     const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
     const runtimeConfigUrl = pathToFileURL(resolve(import.meta.dirname, '../node_modules/@holo-js/config/dist/index.mjs')).href
     const childPath = join(projectRoot, 'child.mjs')
@@ -654,16 +654,17 @@ const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
 const runtimeConfig = await import(${JSON.stringify(runtimeConfigUrl)})
 const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
 const definition = await importDefinition(${JSON.stringify(definitionPath)})
-console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source }))
+console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source, evaluatedFrom: definition.evaluatedFrom }))
 `)
     const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
     const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
     const childEnv: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', ESBUILD_BINARY_PATH: esbuildBinary, ...env }
     const { stdout } = await promisify(execFile)(process.execPath, [...args, '--experimental-strip-types', childPath], { cwd: projectRoot, env: childEnv })
-    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string }
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string, evaluatedFrom: string }
 
     expect(result.bridged).toBe(true)
-    expect(result.source.endsWith('/job.mjs')).toBe(!bundled)
+    expect(result.source).toBe(pathToFileURL(realpathSync(definitionPath)).href)
+    expect(result.evaluatedFrom.includes('/.holo-js/runtime/')).toBe(bundled)
   }, 30_000)
 
   it('does not import package export targets pruned from a production artifact', async () => {

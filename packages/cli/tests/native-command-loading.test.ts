@@ -135,6 +135,21 @@ it('dispatches jobs and events added or removed since the last prepare without r
   }
 }, 60000)
 
+it('resolves import.meta.url to the command source when the command loads with discovered jobs', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/support/greeting.ts', "export const greeting = 'from source'")
+    await write('server/commands/fixture.txt', 'fixture contents')
+    await write('server/commands/read-fixture.ts', "import { readFile } from 'node:fs/promises'\nimport { greeting } from '../support/greeting'\nexport default { description: 'Read a fixture', async run() { console.log(JSON.stringify({ greeting, fixture: await readFile(new URL('./fixture.txt', import.meta.url), 'utf8') })) } }")
+    const { stdout } = await execute(process.execPath, [cli, 'read-fixture'], { cwd: root })
+    expect(JSON.parse(stdout.trim())).toEqual({ greeting: 'from source', fixture: 'fixture contents' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('runs app commands that do not use a discovered job whose imports fail to load', async () => {
   const { root, write } = await createProject()
   try {
@@ -147,6 +162,11 @@ it('runs app commands that do not use a discovered job whose imports fail to loa
     await write('server/support/label.ts', "throw new Error('broken job import')\nexport const label = 'plain'")
     expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
     await expect(execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })).rejects.toThrow('broken job import')
+    await write('server/support/label.ts', "export const label = 'plain'")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nimport { label } from '../support/label'\nexport default defineJob({ async handle() { console.log(label) } }")
+    expect((await execute(process.execPath, [cli, 'hello'], { cwd: root })).stdout.trim()).toBe('hello')
+    expect((await execute(process.execPath, [cli, 'list'], { cwd: root })).stdout).toContain('plain:dispatch')
+    await expect(execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })).rejects.toThrow(/Expected/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
