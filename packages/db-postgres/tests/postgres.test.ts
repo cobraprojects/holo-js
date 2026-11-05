@@ -12,7 +12,8 @@ import { postgresTestConnection, testConnectionUrl } from '../../../tests/suppor
 
 function rawPathUrl(database: string, user?: string) {
   const connection = postgresTestConnection()
-  const url = testConnectionUrl('postgresql', user ? { ...connection, user, password: undefined } : connection)
+  const url = testConnectionUrl('postgresql', user ? { ...connection, password: undefined } : connection)
+  if (user) url.username = user
   url.pathname = `/${database}`
   return url.toString()
 }

@@ -85,6 +85,12 @@ describe('real database test support', () => {
     expect(testConnectionUrl(scheme, { host: 'db.test', port: 5433, user: 'tester', database: 'holo_scratch' }).toString()).toBe(`${scheme}://tester@db.test:5433/holo_scratch`)
   })
 
+  it.each(['postgresql', 'mysql'] as const)('keeps literal percent escapes in %s URL credentials', scheme => {
+    const url = testConnectionUrl(scheme, { host: 'db.test', port: 5433, user: 'te%40st', password: 'p%23ss%', database: 'holo_scratch' })
+    expect(decodeURIComponent(url.username)).toBe('te%40st')
+    expect(decodeURIComponent(url.password)).toBe('p%23ss%')
+  })
+
   it.each([
     ['postgresql', '127.0.0.1/postgres#', 5432],
     ['mysql', '127.0.0.1/mysql#', 3306],

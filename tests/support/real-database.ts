@@ -53,7 +53,7 @@ export function testConnectionUrl(scheme: 'postgresql' | 'mysql', connection: { 
     throw new Error(`The test database host ${JSON.stringify(connection.host)} and port ${connection.port} must be a plain host name and port.`)
   }
   const url = new URL(`${scheme}://${connection.host}:${connection.port}/${encodeURIComponent(connection.database)}`)
-  url.username = connection.user
-  if (connection.password) url.password = connection.password
+  url.username = encodeURIComponent(connection.user)
+  if (connection.password) url.password = encodeURIComponent(connection.password)
   return url
 }
