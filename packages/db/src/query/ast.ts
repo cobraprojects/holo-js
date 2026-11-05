@@ -21,6 +21,7 @@ export interface QuerySource {
   readonly kind: 'table'
   readonly tableName: string
   readonly alias?: string
+  readonly primaryKey?: string
   readonly table?: TableDefinition
 }
 

@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { SERVER_WALL_CLOCK_AMBIGUITY, formatWithOffset, parseWallClockTimestamp } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp, startOfDayInTimezone } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -58,7 +58,7 @@ export function booleanStorageValue(value: unknown): number | null | undefined {
   return coerceBoolean(value) ? 1 : 0
 }
 
-function parseInteger(value: unknown): unknown {
+export function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
@@ -84,15 +84,6 @@ export function readIntegerKey(value: unknown): unknown {
 
   const integer = Number(value)
   return Number.isSafeInteger(integer) ? integer : value
-}
-
-function parseIncrementingKey(value: unknown): unknown {
-  if (typeof value !== 'bigint' && !(typeof value === 'string' && /^-?\d+$/.test(value))) {
-    return parseInteger(value)
-  }
-
-  const integer = Number(value)
-  return Number.isSafeInteger(integer) ? integer : String(value)
 }
 
 function parseJson(value: unknown): unknown {
@@ -202,6 +193,29 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
   return parsed ? formatSQLiteDateTime(parsed.instant) : value
 }
 
+const OFFSET_FREE_WALL_CLOCK = /^(\d{4,})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d{1,6})?)?)?$/
+
+function wallClockInstant(dialect: Exclude<SchemaDialectName, 'sqlite'>, value: string, timeZone: string): Date | undefined {
+  const match = OFFSET_FREE_WALL_CLOCK.exec(value)
+  if (!match) return undefined
+  const [, year, month, day, hour = '00', minute = '00', second = '00', fraction = ''] = match
+  if (Number(month) < 1 || Number(month) > 12 || Number(day) < 1 || Number(day) > daysInMonth(Number(year), Number(month))) return undefined
+  if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return undefined
+  return match[4] === undefined
+    ? parseCalendarDate(`${year}-${month}-${day}`, timeZone)
+    : parseWallClockTimestamp(`${year}-${month}-${day} ${hour}:${minute}:${second}${fraction}`, timeZone, SERVER_WALL_CLOCK_AMBIGUITY[dialect])
+}
+
+export function calendarMidnightWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+  if (dialect === 'sqlite' && typeof value === 'string' && OFFSET_FREE_WALL_CLOCK.test(value)) return dateLikeWriteValue(dialect, value)
+  const timeZone = getApplicationTimezone()
+  const instant = value instanceof Date ? value
+    : typeof value !== 'string' ? undefined
+      : dialect !== 'sqlite' && OFFSET_FREE_WALL_CLOCK.test(value) ? wallClockInstant(dialect, value, timeZone) : parseIsoInstantText(value)?.instant
+  if (!instant || Number.isNaN(instant.getTime())) return typeof value === 'string' ? value : dateLikeWriteValue(dialect, value)
+  return dateLikeWriteValue(dialect, parseCalendarDate(formatCalendarDate(instant, timeZone), timeZone) ?? startOfDayInTimezone(instant, timeZone))
+}
+
 export function wholeSecondInstant(instant: Date): Date {
   const time = instant.getTime()
   const millisecond = ((time % 1000) + 1000) % 1000
@@ -290,12 +304,12 @@ export function storesText(column: AnyColumnDefinition): boolean {
   return column.kind === 'string' || column.kind === 'text'
 }
 
-export function readsAsInteger(column: AnyColumnDefinition): boolean {
-  return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
+export function storesDate(column: AnyColumnDefinition): boolean {
+  return column.kind === 'date' || column.kind === 'datetime' || column.kind === 'timestamp'
 }
 
-export function readIntegerColumnValue(column: AnyColumnDefinition, value: unknown): unknown {
-  return column.kind === 'id' ? parseIncrementingKey(value) : parseInteger(value)
+export function readsAsInteger(column: AnyColumnDefinition): boolean {
+  return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
 
 export function normalizeDialectReadValue(
@@ -305,7 +319,7 @@ export function normalizeDialectReadValue(
 ): unknown {
   switch (column.kind) {
     case 'id':
-      return column.idStrategy === 'autoIncrement' ? parseIncrementingKey(value) : value
+      return column.idStrategy === 'autoIncrement' ? parseInteger(value) : value
     case 'integer':
     case 'bigInteger':
       return parseInteger(value)

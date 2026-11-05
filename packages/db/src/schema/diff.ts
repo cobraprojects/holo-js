@@ -4,7 +4,8 @@ import type {
   TableDefinition,
   TableIndexDefinition,
 } from './types'
-import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from './SchemaService'
+import { getSchemaServiceConnection, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
+import { locateTable, resolveReferencedTableSchema, type TableLocation } from './introspection'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
@@ -81,19 +82,39 @@ export async function diffSchema(
   tables: readonly TableDefinition[],
 ): Promise<SchemaDiff> {
   const actualTables = await schema.getTables()
-  const expectedByName = new Map(tables.map(table => [table.tableName, table]))
-  const extraTables = actualTables.filter(name => !expectedByName.has(name))
-  const missingTables = tables
-    .map(table => table.tableName)
-    .filter(name => !actualTables.includes(name))
-
-  const tableDiffs: TableSchemaDiff[] = []
+  const tableLocations = createTableLocator(schema)
+  const unqualifiedNames = new Set(tables.map(table => table.tableName).filter(name => splitTablePath(name).schema === undefined))
+  const qualifiedLocations: TableLocation[] = []
+  const existingTables: TableDefinition[] = []
+  const missingTables: string[] = []
   for (const table of tables) {
-    if (!actualTables.includes(table.tableName)) {
+    if (splitTablePath(table.tableName).schema === undefined) {
+      if (actualTables.includes(table.tableName)) existingTables.push(table)
+      else missingTables.push(table.tableName)
       continue
     }
 
-    tableDiffs.push(await diffTable(schema, table))
+    const location = await tableLocations.table(table.tableName)
+    if (location === undefined) {
+      missingTables.push(table.tableName)
+      continue
+    }
+
+    qualifiedLocations.push(location)
+    existingTables.push(table)
+  }
+
+  const extraTables: string[] = []
+  for (const name of actualTables) {
+    if (unqualifiedNames.has(name)) continue
+    const candidates = qualifiedLocations.filter(location => location.table === name)
+    const resolvedSchema = candidates.length > 0 ? (await tableLocations.table(name))?.schema : undefined
+    if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
+  }
+
+  const tableDiffs: TableSchemaDiff[] = []
+  for (const table of existingTables) {
+    tableDiffs.push(await diffTable(schema, table, tableLocations))
   }
 
   return {
@@ -104,15 +125,90 @@ export async function diffSchema(
   }
 }
 
+interface TableLocator {
+  table(tableName: string): Promise<TableLocation | undefined>
+  reference(tableName: string, ownerSchema: string): Promise<string | undefined>
+}
+
+function memoize<TResult>(lookup: (key: string) => Promise<TResult>): (key: string) => Promise<TResult> {
+  const resolved = new Map<string, Promise<TResult>>()
+  return (key) => {
+    const cached = resolved.get(key)
+    if (cached) return cached
+    const pending = lookup(key)
+    resolved.set(key, pending)
+    return pending
+  }
+}
+
+function createTableLocator(schema: SchemaService): TableLocator {
+  const connection = getSchemaServiceConnection(schema)
+  const references = new Map<string, (tableName: string) => Promise<string | undefined>>()
+  return {
+    table: memoize(tableName => locateTable(connection, tableName)),
+    reference(tableName, ownerSchema) {
+      let lookup = references.get(ownerSchema)
+      if (!lookup) {
+        lookup = memoize(name => resolveReferencedTableSchema(connection, name, ownerSchema))
+        references.set(ownerSchema, lookup)
+      }
+      return lookup(tableName)
+    },
+  }
+}
+
+async function resolveReferencedTable(
+  tableLocations: TableLocator,
+  ownerTableName: string,
+  referencedTableName: string,
+): Promise<string> {
+  const owner = splitTablePath(ownerTableName)
+  const referenced = splitTablePath(referencedTableName)
+  if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
+  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
+  if (ownerSchema === undefined) return referencedTableName
+  const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
+  if (referencedSchema === undefined) return referencedTableName
+  return canonicalTableName(tableLocations, owner.schema === undefined ? ownerSchema : undefined, referencedSchema, referenced.table)
+}
+
+async function canonicalTableName(
+  tableLocations: TableLocator,
+  unqualifiedSchema: string | undefined,
+  schemaName: string,
+  tableName: string,
+): Promise<string> {
+  const location = await tableLocations.table(`${schemaName}.${tableName}`)
+  const schema = location?.schema ?? schemaName
+  const table = location?.table ?? tableName
+  return schema === unqualifiedSchema ? table : `${schema}.${table}`
+}
+
+async function canonicalActualForeignKeys(
+  tableLocations: TableLocator,
+  ownerTableName: string,
+  foreignKeys: readonly IntrospectedForeignKey[],
+): Promise<readonly IntrospectedForeignKey[]> {
+  if (splitTablePath(ownerTableName).schema === undefined) return foreignKeys
+  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
+  if (ownerSchema === undefined) return foreignKeys
+  return Promise.all(foreignKeys.map(async (foreignKey) => {
+    const { schema = ownerSchema, table } = splitTablePath(foreignKey.table)
+    return { ...foreignKey, table: await canonicalTableName(tableLocations, undefined, schema, table) }
+  }))
+}
+
 async function diffTable(
   schema: SchemaService,
   table: TableDefinition,
+  tableLocations: TableLocator,
 ): Promise<TableSchemaDiff> {
-  const [actualColumns, actualIndexes, actualForeignKeys] = await Promise.all([
+  const [actualColumns, actualIndexes, introspectedForeignKeys] = await Promise.all([
     schema.getColumns(table.tableName),
     schema.getIndexes(table.tableName),
     schema.getForeignKeys(table.tableName),
   ])
+  const actualForeignKeys = await canonicalActualForeignKeys(tableLocations, table.tableName, introspectedForeignKeys)
 
   const expectedColumns = Object.values(table.columns)
   const expectedColumnByName = new Map(expectedColumns.map(column => [column.name, column]))
@@ -193,9 +289,9 @@ async function diffTable(
       }]
     })
 
-  const expectedForeignKeys = expectedColumns
+  const expectedForeignKeys = await Promise.all(expectedColumns
     .filter((column): column is AnyColumnDefinition & { references: ForeignKeyReference & { table: string } } => Boolean(column.references?.table))
-    .map(column => normalizeExpectedForeignKey(column))
+    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(tableLocations, table.tableName, column.references.table))))
   const expectedForeignKeyByName = new Map(expectedForeignKeys.map(foreignKey => [foreignKey.name, foreignKey]))
   const actualForeignKeyByName = new Map(actualForeignKeys.map(foreignKey => [normalizeActualForeignKeyName(foreignKey), foreignKey]))
   const missingForeignKeys = expectedForeignKeys
@@ -300,6 +396,7 @@ function normalizeExpectedIndex(
 
 function normalizeExpectedForeignKey(
   column: AnyColumnDefinition & { references: ForeignKeyReference & { table: string } },
+  referencedTable: string,
 ): {
   name: string
   table: string
@@ -309,8 +406,8 @@ function normalizeExpectedForeignKey(
   onDelete: string
 } {
   return {
-    name: `${column.name}->${column.references.table}.${column.references.column}`,
-    table: column.references.table,
+    name: `${column.name}->${referencedTable}.${column.references.column}`,
+    table: referencedTable,
     from: column.name,
     to: column.references.column,
     onUpdate: (column.references.onUpdate ?? 'NO ACTION').toUpperCase(),

@@ -1,5 +1,6 @@
 import { createMutationIndexKey } from './dependencies'
 import {
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
   type DatabaseQueryPredicateObservation,
 } from './predicate-matching'
@@ -41,7 +42,7 @@ export function readQuerySelectionResultKeys(query: DatabaseQueryObservation): r
 export function readQueryProjectedIdentityColumn(
   query: DatabaseQueryObservation,
 ): string | typeof NO_PROJECTED_IDENTITY_COLUMN {
-  return query.projectedIdentityColumn ?? createQueryProjectedIdentityColumn(query.selections)
+  return query.projectedIdentityColumn ?? createQueryProjectedIdentityColumn(query.selections, readPrimaryKey(query))
 }
 
 export function hasQueryOrderBy(query: DatabaseQueryObservation): boolean {
@@ -60,7 +61,7 @@ export function isSingleIdQuery(query: DatabaseQueryObservation): boolean {
   }
 
   return query.limit === 1
-    && query.predicates.some(predicate => predicate.column === 'id' && predicate.operator === '=')
+    && query.predicates.some(predicate => predicate.column === readPrimaryKey(query) && predicate.operator === '=')
 }
 
 export function isOffsetOrderedLimitedWindow(query: DatabaseQueryObservation): boolean {
@@ -129,7 +130,7 @@ export function createQueryObservationMetadata(
     orderMultipliers: readQueryOrderMultipliers(query),
     predicateColumns: readQueryPredicateColumns(query),
     projectedIdentityColumn: readQueryProjectedIdentityColumn(query),
-    rowIdentityIndex: createQueryRowIdentityIndex(query.result),
+    rowIdentityIndex: createQueryRowIdentityIndex(query.result, readPrimaryKey(query)),
     rowBackfillKeyPrefix: isAggregateQuery ? undefined : createRowBackfillKeyPrefix(query),
     rowWindowMode,
     selectionColumns: readQuerySelectionColumns(query),
@@ -273,13 +274,14 @@ function createQuerySelectionResultKeys(
 
 function createQueryProjectedIdentityColumn(
   selections: readonly DatabaseQuerySelectionObservation[] | undefined,
+  primaryKey: string,
 ): string | typeof NO_PROJECTED_IDENTITY_COLUMN {
   if (!selections || selections.length === 0) {
-    return 'id'
+    return primaryKey
   }
 
   for (const selection of selections) {
-    if (selection.resultKey === 'id') {
+    if (selection.resultKey === primaryKey) {
       return selection.column
     }
   }

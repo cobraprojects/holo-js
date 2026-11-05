@@ -14,6 +14,7 @@ import {
   invalidateQueryCacheDependencies,
   runQueryCacheOperation,
   createDatabaseMutationEvent,
+  resolveInsertIdKey,
   createTableCacheDependency,
   createTableRowWildcardCacheDependency,
   createDatabaseQueryFallbackObservation,
@@ -272,10 +273,11 @@ export class TableQueryBuilder<
   }
 
   from(table: string): TableQueryBuilder<string, TSelectedRow> {
+    const source = createTableSource(table)
     return new TableQueryBuilder(
       table,
       this.connection,
-      withSource(this.plan, createTableSource(table)),
+      withSource(this.plan, this.sourceHasRowKey(source.tableName) ? Object.freeze({ ...source, primaryKey: this.source.primaryKey }) : source),
       this.queryCacheConfig,
       internalPlanHandoff,
     )
@@ -2807,8 +2809,9 @@ export class TableQueryBuilder<
   async upsert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     uniqueBy: readonly string[],
-    updateColumns: readonly string[] = [],
+    requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -3165,7 +3168,9 @@ export class TableQueryBuilder<
       previousRows.push(Object.freeze({ ...previousRow }))
     }
 
-    return Object.freeze(previousRows)
+    const hasUnpairedPossibleMatch = result.rows.some((candidate, index) => !usedResultIndexes.has(index)
+      && rows.some(row => uniqueBy.every(column => !valuesDiffer(candidate[column], row[column]))))
+    return hasUnpairedPossibleMatch ? undefined : Object.freeze(previousRows)
   }
 
   private rowsMatchUniqueBy(
@@ -3214,6 +3219,24 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
   ): readonly Readonly<Record<string, unknown>>[] {
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
+  }
+
+  private sourceHasRowKey(tableName: string): boolean {
+    const primaryKey = this.source.primaryKey
+    if (primaryKey === undefined) {
+      return false
+    }
+
+    if (tableName === this.source.tableName) {
+      return true
+    }
+
+    const table = getConnectionGeneratedTableDefinition(tableName, this.connection.getConnectionName())
+    return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey)
+  }
+
+  private resolveRowKeyColumns(): readonly string[] {
+    return this.source.primaryKey === undefined ? resolveTablePrimaryKeyColumns(this.source.table) : [this.source.primaryKey]
   }
 
   private resolveSinglePrimaryKeyColumn(): string | undefined {
@@ -3273,7 +3296,7 @@ export class TableQueryBuilder<
         createTableCacheDependency(connectionName, this.source.tableName),
         createTableRowWildcardCacheDependency(connectionName, this.source.tableName),
       ],
-      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source.tableName)] : [],
+      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source)] : [],
     )
   }
 
@@ -3288,20 +3311,22 @@ export class TableQueryBuilder<
       return
     }
 
+    const primaryKey = resolveInsertIdKey(this.source, this.connection.getConnectionName())
     const mutations = hasInvalidationListeners
       ? [
           createDatabaseMutationEvent(
             kind,
             this.connection.getConnectionName(),
-            this.source.tableName,
+            this.source,
             [],
             undefined,
             rows.length === 1
               && typeof lastInsertId !== 'undefined'
-              && !Object.prototype.hasOwnProperty.call(rows[0], 'id')
+              && typeof primaryKey !== 'undefined'
+              && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
               ? Object.freeze([Object.freeze({
                   ...rows[0],
-                  id: lastInsertId,
+                  [primaryKey]: lastInsertId,
                 })])
               : rows,
             previousRows,
@@ -3348,7 +3373,7 @@ export class TableQueryBuilder<
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
           this.connection.getConnectionName(),
-          this.source.tableName,
+          this.source,
           this.plan.predicates,
           hasValues ? values : undefined,
           capturedRows?.rows,
@@ -3368,7 +3393,7 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
     previousRows: readonly Readonly<Record<string, unknown>>[],
   ): ReturnType<typeof createDatabaseMutationEvent>[] {
-    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const primaryKeys = this.resolveRowKeyColumns()
     const keyOf = (keyValues: readonly unknown[]): unknown => keyValues.length === 1
       ? keyValues[0]
       : JSON.stringify(keyValues, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
@@ -3382,7 +3407,7 @@ export class TableQueryBuilder<
       return createDatabaseMutationEvent(
         'update',
         this.connection.getConnectionName(),
-        this.source.tableName,
+        this.source,
         primaryKeys.map(key => ({ kind: 'comparison' as const, column: key, operator: '=', value: previousRow?.[key] ?? row[key] })),
         Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
         [row],
@@ -3414,12 +3439,12 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    const amounts = this.resolveArithmeticColumns(requestedAmounts)
+    const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [...resolveTablePrimaryKeyColumns(this.source.table), ...columns] as never[]),
+      withSelections(this.plan, [...this.resolveRowKeyColumns(), ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
@@ -3435,32 +3460,35 @@ export class TableQueryBuilder<
     if (rows.length === 0) return { affectedRows: 0, lastInsertId: undefined }
 
     const adjustments = Object.fromEntries(Object.entries(amounts).map(([column, amount]) => [column, new NumericAdjustment(amount)]))
-    const values = { ...extraValues, ...adjustments }
+    const values = { ...this.resolveSourceColumnKeys(extraValues, 'update'), ...adjustments }
     if (typeof this.plan.limit === 'undefined' && typeof this.plan.offset === 'undefined') {
       return this.update(values)
     }
 
-    const primaryKey = this.resolvePrimaryKeyColumn()
+    const primaryKey = this.source.primaryKey ?? this.resolvePrimaryKeyColumn()
     const plan = this.plan.predicates.length === 0
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
     return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
   }
 
-  private resolveArithmeticColumns(amounts: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
-    const resolved: Record<string, number> = {}
-    for (const [column, amount] of Object.entries(amounts)) {
+  private resolveSourceColumnKeys<TValue>(
+    values: Readonly<Record<string, TValue>> | readonly (readonly [string, TValue])[],
+    operation: 'update' | 'upsert' | 'increment/decrement',
+  ): Readonly<Record<string, TValue>> {
+    const resolved: Record<string, TValue> = {}
+    for (const [column, value] of Array.isArray(values) ? values : Object.entries(values)) {
       const pathStart = column.indexOf('->')
       const root = pathStart === -1 ? column : column.slice(0, pathStart)
       const rootName = this.resolveSourceColumnName(root)
       if (typeof rootName === 'undefined') {
-        throw new CompilerError(`Cannot increment/decrement column "${column}" outside table "${this.source.tableName}".`)
+        throw new CompilerError(`Cannot ${operation} column "${column}" outside table "${this.source.tableName}".`)
       }
       const columnName = rootName + column.slice(root.length)
       if (Object.hasOwn(resolved, columnName)) {
-        throw new CompilerError(`Cannot increment/decrement column "${columnName}" more than once.`)
+        throw new CompilerError(`Cannot ${operation} column "${columnName}" more than once.`)
       }
-      resolved[columnName] = amount
+      resolved[columnName] = value
     }
 
     return resolved
@@ -3609,7 +3637,7 @@ export class TableQueryBuilder<
     return normalizeQueryUpdateValues(
       this.source.table,
       this.connection.getDriver(),
-      values,
+      this.resolveSourceColumnKeys(values, 'update'),
       value => this.parseJsonPath(value, false, 'update'),
     )
   }
@@ -3668,4 +3696,10 @@ export function whereColumnNotExpiredByDatabaseClock<
   }
 
   return append(`${quoted} > CURRENT_TIMESTAMP(3)`, [])
+}
+
+function valuesDiffer(left: unknown, right: unknown): boolean {
+  return left !== right
+    && typeof left === typeof right
+    && (typeof left === 'number' || typeof left === 'bigint' || typeof left === 'boolean')
 }

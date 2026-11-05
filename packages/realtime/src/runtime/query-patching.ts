@@ -2,6 +2,10 @@ import type {
   DatabaseMutationEvent,
 } from './dependencies'
 import {
+  hasRecordKey,
+  readPrimaryKey,
+} from './predicate-matching'
+import {
   tryPatchQueryAggregate,
 } from './query-aggregate-patching'
 import {
@@ -43,6 +47,7 @@ import {
   tryPatchQueryScalarList,
 } from './query-scalar-patching'
 import type {
+  DatabaseQueryObservation,
   PatchQueryResult,
   PatchableQueryPatchTarget,
 } from './query-state'
@@ -69,6 +74,10 @@ export async function tryPatchObservedQuery(
 
   if (isRowsPatchTarget(target) && query.groupedAggregate) {
     return await tryPatchGroupedAggregateQuery(query, target.currentValue, mutations, backfills)
+  }
+
+  if (insertsRowsWithUnknownPrimaryKey(query, mutations)) {
+    return UNPATCHED_RESULT
   }
 
   if (isRowsPatchTarget(target) && target.rowPatchMode === 'offset-window') {
@@ -138,4 +147,36 @@ export async function tryPatchObservedQuery(
   }
 
   return UNPATCHED_RESULT
+}
+
+function insertsRowsWithUnknownPrimaryKey(
+  query: DatabaseQueryObservation,
+  mutations: readonly DatabaseMutationEvent[],
+): boolean {
+  const primaryKey = readPrimaryKey(query)
+  return mutations.some(mutation => (mutation.kind === 'insert' || mutation.kind === 'upsert')
+    && mutation.connectionName === query.connectionName
+    && mutation.tableName === query.tableName
+    && (
+      mutation.rows?.some(row => !hasRecordKey(row, primaryKey))
+      || upsertChangesPrimaryKey(mutation, primaryKey)
+    ))
+}
+
+function upsertChangesPrimaryKey(mutation: DatabaseMutationEvent, primaryKey: string): boolean {
+  if (mutation.kind !== 'upsert') {
+    return false
+  }
+
+  if (!mutation.previousRows) {
+    return true
+  }
+
+  if (mutation.previousRows.length === 0) {
+    return false
+  }
+
+  const previousKeys = new Set(mutation.previousRows.map(row => row[primaryKey]))
+  const keys = new Set((mutation.rows ?? []).map(row => row[primaryKey]))
+  return previousKeys.size !== keys.size || [...keys].some(key => !previousKeys.has(key))
 }

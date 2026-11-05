@@ -3,7 +3,9 @@ import type {
 } from './dependencies'
 import {
   NO_EXACT_ID_PREDICATE,
+  equalValues,
   hasRecordKey,
+  readPrimaryKey,
 } from './predicate-matching'
 import {
   hasQueryOrderBy,
@@ -14,6 +16,7 @@ import {
 } from './query-row-array'
 import {
   exactIdsDiffer,
+  mutationCannotReachExactId,
 } from './query-row-matching'
 import {
   UNCHANGED_ROWS_RESULT,
@@ -216,7 +219,7 @@ function tryApplyProjectedExactMutationValues(
     return undefined
   }
 
-  if (exactIdsDiffer(context.exactQueryId, context.exactMutationId)) {
+  if (mutationCannotReachExactId(context.exactQueryId, context.exactMutationId, mutation.values, readPrimaryKey(context))) {
     return UNCHANGED_ROWS_RESULT
   }
 
@@ -228,7 +231,13 @@ function tryApplyProjectedExactMutationValues(
     return undefined
   }
 
-  if (hasRecordKey(mutation.values, 'id') && mutation.values.id !== context.exactQueryId) {
+  const primaryKey = readPrimaryKey(context)
+  const keepsKey = hasRecordKey(mutation.values, primaryKey) ? equalValues(mutation.values[primaryKey], context.exactQueryId) : true
+  if (typeof keepsKey === 'undefined') {
+    return undefined
+  }
+
+  if (!keepsKey) {
     return { patched: true, rows: EMPTY_RECORD_ROWS }
   }
 
