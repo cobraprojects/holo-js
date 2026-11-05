@@ -119,6 +119,8 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.updated_at).toEqual(midnight)
     expect((await fresh()).created_at).toEqual(midnight)
     expect((await fresh()).updated_at).toEqual(midnight)
+    expect(await Post.where('created_at', post.created_at).count()).toBe(1)
+    expect(await Post.where('created_at', '>=', midnight).where('created_at', '<', new Date('2026-03-05T15:00:00.000Z')).count()).toBe(1)
 
     vi.setSystemTime(new Date('2026-03-05T16:00:00.000Z'))
     const nextMidnight = new Date('2026-03-05T15:00:00.000Z')
@@ -145,5 +147,28 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.deleted_at).toBeNull()
     expect(post.updated_at).toEqual(new Date('2026-03-07T15:00:00.000Z'))
     expect((await fresh()).updated_at).toEqual(post.updated_at)
+  })
+
+  it('holds a timestamp assigned to a DATE column as the calendar date a fresh read returns', async () => {
+    useTokyoAppAt(new Date('2026-03-04T20:00:00.123Z'))
+    const Post = defineModel(await createDatePostsTable(driver), { fillable: ['title', 'created_at', 'updated_at'], softDeletes: true })
+    const fresh = async () => Post.withTrashed().findOrFail(post.id)
+
+    const post = await Post.create({ title: 'Draft', created_at: '2026-03-05 12:34:56' as never, updated_at: new Date('2026-03-06T20:00:00.000Z') })
+
+    expect(post.created_at).toEqual((await fresh()).created_at)
+    expect(post.updated_at).toEqual((await fresh()).updated_at)
+    expect(post.updated_at).toEqual(new Date('2026-03-06T15:00:00.000Z'))
+    expect(post.created_at?.getUTCHours()).toBe(15)
+    expect(await Post.where('updated_at', post.updated_at).count()).toBe(1)
+
+    post.created_at = '2026-03-08' as never
+    post.updated_at = '2026-03-09T01:00:00+09:00' as never
+    await post.save()
+
+    expect(post.created_at).toEqual(new Date('2026-03-07T15:00:00.000Z'))
+    expect(post.created_at).toEqual((await fresh()).created_at)
+    expect(post.updated_at).toEqual(new Date('2026-03-08T15:00:00.000Z'))
+    expect(post.updated_at).toEqual((await fresh()).updated_at)
   })
 })

@@ -225,7 +225,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
     if (this.holdsCalendarDate(key)) {
-      return calendarDateWriteValue(value)
+      return calendarDateWriteValue(this.getSchemaDialectName(), value)
     }
 
     if (this.hasBuiltInDateCast(key)) {
