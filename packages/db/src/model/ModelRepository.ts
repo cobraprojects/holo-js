@@ -774,6 +774,11 @@ export class ModelRepository<
       }
 
       const relation = this.getRelationDefinition(aggregate.relation)
+      if (relation.kind === 'hasOneThrough' || relation.kind === 'hasManyThrough') {
+        this.recordThroughRelationObservations(relation)
+        continue
+      }
+
       const key = this.relationAggregateCalculator.getAttributeKey(aggregate)
 
       for (let index = 0; index < entities.length; index += 1) {

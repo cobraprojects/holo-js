@@ -96,6 +96,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       'related count': (Author: Library['Author']) => Author.query().withCount('reviews').orderBy('id').getJson(),
       'counted through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withCount('posts').orderBy('id').getJson(),
       'summed through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withSum('posts', 'id').orderBy('id').getJson(),
+      'counted through relations': (Author: Library['Author']) => Author.query().withCount('reviews').withCount('posts').orderBy('id').getJson(),
+      'summed through relations': (Author: Library['Author']) => Author.query().withSum('reviews', 'id').withCount('posts').orderBy('id').getJson(),
       'composed with the through table': async (Author: Library['Author'], Post: Library['Post']) => ({
         authors: await Author.query().with(bothOrdered).orderBy('id').getJson(),
         posts: await Post.query().orderBy('id').getJson(),
