@@ -1920,7 +1920,7 @@ export class TableQueryBuilder<
         ? [...implicitSelections, wildcard(source)]
         : !this.plan.distinct && this.plan.groupBy.length === 0
             ? [wildcard(source)]
-            : [...this.selectedSourceColumnNames().map(name => name === '*' ? wildcard(source) : `${source}.${name}`), `${source}.${key}`]
+            : [...this.selectedSourceColumns().map(({ name, alias }) => name === '*' ? wildcard(source) : `${source}.${name}${alias ? ` as ${alias}` : ''}`), `${source}.${key}`]
     return { key, joined: !!join, selections }
   }
 
@@ -3623,11 +3623,11 @@ export class TableQueryBuilder<
     return result
   }
 
-  private selectedSourceColumnNames(): readonly string[] {
+  private selectedSourceColumns(): readonly { readonly name: string, readonly alias?: string }[] {
     return this.plan.selections.flatMap((selection) => {
-      if (selection.kind !== 'column' || selection.alias || !selection.column.includes('.')) return []
+      if (selection.kind !== 'column' || !selection.column.includes('.')) return []
       const name = this.resolveSourceColumnName(selection.column)
-      return typeof name === 'undefined' ? [] : [name]
+      return typeof name === 'undefined' ? [] : [{ name, alias: selection.alias }]
     })
   }
 
