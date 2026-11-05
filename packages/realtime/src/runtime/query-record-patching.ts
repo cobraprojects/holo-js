@@ -62,17 +62,17 @@ export async function tryPatchQueryRecord(
         )
       : undefined
     if (!hydratedMutation) {
-      return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
+      return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
     }
 
     const result = applyMutation(patchedRows, query, hydratedMutation, createMutationRowPatchContext(queryContext, metadata))
     if (!result.patched) {
-      return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
+      return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
     }
 
     if ('rows' in result) {
       if (result.backfill) {
-        return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
+        return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
       }
 
       if (result.rows.length > 1) {
@@ -97,6 +97,7 @@ export async function tryPatchQueryRecord(
 
 async function tryBackfillCurrentQueryRecord(
   query: DatabaseQueryObservation,
+  value: Readonly<Record<string, unknown>> | null | undefined,
   emptyValue: null | undefined,
   backfills: BackfillCache,
 ): Promise<PatchQueryResult> {
@@ -105,9 +106,22 @@ async function tryBackfillCurrentQueryRecord(
     return UNPATCHED_RESULT
   }
 
+  const row = rows[0]
+  if (value && row && !hasSameKeys(value, row)) {
+    return UNPATCHED_RESULT
+  }
+
   return Object.freeze({
     patched: true,
     query,
     value: rows[0] ?? emptyValue,
   })
+}
+
+function hasSameKeys(
+  current: Readonly<Record<string, unknown>>,
+  next: Readonly<Record<string, unknown>>,
+): boolean {
+  const currentKeys = Object.keys(current)
+  return currentKeys.length === Object.keys(next).length && currentKeys.every(key => Object.hasOwn(next, key))
 }

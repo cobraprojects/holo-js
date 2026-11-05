@@ -124,6 +124,23 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     expect(subscription.current.data).toEqual(await handler())
   })
 
+  it('keeps columns a handler removes from a hasOne row out of the next row', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const handler = async () => {
+      const authors = await db.model(Author).query().with({ post: query => query.orderBy('id') }).orderBy('id').getJson() as { post: Record<string, unknown> | null }[]
+      for (const author of authors) {
+        if (author.post) delete author.post.score
+      }
+      return authors
+    }
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).not.toContain('"score"')
+  })
+
   it('loads the next matching row for latestOfMany', async () => {
     const { db, posts, Author } = await openAuthors(driver)
     const handler = () => db.model(Author).query().with('latestPost').orderBy('id').getJson()

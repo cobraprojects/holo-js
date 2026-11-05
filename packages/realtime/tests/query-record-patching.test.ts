@@ -99,6 +99,20 @@ describe('@holo-js/realtime record patching', () => {
     })
   })
 
+  it('leaves the record unpatched when its backfill carries fields the current record lacks', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }], rowWindowMode: 'limited' })
+    const backfillKey = createBackfillQueryKey(query, 0, 1)
+
+    await expect(tryPatchQueryRecord(
+      query,
+      { id: 1, author_id: 1 },
+      [createMutation({ kind: 'delete' })],
+      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([{ id: 2, author_id: 1, secret: 'hidden' }])]]) }),
+      createQueryContext(),
+      createApplier({ patched: true, backfill: true, rows: [] }),
+    )).resolves.toEqual({ patched: false })
+  })
+
   it('rejects record patching when there are no mutations', async () => {
     await expect(tryPatchQueryRecord(
       createQuery(),
