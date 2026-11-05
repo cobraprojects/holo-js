@@ -310,6 +310,41 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidati
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalidation on a case-sensitive column on postgres', () => {
   registerTextNumberScenarios('postgres')
 
+  it('refreshes a subscription filtered by a citext array after an update matched by a case-differing array', async () => {
+    const setupAdapter = createAdapter('postgres')
+    await setupAdapter.initialize()
+    try {
+      await setupAdapter.execute('CREATE EXTENSION IF NOT EXISTS citext')
+    } catch (error) {
+      if ((await setupAdapter.query(`SELECT 1 FROM pg_extension WHERE extname = 'citext'`)).rows.length === 0) {
+        throw error
+      }
+    } finally {
+      await setupAdapter.disconnect()
+    }
+    const adapter = createAdapter('postgres')
+    const tableName = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const db = createDatabase({ adapter, dialect: createDialect('postgres'), connectionName: 'main' })
+    await adapter.initialize()
+    onTestFinished(async () => {
+      resetRealtimeRuntime()
+      resetDatabaseDependencyInvalidationListeners()
+      resetDB()
+      await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+      await adapter.disconnect()
+    })
+    await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, code citext[] NOT NULL, label VARCHAR(64) NOT NULL)`)
+    await adapter.execute(`INSERT INTO ${tableName} (id, code, label) VALUES (1, '{FR}', 'France'), (2, '{DE}', 'Germany')`)
+    configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ db }) => await db.table(tableName).where('code', ['FR']).get() }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).where('code', ['fr']).update({ label: 'République' }) }))
+
+    expect((snapshots.at(-1) as readonly Readonly<Record<string, unknown>>[]).map(row => row.label)).toEqual(['République'])
+  })
+
   for (const [type, setup, exists] of [
     ['citext', 'CREATE EXTENSION IF NOT EXISTS citext', `SELECT 1 FROM pg_extension WHERE extname = 'citext'`],
     ['VARCHAR(16) COLLATE holo_case_insensitive', `CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`, `SELECT 1 FROM pg_collation WHERE collname = 'holo_case_insensitive'`],
