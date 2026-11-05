@@ -5,6 +5,7 @@ import {
   type MutationIndex,
 } from './dependencies'
 import {
+  hasRecordKey,
   matchesPredicates,
 } from './predicate-matching'
 import {
@@ -79,6 +80,10 @@ export async function tryPatchBelongsToManyRelation(
       }
 
       if (mutation.kind === 'update') {
+        if (mutation.values && (hasRecordKey(mutation.values, relation.foreignPivotKey) || hasRecordKey(mutation.values, relation.relatedPivotKey))) {
+          return UNPATCHED_RESULT
+        }
+
         const nextRows = updateBelongsToManyRelationPivot(rows, pivotRow, relation)
         if (!nextRows) {
           return UNPATCHED_RESULT
