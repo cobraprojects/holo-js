@@ -1,7 +1,7 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
-import { isFractionalDecimalText, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
+import { readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
 import { canonicalStoredKey, ownEntry } from './entityRuntime'
 import { StoredKeyMap, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
@@ -115,10 +115,10 @@ export async function loadRelationKeyChunks<TRow>(
 }
 
 export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
-  return definition !== undefined && readsAsInteger(definition) && isFractionalDecimalText(value)
+  return definition !== undefined && readsAsInteger(definition) && readFractionalDecimalKey(value) !== undefined
 }
 
-function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
+export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
   if (!definition || !readsAsInteger(definition)) return [...keys]
   return distinctStoredKeys(keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey))
 }

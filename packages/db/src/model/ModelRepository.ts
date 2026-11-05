@@ -26,7 +26,7 @@ import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type Reject
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
-import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, keysForColumn, relationKeyOptions, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -2813,6 +2813,14 @@ export class ModelRepository<
     return relationKeyOptions(ownEntry(this.definition.table.columns, parentColumn), ownEntry(related.definition.table.columns, relatedColumn))
   }
 
+  private pivotKeyOptions(relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>): StoredKeyOptions {
+    const pivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
+    return relationKeyOptions(
+      ownEntry(this.definition.table.columns, relation.parentKey),
+      typeof pivotTable === 'string' ? undefined : ownEntry(pivotTable.columns, relation.foreignPivotKey),
+    )
+  }
+
   private getRelationParentValue(
     entity: Entity<TTable>,
     relation: RelationDefinition,
@@ -3319,7 +3327,7 @@ export class ModelRepository<
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
-    const latestEntities = await loadRelationKeyChunks(parentKeys, paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
+    const latestEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(related.definition.table.columns, parentColumn)), paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
     const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
@@ -3446,7 +3454,7 @@ export class ModelRepository<
     constraint?: RelationConstraint,
   ): Promise<StoredKeySet> {
     const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
-    const matchingParents = new StoredKeySet()
+    const matchingParents = new StoredKeySet([], this.pivotKeyOptions(relation))
 
     for (const row of pivotRows) {
       if (relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3481,7 +3489,7 @@ export class ModelRepository<
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<number>> {
     const { rows: pivotRows, related: relatedMap } = await this.retrieveBelongsToMany(entities, relation, constraint)
-    const counts = new StoredKeyMap<number>()
+    const counts = new StoredKeyMap<number>([], this.pivotKeyOptions(relation))
 
     for (const row of pivotRows) {
       if (!relatedMap.has(row[relation.relatedPivotKey])) {
@@ -3563,7 +3571,7 @@ export class ModelRepository<
     related: StoredKeyMap<Entity>,
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
   ): StoredKeyMap<Entity[]> {
-    const grouped = new StoredKeyMap<Entity[]>([], relationKeyOptions(ownEntry(this.definition.table.columns, relation.parentKey), undefined))
+    const grouped = new StoredKeyMap<Entity[]>([], this.pivotKeyOptions(relation))
     for (const row of rows) {
       const entity = related.get(row[relation.relatedPivotKey])
       if (!entity) continue

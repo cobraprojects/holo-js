@@ -343,6 +343,8 @@ describe('bounded relation loading', () => {
     expect(parents.get('9007199254740993.00')).toBe('big')
     expect(parents.get('9007199254740992')).toBeUndefined()
     expect(parents.get('-0.00')).toBe('zero')
+    expect(parents.get('01')).toBeUndefined()
+    expect(parents.get('02.50')).toBeUndefined()
     expect(parents.get(true)).toBeUndefined()
     expect(new StoredKeySet([1], { numeric: true }).has('1.00')).toBe(true)
   })

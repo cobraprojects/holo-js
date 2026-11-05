@@ -354,17 +354,27 @@ export function readNumericValue(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined
 }
 
-const INTEGRAL_DECIMAL_TEXT = /^(-?(?:0|[1-9]\d*))(?:\.0+)?$/
+const DECIMAL_KEY_TEXT = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/
 
-export function readIntegralDecimalKey(value: unknown): unknown {
-  const integer = typeof value === 'string' ? INTEGRAL_DECIMAL_TEXT.exec(value)?.[1] : undefined
-  return integer === undefined ? value : readIntegerKey(integer === '-0' ? '0' : integer)
+function readDecimalKeyText(value: unknown): { readonly integer: string, readonly fraction: string } | undefined {
+  const match = typeof value === 'string' ? DECIMAL_KEY_TEXT.exec(value) : null
+  if (!match) {
+    return undefined
+  }
+
+  const [, sign = '', integer = '', decimals = ''] = match
+  const fraction = decimals.replace(/0+$/, '')
+  return { integer: integer === '0' && fraction === '' ? integer : `${sign}${integer}`, fraction }
 }
 
-const FRACTIONAL_DECIMAL_TEXT = /^-?(?:0|[1-9]\d*)\.\d*[1-9]\d*$/
+export function readIntegralDecimalKey(value: unknown): unknown {
+  const text = readDecimalKeyText(value)
+  return text === undefined || text.fraction !== '' ? value : readIntegerKey(text.integer)
+}
 
-export function isFractionalDecimalText(value: unknown): boolean {
-  return typeof value === 'string' && FRACTIONAL_DECIMAL_TEXT.test(value)
+export function readFractionalDecimalKey(value: unknown): string | undefined {
+  const text = readDecimalKeyText(value)
+  return text === undefined || text.fraction === '' ? undefined : `${text.integer}.${text.fraction}`
 }
 
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {

@@ -155,15 +155,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
   })
 })
 
-describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('decimal relation keys referenced by integer columns on %s', (driver) => {
-  async function openDecimalOwnerFixtures() {
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('relation keys referenced by integer columns on %s', (driver) => {
+  async function openDecimalOwnerFixtures(kind: KeyKind = 'decimal') {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
     const names = { owners: `dk_owners_${suffix}`, items: `dk_items_${suffix}`, tags: `dk_tags_${suffix}`, pivot: `dk_owner_tags_${suffix}` }
     await schema.createTable(names.owners, (table) => {
       table.integer('id').primaryKey()
-      table.decimal('code')
+      if (kind === 'decimal') table.decimal('code')
+      else table.string('code')
     })
     onTestFinished(() => schema.dropTable(names.owners))
     await schema.createTable(names.items, (table) => {
@@ -183,7 +184,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('dec
     })
     onTestFinished(() => schema.dropTable(names.pivot))
 
-    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), code: column.decimal() })
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), code: kind === 'decimal' ? column.decimal() : column.string() })
     const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_code: column.integer() })
     const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey(), code: column.decimal() })
     const pivot = defineGeneratedTable(names.pivot, { id: column.integer().primaryKey(), owner_code: column.integer(), tag_code: column.integer() })
@@ -198,6 +199,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('dec
       timestamps: false,
       relations: {
         items: hasMany(() => Item, 'owner_code', 'code'),
+        latestItem: latestOfMany(() => Item, 'owner_code', 'code'),
         tags: belongsToMany(() => Tag, pivot, 'owner_code', 'tag_code', 'code', 'code'),
       },
     })
@@ -213,6 +215,37 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('dec
     expect(ids(relation(first, 'items'))).toEqual([10, 11])
     expect(ids(relation(second, 'items'))).toEqual([20])
     expect(relation(fractional, 'items')).toEqual([])
+  })
+
+  it('eager loads hasOneOfMany from a decimal local key', async () => {
+    const { Owner } = await openDecimalOwnerFixtures()
+
+    const [first, second, fractional] = await Owner.with('latestItem').orderBy('id').get()
+
+    expect(relation<Entity<TableDefinition>>(first, 'latestItem').get('id' as never)).toBe(11)
+    expect(relation<Entity<TableDefinition>>(second, 'latestItem').get('id' as never)).toBe(20)
+    expect(relation(fractional, 'latestItem')).toBeNull()
+  })
+
+  it('counts belongsToMany through integer pivot columns from decimal keys', async () => {
+    const { Owner } = await openDecimalOwnerFixtures()
+
+    const owners = await (await Owner.orderBy('id').get()).loadCount('tags')
+
+    expect(owners.map(owner => owner.get('tags_count' as never))).toEqual([2, 1, 0])
+  })
+
+  it.each(['decimal', 'text'] as const)('eager loads hasMany and belongsToMany from a %s key holding decimal text', async (kind) => {
+    const { Owner } = await openDecimalOwnerFixtures(kind)
+
+    const [first, second, fractional] = await Owner.with('items', 'tags').orderBy('id').get()
+
+    expect(ids(relation(first, 'items'))).toEqual([10, 11])
+    expect(ids(relation(second, 'items'))).toEqual([20])
+    expect(relation(fractional, 'items')).toEqual([])
+    expect(ids(relation(first, 'tags'))).toEqual([1, 2])
+    expect(ids(relation(second, 'tags'))).toEqual([2])
+    expect(relation(fractional, 'tags')).toEqual([])
   })
 
   it('eager loads belongsTo to a decimal owner key', async () => {

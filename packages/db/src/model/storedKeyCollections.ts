@@ -1,4 +1,4 @@
-import { isCanonicalIntegerText, isFractionalDecimalText, readIntegralDecimalKey } from '../schema/normalization'
+import { isCanonicalIntegerText, readFractionalDecimalKey, readIntegralDecimalKey } from '../schema/normalization'
 import { canonicalStoredKey } from './entityRuntime'
 
 export interface StoredKeyOptions {
@@ -18,7 +18,8 @@ function fractionalKey(value: unknown): string | undefined {
     return `numeric:${String(value)}`
   }
 
-  return isFractionalDecimalText(value) ? `numeric:${String(value).replace(/0+$/, '')}` : undefined
+  const fraction = readFractionalDecimalKey(value)
+  return fraction === undefined ? undefined : `numeric:${fraction}`
 }
 
 function dictionaryKey(value: unknown, numeric: boolean): unknown {
