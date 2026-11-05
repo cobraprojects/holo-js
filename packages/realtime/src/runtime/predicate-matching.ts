@@ -282,12 +282,20 @@ export function readQueryExactIdPredicateValue(query: PredicateQuery): unknown |
     return exactId
   }
 
-  if (query.selections?.length && !query.selections.some(selection => selection.column === primaryKey && selection.resultKey === primaryKey)) {
+  if (query.selections?.length && !selectsOnlyKeyColumnAsKey(query.selections, primaryKey)) {
     return NO_EXACT_ID_PREDICATE
   }
 
   const rows = isRecordArray(query.result) ? query.result : isRecord(query.result) ? [query.result] : []
   return readStoredExactId(rows, primaryKey)
+}
+
+function selectsOnlyKeyColumnAsKey(
+  selections: readonly { readonly column: string, readonly resultKey: string }[],
+  primaryKey: string,
+): boolean {
+  const keySelections = selections.filter(selection => selection.resultKey === primaryKey)
+  return keySelections.length > 0 && keySelections.every(selection => selection.column === primaryKey)
 }
 
 function readStoredExactId(

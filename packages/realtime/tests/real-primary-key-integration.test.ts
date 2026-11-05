@@ -209,6 +209,13 @@ describe('a Generated-schema table keyed on code', () => {
     })
 
     expect(live.snapshots.at(-1)).toEqual({ code: 'République' })
+
+    const colliding = await subscribe(db => db.table('countries').select('code', 'name as code').where('code', 'IT').first())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'IT').update({ name: 'Italia' })
+    })
+
+    expect(colliding.snapshots.at(-1)).toEqual({ code: 'Italia' })
   })
 
   it('patches a list subscription when the changed row is matched by its id column', async () => {
