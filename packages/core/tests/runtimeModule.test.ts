@@ -856,6 +856,39 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     await expect(importBundledRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@holo-js/app-only-split" uses its own copy of "@holo-js/db"')
   })
 
+  it('fails loudly when a subpath-only application Holo package brings its own copy of a runtime package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-subpath')
+    const nestedDbRoot = join(packageRoot, 'node_modules/@holo-js/db')
+    await mkdir(nestedDbRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-subpath', type: 'module', exports: { './job': './job.mjs' }, dependencies: { '@holo-js/db': '*' } }))
+    await writeFile(join(packageRoot, 'job.mjs'), "import { Entity } from '@holo-js/db/entity'\nexport class PluginEntity extends Entity {}\n")
+    await writeFile(join(nestedDbRoot, 'package.json'), JSON.stringify({ name: '@holo-js/db', type: 'module', exports: { './entity': './entity.mjs' } }))
+    await writeFile(join(nestedDbRoot, 'entity.mjs'), 'export class Entity {}\n')
+    const entryPath = join(projectRoot, 'server/models/subpath-plugin.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { PluginEntity } from '@holo-js/app-only-subpath/job'\nexport default PluginEntity\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@holo-js/app-only-subpath" uses its own copy of "@holo-js/db"')
+  })
+
+  it('reports the resolution error instead of loading another copy when the importer cannot import an application Holo package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const outerRoot = join(projectRoot, 'node_modules/@holo-js/app-only-blocked')
+    const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const nestedRoot = join(dependencyRoot, 'node_modules/@holo-js/app-only-blocked')
+    await mkdir(outerRoot, { recursive: true })
+    await mkdir(nestedRoot, { recursive: true })
+    await writeFile(join(outerRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-blocked', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(outerRoot, 'index.mjs'), "export const origin = 'outer'\n")
+    await writeFile(join(nestedRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-blocked', type: 'module', exports: { './job': './job.mjs' } }))
+    await writeFile(join(nestedRoot, 'job.mjs'), "export const origin = 'nested'\n")
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    await writeFile(join(dependencyRoot, 'job.mjs'), "export { origin } from '@holo-js/app-only-blocked'\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, join(dependencyRoot, 'job.mjs'))).rejects.toThrow(/not exported|No "exports" main/)
+  })
+
   it('loads an application-only Holo package from the dependency that imports it', async () => {
     const projectRoot = await realpath(await createTempProject())
     const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')

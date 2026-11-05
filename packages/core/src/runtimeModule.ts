@@ -524,24 +524,20 @@ function readPackageManifest(packageRoot: string): Record<string, unknown> | und
 
 const importerResolutionRequest = 'holo-js-importer-resolution:'
 
-function resolveFromImporter(specifier: string, importerPath: string): string | undefined {
+function resolveFromImporter(specifier: string, importerPath: string): string {
+  if (isBunRuntime()) return pathToFileURL((globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))).href
+  const parentURL = pathToFileURL(importerPath).href
+  const hooks = nodeModule.registerHooks({
+    resolve(request, context, nextResolve) {
+      return request === importerResolutionRequest
+        ? nextResolve(specifier, { ...context, parentURL })
+        : nextResolve(request, context)
+    },
+  })
   try {
-    if (isBunRuntime()) return pathToFileURL((globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))).href
-    const parentURL = pathToFileURL(importerPath).href
-    const hooks = nodeModule.registerHooks({
-      resolve(request, context, nextResolve) {
-        return request === importerResolutionRequest
-          ? nextResolve(specifier, { ...context, parentURL })
-          : nextResolve(request, context)
-      },
-    })
-    try {
-      return import.meta.resolve(importerResolutionRequest)
-    } finally {
-      hooks.deregister()
-    }
-  } catch {
-    return undefined
+    return import.meta.resolve(importerResolutionRequest)
+  } finally {
+    hooks.deregister()
   }
 }
 
@@ -555,8 +551,8 @@ function packageRootContaining(filePath: string, packageName: string): string | 
   }
 }
 
-function packageRootFromUrl(url: string | undefined, packageName: string): string | undefined {
-  return url?.startsWith('file:') ? packageRootContaining(fileURLToPath(url), packageName) : undefined
+function packageRootFromUrl(url: string, packageName: string): string | undefined {
+  return url.startsWith('file:') ? packageRootContaining(fileURLToPath(url), packageName) : undefined
 }
 
 function runtimePackageRoot(packageName: string): string | undefined {
@@ -567,11 +563,21 @@ function runtimePackageRoot(packageName: string): string | undefined {
   }
 }
 
-function assertApplicationHoloPackageSharesRuntime(specifier: string, importerPath: string): void {
+function installedPackageRoot(packageName: string, importerPath: string): string | undefined {
+  try {
+    const manifestPath = isBunRuntime()
+      ? (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(`${packageName}/package.json`, dirname(importerPath))
+      : nodeModule.findPackageJSON(packageName, pathToFileURL(importerPath).href)
+    return manifestPath ? realpathSync(dirname(manifestPath)) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function assertApplicationHoloPackageSharesRuntime(specifier: string, applicationRoot: string): void {
   const visited = new Set<string>()
-  const check = (packageName: string, fromImporter: string): void => {
-    const packageRoot = packageRootFromUrl(resolveFromImporter(packageName, fromImporter), packageName)
-    if (!packageRoot || visited.has(packageRoot)) return
+  const check = (packageRoot: string): void => {
+    if (visited.has(packageRoot)) return
     visited.add(packageRoot)
     const manifest = readPackageManifest(packageRoot)
     const packageImporter = join(packageRoot, 'package.json')
@@ -579,18 +585,19 @@ function assertApplicationHoloPackageSharesRuntime(specifier: string, importerPa
       .flatMap(field => isRecord(manifest?.[field]) ? Object.keys(manifest[field]) : [])
       .filter(name => name.startsWith('@holo-js/'))
     for (const dependencyName of new Set(dependencyNames)) {
+      const dependencyRoot = installedPackageRoot(dependencyName, packageImporter)
+      if (!dependencyRoot) continue
       const runtimeRoot = runtimePackageRoot(dependencyName)
       if (!runtimeRoot) {
-        check(dependencyName, packageImporter)
+        check(dependencyRoot)
         continue
       }
-      const applicationRoot = packageRootFromUrl(resolveFromImporter(dependencyName, packageImporter), dependencyName)
-      if (applicationRoot && applicationRoot !== runtimeRoot) {
+      if (dependencyRoot !== runtimeRoot) {
         throw new Error(`[@holo-js/core] "${holoPackageName(specifier)}" uses its own copy of "${dependencyName}", so it cannot share the Holo runtime's instances. Install "${holoPackageName(specifier)}" in the same node_modules as @holo-js/core.`)
       }
     }
   }
-  check(holoPackageName(specifier), importerPath)
+  check(applicationRoot)
 }
 
 function resolveHoloPackageFromRuntime(specifier: string, importerPath: string): string {
@@ -598,9 +605,11 @@ function resolveHoloPackageFromRuntime(specifier: string, importerPath: string):
     return import.meta.resolve(specifier)
   } catch (error) {
     if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND')) throw error
-    assertApplicationHoloPackageSharesRuntime(specifier, importerPath)
-    return resolveFromImporter(specifier, importerPath) ?? specifier
   }
+  const entryUrl = resolveFromImporter(specifier, importerPath)
+  const applicationRoot = packageRootFromUrl(entryUrl, holoPackageName(specifier))
+  if (applicationRoot) assertApplicationHoloPackageSharesRuntime(specifier, applicationRoot)
+  return entryUrl
 }
 
 function bridgeRuntimeModuleInstances(): Plugin {
