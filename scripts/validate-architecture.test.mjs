@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { validateArchitecture } from './validate-architecture.mjs'
+import { runArchitectureValidation, validateArchitecture } from './validate-architecture.mjs'
 
 async function createPackage(root, name, dependencies = {}, source = '') {
   const directory = name.slice('@holo-js/'.length)
@@ -227,4 +227,15 @@ test('architecture validator rejects tests that read connection settings or conn
     assert.match(failures, new RegExp(`direct\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers; build its connection with postgresTestConnection\\(\\), mysqlTestConnection\\(\\) or testConnectionUrl\\(\\) from tests/support/real-database\\.ts`))
   }
   assert.doesNotMatch(failures, /real-database\.ts reads|native-library-suite|example-app-matrix/)
+})
+
+test('architecture validation points real-database failures at the authoritative runtime gating job', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'holo-architecture-'))
+  await createPackage(root, '@holo-js/kernel')
+  await writeTestFile(root, 'packages/kernel/tests/env.test.ts', 'const database = process.env.HOLO_MYSQL_DATABASE\n')
+  assert.throws(() => runArchitectureValidation(root), /This static check is a best-effort first line\. The Real-database gating CI job \(bun run test:real-database-gating\) is the authoritative check/)
+  const clean = await mkdtemp(join(tmpdir(), 'holo-architecture-'))
+  await createPackage(clean, '@holo-js/kernel')
+  await createPackage(clean, '@holo-js/feature', {}, "import '@holo-js/kernel'")
+  assert.throws(() => runArchitectureValidation(clean), error => !/Real-database gating/.test(error.message))
 })

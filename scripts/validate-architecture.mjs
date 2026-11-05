@@ -288,7 +288,11 @@ export function validateArchitecture(repoRoot) {
 
 export function runArchitectureValidation(repoRoot) {
   const failures = validateArchitecture(repoRoot)
-  if (failures.length > 0) throw new Error(`Architecture validation failed:\n${failures.map(failure => `- ${failure}`).join('\n')}`)
+  if (failures.length === 0) return
+  const realDatabaseNote = failures.some(failure => failure.includes('tests/support/real-database.ts'))
+    ? '\nThis static check is a best-effort first line. The Real-database gating CI job (bun run test:real-database-gating) is the authoritative check that every PostgreSQL and MySQL test skips without its integration flag.'
+    : ''
+  throw new Error(`Architecture validation failed:\n${failures.map(failure => `- ${failure}`).join('\n')}${realDatabaseNote}`)
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
