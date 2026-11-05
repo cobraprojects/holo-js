@@ -317,6 +317,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
         { id: 70, noteable_type: ownerType, noteable_id: '2x' },
         { id: 80, noteable_type: ownerType, noteable_id: '1\n' },
         { id: 90, noteable_type: ownerType, noteable_id: '３' },
+        ...(driver === 'postgres' ? [] : [{ id: 100, noteable_type: ownerType, noteable_id: '1\u0000abc' }]),
       ])
       const Note = defineModel(notes, { timestamps: false, relations: { noteable: morphTo('noteable') } })
       const Owner = defineModel(owners, { morphClass: ownerType, timestamps: false, relations: { notes: morphMany(() => Note, 'noteable') } })
@@ -328,10 +329,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
       const loaded = await Note.with('noteable').orderBy('id').get()
 
-      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined, undefined, undefined])
+      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined, undefined, undefined, ...(driver === 'postgres' ? [] : [undefined])])
       expect(valuesOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 20, 60])
-      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70, 80, 90])
-      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0, 0, 0])
+      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70, 80, 90, ...(driver === 'postgres' ? [] : [100])])
+      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0, 0, 0, ...(driver === 'postgres' ? [] : [0])])
       expect((await Owner.with('notes').orderBy('id').get()).map(owner => valuesOf(owner.getRelation<Loaded[]>('notes') ?? []))).toEqual([[10], [60], []])
       expect(valuesOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
       expect(valuesOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
