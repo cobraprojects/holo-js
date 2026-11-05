@@ -218,6 +218,9 @@ function assertJoinClause(join: QueryJoinClause): void {
 
   if (hasTable) {
     assertQualifiedIdentifier(join.table!, 'Join table')
+    if (typeof join.alias !== 'undefined') {
+      assertIdentifier(join.alias, 'Join alias')
+    }
   } else {
     validateQueryPlan(join.subquery!)
     if (!join.alias) {

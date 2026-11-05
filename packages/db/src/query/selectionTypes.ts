@@ -12,6 +12,26 @@ export type NullableColumns<TColumns extends Record<string, unknown>> = {
   [TColumn in keyof TColumns]: TColumns[TColumn] | null
 }
 
+type ReplaceAll<TValue extends string, TFrom extends string> = TValue extends `${infer THead}${TFrom}${infer TTail}`
+  ? `${THead} ${ReplaceAll<TTail, TFrom>}`
+  : TValue
+type SpaceCharacters<TValue extends string> = ReplaceAll<ReplaceAll<ReplaceAll<ReplaceAll<ReplaceAll<TValue, '\t'>, '\n'>, '\r'>, '\f'>, '\v'>
+type TrimStart<TValue extends string> = TValue extends ` ${infer TRest}` ? TrimStart<TRest> : TValue
+type TrimEnd<TValue extends string> = TValue extends `${infer TRest} ` ? TrimEnd<TRest> : TValue
+type Trim<TValue extends string> = TrimStart<TrimEnd<TValue>>
+
+type TableAlias<TTable extends string> = TTable extends `${string} ${infer TRest}`
+  ? TrimStart<TRest> extends `${infer TKeyword} ${infer TAlias}`
+    ? Lowercase<TKeyword> extends 'as' ? Trim<TAlias> extends `${string} ${string}` ? never : Trim<TAlias> : never
+    : never
+  : never
+
+export type JoinedTableName<TTable extends string> = string extends TTable
+  ? TTable
+  : TTable extends string
+  ? [TableAlias<Trim<SpaceCharacters<TTable>>>] extends [never] ? TTable : TableAlias<Trim<SpaceCharacters<TTable>>>
+  : never
+
 type QualifiedTableName<TColumn extends string> = TColumn extends `${infer TTable}.${string}` ? TTable : never
 
 export type TableWildcardSelection<TTableName extends string> = `${TTableName}.*`
