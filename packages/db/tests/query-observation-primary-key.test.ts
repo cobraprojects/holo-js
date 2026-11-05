@@ -79,6 +79,19 @@ describe('query observations and mutation events carry the table primary key', (
     expect(mutations.map(mutation => mutation.primaryKey)).toEqual(['entry_no'])
   })
 
+  it('increments a limited model query by the model primary key', async () => {
+    await openTable('ledger', { id: column.id(), entry_no: column.string(), amount: column.integer() }, {}, 'CREATE TABLE ledger (id INTEGER PRIMARY KEY, entry_no TEXT, amount INTEGER)')
+    await DB.table('ledger').insert([{ entry_no: 'B', amount: 20 }, { entry_no: 'A', amount: 10 }])
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+
+    await Entry.query().orderBy('entry_no').limit(1).increment('amount', 1)
+
+    expect(await DB.table('ledger').orderBy('entry_no').get()).toEqual([
+      { id: 2, entry_no: 'A', amount: 11 },
+      { id: 1, entry_no: 'B', amount: 20 },
+    ])
+  })
+
   it('keeps id as the key of tables without schema metadata', async () => {
     const { adapter } = await openDatabase('sqlite')
     await adapter.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)')

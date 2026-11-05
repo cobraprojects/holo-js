@@ -3434,7 +3434,7 @@ export class TableQueryBuilder<
       return this.update(values)
     }
 
-    const primaryKey = this.resolvePrimaryKeyColumn()
+    const primaryKey = this.source.primaryKey ?? this.resolvePrimaryKeyColumn()
     const plan = this.plan.predicates.length === 0
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
