@@ -18,6 +18,7 @@ import {
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
@@ -208,6 +209,18 @@ export class ModelRepository<
 
   getConnectionName(): string {
     return this.getConnection().getConnectionName()
+  }
+
+  private textMatchesAnyNumber(connectionName: string): boolean {
+    if (connectionName === this.getConnectionName()) {
+      return textMatchesAnyNumber(this.getConnection())
+    }
+
+    try {
+      return textMatchesAnyNumber(DB.connection(connectionName))
+    } catch {
+      return true
+    }
   }
 
   getDeletedAtColumn(): string | undefined {
@@ -784,6 +797,7 @@ export class ModelRepository<
           target.tableName,
           target.column,
           target.value,
+          this.textMatchesAnyNumber(target.connectionName),
         )
         const dependencies = predicateDependency
           ? Object.freeze([
@@ -897,10 +911,11 @@ export class ModelRepository<
         related.definition.table.tableName,
         relation.foreignKey,
         parentKey,
+        this.textMatchesAnyNumber(related.getConnectionName()),
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       const primaryKey = resolveModelRowKey(related.definition)
@@ -957,10 +972,11 @@ export class ModelRepository<
         related.definition.table.tableName,
         relation.foreignKey,
         parentKey,
+        this.textMatchesAnyNumber(related.getConnectionName()),
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
@@ -1025,10 +1041,11 @@ export class ModelRepository<
         related.definition.table.tableName,
         relation.ownerKey,
         ownerKey,
+        this.textMatchesAnyNumber(related.getConnectionName()),
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
@@ -1065,10 +1082,11 @@ export class ModelRepository<
       this.definition.table.tableName,
       this.definition.primaryKey,
       parentKey,
+      this.textMatchesAnyNumber(this.getConnectionName()),
     )
     const dependencies = Object.freeze([
       createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName),
-      predicateDependency!,
+      ...(predicateDependency ? [predicateDependency] : []),
     ])
     const related = this.resolveRelatedRepository(relation.related)
 
@@ -1172,7 +1190,7 @@ export class ModelRepository<
       operator: '=',
       value: parentKey,
     })
-    const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName())
+    const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName(), undefined, this.textMatchesAnyNumber(related.getConnectionName()))
     return createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies!)
   }
 
@@ -1192,7 +1210,7 @@ export class ModelRepository<
       operator: '=',
       value: ownerKey,
     })
-    const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName())
+    const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName(), undefined, this.textMatchesAnyNumber(related.getConnectionName()))
     return createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies!)
   }
 
@@ -1216,6 +1234,7 @@ export class ModelRepository<
         pivotTableName,
         relation.foreignPivotKey,
         parentKey,
+        this.textMatchesAnyNumber(this.getConnectionName()),
       )
       const relatedMetadata = this.createBelongsToManyRelatedObservationMetadata(entity, relationName, relation, related)
       const dependencies = predicateDependency
@@ -1313,6 +1332,7 @@ export class ModelRepository<
         related.definition.table.tableName,
         relation.relatedKey,
         relatedValue,
+        this.textMatchesAnyNumber(related.getConnectionName()),
       )
       if (dependency) {
         dependencies.push(dependency)
