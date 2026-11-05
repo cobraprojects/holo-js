@@ -12,8 +12,8 @@ const drivers = [
 
 type Driver = typeof drivers[number]
 
-async function openPrices(driver: Driver) {
-  const { schema } = await openDatabase(driver)
+async function openPrices(driver: Driver, options: Parameters<typeof openDatabase>[1] = {}) {
+  const { schema } = await openDatabase(driver, options)
   onTestFinished(() => resetDB())
   const name = `holo_prices_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   await schema.createTable(name, (table) => {
@@ -29,7 +29,11 @@ async function openPrices(driver: Driver) {
     amount: column.decimal(),
     discount: column.decimal().nullable(),
   })
-  return { prices, schema }
+  return { prices, schema, name }
+}
+
+function defaultSchema(driver: Driver): string {
+  return driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
 }
 
 describe.each(drivers)('decimal columns on %s', (driver) => {
@@ -61,6 +65,54 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
 
     expect(typed).toEqual({ amount: '12.30' })
     expect(named).toEqual(await DB.table(prices.tableName).select('amount').first())
+  })
+
+  it('returns driver values to name-only reads after a typed cache miss', async () => {
+    const { prices } = await openPrices(driver)
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
+
+    expect(await DB.table(prices).select('amount').cache(60).first()).toEqual({ amount: '12.30' })
+    expect(await DB.table(prices.tableName).select('amount').cache(60).first())
+      .toEqual(await DB.table(prices.tableName).select('amount').first())
+  })
+
+  it('reads a decimal column through its schema-qualified table by the bare table name', async () => {
+    const { prices, name } = await openPrices(driver)
+    const qualified = defineGeneratedTable(`${defaultSchema(driver)}.${name}`, { id: column.id(), label: column.string(), amount: column.decimal() })
+    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
+
+    expect(await DB.table(qualified).select(`${name}.amount` as never).first()).toEqual({ amount: '12.30' })
+  })
+
+  it('leaves a raw selection that reuses a decimal or integer key as the driver returns it', async () => {
+    const { prices } = await openPrices(driver, { security: { allowUnsafeRawSql: true } })
+    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
+
+    const row = await DB.table(prices).select('id', 'amount').addUnsafeSelect('0.5 AS id, 1 AS amount', []).first()
+
+    expect(Number(row?.id)).toBe(0.5)
+    expect(Number(row?.amount)).toBe(1)
+    expect(row?.amount).not.toBe('1.00')
+  })
+
+  it('counts and checks existence when a decimal column shares the synthetic result key', async () => {
+    const { schema } = await openPrices(driver)
+    const name = `holo_marks_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.decimal('__holo_exists')
+      table.decimal('__holo_count')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const marks = defineGeneratedTable(name, { id: column.id(), __holo_exists: column.decimal(), __holo_count: column.decimal() })
+    await DB.table(marks).insert({ __holo_exists: '1.00', __holo_count: '1.00' })
+
+    expect(await DB.table(marks).exists()).toBe(true)
+    expect(await DB.table(marks).doesntExist()).toBe(false)
+    expect(await DB.table(marks).count()).toBe(1)
+    expect((await DB.table(marks).paginate(10)).meta.total).toBe(1)
   })
 
   it('aggregates decimal columns through models and relations', async () => {

@@ -41,6 +41,12 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
   return tables
 }
 
+function qualifiedTable(plan: SelectQueryPlan, tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
+  if (tables.has(qualifier)) return tables.get(qualifier)
+  const { tableName, alias } = plan.source
+  return alias === undefined && tableName.slice(tableName.lastIndexOf('.') + 1) === qualifier ? plan.source.table : undefined
+}
+
 function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefined>, name: string): AnyColumnDefinition | undefined {
   const [source] = tables.values()
   if (source && Object.hasOwn(source.columns, name)) return source.columns[name]
@@ -54,13 +60,13 @@ function projectedColumns(tables: ReadonlyMap<string, TableDefinition | undefine
   return [...tables.values()].flatMap(table => table ? columnsOf(table) : [[UNKNOWN_COLUMNS, undefined] as const])
 }
 
-function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+function selectedColumns(plan: SelectQueryPlan, selection: QueryColumnSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
   const separator = selection.column.lastIndexOf('.')
   const name = selection.column.slice(separator + 1)
   if (separator < 0) {
     return name === '*' ? projectedColumns(tables) : [[selection.alias ?? name, unambiguousColumn(tables, name)]]
   }
-  const table = tables.get(selection.column.slice(0, separator))
+  const table = qualifiedTable(plan, tables, selection.column.slice(0, separator))
   if (name === '*') return table ? columnsOf(table) : [[UNKNOWN_COLUMNS, undefined]]
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
@@ -70,8 +76,8 @@ function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, Any
   const selected: readonly SelectedColumn[] = plan.selections.length === 0
     ? projectedColumns(tables)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(selection, tables)
-      : 'alias' in selection ? [[selection.alias, undefined]] : [])
+      ? selectedColumns(plan, selection, tables)
+      : 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]])
   const definitions = new Map<string, AnyColumnDefinition>()
   for (const [key, definition] of selected) {
     if (key === UNKNOWN_COLUMNS) definitions.clear()

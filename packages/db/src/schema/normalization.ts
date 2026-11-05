@@ -349,7 +349,9 @@ const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
 
 export function readNumericValue(value: unknown): number | undefined {
   if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
-  return typeof value === 'string' && DECIMAL_NUMBER_TEXT.test(value) ? Number(value) : undefined
+  if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
 }
 
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {

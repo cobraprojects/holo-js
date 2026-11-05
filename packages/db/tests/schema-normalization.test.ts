@@ -7,6 +7,8 @@ import {
   normalizeDialectReadValue,
   normalizeDialectWriteValue,
 } from '../src'
+import { readNumericValue } from '../src/schema/normalization'
+import { compareChunkValuesAscending, compareChunkValuesDescending } from '../src/query/chunkOrdering'
 
 describe('schema normalization rules', () => {
   it('normalizes boolean, json, and timestamp values on reads and writes across dialects', () => {
@@ -81,6 +83,21 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectWriteValue('sqlite', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectWriteValue('mysql', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectWriteValue('postgres', stringColumn, { value: 'Mohamed' })).toEqual({ value: 'Mohamed' })
+  })
+
+  it('reads finite numbers from decimal text for aggregates', () => {
+    expect(readNumericValue('12.30')).toBe(12.3)
+    expect(readNumericValue(-2)).toBe(-2)
+    expect(readNumericValue('9'.repeat(400))).toBeUndefined()
+    expect(readNumericValue(Number.NaN)).toBeUndefined()
+    expect(readNumericValue('1e3')).toBeUndefined()
+  })
+
+  it('orders decimal text beyond number precision in chunk traversal', () => {
+    expect(compareChunkValuesAscending('9007199254740993.00', '9007199254740992.00', true)).toBe(1)
+    expect(compareChunkValuesDescending('9007199254740993.00', '9007199254740992.00', true)).toBe(-1)
+    expect(compareChunkValuesAscending('-0.10', '-0.05', true)).toBe(-1)
+    expect(compareChunkValuesAscending('-0.00', '0', true)).toBe(0)
   })
 
   it('reads SQLite decimal numbers as decimal text with at least two places', () => {

@@ -1917,6 +1917,7 @@ export class TableQueryBuilder<
     statement: CompiledStatement,
     collectObservation = true,
     scopeCacheKey = false,
+    convertColumns = true,
   ): Promise<TRow[]> {
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
@@ -1937,7 +1938,7 @@ export class TableQueryBuilder<
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired) {
-      const rows = this.convertRows(await this.queryRows<TRow>(statement))
+      const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -1958,7 +1959,7 @@ export class TableQueryBuilder<
 
     const flexible = cacheConfig.flexible
     if (flexible) {
-      const rows = this.convertRows(await runQueryCacheOperation(runSource => bridge.flexible(
+      const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
         flexible,
         () => runSource(() => this.queryRows<TRow>(statement)),
@@ -1981,7 +1982,7 @@ export class TableQueryBuilder<
     }
 
     const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
-    const rows = this.convertRows(await runQueryCacheOperation(runSource => bridge.flexible(
+    const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
       ttl,
       () => runSource(() => this.queryRows<TRow>(statement)),
@@ -1999,7 +2000,8 @@ export class TableQueryBuilder<
     return rows
   }
 
-  private convertRows<TRow extends Record<string, unknown>>(rows: TRow[]): TRow[] {
+  private convertRows<TRow extends Record<string, unknown>>(convertColumns: boolean, rows: TRow[]): TRow[] {
+    if (!convertColumns) return rows
     const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
     return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
@@ -2032,7 +2034,7 @@ export class TableQueryBuilder<
     }
     const readsDecimal = (column: string): boolean => {
       const separator = column.lastIndexOf('.')
-      const table = separator < 0 ? this.source.table : tables.get(column.slice(0, separator))
+      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tables.get(column.slice(0, separator))
       const name = column.slice(separator + 1)
       const columns = Object.entries(table?.columns ?? {})
       return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')
@@ -2351,7 +2353,7 @@ export class TableQueryBuilder<
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
     const offset = (page - 1) * perPage
-    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true)
+    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true, false)
     const total = Number(counts[0]?.__holo_count)
     if (!Number.isSafeInteger(total) || total < 0) throw new CompilerError('Pagination count must be a non-negative safe integer.')
     const pageQuery = this.limit(perPage).offset(offset === 0 ? undefined : offset)
@@ -2576,7 +2578,7 @@ export class TableQueryBuilder<
   }
 
   async count(): Promise<number> {
-    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true)
+    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true, false)
     const result = Number(rows[0]?.__holo_count)
     if (!Number.isSafeInteger(result) || result < 0) throw new CompilerError('Query count must be a non-negative safe integer.')
     if (hasActiveDatabaseDependencyCollector()) {
@@ -2587,7 +2589,7 @@ export class TableQueryBuilder<
 
   async exists(): Promise<boolean> {
     if (!hasActiveDatabaseDependencyCollector()) {
-      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true)
+      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true, false)
       return rows[0]?.__holo_exists === true || rows[0]?.__holo_exists === 1
     }
     const count = await this.count()

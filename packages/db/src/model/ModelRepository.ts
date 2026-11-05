@@ -1285,7 +1285,9 @@ export class ModelRepository<
   private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
     const connection = this.getConnection()
     if (readsSQLiteDecimals(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
-    return !relation.pivotModel || !modelNeedsSerialization(this.resolveRelatedRepository(relation.pivotModel).definition)
+    if (!relation.pivotModel) return true
+    const pivot = this.resolveRelatedRepository(relation.pivotModel)
+    return !modelNeedsSerialization(pivot.definition) && !readsSQLiteDecimals(connection, pivot.definition.table)
   }
 
   private createBelongsToManyRelatedObservationMetadata(
