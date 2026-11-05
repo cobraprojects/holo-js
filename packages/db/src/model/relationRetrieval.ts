@@ -138,7 +138,15 @@ export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, r
 }
 
 function selectsRelationColumn(plan: SelectQueryPlan, column: string): boolean {
-  return plan.selections.length === 0 || plan.selections.some(selection => selection.kind === 'column'
+  if (plan.selections.length === 0) {
+    return true
+  }
+
+  if (plan.selections.some(selection => selection.kind !== 'column' || selection.alias === column)) {
+    return false
+  }
+
+  return plan.selections.some(selection => selection.kind === 'column'
     && typeof selection.alias === 'undefined'
     && (selection.column === '*' || selection.column.endsWith('.*') || selection.column.split('.').at(-1) === column))
 }
