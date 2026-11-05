@@ -64,7 +64,9 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPredicateValue('12.30', createPredicate('amount', '!=', 12.3))).toBeUndefined()
     expect(matchesPredicateValue('12.30', createPredicate('amount', 'in', [12.3]))).toBeUndefined()
     expect(matchesPredicateValue('12.30', createPredicate('amount', 'not in', [12.3]))).toBeUndefined()
-    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', true))).toBe(false)
+    expect(matchesPredicateValue('12.30', createPredicate('amount', '=', true))).toBeUndefined()
+    expect(matchesPredicateValue(true, createPredicate('enabled', '=', '1'))).toBeUndefined()
+    expect(matchesPredicateValue(false, createPredicate('enabled', 'in', ['0']))).toBeUndefined()
     expect(matchesPredicateValue(1, createPredicate('amount', '=', 2))).toBe(false)
   })
 

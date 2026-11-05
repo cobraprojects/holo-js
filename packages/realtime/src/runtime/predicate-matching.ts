@@ -82,7 +82,7 @@ export function compareValues(left: unknown, right: unknown): number | undefined
 }
 
 function comparesAsText(value: unknown): boolean {
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint'
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean'
 }
 
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
