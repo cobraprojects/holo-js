@@ -179,6 +179,21 @@ function createGroupedAggregateValueBackfillKey(
     + '}'
 }
 
+function whereGroupValues(
+  builder: TableQueryBuilder<string, Record<string, unknown>>,
+  groupColumn: string,
+  values: readonly unknown[],
+): TableQueryBuilder<string, Record<string, unknown>> {
+  const presentValues = values.filter(value => value !== null)
+  if (presentValues.length === values.length) {
+    return builder.where(groupColumn, 'in', values)
+  }
+
+  return builder.where(group => presentValues.length === 0
+    ? group.whereNull(groupColumn)
+    : group.where(groupColumn, 'in', presentValues).orWhereNull(groupColumn))
+}
+
 async function fetchGroupedAggregateValues(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
@@ -195,8 +210,7 @@ async function fetchGroupedAggregateValues(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  let aggregateBuilder = builder
-    .where(groupedAggregate.groupColumn, 'in', values)
+  let aggregateBuilder = whereGroupValues(builder, groupedAggregate.groupColumn, values)
     .select(groupedAggregate.groupColumn)
   if (groupedAggregate.kind === 'count') {
     aggregateBuilder = aggregateBuilder.addSelectCount(GROUPED_AGGREGATE_VALUE_KEY)
@@ -375,8 +389,7 @@ async function fetchGroupedAggregateValueCounts(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  const rows = await builder
-    .where(groupedAggregate.groupColumn, 'in', values)
+  const rows = await whereGroupValues(builder, groupedAggregate.groupColumn, values)
     .select(groupedAggregate.groupColumn, column)
     .addSelectCount(GROUPED_AGGREGATE_VALUE_COUNT_KEY)
     .groupBy(groupedAggregate.groupColumn)

@@ -1,5 +1,5 @@
 import { getExecutionDatabase } from './execution-context'
-import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition } from '@holo-js/db'
+import { DB, queryCacheInternals, type DatabaseContext, type Dialect, type TableDefinition } from '@holo-js/db'
 import type { DatabaseQueryObservation, DatabaseQuerySelectionObservation } from './query-state'
 import type { DatabaseMutationEvent } from './dependencies'
 import type { BackfillCache } from './state'
@@ -100,4 +100,11 @@ export function readMutationsForQuery(
     return next
   })
   return changed ? Object.freeze(read) : mutations
+}
+
+export function quoteTableReference(dialect: Dialect, tableName: string): string {
+  return tableName
+    .split('.')
+    .map(segment => dialect.quoteIdentifier(segment))
+    .join('.')
 }

@@ -276,8 +276,9 @@ export class SchemaService {
     this.assertSupportedColumnDefaults(Object.values(table.columns))
     await this.assertSupportedColumns(Object.values(table.columns))
     const compiler = this.createCompiler()
-    const indexes = compiler.resolveCreateTableIndexes(table)
+    const indexes = compiler.resolveCreateTableIndexes(table).map(index => ({ ...index, name: this.resolveIndexName(table.tableName, index) }))
     const tableStatement = compiler.compileTableCreation(table)
+    const indexTablePath = this.isSqlite() ? this.sqlite.createdTablePath(table.tableName) : table.tableName
     if (indexes.length === 0) {
       await this.execute([tableStatement])
       return
@@ -285,8 +286,8 @@ export class SchemaService {
 
     await runAtomically(this.connection, async (connection) => {
       await executeStatements(connection, [tableStatement])
-      const missingIndexes = await resolveMissingIndexes(connection, table.tableName, indexes)
-      await executeStatements(connection, missingIndexes.map(index => compiler.compileCreateIndex(table.tableName, index)))
+      const missingIndexes = await resolveMissingIndexes(connection, table.tableName, indexTablePath, indexes)
+      await executeStatements(connection, missingIndexes.map(index => compiler.compileCreateIndex(indexTablePath, index)))
     })
   }
 
@@ -297,6 +298,10 @@ export class SchemaService {
     }
 
     await runAtomically(this.connection, connection => executeStatements(connection, statements))
+  }
+
+  private resolveDDLTablePath(tableName: string): Promise<string> {
+    return this.isSqlite() ? this.sqlite.resolveTablePath(tableName) : Promise.resolve(tableName)
   }
 
   private async resolveCoveringIndexName(tableName: string, columns: readonly string[], unique: boolean): Promise<string> {
@@ -348,7 +353,9 @@ export class SchemaService {
           await this.sqlite.addColumn(tableName, definition)
           return
         }
-        await this.executeAtomically(this.createCompiler().compile(addColumnOperation(tableName, definition)))
+        await this.executeAtomically(this.isSqlite()
+          ? await this.sqlite.compileAddColumnInPlace(tableName, definition)
+          : this.createCompiler().compile(addColumnOperation(tableName, definition)))
         return
       }
       case 'alterColumn':
@@ -366,12 +373,14 @@ export class SchemaService {
           : this.execute(statements))
         return
       }
-      case 'createIndex':
-        await this.execute(this.createCompiler().compile(createIndexOperation(tableName, operation.index)))
+      case 'createIndex': {
+        const index = { ...operation.index, name: this.resolveIndexName(tableName, operation.index) }
+        await this.execute(this.createCompiler().compile(createIndexOperation(await this.resolveDDLTablePath(tableName), index)))
         return
+      }
       case 'dropIndex': {
         const indexName = 'indexName' in operation ? operation.indexName : await this.resolveCoveringIndexName(tableName, operation.columns, false)
-        await this.execute(this.createCompiler().compile(dropIndexOperation(tableName, indexName)))
+        await this.execute(this.createCompiler().compile(dropIndexOperation(await this.resolveDDLTablePath(tableName), indexName)))
         return
       }
       case 'dropUnique': {
@@ -380,7 +389,7 @@ export class SchemaService {
           return
         }
         await this.execute(this.createCompiler().compile(
-          dropUniqueOperation(tableName, indexName, await this.resolveUniqueBacking(tableName, indexName)),
+          dropUniqueOperation(await this.resolveDDLTablePath(tableName), indexName, await this.resolveUniqueBacking(tableName, indexName)),
         ))
         return
       }
@@ -511,9 +520,10 @@ export class SchemaService {
 async function resolveMissingIndexes(
   connection: DatabaseContext,
   tableName: string,
+  tablePath: string,
   declaredIndexes: readonly TableIndexDefinition[],
 ): Promise<TableIndexDefinition[]> {
-  const existingIndexes = (await readTableStructure(connection, tableName))?.indexes ?? []
+  const existingIndexes = (await readTableStructure(connection, tablePath))?.indexes ?? []
   return declaredIndexes.filter((declared) => {
     const existing = existingIndexes.find(index => index.name === declared.name)
     if (!existing) {
