@@ -115,6 +115,8 @@ it('types pivot attribute writes from the pivot table columns', () => {
       await user.roles().attach({ 1: { approved: true } })
       await user.roles().sync([1, 2])
       await user.roles().sync(null)
+      await user.roles().sync({ 1: null, 2: undefined })
+      await user.attach('roles', { 1: null })
       await user.roles().toggle(undefined)
       await user.roles().attach([new Uint8Array([1])])
       await user.roles().sync({ 1: { approved: true }, 2: { note: 'x' } })
