@@ -348,7 +348,7 @@ export function oldestOfMany<TRelated extends ModelDefinitionLike<TableDefinitio
 
 export function belongsToMany<
   const TName extends RegisteredModelName,
-  TPivotTable extends string | TableDefinition,
+  const TPivotTable extends string | TableDefinition,
 >(
   related: TName,
   pivotTableOrOptions: TPivotTable | {
@@ -365,7 +365,7 @@ export function belongsToMany<
 ): InitialPivotRelation<BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable>, TPivotTable>
 export function belongsToMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
-  TPivotTable extends string | TableDefinition,
+  const TPivotTable extends string | TableDefinition,
 >(
   related: () => TRelated,
   pivotTableOrOptions: TPivotTable | {
@@ -380,7 +380,7 @@ export function belongsToMany<
   parentKey?: string,
   relatedKey?: string,
 ): InitialPivotRelation<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable>
-export function belongsToMany<TPivotTable extends string | TableDefinition>(
+export function belongsToMany<const TPivotTable extends string | TableDefinition>(
   related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
   pivotTableOrOptions: TPivotTable | {
     pivotTable: TPivotTable

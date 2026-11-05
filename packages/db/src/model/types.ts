@@ -105,8 +105,23 @@ export type ModelDefinitionTable<TReference extends ModelDefinitionLike>
       ? TTable
       : TableDefinition
 
+type PivotTableDefinition<TPivotTable extends string | TableDefinition>
+  = TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable
+
 export type PivotTableColumnName<TPivotTable extends string | TableDefinition>
-  = Extract<keyof InferSelect<TPivotTable extends string ? GeneratedSchemaTable<TPivotTable> : TPivotTable>, string>
+  = Extract<keyof InferSelect<PivotTableDefinition<TPivotTable>>, string>
+
+export type PivotAttributes<TPivotTable extends string | TableDefinition = string | TableDefinition>
+  = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>>
+    ? Record<string, unknown>
+    : ModelUpdatePayload<PivotTableDefinition<TPivotTable>>
+
+export type PivotRelatedKey = string | number | bigint | Uint8Array
+
+export type PivotRelatedIds<TPivotTable extends string | TableDefinition = string | TableDefinition>
+  = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>>
+    ? unknown
+    : PivotRelatedKey | readonly PivotRelatedKey[] | { readonly [id: string]: PivotAttributes<TPivotTable> }
 
 export interface BelongsToRelationDefinition<TRelated extends ModelDefinitionLike = ModelDefinitionLike> extends ScopedRelationDefinition {
   readonly kind: 'belongsTo'
@@ -342,11 +357,11 @@ export interface HasManyRelationMethods<TRelated, TValues = Record<string, unkno
 /**
  * Methods available on BelongsToMany relations when called as a method (e.g., post.tags())
  */
-export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>, TValues = Record<string, unknown>> {
-  attach(ids: unknown | readonly unknown[], attributes?: TPivot): Promise<void>
+export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>, TValues = Record<string, unknown>, TIds = unknown> {
+  attach(ids: TIds, attributes?: TPivot): Promise<void>
   detach(ids?: unknown | readonly unknown[]): Promise<number>
-  sync(ids: unknown): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>
-  toggle(ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }>
+  sync(ids: TIds): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>
+  toggle(ids: TIds): Promise<{ attached: unknown[], detached: unknown[] }>
   updateExistingPivot(id: unknown, attributes: TPivot): Promise<number>
   create(values: TValues): Promise<TRelated>
   save(related: TRelated): Promise<TRelated>
@@ -369,7 +384,7 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
             : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
               ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
               : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
-                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
                   ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                   : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
@@ -377,9 +392,9 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
                     : TRelation extends MorphManyRelationDefinition<infer TRelated>
                       ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphToManyRelationDefinition<infer TRelated>
-                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
-                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
+                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
                         : never
 
 export interface RelationMap {
@@ -746,6 +761,15 @@ export type PivotTableOfRelation<TRelation extends RelationDefinition>
 
 export type PivotColumnNameOfRelation<TRelation extends RelationDefinition>
   = PivotTableColumnName<PivotTableOfRelation<TRelation>>
+
+type NamedRelationPivotTable<TRelations extends RelationMap, TName extends string>
+  = TName extends keyof TRelations ? PivotTableOfRelation<TRelations[TName]> : string
+
+export type PivotAttributesOfRelation<TRelations extends RelationMap, TName extends string>
+  = PivotAttributes<NamedRelationPivotTable<TRelations, TName>>
+
+export type PivotRelatedIdsOfRelation<TRelations extends RelationMap, TName extends string>
+  = PivotRelatedIds<NamedRelationPivotTable<TRelations, TName>>
 
 export type EmptyScopeMap = Record<never, never>
 export type ModelScopesDefinition = Readonly<Record<string, unknown>>
