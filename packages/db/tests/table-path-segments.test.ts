@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, onDatabaseDependencyInvalidated, resetDB, type DriverAdapter } from '../src'
+import { DB, SchemaError, SecurityError, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, belongsToMany, defineGeneratedTable, defineModel, onDatabaseDependencyInvalidated, resetDB, type DriverAdapter } from '../src'
 
 const unreachable = async (): Promise<never> => {
   throw new Error('The statement reached the database.')
@@ -68,6 +68,44 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('table paths with more t
     const Thing = defineModel('a.b.c', { connectionName: 'secondary', guarded: ['id'], timestamps: false })
 
     await expect(Thing.create({ name: 'x' })).rejects.toThrow(new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.'))
+  })
+
+  it('rejects them before updates open a transaction to capture previous rows', async () => {
+    openUnreachableDatabase(driver)
+    const stop = onDatabaseDependencyInvalidated(() => {})
+    try {
+      const error = new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.')
+      await expect(DB.table('a.b.c').where('id', 1).update({ name: 'x' })).rejects.toThrow(error)
+      await expect(DB.table('a.b.c').where('id', 1).delete()).rejects.toThrow(error)
+    } finally {
+      stop()
+    }
+  })
+
+  it('rejects them before model writes open a transaction', async () => {
+    openUnreachableDatabase(driver)
+    const error = new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.')
+    const Fillable = defineModel('a.b.c', { connectionName: 'secondary', fillable: ['name'], timestamps: false })
+    const Unguarded = defineModel('a.b.c', { connectionName: 'secondary', guarded: [], timestamps: false })
+
+    await expect(Fillable.create({ name: 'x' })).rejects.toThrow(error)
+    await expect(Unguarded.create({ name: 'x' })).rejects.toThrow(error)
+    await expect(Fillable.createOrFirst({ name: 'x' })).rejects.toThrow(error)
+    await expect((await Fillable.hydrate({ id: 1, name: 'x' })).delete()).rejects.toThrow(error)
+  })
+
+  it('rejects them before pivot mutations open a transaction', async () => {
+    openUnreachableDatabase(driver)
+    const error = new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.')
+    const Role = defineModel('roles', { connectionName: 'secondary', timestamps: false })
+    const User = defineModel('users', { connectionName: 'secondary', timestamps: false, relations: { roles: belongsToMany(() => Role, 'a.b.c', 'user_id', 'role_id') } })
+    const user = await User.hydrate({ id: 1 })
+
+    await expect(user.attach('roles', [1])).rejects.toThrow(error)
+    await expect(user.sync('roles', [1])).rejects.toThrow(error)
+    await expect(user.toggle('roles', [1])).rejects.toThrow(error)
+    await expect(user.detach('roles', [1])).rejects.toThrow(error)
+    await expect(user.updateExistingPivot('roles', 1, { note: 'x' })).rejects.toThrow(error)
   })
 
   it('keeps accepting schema-qualified column references', async () => {

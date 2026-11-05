@@ -371,6 +371,19 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table('main.products').select('main.products.*').get()).toEqual([])
   })
 
+  it('applies the qualified wildcard checks to counts and pagination', async () => {
+    await openArchive()
+    await DB.table('main.products').insert({ id: 1, name: 'main', price: 10 })
+
+    await expect(DB.table('main.products as p').select('main.products.*').count())
+      .rejects.toThrow('SQLite cannot select "main.products.*" because table "main.products" is aliased as "p". Select "p.*" instead.')
+    await expect(DB.table('products').select('main.products.*').count())
+      .rejects.toThrow('SQLite cannot select "main.products.*" because no table in the query is "main.products" without an alias. Qualify the table the same way or select "products.*".')
+    await expect(DB.table('products').select('main.products.*').paginate(10, 1))
+      .rejects.toThrow('SQLite cannot select "main.products.*" because no table in the query is "main.products" without an alias. Qualify the table the same way or select "products.*".')
+    expect(await DB.table('main.products').select('main.products.*').count()).toBe(1)
+  })
+
   it('never expands a qualified wildcard from a temporary table that shadows it', async () => {
     const { db } = await openArchive()
     await db.executeCompiled({ sql: 'CREATE TEMP TABLE "products" ("id" INTEGER PRIMARY KEY, "other" TEXT)', source: 'schema' })

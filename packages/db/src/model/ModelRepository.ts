@@ -1,6 +1,7 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
+import { assertQueryTablePath } from '../query/validator'
 import {
   createDatabaseQueryObservation,
   createTableCacheDependency,
@@ -390,6 +391,7 @@ export class ModelRepository<
       throw new HydrationError('createOrFirst() requires at least one attribute to match the existing row.')
     }
 
+    assertQueryTablePath(this.definition.table.tableName)
     const connection = this.getConnection()
     const create = () => this.create({ ...match, ...values })
     try {
@@ -2067,6 +2069,7 @@ export class ModelRepository<
   }
 
   private async runWriteUnit<TResult>(callback: () => Promise<TResult>): Promise<TResult> {
+    assertQueryTablePath(this.definition.table.tableName)
     const connection = this.getConnection()
     if (connection.getScope().kind !== 'root') {
       return callback()

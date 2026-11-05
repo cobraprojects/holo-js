@@ -1,6 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { assertQueryTablePath } from '../query/validator'
 import type { TableDefinition } from '../schema/types'
 import { assertColumnWritable, ownEntry } from './entityRuntime'
 
@@ -20,7 +21,9 @@ type Context = {
 const bindingBudget = 900
 
 export class PivotMutation {
-  constructor(private readonly context: Context, private readonly connection: DatabaseContext) {}
+  constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
+    assertQueryTablePath(typeof context.table === 'string' ? context.table : context.table.tableName)
+  }
 
   async attach(ids: unknown, attributes: Attributes): Promise<void> {
     await this.mutate('attach', ids, attributes)
