@@ -355,6 +355,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
+  readonly refreshQueries: Map<string, DatabaseQueryObservation>
   serializationOverridden: boolean
 }
 
@@ -467,6 +468,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
+    refreshQueries: new Map(),
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -475,7 +477,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze([...state.queries]),
+    queries: Object.freeze([...state.queries, ...state.refreshQueries.values()]),
   })
 }
 
@@ -538,6 +540,29 @@ function serializedQueryObservation(observation: DatabaseQueryObservation): Data
     patchable: false,
     serialized: true,
   })
+}
+
+export function recordDatabaseQueryRefreshObservation(connectionName: string, tableName: string): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return
+  }
+
+  const dependency = createTableCacheDependency(connectionName, tableName)
+  if (state.refreshQueries.has(dependency)) {
+    return
+  }
+
+  state.refreshQueries.set(dependency, Object.freeze({
+    connectionName,
+    dependencies: Object.freeze([dependency]),
+    orderBy: [],
+    patchable: false,
+    predicates: [],
+    selections: [],
+    serialized: true,
+    tableName,
+  }))
 }
 
 export function readDatabaseQueryObservationCount(): number {

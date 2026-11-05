@@ -30,6 +30,7 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
   await create(names.authors, (table) => {
     table.integer('id').primaryKey()
     table.string('name')
+    table.integer('mentor_id').nullable()
   })
   await create(names.posts, (table) => {
     table.integer('id').primaryKey()
@@ -42,11 +43,11 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
     table.string('body')
   })
 
-  const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string() })
+  const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string(), mentor_id: column.integer().nullable() })
   const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), author_id: column.integer(), title: column.string() })
   const reviews = defineGeneratedTable(names.reviews, { id: column.integer().primaryKey(), post_id: column.integer(), body: column.string() })
 
-  await DB.table(authors).insert([{ id: 1, name: 'Ada' }, { id: 2, name: 'Grace' }, { id: 3, name: 'Linus' }])
+  await DB.table(authors).insert([{ id: 1, name: 'Ada', mentor_id: null }, { id: 2, name: 'Grace', mentor_id: 1 }, { id: 3, name: 'Linus', mentor_id: 1 }])
   await DB.table(posts).insert([{ id: 10, author_id: 1, title: 'Engines' }, { id: 20, author_id: 2, title: 'Compilers' }, { id: 30, author_id: 1, title: 'Notes' }])
   await DB.table(reviews).insert([{ id: 100, post_id: 10, body: 'great' }, { id: 300, post_id: 30, body: 'fine' }, { id: 200, post_id: 20, body: 'sharp' }])
 
@@ -58,6 +59,7 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
       reviews: hasManyThrough(() => Review, () => Post, 'author_id', 'post_id'),
       review: hasOneThrough(() => Review, () => Post, 'author_id', 'post_id'),
       posts: hasMany(() => Post, 'author_id'),
+      mentees: hasMany(() => Author, 'mentor_id'),
     },
   })
 
@@ -98,6 +100,10 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       'summed through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withSum('posts', 'id').orderBy('id').getJson(),
       'counted through relations': (Author: Library['Author']) => Author.query().withCount('reviews').withCount('posts').orderBy('id').getJson(),
       'summed through relations': (Author: Library['Author']) => Author.query().withSum('reviews', 'id').withCount('posts').orderBy('id').getJson(),
+      'nested in a relation callback': async (Author: Library['Author'], Post: Library['Post']) => ({
+        mentors: await Author.query().with('mentees', query => query.with('reviews')).where('id', 1).getJson(),
+        posts: await Post.query().orderBy('id').getJson(),
+      }),
       'composed with the through table': async (Author: Library['Author'], Post: Library['Post']) => ({
         authors: await Author.query().with(bothOrdered).orderBy('id').getJson(),
         posts: await Post.query().orderBy('id').getJson(),
@@ -110,12 +116,14 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
     for (const [name, readWith] of Object.entries(reads)) {
       it(`keeps ${name} subscriptions equal to a fresh read across through row and key writes`, async () => {
         const { names, Author, Post, Review } = await openLibrary(driver)
-        const read = async () => JSON.parse(JSON.stringify(await readWith(Author, Post, Review)))
+        const read = async () => await readWith(Author, Post, Review)
         const live = await subscribe(read)
         const expectFresh = async () => {
-          expect(live.current.data).toEqual(await read())
+          expect(JSON.parse(JSON.stringify(live.current.data))).toEqual(JSON.parse(JSON.stringify(await read())))
         }
 
+        await expectFresh()
+        await mutate(db => db.table(names.posts).where('id', 20).update({ author_id: 3 }))
         await expectFresh()
         await mutate(db => db.table(names.posts).where('id', 30).update({ author_id: 2 }))
         await expectFresh()

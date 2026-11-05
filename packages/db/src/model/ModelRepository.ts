@@ -9,6 +9,7 @@ import {
   hasActiveDatabaseDependencyCollector,
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
+  recordDatabaseQueryRefreshObservation,
   resolveQueryCacheDependencies,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
@@ -774,11 +775,6 @@ export class ModelRepository<
       }
 
       const relation = this.getRelationDefinition(aggregate.relation)
-      if (relation.kind === 'hasOneThrough' || relation.kind === 'hasManyThrough') {
-        this.recordThroughRelationObservations(relation)
-        continue
-      }
-
       const key = this.relationAggregateCalculator.getAttributeKey(aggregate)
 
       for (let index = 0; index < entities.length; index += 1) {
@@ -3414,18 +3410,7 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
   ): void {
     for (const repository of [this.resolveThroughRepository(relation.through), this.resolveRelatedRepository(relation.related)]) {
-      const connectionName = repository.getConnectionName()
-      const tableName = repository.definition.table.tableName
-      recordDatabaseQueryObservation(Object.freeze({
-        connectionName,
-        dependencies: Object.freeze([createTableCacheDependency(connectionName, tableName)]),
-        orderBy: [],
-        patchable: false,
-        predicates: [],
-        selections: [],
-        serialized: true,
-        tableName,
-      }))
+      recordDatabaseQueryRefreshObservation(repository.getConnectionName(), repository.definition.table.tableName)
     }
   }
 
