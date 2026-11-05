@@ -1,5 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection } from './support/database'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { createMySQLAdapter } from '@holo-js/db-mysql'
+import { createPostgresAdapter } from '@holo-js/db-postgres'
+import { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
+import { openDatabase } from './support/database'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -53,6 +56,18 @@ describe('real database test support', () => {
     expect(mysqlTestConnection()).toEqual({ host: 'my.test', port: 3307, user: 'tester', password: 'secret', database: 'holo_my_scratch' })
   })
 
+  it.each([
+    ['HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', postgresTestConnection],
+    ['HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', mysqlTestConnection],
+  ] as const)('refuses a %s connection without a scratch database', (flag, database, connection) => {
+    vi.stubEnv(flag, '1')
+    vi.stubEnv(database, undefined)
+    expect(() => connection()).toThrow(`${database} must name a scratch test database`)
+    vi.stubEnv(database, 'holo_scratch')
+    vi.stubEnv(flag, undefined)
+    expect(() => connection()).toThrow(`${flag}=1`)
+  })
+
   it('keeps only the drivers whose integration flag is on', () => {
     vi.stubEnv('HOLO_POSTGRES_INTEGRATION', '1')
     vi.stubEnv('HOLO_MYSQL_INTEGRATION', undefined)
@@ -60,5 +75,36 @@ describe('real database test support', () => {
     vi.stubEnv('HOLO_POSTGRES_INTEGRATION', undefined)
     vi.stubEnv('HOLO_MYSQL_INTEGRATION', '1')
     expect(integrationDrivers(['sqlite', 'postgres', 'mysql'])).toEqual(['sqlite', 'mysql'])
+  })
+
+  it.runIf(postgresIntegration)('drops a postgres fixture through the connection it opened after the environment changes', async () => {
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
+    let fixture = ''
+    onTestFinished(async () => {
+      try {
+        expect((await adapter.query<{ found: string | null }>('SELECT to_regclass($1)::text AS found', [fixture])).rows).toEqual([{ found: null }])
+      } finally {
+        vi.unstubAllEnvs()
+        await adapter.disconnect()
+      }
+    })
+    fixture = (await openDatabase('postgres')).table.tableName
+    onTestFinished(() => { vi.stubEnv('HOLO_POSTGRES_DATABASE', undefined) })
+  })
+
+  it.runIf(mysqlIntegration)('drops a mysql fixture through the connection it opened after the environment changes', async () => {
+    const connection = mysqlTestConnection()
+    const adapter = createMySQLAdapter({ config: connection })
+    let fixture = ''
+    onTestFinished(async () => {
+      try {
+        expect((await adapter.query<{ found: number }>('SELECT COUNT(*) AS found FROM information_schema.tables WHERE table_schema = ? AND table_name = ?', [connection.database, fixture.split('.').at(-1)])).rows).toEqual([{ found: 0 }])
+      } finally {
+        vi.unstubAllEnvs()
+        await adapter.disconnect()
+      }
+    })
+    fixture = (await openDatabase('mysql')).table.tableName
+    onTestFinished(() => { vi.stubEnv('HOLO_MYSQL_DATABASE', undefined) })
   })
 })

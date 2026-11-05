@@ -96,6 +96,7 @@ import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalize
 import { useStorage } from '@holo-js/storage/runtime'
 import * as sessionModule from '@holo-js/session'
 import { holoStorageDefaults, normalizeStorageConfig } from '@holo-js/storage'
+import { postgresTestConnection } from '../../../tests/support/real-database'
 
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const authPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
@@ -2157,6 +2158,7 @@ export default defineQueueConfig({
   })
 
   it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('clears the database runtime after PostgreSQL terminates its own active connection', async () => {
+    const { user, ...connection } = postgresTestConnection()
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/database.ts'), `
@@ -2164,14 +2166,7 @@ import { defineDatabaseConfig } from ${databasePackageEntry}
 export default defineDatabaseConfig({
   defaultConnection: 'main',
   connections: {
-    main: ${JSON.stringify({
-      driver: 'postgres',
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      username: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-    })},
+    main: ${JSON.stringify({ driver: 'postgres', ...connection, username: user })},
   },
 })
 `, 'utf8')
