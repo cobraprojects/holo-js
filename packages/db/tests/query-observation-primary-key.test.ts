@@ -92,6 +92,21 @@ describe('query observations and mutation events carry the table primary key', (
     ])
   })
 
+  it('increments through from() a table that lacks the model primary key column', async () => {
+    const adapter = await openTable('ledger', { id: column.id(), entry_no: column.string(), amount: column.integer() }, {}, 'CREATE TABLE ledger (id INTEGER PRIMARY KEY, entry_no TEXT, amount INTEGER)')
+    registerGeneratedTables({ archive: defineTable('archive', { id: column.id(), amount: column.integer() }) })
+    await adapter.execute('CREATE TABLE archive (id INTEGER PRIMARY KEY, amount INTEGER)')
+    await DB.table('archive').insert([{ amount: 10 }, { amount: 20 }])
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+
+    await Entry.query().from('archive').orderBy('id').limit(1).increment('amount', 1)
+    await Entry.query().from('archive').where('id', 2).increment('amount', 1)
+
+    expect(await DB.table('archive').orderBy('id').get()).toEqual([{ id: 1, amount: 11 }, { id: 2, amount: 21 }])
+    expect(observe(Entry.query().from('archive').getTableQueryBuilder())?.primaryKey).toBe('id')
+    expect(observe(Entry.query().from('ledger').getTableQueryBuilder())?.primaryKey).toBe('entry_no')
+  })
+
   it('keeps id as the key of tables without schema metadata', async () => {
     const { adapter } = await openDatabase('sqlite')
     await adapter.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)')

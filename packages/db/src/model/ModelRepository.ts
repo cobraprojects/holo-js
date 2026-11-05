@@ -9,7 +9,6 @@ import {
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
-  resolveRowDependencyKey,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
@@ -91,6 +90,7 @@ type AggregateLoad = {
 type RelationAggregateObservationTarget = {
   readonly column: string
   readonly connectionName: string
+  readonly primaryKey: string | undefined
   readonly tableName: string
   readonly value: unknown
 }
@@ -787,7 +787,7 @@ export class ModelRepository<
           : Object.freeze([createTableCacheDependency(target.connectionName, target.tableName)])
         const resultPath = createPath(index, key)
         const data = entity.toJSON() as Readonly<Record<string, unknown>>
-        const primaryKey = resolveRowDependencyKey({ tableName: target.tableName }, target.connectionName)
+        const primaryKey = target.primaryKey
         recordDatabaseQueryObservation(Object.freeze({
           aggregate: aggregate.kind === 'exists'
             ? Object.freeze({
@@ -1368,6 +1368,7 @@ export class ModelRepository<
         return {
           column: relation.ownerKey,
           connectionName: related.getConnectionName(),
+          primaryKey: resolveModelRowKey(related.definition),
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -1379,6 +1380,7 @@ export class ModelRepository<
         return {
           column: relation.foreignKey,
           connectionName: related.getConnectionName(),
+          primaryKey: resolveModelRowKey(related.definition),
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }

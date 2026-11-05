@@ -2,6 +2,7 @@ import type {
   DatabaseMutationEvent,
 } from './dependencies'
 import {
+  hasRecordKey,
   matchesPredicates,
   readPrimaryKey,
 } from './predicate-matching'
@@ -52,7 +53,10 @@ export async function tryPatchCursorWrapperDataRows(
   let patchedRowCount = rowCount
   let changed = false
   for (const mutation of mutations) {
-    if (query.cursorRowCountKnown === false && !canPatchPartialCursorMutation(query, mutation)) {
+    if (
+      (query.cursorRowCountKnown === false && !canPatchPartialCursorMutation(query, mutation))
+      || ((mutation.kind === 'update' || mutation.kind === 'upsert') && mutation.values !== undefined && hasRecordKey(mutation.values, readPrimaryKey(query)))
+    ) {
       const refreshedRows = await backfillCurrentQueryRows({ ...query, limit: perPage + 1, rowWindowMode: undefined }, backfills)
       if (!refreshedRows) return UNPATCHED_RESULT
       return Object.freeze({

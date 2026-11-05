@@ -277,7 +277,7 @@ export class TableQueryBuilder<
     return new TableQueryBuilder(
       table,
       this.connection,
-      withSource(this.plan, this.source.primaryKey === undefined ? source : Object.freeze({ ...source, primaryKey: this.source.primaryKey })),
+      withSource(this.plan, this.sourceHasRowKey(source.tableName) ? Object.freeze({ ...source, primaryKey: this.source.primaryKey }) : source),
       this.queryCacheConfig,
       internalPlanHandoff,
     )
@@ -3216,6 +3216,20 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
   ): readonly Readonly<Record<string, unknown>>[] {
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
+  }
+
+  private sourceHasRowKey(tableName: string): boolean {
+    const primaryKey = this.source.primaryKey
+    if (primaryKey === undefined) {
+      return false
+    }
+
+    if (tableName === this.source.tableName) {
+      return true
+    }
+
+    const table = getConnectionGeneratedTableDefinition(tableName, this.connection.getConnectionName())
+    return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey)
   }
 
   private resolveRowKeyColumns(): readonly string[] {

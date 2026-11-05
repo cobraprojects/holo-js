@@ -1314,7 +1314,7 @@ function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' |
   return source.primaryKey ?? resolveRowDependencyKey(source, connectionName)
 }
 
-export function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
+function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
   const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   if (!table) return 'id'
   const [primaryKey, ...otherPrimaryKeys] = listTablePrimaryKeyColumns(table)

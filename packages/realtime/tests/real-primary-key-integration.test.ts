@@ -337,6 +337,30 @@ describe('a model whose primaryKey option differs from the table schema key', ()
     expect(live.reads()).toBe(1)
   })
 
+  it('patches a related count of a model whose related model sets primaryKey on a keyless table', async () => {
+    await adapter.execute('CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO owners VALUES (1, 'Ada')")
+    await adapter.execute('ALTER TABLE ledger ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1')
+    registerGeneratedTables({
+      owners: defineGeneratedTable('owners', { id: column.id(), name: column.string() }),
+      ledger: defineGeneratedTable('ledger', {
+        id: column.integer(),
+        entry_no: column.string(),
+        amount: column.integer(),
+        owner_id: column.integer(),
+      }, { primaryKeyColumns: [] }),
+    })
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no' })
+    const Owner = defineModel('owners', { timestamps: false, relations: { entries: hasMany(() => Entry, 'owner_id') } })
+    const live = await subscribe(db => db.model(Owner).query().withCount('entries').get())
+    await mutate(async ({ db }) => {
+      await db.table('ledger').insert({ id: 3, entry_no: 'D', amount: 40, owner_id: 1 })
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([{ id: 1, name: 'Ada', entries_count: 4 }])
+    expect(live.reads()).toBe(1)
+  })
+
   it('re-runs a DB.table() list subscription on the same keyless table', async () => {
     const live = await subscribe(db => db.table('ledger').orderBy('entry_no').get())
     await mutate(async ({ db }) => {
