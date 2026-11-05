@@ -33,8 +33,9 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefined>, name: string): AnyColumnDefinition | undefined {
   const definitions = [...tables.values()]
   if (definitions.some(table => table === undefined)) return undefined
-  const owners = definitions.filter(table => Object.hasOwn(table!.columns, name))
-  return owners.length === 1 ? owners[0]!.columns[name] : undefined
+  const columns = definitions.flatMap(table => Object.hasOwn(table!.columns, name) ? [table!.columns[name]!] : [])
+  const [first] = columns
+  return first && columns.every(column => column.kind === first.kind && column.idStrategy === first.idStrategy) ? first : undefined
 }
 
 function unambiguousColumns(tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {

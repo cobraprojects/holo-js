@@ -65,6 +65,24 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(await DB.table(prices).where('label', 'padded').first()).toMatchObject({ amount: '12.30', discount: null })
   })
 
+  it('reads a decimal column that two joined tables share as decimal text', async () => {
+    const { prices, schema } = await openPrices(driver)
+    const ratesName = `holo_rates_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ratesName, (table) => {
+      table.id()
+      table.decimal('amount')
+    })
+    onTestFinished(() => schema.dropTable(ratesName))
+    const rates = defineGeneratedTable(ratesName, { id: column.id(), amount: column.decimal() })
+    await DB.table(prices).insert({ label: 'exact', amount: '12.30' })
+    await DB.table(rates).insert({ amount: '2.50' })
+
+    const rows = await DB.table(prices).crossJoin(rates).get()
+
+    expect(rows).toHaveLength(1)
+    expect(['12.30', '2.50']).toContain(rows[0]!.amount)
+  })
+
   it('chunks by a decimal column in numeric order when the rows are sorted in memory', async () => {
     const { prices } = await openPrices(driver)
     await DB.table(prices).insert([
