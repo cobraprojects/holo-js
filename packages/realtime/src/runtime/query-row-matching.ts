@@ -1,5 +1,6 @@
 import {
   NO_EXACT_ID_PREDICATE,
+  equalValues,
   hasRecordKey,
 } from './predicate-matching'
 import { rowIdentity } from './query-row-identity'
@@ -22,7 +23,7 @@ export function matchesPatchedExactRowIdentity(
   primaryKey: string,
 ): boolean | undefined {
   if (hasRecordKey(values, primaryKey)) {
-    return values[primaryKey] === identity
+    return equalValues(values[primaryKey], identity)
   }
 
   return matchesExactRowIdentity(row, identity, primaryKey)

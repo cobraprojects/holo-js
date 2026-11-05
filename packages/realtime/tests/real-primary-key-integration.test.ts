@@ -412,6 +412,20 @@ describe('a Generated-schema table with a case-insensitive string key', () => {
 
     expect(live.snapshots.at(-1)).toEqual([{ code: 'FR', name: 'France' }])
   })
+
+  it('keeps a projected detail subscription when an update recases its key', async () => {
+    registerGeneratedTables({
+      regions: defineGeneratedTable('regions', { code: column.string().primaryKey(), name: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE regions (code TEXT PRIMARY KEY COLLATE NOCASE, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO regions VALUES ('DE', 'Germany'), ('FR', 'France')")
+    const live = await subscribe(db => db.table('regions').select('code', 'name').where('code', 'DE').first())
+    await mutate(async ({ db }) => {
+      await db.table('regions').where('code', 'DE').update({ code: 'de' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual({ code: 'de', name: 'Germany' })
+  })
 })
 
 describe('a MySQL table whose key the database generates without auto-increment', () => {

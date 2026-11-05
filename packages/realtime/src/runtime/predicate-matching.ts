@@ -72,7 +72,7 @@ export function compareValues(left: unknown, right: unknown): number | undefined
   return undefined
 }
 
-function equalValues(left: unknown, right: unknown): boolean | undefined {
+export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
   return typeof left === 'string' && typeof right === 'string' ? undefined : false

@@ -3,6 +3,7 @@ import type {
 } from './dependencies'
 import {
   NO_EXACT_ID_PREDICATE,
+  equalValues,
   hasRecordKey,
   readPrimaryKey,
 } from './predicate-matching'
@@ -231,7 +232,12 @@ function tryApplyProjectedExactMutationValues(
   }
 
   const primaryKey = readPrimaryKey(context)
-  if (hasRecordKey(mutation.values, primaryKey) && mutation.values[primaryKey] !== context.exactQueryId) {
+  const keepsKey = hasRecordKey(mutation.values, primaryKey) ? equalValues(mutation.values[primaryKey], context.exactQueryId) : true
+  if (typeof keepsKey === 'undefined') {
+    return undefined
+  }
+
+  if (!keepsKey) {
     return { patched: true, rows: EMPTY_RECORD_ROWS }
   }
 
