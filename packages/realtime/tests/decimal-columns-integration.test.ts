@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
+import { belongsToMany, column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -95,5 +95,50 @@ describe.each(drivers)('realtime decimal columns on %s', (driver) => {
 
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).toContain('"9.50"')
+  })
+
+  it('keeps decimal pivot attributes correct after a pivot update', async () => {
+    const { db, schema } = await openPrices(driver)
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const groupsName = `holo_pivot_groups_${suffix}`
+    const tagsName = `holo_pivot_tags_${suffix}`
+    const pivotName = `holo_pivot_rates_${suffix}`
+    await schema.createTable(groupsName, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await schema.createTable(tagsName, (table) => {
+      table.id()
+      table.string('name')
+    })
+    await schema.createTable(pivotName, (table) => {
+      table.id()
+      table.integer('group_id')
+      table.integer('tag_id')
+      table.decimal('rate')
+    })
+    onTestFinished(async () => {
+      await schema.dropTable(pivotName)
+      await schema.dropTable(tagsName)
+      await schema.dropTable(groupsName)
+    })
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), name: column.string() })
+    const tags = defineGeneratedTable(tagsName, { id: column.id(), name: column.string() })
+    const rates = defineGeneratedTable(pivotName, { id: column.id(), group_id: column.integer(), tag_id: column.integer(), rate: column.decimal() })
+    await db.table(groups).insert({ id: 1, name: 'first' })
+    await db.table(tags).insert({ id: 1, name: 'sale' })
+    await db.table(rates).insert({ id: 1, group_id: 1, tag_id: 1, rate: '12.30' })
+    const Tag = defineModel(tags, { timestamps: false })
+    const Rate = defineModel(rates, { timestamps: false })
+    const Group = defineModel(groups, { timestamps: false, relations: { tags: belongsToMany(() => Tag, rates, 'group_id', 'tag_id').withPivot('rate').using(() => Rate) } })
+    const handler = () => db.model(Group).query().with('tags').orderBy('id').getJson()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(rates).where('id', 1).update({ rate: '2.50' }) }))
+
+    const fresh = JSON.stringify(await handler())
+    const current = JSON.stringify(subscription.current.data)
+    expect({ current, fresh }).toEqual({ current: fresh, fresh })
+    expect(current).toContain('"2.50"')
   })
 })

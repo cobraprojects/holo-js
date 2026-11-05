@@ -99,9 +99,12 @@ type BelongsToManyRelatedObservationMetadata = {
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
 
+function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableDefinition | undefined): boolean {
+  return connection.getDriver() === 'sqlite' && typeof table === 'object' && Object.values(table.columns).some(column => column.kind === 'decimal')
+}
+
 function relatedRowsArePatchable(related: ModelRepository): boolean {
-  return !modelNeedsSerialization(related.definition)
-    && !(related.getConnection().getDriver() === 'sqlite' && Object.values(related.definition.table.columns).some(column => column.kind === 'decimal'))
+  return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -1274,6 +1277,8 @@ export class ModelRepository<
   }
 
   private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
+    const connection = this.getConnection()
+    if (readsSQLiteDecimals(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
     return !relation.pivotModel || !modelNeedsSerialization(this.resolveRelatedRepository(relation.pivotModel).definition)
   }
 
