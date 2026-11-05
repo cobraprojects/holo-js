@@ -266,3 +266,30 @@ it('waits for a running dependency install to record its writes before judging m
   await captured.settled()
   expect(captured.changes).toEqual([])
 })
+
+it('ignores the staging files of atomic writes in watched roots', async () => {
+  const root = await createProject()
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    deferred: true,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('rename', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  emit(`server/models/User.ts.holo-${process.pid}-${randomUUID()}.tmp`)
+  watcher.resume()
+  emit(`config/app.ts.holo-${process.pid}-${randomUUID()}.tmp`)
+  await captured.settled()
+  expect(captured.changes).toEqual([])
+})

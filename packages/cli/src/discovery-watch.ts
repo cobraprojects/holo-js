@@ -14,6 +14,8 @@ export { PACKAGE_MANIFEST_DISCOVERY_PATHS }
 
 export const DISCOVERY_WATCH_PROBE_PATH = '.holo-js/runtime/discovery-watch.probe'
 
+const ATOMIC_WRITE_STAGING_FILE = /\.holo-\d+-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.tmp$/
+
 const LIVENESS_PROBE_INTERVAL_MS = 50
 const LIVENESS_TIMEOUT_MS = 10_000
 
@@ -444,7 +446,7 @@ export async function startDiscoveryWatch({
     const handle = createWatcher(root, { recursive }, (eventType, fileName) => {
       if (closed || signal.aborted || acquiredGeneration !== generation || typeof fileName !== 'string') return
       const path = normalizeContainedWatchedFilePath(projectRoot, root, fileName, canonicalProjectRoot)
-      if (!path) return
+      if (!path || ATOMIC_WRITE_STAGING_FILE.test(path)) return
       if (path === DISCOVERY_WATCH_PROBE_PATH) {
         stopProbing()
         return
