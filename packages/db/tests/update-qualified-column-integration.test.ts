@@ -326,7 +326,7 @@ describe.each(drivers)('model upsert accepts a non-fillable key only on an unsco
       deleted_at: column.timestamp().nullable(),
     })
     const read = async () => (await DB.table(name).orderBy('id').get()).map(row => [Number(row.id), Number(row.tenant_id), row.status])
-    return { statements, accounts, read }
+    return { statements, accounts, read, schema }
   }
 
   it('rejects a non-fillable key on a tenant-scoped model before any SQL runs', async () => {
@@ -349,6 +349,32 @@ describe.each(drivers)('model upsert accepts a non-fillable key only on an unsco
 
     statements.length = 0
     await expect(Account.where('tenant_id', 1).upsert([{ id: 2, tenant_id: 1, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(`Column "id" is not writable on model "${Account.definition.name}".`)
+    expect(statements).toEqual([])
+    expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
+  })
+
+  it('rejects a non-fillable key on a query a join scopes, before any SQL runs', async () => {
+    const { statements, accounts, read, schema } = await createAccounts()
+    const allowed = `allowed_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(allowed)
+    })
+    await schema.createTable(allowed, (table) => {
+      table.integer('account_id')
+    })
+    await DB.table(allowed).insert({ account_id: 1 })
+    const name = accounts.tableName
+    const Account = defineModelFromTable(accounts, {
+      fillable: ['tenant_id', 'slug', 'status'],
+      timestamps: false,
+      globalScopes: { tenant: query => query.join(allowed, `${name}.id` as never, '=', `${allowed}.account_id` as never) },
+    })
+    const Plain = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false })
+    const notWritable = `Column "id" is not writable on model "${Account.definition.name}".`
+
+    statements.length = 0
+    await expect(Account.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
+    await expect(Plain.query().join(allowed, `${name}.id` as never, '=', `${allowed}.account_id` as never).upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
     expect(statements).toEqual([])
     expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
   })
