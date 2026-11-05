@@ -1,4 +1,4 @@
-import { SecurityError } from '../core/errors'
+import { SecurityError, SerializationError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
@@ -27,6 +27,62 @@ function normalizeDefinitionlessValue(driver: string, value: unknown): unknown {
   return driver === 'sqlite' && value instanceof Date ? formatSQLiteDateTime(value) : value
 }
 
+const SQLITE_CONVERSION_HINT = 'Convert it to a string, number, bigint, Buffer or null first.'
+
+function normalizeQueryColumnWriteValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+): unknown {
+  const normalized = normalizeQueryWriteValue(table, driver, columnName, value)
+  if (driver !== 'sqlite') return normalized
+  if (Array.isArray(normalized) || isPlainObject(normalized)) {
+    const kind = Array.isArray(normalized) ? 'an array' : 'an object'
+    throw new SerializationError(`Cannot write ${kind} to column "${columnName}" on SQLite. Add a 'json' cast for it or JSON.stringify the value.`)
+  }
+  const type = unbindableSQLiteType(normalized)
+  if (type) {
+    throw new SerializationError(`Cannot write a value of type ${type} to column "${columnName}" on SQLite. ${SQLITE_CONVERSION_HINT}`)
+  }
+  return normalized
+}
+
+function normalizeQueryColumnPredicateValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+): unknown {
+  const normalized = normalizeQueryWriteValue(table, driver, columnName, value)
+  if (driver !== 'sqlite') return normalized
+  if (Array.isArray(normalized)) {
+    throw new SerializationError(`Cannot compare column "${columnName}" to an array on SQLite. Use whereIn() for a list of values.`)
+  }
+  if (isPlainObject(normalized)) {
+    throw new SerializationError(`Cannot compare column "${columnName}" to an object on SQLite. Use whereJsonContains() for JSON, or JSON.stringify the value.`)
+  }
+  const type = unbindableSQLiteType(normalized)
+  if (type) {
+    throw new SerializationError(`Cannot compare column "${columnName}" to a value of type ${type} on SQLite. ${SQLITE_CONVERSION_HINT}`)
+  }
+  return normalized
+}
+
+function unbindableSQLiteType(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  if (value instanceof Date || value instanceof NumericAdjustment) return undefined
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return undefined
+  const name: unknown = Object.getPrototypeOf(value)?.constructor?.name
+  return typeof name === 'string' && name !== '' ? name : 'object'
+}
+
+function isPlainObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 export function normalizeQueryPredicateValue(
   table: TableDefinition | undefined,
   driver: string,
@@ -35,9 +91,9 @@ export function normalizeQueryPredicateValue(
   operator: unknown = '=',
 ): unknown {
   if (Array.isArray(value) && typeof operator === 'string' && ['in', 'not in', 'between', 'not between'].includes(operator)) {
-    return value.map(item => normalizeQueryWriteValue(table, driver, columnName, item))
+    return value.map(item => normalizeQueryColumnPredicateValue(table, driver, columnName, item))
   }
-  return normalizeQueryWriteValue(table, driver, columnName, value)
+  return normalizeQueryColumnPredicateValue(table, driver, columnName, value)
 }
 
 function isValidDate(value: unknown): value is Date {
@@ -117,7 +173,7 @@ export function normalizeQueryWriteRecord(
   values: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [key, normalizeQueryWriteValue(table, driver, key, value)]),
+    Object.entries(values).map(([key, value]) => [key, normalizeQueryColumnWriteValue(table, driver, key, value)]),
   )
 }
 
@@ -131,7 +187,7 @@ export function normalizeQueryUpdateValues(
 
   for (const [key, value] of Object.entries(values)) {
     if (!key.includes('->')) {
-      normalized[key] = normalizeQueryWriteValue(table, driver, key, value)
+      normalized[key] = normalizeQueryColumnWriteValue(table, driver, key, value)
       continue
     }
 

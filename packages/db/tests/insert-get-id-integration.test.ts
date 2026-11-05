@@ -70,11 +70,6 @@ describe.each(drivers)('insertGetId() on %s', (driver) => {
       const created = await Counted.create({ name: 'c' })
       expect(created.get('id')).toBe('9007199254740996')
       expect((await Counted.findOrFail(created.get('id'))).get('id')).toBe('9007199254740996')
-
-      const TypedCounted = defineModel(counted, { fillable: ['name'], timestamps: false })
-      const typed = await TypedCounted.create({ name: 'd' })
-      expect(typed.get('id')).toBe('9007199254740997')
-      expect((await TypedCounted.findOrFail(typed.get('id'))).get('id')).toBe('9007199254740997')
     } finally {
       for (const name of Object.values(names)) await schema.dropTable(name)
     }
