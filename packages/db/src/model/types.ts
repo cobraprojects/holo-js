@@ -119,7 +119,7 @@ export type PivotAttributes<TPivotTable extends string | TableDefinition>
     ? Record<string, unknown>
     : ModelUpdatePayload<PivotTableDefinition<TPivotTable>>
 
-export type PivotRelatedKey = string | number | bigint
+export type PivotRelatedKey = string | number | bigint | boolean
 
 export type PivotRelatedIds<TPivotTable extends string | TableDefinition>
   = IsUntypedPivotTable<TPivotTable> extends true
