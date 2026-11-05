@@ -616,3 +616,44 @@ it('replays no change at resume when the watch policy kept its roots during star
   await settled()
   expect(changes).toEqual([])
 })
+
+it('replays a startup-excluded folder as changed when the watch policy starts watching it during startup', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots: ['resources'], excludes: ['resources/demo'] } }))
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots: ['resources/demo'], excludes: [] } }))
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo', kind: 'changed' }])
+})
+
+it('accepts configured discovery paths written with a leading dot or a trailing slash', async () => {
+  const root = await createProject()
+  const defaults = defaultProjectConfig()
+  const config = { ...defaults, paths: { ...defaults.paths, models: './server/models', jobs: 'server/jobs/' } }
+  const listeners: DeferredWatchListener[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config },
+    observe: captured.observe,
+    deferred: true,
+    createWatcher: ((_path: string, _options: unknown, listener: DeferredWatchListener) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  listeners.forEach(listener => listener('rename', DISCOVERY_WATCH_PROBE_PATH))
+  await watcher.ready
+  await watcher.refresh({ config: { ...config, paths: { ...config.paths, events: './app/events/' } } })
+  expect(() => watcher.resume()).not.toThrow()
+  await captured.settled()
+  expect(captured.changes).toEqual([{ path: 'app/events', kind: 'changed' }])
+})

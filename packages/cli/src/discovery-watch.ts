@@ -195,14 +195,28 @@ function isDiscoveryRelevantPath(
   })
 }
 
+type WatchPolicyRoot = {
+  readonly root: string
+  readonly excludes: readonly string[]
+}
+
 function collectWatchPolicyRoots(
+  projectRoot: string,
   project: LoadedProjectConfig,
   pluginWatches: readonly PluginPrepareWatch[],
-): readonly string[] {
+): readonly WatchPolicyRoot[] {
   return [
-    ...resolveConfiguredDiscoveryRoots(project).map(root => normalizeArtifactPath(toPosixSlashes(root), true)),
-    ...pluginWatches.flatMap(watch => watch.roots),
+    ...resolveConfiguredDiscoveryRoots(project).map(root => ({
+      root: toPosixSlashes(relative(projectRoot, resolve(projectRoot, root))) || '.',
+      excludes: [],
+    })),
+    ...pluginWatches.flatMap(watch => watch.roots.map(root => ({ root, excludes: watch.excludes }))),
   ]
+}
+
+function isWatchedThroughout(root: string, policyRoots: readonly WatchPolicyRoot[]): boolean {
+  return policyRoots.some(policyRoot => pathIsWithin(root, policyRoot.root)
+    && !policyRoot.excludes.some(exclude => pathIsWithin(root, exclude) || pathIsWithin(exclude, root)))
 }
 
 async function collectDirectoryTree(
@@ -456,9 +470,9 @@ export async function startDiscoveryWatch({
   }
 
   const findGainedWatchRoots = (baseline: WatchPolicyBaseline): readonly string[] => {
-    const startupRoots = collectWatchPolicyRoots(baseline.project, baseline.pluginWatches)
-    return [...new Set(collectWatchPolicyRoots(project, pluginWatches))]
-      .filter(root => !startupRoots.some(startupRoot => pathIsWithin(root, startupRoot)))
+    const startupRoots = collectWatchPolicyRoots(projectRoot, baseline.project, baseline.pluginWatches)
+    return [...new Set(collectWatchPolicyRoots(projectRoot, project, pluginWatches).map(({ root }) => root))]
+      .filter(root => !isWatchedThroughout(root, startupRoots))
   }
 
   const classify = async (
