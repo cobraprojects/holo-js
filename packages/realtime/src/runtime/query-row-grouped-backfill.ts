@@ -199,10 +199,11 @@ async function fetchGroupedExactRowBackfill(
     .where(primaryKey, 'in', values)
     .get()
 
+  const requestedValues = new Set(values)
   const rowsById = new Map<unknown, BackfillRows>()
   for (const row of rows) {
     const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey]
-    if (typeof id === 'undefined' || !values.some(value => Object.is(value, id))) {
+    if (typeof id === 'undefined' || !requestedValues.has(id)) {
       return undefined
     }
 
@@ -372,10 +373,11 @@ function groupWindowRows(
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
+  const requestedValues = new Set(values)
   const rowsByGroup = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const groupValue = row[GROUPED_ROW_ID_ALIAS]
-    if (typeof groupValue === 'undefined' || !values.some(value => Object.is(value, groupValue))) {
+    if (typeof groupValue === 'undefined' || !requestedValues.has(groupValue)) {
       return undefined
     }
 
