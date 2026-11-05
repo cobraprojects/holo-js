@@ -497,6 +497,10 @@ async function declarePluginWatchRoots(root: string, roots: readonly string[]): 
   await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots, excludes: [] } }))
 }
 
+async function excludeDemoAtStartup(root: string): Promise<void> {
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots: ['resources'], excludes: ['resources/demo'] } }))
+}
+
 async function startDeferredWatch(root: string, recursive: boolean, config = defaultProjectConfig(), unwatchableOnce: readonly string[] = []) {
   const unwatchable = new Set(unwatchableOnce.map(path => join(root, path)))
   const listeners = new Map<string, DeferredWatchListener[]>()
@@ -537,6 +541,7 @@ it('replays a file created during startup as created when the watch policy chang
   await installWatchPlugin(root)
   await write(root, 'resources/demo/Existing.ts')
   const config = defaultProjectConfig()
+  await excludeDemoAtStartup(root)
   const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
   await write(root, 'server/models/New.ts')
   emit('server/models/New.ts')
@@ -580,6 +585,7 @@ it('replays a file deleted during startup in a newly watched root as deleted', a
   const root = await createProject()
   await installWatchPlugin(root)
   await write(root, 'resources/demo/Removed.ts')
+  await excludeDemoAtStartup(root)
   const config = defaultProjectConfig()
   const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
   await rm(join(root, 'resources/demo/Removed.ts'))
@@ -799,6 +805,7 @@ it('replays a file moved into a newly watched root during startup as created', a
   await installWatchPlugin(root)
   await write(root, 'resources/demo/Existing.ts')
   await write(root, 'drafts/Old.ts')
+  await excludeDemoAtStartup(root)
   const config = defaultProjectConfig()
   const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
   await rename(join(root, 'drafts/Old.ts'), join(root, 'resources/demo/Added.ts'))
@@ -809,4 +816,18 @@ it('replays a file moved into a newly watched root during startup as created', a
   watcher.resume()
   await settled()
   expect(changes).toEqual([{ path: 'resources/demo/Added.ts', kind: 'created' }])
+})
+
+it('replays a startup file in a root no startup watch root covers as changed', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await write(root, 'resources/demo/Added.ts')
+  emit('resources/demo/Added.ts')
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo/Added.ts', kind: 'changed' }])
 })

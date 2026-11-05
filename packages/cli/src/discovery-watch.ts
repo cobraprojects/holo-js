@@ -378,20 +378,27 @@ type WatchPolicyBaseline = {
   readonly pluginWatches: readonly PluginPrepareWatch[]
   readonly snapshots: ReadonlyMap<string, WatchedPathSnapshot>
   readonly directories: ReadonlySet<string>
+  readonly listedRoots: readonly string[]
   readonly paths: ReadonlySet<string>
 }
 
 const EXISTED_AT_STARTUP: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0 })
 
-async function collectProjectPaths(projectRoot: string): Promise<ReadonlySet<string>> {
+async function collectStartupPaths(
+  projectRoot: string,
+  roots: readonly string[],
+  pluginWatches: readonly PluginPrepareWatch[],
+): Promise<ReadonlySet<string>> {
+  const isExcluded = (path: string): boolean => isAlwaysExcludedWatchPath(path)
+    || pluginWatches.some(watch => watch.packageRoot !== undefined && pathIsWithin(path, watch.packageRoot))
   const paths = new Set<string>()
-  const pending = ['.']
+  const pending = roots.filter(root => !isExcluded(root))
   while (pending.length > 0) {
     const directory = pending.pop() as string
     const entries = await readdir(resolve(projectRoot, directory), { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       const path = directory === '.' ? entry.name : `${directory}/${entry.name}`
-      if (isAlwaysExcludedWatchPath(path)) continue
+      if (paths.has(path) || isExcluded(path)) continue
       paths.add(path)
       if (entry.isDirectory()) pending.push(path)
     }
@@ -485,6 +492,7 @@ export async function startDiscoveryWatch({
     if (!baseline || isDiscoveryRelevantPath(path, baseline.project, baseline.pluginWatches)) {
       return (baseline?.snapshots ?? snapshots).get(path)
     }
+    if (!baseline.listedRoots.some(root => pathIsWithin(path, root))) return snapshots.get(path)
     return baseline.paths.has(path) ? EXISTED_AT_STARTUP : undefined
   }
 
@@ -640,7 +648,8 @@ export async function startDiscoveryWatch({
   signal.addEventListener('abort', close, { once: true })
   try {
     const directories = await updatePolicy(project)
-    const startupPaths = deferred ? await collectProjectPaths(projectRoot) : new Set<string>()
+    const listedRoots = deferred ? collectWatchRootPaths(project, pluginWatches) : []
+    const startupPaths = await collectStartupPaths(projectRoot, listedRoots, pluginWatches)
     signal.throwIfAborted()
     try {
       acquire(projectRoot, true)
@@ -653,7 +662,7 @@ export async function startDiscoveryWatch({
       acquireDirectories(directories)
       stopProbing()
     }
-    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots, directories: new Set(watchedDirectories), paths: startupPaths })
+    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots, directories: new Set(watchedDirectories), listedRoots, paths: startupPaths })
     return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {
     close()
