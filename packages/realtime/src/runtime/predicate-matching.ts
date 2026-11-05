@@ -72,10 +72,15 @@ export function compareValues(left: unknown, right: unknown): number | undefined
   return undefined
 }
 
+function comparesAsText(value: unknown): boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint'
+}
+
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
-  return typeof left === 'string' && typeof right === 'string' ? undefined : false
+  const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
+  return textComparison ? undefined : false
 }
 
 function includesValue(values: readonly unknown[], value: unknown): boolean | undefined {

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
+import { postgresTestConnection } from '../../../tests/support/real-database'
 import { DB, defineMigration } from '@holo-js/db'
 import { expect, it } from 'vitest'
 import { createHolo } from '../src/portable'
@@ -10,12 +11,8 @@ import { createHolo } from '../src/portable'
 it.runIf(process.env.HOLO_POSTGRES_INTEGRATION === '1')('native app policy enables RLS migrations and isolates transaction-local tenant context', async () => {
   const name = `holo_rls_${randomUUID().replaceAll('-', '')}`
   const root = await mkdtemp(join(tmpdir(), 'holo-native-rls-'))
-  const config = {
-    host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-    database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-  }
-  const admin = createPostgresAdapter({ config: { ...config, user: 'postgres' } })
+  const { user, password, ...config } = postgresTestConnection()
+  const admin = createPostgresAdapter({ config: { ...config, user, password } })
   let runtime: Awaited<ReturnType<typeof createHolo>> | undefined
   try {
     await admin.execute(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOBYPASSRLS`)

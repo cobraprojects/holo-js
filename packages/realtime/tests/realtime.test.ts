@@ -57,6 +57,7 @@ import { authRuntimeInternals, createAsyncAuthContext, defineAuthConfig, getAuth
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import { createNativeAuthPersistence } from '../../auth/tests/support/native-persistence'
 import { createNativeSessionStore } from '../../auth/tests/support/native-session'
+import { postgresTestConnection } from '../../../tests/support/real-database'
 import { recordDatabaseQueryObservation } from '../../db/src/cache'
 import type {
   RealtimeSubscribeOptions,
@@ -4128,14 +4129,8 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
-  it('patches limited ordered inserts with database-generated returned columns', async () => {
-    const adapter = createPostgresAdapter({ config: {
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-    } })
+  it.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('patches limited ordered inserts with database-generated returned columns', async () => {
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
     const queries: string[] = []
     const db = createDatabase({
       adapter,

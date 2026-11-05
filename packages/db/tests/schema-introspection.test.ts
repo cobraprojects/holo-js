@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 function uniqueName(prefix: string, length = 12): string {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, length)}`
@@ -59,7 +59,7 @@ function expectedIndexes(driver: 'sqlite' | 'postgres' | 'mysql', posts: string)
   return [slug, titleViews, { name: `${posts}_user_id_foreign`, unique: false, columns: ['user_id'] }, { name: 'PRIMARY', unique: true, columns: ['id'] }]
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`native ${driver} schema introspection`, () => {
     it('reports the tables, columns, indexes and foreign keys of the default schema', async () => {
       const { schema } = await openDatabase(driver)

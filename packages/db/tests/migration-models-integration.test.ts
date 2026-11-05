@@ -64,6 +64,7 @@ async function withMigrationFixture(driver: Driver, run: (fixture: MigrationFixt
     }
     if (migrations.length > 0 && await schema.hasTable('_holo_migrations')) {
       await new TableQueryBuilder('_holo_migrations', db).whereIn('name', migrations).delete()
+      if (await new TableQueryBuilder('_holo_migrations', db).count() === 0) await schema.dropTable('_holo_migrations')
     }
   }
 }

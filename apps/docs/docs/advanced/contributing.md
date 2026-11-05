@@ -23,6 +23,29 @@ The full test suite runs against real databases and Redis:
 | Redis | Port `6379`, plus the `redis-server` executable on your `PATH` |
 | Chromium | `bun x playwright install chromium` (add `--with-deps` on Linux) |
 
+### Tests against real PostgreSQL and MySQL
+
+Tests that need a real server run only when their integration flag is set, and only against a scratch database you name:
+
+```bash
+HOLO_POSTGRES_INTEGRATION=1 HOLO_POSTGRES_DATABASE=holo_scratch \
+HOLO_MYSQL_INTEGRATION=1 HOLO_MYSQL_DATABASE=holo_scratch \
+bun run --cwd packages/db test
+```
+
+Create the scratch database first. `bun run test:libraries` creates and drops its own. Without a flag, those tests skip. A database name must be letters, digits and underscores, and never a system database such as `postgres` or `mysql`.
+
+When you write such a test, take everything from `tests/support/real-database.ts`:
+
+- Gate it with `integrationDrivers()`, `postgresIntegration` or `mysqlIntegration`.
+- Connect with `postgresTestConnection()`, `mysqlTestConnection()` or `testConnectionUrl()`. Never read `HOLO_POSTGRES_*` or `HOLO_MYSQL_*` connection variables yourself.
+- In `packages/db`, `openDatabase()` from `tests/support/database.ts` does both and drops its fixture table afterwards.
+
+Two checks enforce this:
+
+- **Real-database gating (authoritative).** `bun run test:real-database-gating` runs every test that can reach PostgreSQL or MySQL with the integration flags removed and no server reachable. Any test that connects instead of skipping fails it, however it is written.
+- **Architecture validation (best effort).** `node scripts/validate-architecture.mjs` reads test sources and catches the common mistakes early: connection variables read directly, system database names, and connections built without the shared helpers. A source check can't be complete, so the gating job is the final word.
+
 ## Repository layout
 
 | Folder | Contents |
@@ -46,6 +69,7 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run check:dead-code` | Fail on new Fallow findings against the committed baseline. |
 | `bun run --cwd packages/<name> test` | Run one package's tests while you work. |
 | `bun run test:libraries` | Run every library test suite against the real services. |
+| `bun run test:real-database-gating` | Run every PostgreSQL and MySQL test without integration flags or servers, and fail if any of them connects instead of skipping. |
 | `bun run test:examples` | Run the Next.js, Nuxt, and SvelteKit example apps against SQLite, PostgreSQL, and MySQL. |
 | `bun run test:ci` | `test:libraries` plus `test:examples`. |
 | `bun run test` | `test:ci` plus published-package, scaffold, and browser-bundle checks. Run it locally before a release and for changes to adapters, the CLI scaffold, or packaging. |
@@ -59,7 +83,7 @@ The CLI's package-manager tests run real `npm`, `pnpm`, and `yarn` installs, so 
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
+CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, the real-database gating check, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
 
 CI splits the library suites into three jobs per Node version by running `bun run test:libraries --skip-build --shard <n>/3` after it builds the packages. Each package stays whole, and the split balances the measured durations in `scripts/library-suite-durations.json`, so a package missing from it still runs. Update a package's entry when its tests get much slower or faster.
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
-import { openDatabase } from './support/database'
+import { mysqlTestConnection, openDatabase } from './support/database'
 
 const drivers = [
   'sqlite' as const,
@@ -99,7 +99,7 @@ describe.each(drivers)('increment and decrement on a table-qualified column on %
 
   it('adjusts a column qualified with the bare name of a schema-qualified table', async () => {
     const { name, read } = await createProducts(driver)
-    const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
 
     await DB.table(`${schemaName}.${name}`).where('id', 1).increment(`${name}.price`, 6)
     await DB.table(`${schemaName}.${name}`).where('id', 2).decrementEach({ [`${schemaName}.${name}.stock`]: 2 })

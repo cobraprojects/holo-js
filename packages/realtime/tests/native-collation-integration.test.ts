@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureDB, createConnectionManager, createDatabase, createDialect, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { createMySQLAdapter } from '../../db-mysql/src'
+import { mysqlTestConnection } from '../../../tests/support/real-database'
 import { expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -8,12 +9,7 @@ import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime
 for (const operator of ['=', '!=', 'in', 'not in'] as const) {
   it.runIf(process.env.HOLO_MYSQL_INTEGRATION === '1')(`preserves native case-insensitive ${operator} filtering after text changes`, async () => {
     const tableName = `holo_realtime_${randomUUID().replaceAll('-', '')}`
-    const adapter = createMySQLAdapter({ config: {
-      host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-      user: 'root',
-      database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-    } })
+    const adapter = createMySQLAdapter({ config: mysqlTestConnection() })
     const db = createDatabase({ adapter, dialect: createDialect('mysql'), connectionName: 'main' })
     const excluded = operator === '!=' || operator === 'not in'
     const value = excluded ? 'xyz' : 'abc'

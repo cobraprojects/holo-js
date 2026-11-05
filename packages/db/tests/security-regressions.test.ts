@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DB, SchemaError, SecurityError, TableQueryBuilder, holoRuntimeInternals, onDatabaseDependencyInvalidated, resetDB } from '../src'
 import { defineModelFromTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { integrationDrivers, mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 describe('native database security boundaries', () => {
   beforeEach(() => resetDB())
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('stores hostile values as data and preserves qualified tables on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('stores hostile values as data and preserves qualified tables on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     const payload = `Mohamed' OR '1'='1`
     const comment = '"; DROP TABLE users; --'
@@ -27,7 +27,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id', 'name').get()).toEqual([{ id: 1, name: 'Safe' }])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('allows only comparison operators in whereColumn on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('allows only comparison operators in whereColumn on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     const User = defineModelFromTable(table)
     await db.table(table).insert({ id: 1, name: 'Safe' })
@@ -38,7 +38,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).whereColumn('id', '<=', 'id').whereColumn('name', 'like', 'name').count()).toBe(1)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('stores schema default text as data, including backslashes and quotes on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('stores schema default text as data, including backslashes and quotes on %s', async driver => {
     const { db, schema } = await openDatabase(driver)
     const name = `holo_default_${randomUUID().replaceAll('-', '')}`
     const payload = `\\' OR 1=1 -- \\`
@@ -54,7 +54,7 @@ describe('native database security boundaries', () => {
     }
   })
 
-  it('rejects MySQL enum values with a backslash before creating the table', async () => {
+  it.runIf(mysqlIntegration)('rejects MySQL enum values with a backslash before creating the table', async () => {
     const { schema } = await openDatabase('mysql')
     const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
     await expect(schema.createTable(name, table => {
@@ -64,7 +64,7 @@ describe('native database security boundaries', () => {
     expect(await schema.hasTable(name)).toBe(false)
   })
 
-  it.each(['sqlite', 'postgres'] as const)('stores enum values containing backslashes and quotes as data on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres']))('stores enum values containing backslashes and quotes as data on %s', async driver => {
     const { db, schema } = await openDatabase(driver)
     const name = `holo_enum_${randomUUID().replaceAll('-', '')}`
     const values = ['a\\', `b' OR 1=1 -- \\`]
@@ -80,7 +80,7 @@ describe('native database security boundaries', () => {
     }
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects referential actions that are not SQL keywords on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('rejects referential actions that are not SQL keywords on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const name = `holo_action_${randomUUID().replaceAll('-', '')}`
     await expect(schema.createTable(name, child => {
@@ -110,7 +110,7 @@ describe('native database security boundaries', () => {
     await expect(User.whereJsonLength('settings->tags', 'like' as never, 2).get()).rejects.toThrow(SecurityError)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('matches JSON path segments containing commas on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('matches JSON path segments containing commas on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([
       { id: 1, name: 'comma', settings: JSON.stringify({ 'a,b': { c: 'matched' } }) },
@@ -160,7 +160,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id').whereJsonLength('settings->b\\s[0].c', 1).get()).toEqual([{ id: 1 }])
   })
 
-  it('matches Postgres JSON path segments containing quotes, backslashes, braces, and NULL', async () => {
+  it.runIf(postgresIntegration)('matches Postgres JSON path segments containing quotes, backslashes, braces, and NULL', async () => {
     const { db, table } = await openDatabase('postgres')
     const segments = ['q"uote', 'back\\slash', '{brace}', 'NULL']
     await db.table(table).insert([
@@ -170,7 +170,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id').whereJson(`settings->${segments.join('->')}`, 'matched').get()).toEqual([{ id: 1 }])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('gates unsafe raw predicates on update and delete when raw SQL is disabled on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('gates unsafe raw predicates on update and delete when raw SQL is disabled on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     const User = defineModelFromTable(table)
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
@@ -186,14 +186,14 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects a non-identifier column in the database-clock expiry predicate on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('rejects a non-identifier column in the database-clock expiry predicate on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert({ id: 1, name: 'Safe' })
     expect(() => holoRuntimeInternals.whereColumnNotExpiredByDatabaseClock(db.table(table), 'expires_at" OR 1=1 --')).toThrow(SecurityError)
     expect(await db.table(table).count()).toBe(1)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps a hand-built or copied raw predicate gated when it carries the trusted marker on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('keeps a hand-built or copied raw predicate gated when it carries the trusted marker on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
     const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
@@ -210,7 +210,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).select('id', 'name').orderBy('id').get()).toEqual([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('rejects a duck-typed query whose dialect returns attacker SQL on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('rejects a duck-typed query whose dialect returns attacker SQL on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert({ id: 1, name: 'Safe' })
     const duck = {
@@ -222,7 +222,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(1)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('strips trust from a database-clock predicate transplanted through getPlan on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('strips trust from a database-clock predicate transplanted through getPlan on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
     const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
@@ -234,7 +234,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(2)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('does not let reflection reach a method that mints trusted raw SQL on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('does not let reflection reach a method that mints trusted raw SQL on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
     const policyError = 'Unsafe raw SQL is disabled by the active security policy. Enable allowUnsafeRawSql to use unsafeQuery()/unsafeExecute().'
@@ -257,7 +257,7 @@ describe('native database security boundaries', () => {
     expect(await db.table(table).count()).toBe(2)
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('deletes and updates by database-clock expiry under the default policy while a realtime listener is installed on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('deletes and updates by database-clock expiry under the default policy while a realtime listener is installed on %s', async driver => {
     const { db, schema } = await openDatabase(driver)
     const name = `holo_clock_${randomUUID().replaceAll('-', '')}`
     const futureExpiry = driver === 'sqlite' ? '2030-01-01T00:00:00.000Z' : '2030-01-01 00:00:00'
@@ -283,7 +283,7 @@ describe('native database security boundaries', () => {
     }
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('runs unsafe raw write predicates when raw SQL is allowed on %s', async driver => {
     const { db, table } = await openDatabase(driver, { security: { allowUnsafeRawSql: true } })
     await db.table(table).insert([{ id: 1, name: 'Safe' }, { id: 2, name: 'Other' }])
     await db.table(table).unsafeWhere(`name = 'Other'`, []).update({ name: 'Changed' })
