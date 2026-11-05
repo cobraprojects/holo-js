@@ -130,8 +130,14 @@ export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDef
 const INTEGER_COLUMN_RANGE = { min: -(2n ** 31n), max: 2n ** 31n - 1n }
 const BIG_INTEGER_COLUMN_RANGE = { min: -(2n ** 63n), max: 2n ** 63n - 1n }
 
+function readBigIntKey(key: unknown): bigint | undefined {
+  if (typeof key === 'bigint') return key
+  if (typeof key === 'number') return Number.isSafeInteger(key) ? BigInt(key) : undefined
+  return isCanonicalIntegerText(key) ? BigInt(key) : undefined
+}
+
 function fitsIntegerColumn(definition: AnyColumnDefinition, key: unknown): boolean {
-  const integer = typeof key === 'number' && Number.isSafeInteger(key) ? BigInt(key) : typeof key === 'bigint' ? key : isCanonicalIntegerText(key) ? BigInt(key) : undefined
+  const integer = readBigIntKey(key)
   const range = definition.kind === 'integer' ? INTEGER_COLUMN_RANGE : BIG_INTEGER_COLUMN_RANGE
   return integer !== undefined && integer >= range.min && integer <= range.max
 }

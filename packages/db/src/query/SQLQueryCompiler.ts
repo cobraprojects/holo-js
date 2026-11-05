@@ -688,7 +688,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnComparison(predicate: QueryColumnPredicate): string {
-    return `${this.compileKeyOperand(predicate.column, predicate.keyCasts?.column)} ${predicate.operator.toUpperCase()} ${this.compileKeyOperand(predicate.compareTo, predicate.keyCasts?.compareTo)}`
+    return `${this.compileKeyOperand(predicate.column, predicate.keyCasts?.left)} ${predicate.operator.toUpperCase()} ${this.compileKeyOperand(predicate.compareTo, predicate.keyCasts?.right)}`
   }
 
   private compileKeyOperand(column: string, cast?: QueryKeyCast): string {

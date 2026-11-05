@@ -13,11 +13,7 @@ function suffix(): string {
   return randomUUID().replaceAll('-', '').slice(0, 12)
 }
 
-function keysOf(entities: readonly Loaded[], key = 'id'): unknown[] {
-  return entities.map(entity => entity.get(key as never))
-}
-
-function countsOf(entities: readonly Loaded[], attribute: string): unknown[] {
+function valuesOf(entities: readonly { get(attribute: never): unknown }[], attribute = 'id'): unknown[] {
   return entities.map(entity => entity.get(attribute as never))
 }
 
@@ -205,62 +201,62 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     it('filters and counts hasMany, hasOne and belongsTo', async () => {
       const { Owner, Item } = await openKeyFixtures(driver, kind)
 
-      expect(keysOf(await Owner.has('items').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.has('item').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereHas('items', query => query.where('id', 20)).orderBy('id').get())).toEqual([2])
-      expect(keysOf(await Owner.whereDoesntHave('items').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('items').orderBy('id').get(), 'items_count')).toEqual([2, 1, 0])
-      expect(keysOf(await Item.has('owner').orderBy('id').get())).toEqual([10, 11, 20])
-      expect(keysOf(await Item.whereHas('owner', query => query.where('name', 'second')).orderBy('id').get())).toEqual([20])
-      expect(keysOf(await Item.whereDoesntHave('owner').orderBy('id').get())).toEqual([30])
-      expect(countsOf(await Item.withCount('owner').orderBy('id').get(), 'owner_count')).toEqual([1, 1, 1, 0])
+      expect(valuesOf(await Owner.has('items').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.has('item').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('items', query => query.where('id', 20)).orderBy('id').get())).toEqual([2])
+      expect(valuesOf(await Owner.whereDoesntHave('items').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('items').orderBy('id').get(), 'items_count')).toEqual([2, 1, 0])
+      expect(valuesOf(await Item.has('owner').orderBy('id').get())).toEqual([10, 11, 20])
+      expect(valuesOf(await Item.whereHas('owner', query => query.where('name', 'second')).orderBy('id').get())).toEqual([20])
+      expect(valuesOf(await Item.whereDoesntHave('owner').orderBy('id').get())).toEqual([30])
+      expect(valuesOf(await Item.withCount('owner').orderBy('id').get(), 'owner_count')).toEqual([1, 1, 1, 0])
     })
 
     it('filters and counts belongsToMany', async () => {
       const { Owner, Tag } = await openKeyFixtures(driver, kind)
 
-      expect(keysOf(await Owner.has('tags').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereHas('tags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
-      expect(keysOf(await Owner.whereDoesntHave('tags').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('tags').orderBy('id').get(), 'tags_count')).toEqual([2, 1, 0])
-      expect(keysOf(await Tag.has('owners').orderBy('id').get())).toEqual([1, 2])
-      expect(countsOf(await Tag.withCount('owners').orderBy('id').get(), 'owners_count')).toEqual([1, 2, 0])
+      expect(valuesOf(await Owner.has('tags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('tags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
+      expect(valuesOf(await Owner.whereDoesntHave('tags').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('tags').orderBy('id').get(), 'tags_count')).toEqual([2, 1, 0])
+      expect(valuesOf(await Tag.has('owners').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Tag.withCount('owners').orderBy('id').get(), 'owners_count')).toEqual([1, 2, 0])
     })
 
     it('filters and counts morphMany, morphOne and morphTo', async () => {
       const { Owner, Note } = await openKeyFixtures(driver, kind)
 
-      expect(keysOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.has('note').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereHas('notes', query => query.where('id', 20)).orderBy('id').get())).toEqual([2])
-      expect(keysOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('notes').orderBy('id').get(), 'notes_count')).toEqual([2, 1, 0])
-      expect(keysOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 11, 20])
-      expect(keysOf(await Note.whereHas('noteable', query => query.where('id', 2)).orderBy('id').get())).toEqual([20])
-      expect(keysOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30])
-      expect(countsOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 1, 0])
+      expect(valuesOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.has('note').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('notes', query => query.where('id', 20)).orderBy('id').get())).toEqual([2])
+      expect(valuesOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('notes').orderBy('id').get(), 'notes_count')).toEqual([2, 1, 0])
+      expect(valuesOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 11, 20])
+      expect(valuesOf(await Note.whereHas('noteable', query => query.where('id', 2)).orderBy('id').get())).toEqual([20])
+      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30])
+      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 1, 0])
     })
 
     it('filters and counts morphToMany and morphedByMany', async () => {
       const { Owner, Tag } = await openKeyFixtures(driver, kind)
 
-      expect(keysOf(await Owner.has('morphTags').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereHas('morphTags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
-      expect(keysOf(await Owner.whereDoesntHave('morphTags').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('morphTags').orderBy('id').get(), 'morphTags_count')).toEqual([2, 1, 0])
-      expect(keysOf(await Tag.has('morphOwners').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Tag.whereHas('morphOwners', query => query.where('name', 'second')).orderBy('id').get())).toEqual([2])
-      expect(countsOf(await Tag.withCount('morphOwners').orderBy('id').get(), 'morphOwners_count')).toEqual([1, 2, 0])
+      expect(valuesOf(await Owner.has('morphTags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('morphTags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])
+      expect(valuesOf(await Owner.whereDoesntHave('morphTags').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('morphTags').orderBy('id').get(), 'morphTags_count')).toEqual([2, 1, 0])
+      expect(valuesOf(await Tag.has('morphOwners').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Tag.whereHas('morphOwners', query => query.where('name', 'second')).orderBy('id').get())).toEqual([2])
+      expect(valuesOf(await Tag.withCount('morphOwners').orderBy('id').get(), 'morphOwners_count')).toEqual([1, 2, 0])
     })
 
     it('filters and counts hasManyThrough and hasOneThrough', async () => {
       const { Owner, partsTable } = await openKeyFixtures(driver, kind)
 
-      expect(keysOf(await Owner.has('parts').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.has('part').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereHas('parts', query => query.where(`${partsTable}.id`, 200)).orderBy('id').get())).toEqual([2])
-      expect(keysOf(await Owner.whereDoesntHave('parts').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('parts').orderBy('id').get(), 'parts_count')).toEqual([2, 1, 0])
+      expect(valuesOf(await Owner.has('parts').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.has('part').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('parts', query => query.where(`${partsTable}.id`, 200)).orderBy('id').get())).toEqual([2])
+      expect(valuesOf(await Owner.whereDoesntHave('parts').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('parts').orderBy('id').get(), 'parts_count')).toEqual([2, 1, 0])
     })
   })
 
@@ -268,27 +264,27 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     it('filters and counts hasMany, belongsTo and belongsToMany', async () => {
       const { Owner, Item } = await openDecimalOwnerFixtures(driver)
 
-      expect(keysOf(await Owner.has('items').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
-      expect(keysOf(await Owner.whereDoesntHave('items').orderBy('code').get(), 'name')).toEqual(['fractional'])
-      expect(countsOf(await Owner.withCount('items').orderBy('code').get(), 'items_count')).toEqual([2, 0, 2])
-      expect(keysOf(await Item.has('owner').orderBy('id').get())).toEqual([10, 11, 20, 21])
-      expect(keysOf(await Item.whereDoesntHave('owner').orderBy('id').get())).toEqual([30])
-      expect(keysOf(await Owner.has('tags').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
-      expect(countsOf(await Owner.withCount('tags').orderBy('code').get(), 'tags_count')).toEqual([2, 0, 1])
+      expect(valuesOf(await Owner.has('items').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
+      expect(valuesOf(await Owner.whereDoesntHave('items').orderBy('code').get(), 'name')).toEqual(['fractional'])
+      expect(valuesOf(await Owner.withCount('items').orderBy('code').get(), 'items_count')).toEqual([2, 0, 2])
+      expect(valuesOf(await Item.has('owner').orderBy('id').get())).toEqual([10, 11, 20, 21])
+      expect(valuesOf(await Item.whereDoesntHave('owner').orderBy('id').get())).toEqual([30])
+      expect(valuesOf(await Owner.has('tags').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
+      expect(valuesOf(await Owner.withCount('tags').orderBy('code').get(), 'tags_count')).toEqual([2, 0, 1])
     })
 
     it('filters and counts morph and through relations', async () => {
       const { Owner, Note, Tag } = await openDecimalOwnerFixtures(driver)
 
-      expect(keysOf(await Owner.has('notes').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
-      expect(countsOf(await Owner.withCount('notes').orderBy('code').get(), 'notes_count')).toEqual([2, 0, 1])
-      expect(keysOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 11, 20])
-      expect(keysOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30])
-      expect(keysOf(await Owner.has('morphTags').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
-      expect(keysOf(await Tag.has('morphOwners').orderBy('id').get())).toEqual([1, 2])
-      expect(countsOf(await Tag.withCount('morphOwners').orderBy('id').get(), 'morphOwners_count')).toEqual([1, 2, 0])
-      expect(keysOf(await Owner.has('parts').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
-      expect(countsOf(await Owner.withCount('parts').orderBy('code').get(), 'parts_count')).toEqual([2, 0, 1])
+      expect(valuesOf(await Owner.has('notes').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
+      expect(valuesOf(await Owner.withCount('notes').orderBy('code').get(), 'notes_count')).toEqual([2, 0, 1])
+      expect(valuesOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 11, 20])
+      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30])
+      expect(valuesOf(await Owner.has('morphTags').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
+      expect(valuesOf(await Tag.has('morphOwners').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Tag.withCount('morphOwners').orderBy('id').get(), 'morphOwners_count')).toEqual([1, 2, 0])
+      expect(valuesOf(await Owner.has('parts').orderBy('code').get(), 'name')).toEqual(['first', 'second'])
+      expect(valuesOf(await Owner.withCount('parts').orderBy('code').get(), 'parts_count')).toEqual([2, 0, 1])
     })
   })
 
@@ -319,6 +315,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
         { id: 50, noteable_type: ownerType, noteable_id: '99999999999999999999999' },
         { id: 60, noteable_type: ownerType, noteable_id: '2' },
         { id: 70, noteable_type: ownerType, noteable_id: '2x' },
+        { id: 80, noteable_type: ownerType, noteable_id: '1\n' },
       ])
       const Note = defineModel(notes, { timestamps: false, relations: { noteable: morphTo('noteable') } })
       const Owner = defineModel(owners, { morphClass: ownerType, timestamps: false, relations: { notes: morphMany(() => Note, 'noteable') } })
@@ -330,14 +327,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
       const loaded = await Note.with('noteable').orderBy('id').get()
 
-      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined])
-      expect(keysOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 20, 60])
-      expect(keysOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70])
-      expect(countsOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0])
-      expect((await Owner.with('notes').orderBy('id').get()).map(owner => keysOf(owner.getRelation<Loaded[]>('notes') ?? []))).toEqual([[10], [60], []])
-      expect(keysOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
-      expect(keysOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
-      expect(countsOf(await Owner.withCount('notes').orderBy('id').get(), 'notes_count')).toEqual([1, 1, 0])
+      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined, undefined])
+      expect(valuesOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 20, 60])
+      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70, 80])
+      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0, 0])
+      expect((await Owner.with('notes').orderBy('id').get()).map(owner => valuesOf(owner.getRelation<Loaded[]>('notes') ?? []))).toEqual([[10], [60], []])
+      expect(valuesOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
+      expect(valuesOf(await Owner.withCount('notes').orderBy('id').get(), 'notes_count')).toEqual([1, 1, 0])
     })
   })
 })

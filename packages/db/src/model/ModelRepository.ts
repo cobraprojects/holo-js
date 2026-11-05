@@ -2675,13 +2675,13 @@ export class ModelRepository<
         const throughTable = through.definition.table.tableName
         const relatedTable = related.definition.table.tableName
         const throughColumns = through.definition.table.columns
-        const joined = this.applyRelationConstraint(relation, related, constraint)
-          .getTableQueryBuilder()[joinOnKeyColumns](
-            throughTable,
-            `${throughTable}.${relation.secondLocalKey}`,
-            `${relatedTable}.${relation.secondKey}`,
-            { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
-          ) as TableQueryBuilder<TableDefinition, Record<string, unknown>>
+        const joined = joinOnKeyColumns(
+          this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder(),
+          throughTable,
+          `${throughTable}.${relation.secondLocalKey}`,
+          `${relatedTable}.${relation.secondKey}`,
+          { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
+        )
 
         return [this.whereParentKey(joined, through.definition.table, relation.firstKey, relation.localKey, `${throughTable}.${relation.firstKey}`)]
       }
@@ -2711,7 +2711,7 @@ export class ModelRepository<
     reference = column,
   ): TQuery {
     const cast = sourceKeyCast(ownEntry(this.definition.table.columns, parentColumn), table ? ownEntry(table.columns, column) : undefined)
-    return query[whereKeyColumn](reference, this.qualifyParentColumn(parentColumn), { right: cast }) as TQuery
+    return whereKeyColumn(query, reference, this.qualifyParentColumn(parentColumn), { right: cast })
   }
 
   private whereHasPivot(
@@ -2726,11 +2726,11 @@ export class ModelRepository<
     const pivotDefinition = typeof pivotTable === 'string' ? undefined : pivotTable
     const relatedTable = related.definition.table
     const relatedCast = sourceKeyCast(pivotDefinition ? ownEntry(pivotDefinition.columns, relatedPivotColumn) : undefined, ownEntry(relatedTable.columns, relation.relatedKey))
-    const correlated = this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey)[whereKeyColumn](relatedPivotColumn, `${relatedTable.tableName}.${relation.relatedKey}`, { left: relatedCast })
+    const correlated = whereKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, `${relatedTable.tableName}.${relation.relatedKey}`, { left: relatedCast })
 
     return this.applyRelationConstraint(relation, related, constraint)
       .getTableQueryBuilder()
-      .whereExists(correlated as never)
+      .whereExists(correlated)
   }
 
   private resolveMorphExistenceReferences(
