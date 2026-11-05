@@ -3367,12 +3367,15 @@ export class ModelRepository<
     }
 
     const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
-    const winner = await this.applyRelationConstraint(relation, related, constraint)
+    const query = this.applyRelationConstraint(relation, related, constraint)
+    const source = query.getTableQueryBuilder().getPlan().source
+    const qualify = (column: string) => `${source.alias ?? source.tableName}.${column}` as never
+    const winner = await query
       .limit()
       .offset()
-      .reorder(relation.aggregateColumn as never, direction)
-      .orderBy(primaryKey as never, direction)
-      .where(primaryKey as never, 'in', candidates.map(candidate => candidate.get(primaryKey as never)))
+      .reorder(qualify(relation.aggregateColumn), direction)
+      .orderBy(qualify(primaryKey), direction)
+      .where(qualify(primaryKey), 'in', candidates.map(candidate => candidate.get(primaryKey as never)))
       .first()
     const winnerKey = canonicalStoredKey(winner?.get(primaryKey as never))
     return candidates.find(candidate => canonicalStoredKey(candidate.get(primaryKey as never)) === winnerKey) ?? candidates[0]!
