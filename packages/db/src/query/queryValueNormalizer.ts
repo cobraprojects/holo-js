@@ -69,16 +69,27 @@ export function normalizeDateColumnPredicateValue(
   columnName: string,
   value: unknown,
   operator: unknown,
-): unknown {
+): { readonly value: unknown, readonly comparesCalendarDates: boolean } {
   const timeZone = getApplicationTimezone()
-  const calendarDates = mapPredicateValue(value, item => isValidDate(item) ? calendarDateOf(item, timeZone) ?? item : item)
-  const normalized = normalizeQueryPredicateValue(table, driver, columnName, calendarDates, operator)
-  if (driver !== 'sqlite') return normalized
+  const instantOf = (item: unknown): Date | undefined => isValidDate(item)
+    ? item
+    : driver === 'sqlite' && typeof item === 'string' ? parseSQLiteDateTime(item) : undefined
+  const isBeforeCommonEra = (item: unknown): boolean => {
+    const instant = instantOf(item)
+    return instant !== undefined && calendarDateOf(instant, timeZone) === undefined
+  }
+  const normalized = normalizeQueryPredicateValue(table, driver, columnName, value, operator)
+  if ([value, normalized].flat().some(isBeforeCommonEra)) return { value: normalized, comparesCalendarDates: false }
 
-  return mapPredicateValue(normalized, (item) => {
-    const instant = typeof item === 'string' ? parseSQLiteDateTime(item) : undefined
-    return instant ? calendarDateOf(instant, timeZone) ?? item : item
-  })
+  const calendarDates = mapPredicateValue(value, item => isValidDate(item) ? calendarDateOf(item, timeZone) : item)
+  const normalizedCalendarDates = normalizeQueryPredicateValue(table, driver, columnName, calendarDates, operator)
+  return {
+    value: driver === 'sqlite' ? mapPredicateValue(normalizedCalendarDates, item => {
+      const instant = instantOf(item)
+      return instant ? calendarDateOf(instant, timeZone) : item
+    }) : normalizedCalendarDates,
+    comparesCalendarDates: true,
+  }
 }
 
 export function normalizeDatePartPredicateValue(part: QueryDatePart, value: unknown): unknown {

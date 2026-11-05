@@ -3649,10 +3649,8 @@ export class TableQueryBuilder<
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
     if (this.isDateColumn(columnName)) {
-      return {
-        value: normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator),
-        valueType: 'date',
-      }
+      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+      return normalized.comparesCalendarDates ? { value: normalized.value, valueType: 'date' } : { value: normalized.value }
     }
 
     return {

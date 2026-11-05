@@ -9,6 +9,25 @@ afterEach(() => {
 })
 
 describe('Date values in date predicates', () => {
+  it('finds a stored DATE row by the same Date before year 1 on SQLite', async () => {
+    configureConfigRuntime({ app: { timezone: 'UTC' } } as never)
+    const { schema } = await openDatabase('sqlite')
+    await schema.createTable('bc_rows', (table) => {
+      table.id()
+      table.date('day')
+    })
+    const rows = defineGeneratedTable('bc_rows', { id: column.id(), day: column.date() })
+    const yearZero = new Date('0000-06-15T12:00:00Z')
+    const yearMinusOne = new Date('-000001-06-15T12:00:00Z')
+    await DB.table(rows).insert({ day: yearZero })
+    await DB.table(rows).insert({ day: yearMinusOne })
+
+    await expect(DB.table(rows).where('day', yearZero).pluck('id')).resolves.toEqual([1])
+    await expect(DB.table(rows).where('day', yearMinusOne).pluck('id')).resolves.toEqual([2])
+    await expect(DB.table(rows).whereIn('day', [yearZero, yearMinusOne]).orderBy('id').pluck('id')).resolves.toEqual([1, 2])
+  })
+
+
   it('leaves a Date before year 1 to the dialect instead of formatting a calendar date it cannot read', async () => {
     configureConfigRuntime({ app: { timezone: 'UTC' } } as never)
     await openDatabase('sqlite')
