@@ -17,7 +17,7 @@ const DIALECT_DISPLAY_NAME: Readonly<Record<SchemaDialectName, string>> = Object
   mysql: 'MySQL',
 })
 
-function coerceBoolean(value: unknown): boolean | null | undefined {
+export function coerceBoolean(value: unknown): boolean | null | undefined {
   if (value == null) {
     return value as null | undefined
   }
