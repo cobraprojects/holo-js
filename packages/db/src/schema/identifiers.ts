@@ -23,6 +23,13 @@ export function assertValidIdentifierPath(identifier: string, context: string): 
   }
 }
 
+export function assertValidTablePath(identifier: string, context: string): void {
+  assertValidIdentifierPath(identifier, context)
+  if (identifier.split('.').length > 2) {
+    throw new SchemaError(`${context} "${identifier}" must be a table name or a schema-qualified table name.`)
+  }
+}
+
 export interface TablePath {
   readonly schema?: string
   readonly table: string

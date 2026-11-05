@@ -1,5 +1,5 @@
 import { SchemaError } from '../core/errors'
-import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidIdentifierPath, assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
 import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
@@ -87,7 +87,7 @@ export abstract class SQLSchemaCompiler {
       return [this.compileRenameIndex(operation.tableName, operation.fromIndexName, operation.toIndexName)]
     }
 
-    assertValidIdentifierPath(operation.tableName, 'Table name')
+    assertValidTablePath(operation.tableName, 'Table name')
     return [{
       sql: `DROP TABLE IF EXISTS ${this.compileIdentifierPath(operation.tableName)}`,
       source: `schema:dropTable:${operation.tableName}`,
@@ -102,7 +102,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileTableCreation(table: TableDefinition): DDLStatement {
-    assertValidIdentifierPath(table.tableName, 'Table name')
+    assertValidTablePath(table.tableName, 'Table name')
     const { table: definedTable, primaryKeyConstraint } = this.resolveTablePrimaryKeyConstraint(table)
     const columnSql = [
       ...this.compileTableDefinitions(definedTable),
@@ -176,7 +176,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileAddColumn(tableName: string, column: AnyColumnDefinition): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     const uniqueConstraints = this.compileUniqueConstraints(tableName, this.resolveColumnUniqueIndexes(tableName, [column]))
       .map(constraint => `, ADD ${constraint}`)
       .join('')
@@ -187,7 +187,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileDropColumn(tableName: string, columnName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIdentifierSegment(columnName, 'Column name')
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP COLUMN ${this.quoteIdentifier(columnName)}`,
@@ -196,7 +196,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileRenameColumn(tableName: string, fromColumnName: string, toColumnName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIdentifierSegment(fromColumnName, 'Column name')
     assertValidIdentifierSegment(toColumnName, 'Column name')
     return {
@@ -206,7 +206,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileAlterColumn(tableName: string, column: AnyColumnDefinition): DDLStatement[] {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     this.assertSupportedAlterColumnDefinition(column)
     return [{
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} MODIFY COLUMN ${this.compileColumn(tableName, column)}`,
@@ -220,7 +220,7 @@ export abstract class SQLSchemaCompiler {
     reference: ForeignKeyReference,
     constraintName?: string,
   ): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     const resolvedConstraintName = this.resolveForeignKeyName(tableName, columnName, constraintName)
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compileForeignKeyConstraint(tableName, columnName, reference, resolvedConstraintName)}`,
@@ -280,7 +280,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileDropForeignKey(tableName: string, constraintName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIdentifierSegment(constraintName, 'Foreign key name')
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
@@ -289,7 +289,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileCreatePrimaryKey(tableName: string, columns: readonly string[], constraintName?: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compilePrimaryKeyConstraint(columns, constraintName)}`,
       source: `schema:createPrimaryKey:${tableName}`,
@@ -297,7 +297,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileDropPrimaryKey(tableName: string, constraintName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIdentifierSegment(constraintName, 'Primary key name')
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(constraintName)}`,
@@ -306,7 +306,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileCreateIndex(tableName: string, index: TableIndexDefinition): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     const indexName = this.resolveIndexName(tableName, index)
     const quotedColumns = index.columns.map((column) => {
       assertValidIdentifierSegment(column, 'Index column')
@@ -314,17 +314,17 @@ export abstract class SQLSchemaCompiler {
     }).join(', ')
 
     return {
-      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.compileIndexTarget(tableName, indexName)} (${quotedColumns})`,
+      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.compileIndexNameOnTable(tableName, indexName)} (${quotedColumns})`,
       source: `schema:createIndex:${tableName}:${indexName}`,
     }
   }
 
-  protected compileIndexTarget(tableName: string, indexName: string): string {
+  protected compileIndexNameOnTable(tableName: string, indexName: string): string {
     return `${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)}`
   }
 
   compileDropIndex(tableName: string, indexName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIndexName(indexName)
 
     return {
@@ -334,7 +334,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileDropUnique(tableName: string, indexName: string, backedBy: UniqueBacking): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIndexName(indexName)
     const sql = backedBy === 'constraint'
       ? `ALTER TABLE ${this.compileIdentifierPath(tableName)} DROP CONSTRAINT ${this.quoteIdentifier(indexName)}`
@@ -347,8 +347,8 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileRenameTable(fromTableName: string, toTableName: string): DDLStatement {
-    assertValidIdentifierPath(fromTableName, 'Table name')
-    assertValidIdentifierPath(toTableName, 'Table name')
+    assertValidTablePath(fromTableName, 'Table name')
+    assertValidTablePath(toTableName, 'Table name')
 
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(fromTableName)} RENAME TO ${this.compileIdentifierPath(toTableName)}`,
@@ -357,7 +357,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   compileRenameIndex(tableName: string, fromIndexName: string, toIndexName: string): DDLStatement {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     assertValidIndexName(fromIndexName)
     assertValidIndexName(toIndexName)
 
@@ -367,7 +367,7 @@ export abstract class SQLSchemaCompiler {
     }
   }
 
-  private compileTableSchemaIndexPath(tableName: string, indexName: string): string {
+  protected compileTableSchemaIndexPath(tableName: string, indexName: string): string {
     return this.compileIdentifierPath([...tableName.split('.').slice(0, -1), indexName].join('.'))
   }
 

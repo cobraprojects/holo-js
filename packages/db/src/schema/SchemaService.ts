@@ -5,7 +5,7 @@ import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, cr
 import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
-import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
 import { PostgresVirtualColumns } from './PostgresVirtualColumns'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
@@ -72,7 +72,7 @@ export class SchemaService {
   }
 
   async dropTable(tableName: string): Promise<void> {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     await this.execute(this.createCompiler().compile(dropTableOperation(tableName)))
   }
 
@@ -80,8 +80,8 @@ export class SchemaService {
     fromTableName: string,
     toTableName: string,
   ): Promise<void> {
-    assertValidIdentifierPath(fromTableName, 'Table name')
-    assertValidIdentifierPath(toTableName, 'Table name')
+    assertValidTablePath(fromTableName, 'Table name')
+    assertValidTablePath(toTableName, 'Table name')
     const statements = this.createCompiler().compile(renameTableOperation(fromTableName, toTableName))
     await (this.isPostgres()
       ? this.postgresEnumChecks.renameTable(fromTableName, toTableName, statements)
@@ -92,7 +92,7 @@ export class SchemaService {
     tableName: string,
     callback: (table: TableMutationBuilder) => void | Promise<void>,
   ): Promise<void> {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
     const builder = new TableMutationBuilder(tableName)
     await callback(builder)
     const operations = builder.getOperations()
@@ -154,7 +154,7 @@ export class SchemaService {
   }
 
   async hasTable(name: string): Promise<boolean> {
-    assertValidIdentifierPath(name, 'Table name')
+    assertValidTablePath(name, 'Table name')
     const tables = await this.getTables()
     return tables.includes(name)
   }
@@ -383,7 +383,7 @@ export class SchemaService {
         return
       case 'createForeignKey':
         assertValidIdentifierSegment(operation.columnName, 'Foreign key column')
-        assertValidIdentifierPath(operation.reference.table, 'Foreign key table')
+        assertValidTablePath(operation.reference.table, 'Foreign key table')
         assertValidIdentifierSegment(operation.reference.column, 'Foreign key column')
         if (this.isSqlite()) {
           await this.sqlite.addForeignKey(tableName, operation.columnName, operation.reference, operation.constraintName)
@@ -457,7 +457,7 @@ export class SchemaService {
     tableName: TName,
     callback?: (table: TableDefinitionBuilder<TName>) => void | Promise<void>,
   ): Promise<TableDefinition> {
-    assertValidIdentifierPath(tableName, 'Table name')
+    assertValidTablePath(tableName, 'Table name')
 
     if (!callback) {
       throw new CapabilityError('SchemaService.createTable(name, callback) requires a table-definition callback.')

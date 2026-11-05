@@ -1,6 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { isColumnBuilder, type ColumnInput } from './columns'
-import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
 import { resolvePrimaryKeyColumnOrder } from './tablePrimaryKey'
 import type {
   AnyColumnDefinition,
@@ -61,7 +61,7 @@ export function defineTable<
   columns: TColumns,
   options: DefineTableOptions = {},
 ): BoundTableDefinition<TName, TColumns> {
-  assertValidIdentifierPath(name, 'Table name')
+  assertValidTablePath(name, 'Table name')
 
   for (const columnName of Object.keys(columns)) {
     assertValidIdentifierSegment(columnName, 'Column name')

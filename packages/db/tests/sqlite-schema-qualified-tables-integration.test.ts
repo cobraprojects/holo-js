@@ -346,6 +346,28 @@ describe('SQLite schema operations on schema-qualified tables', () => {
       .get()).rejects.toThrow('SQLite cannot select "archive.products.*" because more than one table in the query is named "products". Alias the tables and select "alias.*" instead.')
   })
 
+  it('refuses a schema-qualified wildcard that SQLite would expand from another table', async () => {
+    const { db } = await openArchive()
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."products" ("id" INTEGER PRIMARY KEY, "name" TEXT, "price" INTEGER)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."orders" ("id" INTEGER PRIMARY KEY, "total" INTEGER)', source: 'schema' })
+
+    await expect(DB.table('main.products as p')
+      .join('archive.products', 'archive.products.id', '=', 'p.id')
+      .select('main.products.*')
+      .get()).rejects.toThrow('SQLite cannot select "main.products.*" because table "main.products" is aliased as "p". Select "p.*" instead.')
+    await expect(DB.table('archive.orders as products')
+      .select('main.products.*')
+      .get()).rejects.toThrow('SQLite cannot select "main.products.*" because "products" in this query does not name table "main.products".')
+    await expect(DB.table('main.products')
+      .join('archive.orders as products', 'products.id', '=', 'main.products.id')
+      .select('archive.products.*')
+      .get()).rejects.toThrow('SQLite cannot select "archive.products.*" because more than one table in the query is named "products". Alias the tables and select "alias.*" instead.')
+    await expect(DB.table('products')
+      .select('archive.products.*')
+      .get()).rejects.toThrow('SQLite cannot select "archive.products.*" because "products" in this query does not name table "archive.products".')
+    expect(await DB.table('products').select('main.products.*').get()).toEqual([])
+  })
+
   it('selects every column of a joined attached table with a distinct name', async () => {
     const { db } = await openArchive()
     await db.executeCompiled({ sql: 'CREATE TABLE "archive"."notes" ("id" INTEGER PRIMARY KEY, "product_id" INTEGER, "body" TEXT)', source: 'schema' })

@@ -1,8 +1,9 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileColumnDefaultLiteral } from './defaultLiterals'
-import { assertValidIdentifierPath, splitTablePath } from './identifiers'
+import { assertValidTablePath, splitTablePath } from './identifiers'
 import { SchemaError } from '../core/errors'
 import { withIndexName, withSchemaQualifiedName } from './introspection/sqlDefinitions'
+import { sameSQLiteSchema } from './introspection/sqliteTokens'
 import { resolveDialectColumnType } from './typeMapping'
 import type { DDLStatement } from './ddl'
 import type { SQLiteDependentObject, SQLiteTableObject } from './introspection/sqlite'
@@ -43,29 +44,27 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return [...indexes]
   }
 
-  protected override compileIndexTarget(tableName: string, indexName: string): string {
-    const { schema, table } = splitTablePath(tableName)
-    if (schema === undefined) return super.compileIndexTarget(tableName, indexName)
-    return `${this.compileIdentifierPath(`${schema}.${indexName}`)} ON ${this.quoteIdentifier(table)}`
+  protected override compileIndexNameOnTable(tableName: string, indexName: string): string {
+    const { table } = splitTablePath(tableName)
+    return `${this.compileTableSchemaIndexPath(tableName, indexName)} ON ${this.quoteIdentifier(table)}`
   }
 
   protected override compileReferencedTable(tableName: string, columnName: string, referencedTable: string): string {
-    assertValidIdentifierPath(referencedTable, 'Referenced table name')
+    assertValidTablePath(referencedTable, 'Referenced table name')
     const referenced = splitTablePath(referencedTable)
     if (referenced.schema === undefined) return this.quoteIdentifier(referenced.table)
-    const owningSchema = splitTablePath(tableName).schema ?? 'main'
-    if (referenced.schema.toLowerCase() !== owningSchema.toLowerCase()) {
+    if (!sameSQLiteSchema(referenced.schema, splitTablePath(tableName).schema)) {
       throw new SchemaError(`SQLite foreign key "${columnName}" on table "${tableName}" cannot reference table "${referencedTable}" in another database.`)
     }
     return this.quoteIdentifier(referenced.table)
   }
 
   override compileRenameTable(fromTableName: string, toTableName: string): DDLStatement {
-    assertValidIdentifierPath(fromTableName, 'Table name')
-    assertValidIdentifierPath(toTableName, 'Table name')
+    assertValidTablePath(fromTableName, 'Table name')
+    assertValidTablePath(toTableName, 'Table name')
     const from = splitTablePath(fromTableName)
     const to = splitTablePath(toTableName)
-    if (to.schema !== undefined && to.schema.toLowerCase() !== (from.schema ?? 'main').toLowerCase()) {
+    if (to.schema !== undefined && !sameSQLiteSchema(to.schema, from.schema)) {
       throw new SchemaError(`SQLite cannot move table "${fromTableName}" to another database as "${toTableName}".`)
     }
 
@@ -122,8 +121,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   }
 
   compileRecreateIndex(tableName: string, fromIndexName: string, toIndexName: string, createIndexSql: string): DDLStatement[] | undefined {
-    const { schema } = splitTablePath(tableName)
-    const renamedSql = withIndexName(createIndexSql, this.compileIdentifierPath(schema === undefined ? toIndexName : `${schema}.${toIndexName}`))
+    const renamedSql = withIndexName(createIndexSql, this.compileTableSchemaIndexPath(tableName, toIndexName))
     if (renamedSql === undefined) return undefined
     return [
       this.compileDropIndex(tableName, fromIndexName),
@@ -147,7 +145,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     definitions: readonly string[],
     options: string,
   ): DDLStatement {
-    assertValidIdentifierPath(temporaryTableName, 'Table name')
+    assertValidTablePath(temporaryTableName, 'Table name')
     const tableOptions = options ? ` ${options}` : ''
     return {
       sql: `CREATE TABLE ${this.compileIdentifierPath(temporaryTableName)} (${definitions.join(', ')})${tableOptions}`,

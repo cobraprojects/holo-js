@@ -117,6 +117,13 @@ function assertQualifiedIdentifier(value: string, kind: string): void {
   }
 }
 
+function assertTablePath(value: string, kind: string, message = `${kind} "${value}" must be a table name or a schema-qualified table name.`): void {
+  assertQualifiedIdentifier(value, kind)
+  if (value.split('.').length > 2) {
+    throw new SecurityError(message)
+  }
+}
+
 function assertHavingClause(clause: QueryHavingClause): void {
   if (!HAVING_EXPRESSION_PATTERN.test(clause.expression)) {
     throw new SecurityError(`Having expression "${clause.expression}" is not allowed in safe query mode.`)
@@ -198,7 +205,7 @@ function assertColumnSelection(
 ): void {
   const allColumnsOf = readAllColumnsSelectionTable(selection.column)
   if (allColumnsOf !== undefined && !selection.alias) {
-    assertQualifiedIdentifier(allColumnsOf, 'Column reference')
+    assertTablePath(allColumnsOf, 'Column reference', `Column reference "${selection.column}" must select every column of a table name or a schema-qualified table name.`)
     return
   }
 
@@ -217,7 +224,7 @@ function assertJoinClause(join: QueryJoinClause): void {
   }
 
   if (hasTable) {
-    assertQualifiedIdentifier(join.table!, 'Join table')
+    assertTablePath(join.table!, 'Join table')
     if (typeof join.alias !== 'undefined') {
       assertIdentifier(join.alias, 'Join alias')
     }
@@ -579,7 +586,7 @@ function assertNonNegativeInteger(value: number | undefined, kind: string): void
 }
 
 export function validateQueryPlan(plan: QueryPlan, dialect?: SchemaDialectName): void {
-  assertQualifiedIdentifier(plan.source.tableName, 'Table')
+  assertTablePath(plan.source.tableName, 'Table')
   if (plan.source.alias) {
     assertIdentifier(plan.source.alias, 'Table alias')
   }
