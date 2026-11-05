@@ -7,7 +7,7 @@ import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
-import type { CaseInsensitiveColumns } from './query/caseInsensitiveColumns'
+import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
 
@@ -1109,8 +1109,9 @@ export function createTablePredicateCacheDependency(
   tableName: string,
   columnName: string,
   value: unknown,
+  textMatchesAnyNumber = false,
 ): string | undefined {
-  return isNumericText(value)
+  return mayEqualNumber(value, textMatchesAnyNumber)
     ? undefined
     : createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
 }
@@ -1341,14 +1342,14 @@ function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, c
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
 }
 
-function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string): string | undefined {
+function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): string | undefined {
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
   if (primaryKey === undefined) {
     return undefined
   }
 
   const value = findExactPrimaryKeyValue(plan.predicates, primaryKey)
-  return isNumericText(value)
+  return mayEqualNumber(value, textMatchesAnyNumber)
     ? undefined
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
 }
@@ -1443,8 +1444,19 @@ function collectMutationLooseColumns(
   return collectLooseColumns(predicates, records, (column, value) => mayEqualOtherLiteral(column, value, caseInsensitiveColumns))
 }
 
-function collectNumericTextColumns(predicates: readonly QueryPredicateNode[]): ReadonlySet<string> {
-  return collectLooseColumns(predicates, [], (_column, value) => isNumericText(value))
+function mayEqualNumber(value: unknown, textMatchesAnyNumber: boolean): boolean {
+  return typeof value === 'string' && (textMatchesAnyNumber || isNumericText(value))
+}
+
+function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatchesAnyNumber: boolean): ReadonlySet<string> {
+  return collectLooseColumns(predicates, [], (_column, value) => mayEqualNumber(value, textMatchesAnyNumber))
+}
+
+export function writesTextLiterals(
+  predicates: readonly QueryPredicateNode[],
+  records: readonly Readonly<Record<string, unknown>>[],
+): boolean {
+  return collectLooseColumns(predicates, records, (_column, value) => typeof value === 'string').size > 0
 }
 
 function createMutationRowDependencies(
@@ -2154,13 +2166,14 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 export function inferAutomaticQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
+  textMatchesAnyNumber = false,
 ): readonly string[] | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName)
+    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatchesAnyNumber)
     if (primaryKeyDependency) {
       return Object.freeze([
         primaryKeyDependency,
@@ -2175,7 +2188,7 @@ export function inferAutomaticQueryCacheDependencies(
       connectionName,
       plan.source.tableName,
       false,
-      collectNumericTextColumns(plan.predicates),
+      collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber),
     )
     if (predicateDependencies.length > 0) {
       return Object.freeze([
@@ -2392,12 +2405,13 @@ export function resolveQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   explicit?: readonly string[],
+  textMatchesAnyNumber = false,
 ): readonly string[] | undefined {
   if (explicit && explicit.length > 0) {
     return normalizeQueryCacheDependencies(connectionName, explicit)
   }
 
-  return inferAutomaticQueryCacheDependencies(plan, connectionName)
+  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatchesAnyNumber)
 }
 
 export async function invalidateQueryCacheDependencies(

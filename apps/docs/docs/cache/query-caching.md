@@ -101,9 +101,9 @@ A plain table name in `invalidate` uses the query's connection. To watch a table
 
 A database can match a write to a cached row even when the two values differ as written, so Holo treats values it can't prove different as possibly equal and clears more entries:
 
-- **Text that reads as a number** (`'5'`, `' 05'`, `'5.0'`, `'1e3'`) can match the number `5` on every database. A write through `where('id', '5')` clears a cached `where('id', 5)`, and a write through `where('id', 5)` clears a cached `where('id', '5')`.
+- **Text that reads as a number** (`'5'`, `' 05'`, `'5.0'`, `'1e3'`) can match the number `5` on every database. A write through `where('id', '5')` clears a cached `where('id', 5)`, and a write through `where('id', 5)` clears a cached `where('id', '5')`. MySQL also converts other text when it compares it with a number, so `'5abc'` matches `5` and `'abc'` matches `0`; there, any cached read by text can be cleared by a write with a number.
 - **Case- and accent-insensitive text.** SQLite `COLLATE NOCASE` and MySQL's `_ci` collations, the MySQL default, compare `'fr'` and `'FR'` as equal. Holo doesn't know a column's collation on SQLite or MySQL, so a write with a text key there clears every cached read by key on that table, and a write with a text value clears queries that filter that column by different text.
-- **PostgreSQL** compares text exactly by default and keeps precise invalidation. Holo reads from PostgreSQL which columns are `citext`, a domain over `citext`, or use a nondeterministic collation such as `CREATE COLLATION ... (deterministic = false)`, and treats those columns as case-insensitive. It reads them the first time a write with text values reaches the table, and again after a migration that runs through Holo in the same process.
+- **PostgreSQL** compares text exactly by default and keeps precise invalidation. Holo reads from PostgreSQL which columns are `citext`, a domain or array built on `citext`, or use a nondeterministic collation such as `CREATE COLLATION ... (deterministic = false)`, and treats those columns as case-insensitive. It reads them the first time a write with text values reaches the table, and again after a migration that runs through Holo in the same process.
 
 Realtime queries follow the same rules, so a subscription refreshes after any write the database matched to its rows.
 

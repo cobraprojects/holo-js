@@ -7,6 +7,24 @@ import { openDatabase } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
 
+async function ensurePostgresObject(create: string, exists: string) {
+  const { adapter } = await openDatabase('postgres')
+  try {
+    await adapter.execute(create)
+  } catch (error) {
+    const found = await adapter.query(exists)
+    if (found.rows.length === 0) {
+      throw error
+    }
+  }
+}
+
+const ensureCitext = () => ensurePostgresObject('CREATE EXTENSION IF NOT EXISTS citext', `SELECT 1 FROM pg_extension WHERE extname = 'citext'`)
+const ensureCaseInsensitiveCollation = () => ensurePostgresObject(
+  `CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`,
+  `SELECT 1 FROM pg_collation WHERE collname = 'holo_case_insensitive'`,
+)
+
 async function createCountries(driver: Driver, postgresCodeType = 'VARCHAR(16) COLLATE "C"') {
   const { adapter } = await openDatabase(driver)
   const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
@@ -105,13 +123,22 @@ describe('query cache invalidation by a NOCASE key on sqlite', () => {
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('query cache invalidation by a default _ci key on mysql', () => {
   registerCaseInsensitiveScenarios('mysql')
   registerTextNumberScenarios('mysql')
+
+  it('refreshes a cached read by a key as non-numeric text after an update matched by the number mysql converts it to', async () => {
+    const tickets = await createTickets('mysql')
+    expect(await tickets.cachedLabel('5abc')).toBe('first')
+
+    await tickets.update(5, 'renamed')
+
+    expect(await tickets.cachedLabel('5abc')).toBe('renamed')
+  })
 })
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache invalidation by a case-sensitive key on postgres', () => {
   registerTextNumberScenarios('postgres')
 
   it('refreshes a cached read by a citext key after an update matched by a case-differing key', async () => {
-    await (await openDatabase('postgres')).adapter.execute('CREATE EXTENSION IF NOT EXISTS citext')
+    await ensureCitext()
     const countries = await createCountries('postgres', 'citext')
     expect(await countries.cachedLabel('FR')).toBe('France')
 
@@ -120,8 +147,26 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache inva
     expect(await countries.cachedLabel('FR')).toBe('République')
   })
 
+  it('refreshes a cached read by a key whose domain is built on citext after an update matched by a case-differing key', async () => {
+    await ensureCitext()
+    const domain = `country_code_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const { adapter } = await openDatabase('postgres')
+    await adapter.execute(`CREATE DOMAIN ${domain}_base AS citext`)
+    await adapter.execute(`CREATE DOMAIN ${domain} AS ${domain}_base`)
+    try {
+      const countries = await createCountries('postgres', domain)
+      expect(await countries.cachedLabel('FR')).toBe('France')
+
+      await countries.update('fr', 'République')
+
+      expect(await countries.cachedLabel('FR')).toBe('République')
+    } finally {
+      await adapter.execute(`DROP DOMAIN IF EXISTS ${domain}_base CASCADE`)
+    }
+  })
+
   it('refreshes a cached read by a key with a nondeterministic collation after an update matched by a case-differing key', async () => {
-    await (await openDatabase('postgres')).adapter.execute(`CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`)
+    await ensureCaseInsensitiveCollation()
     const countries = await createCountries('postgres', 'VARCHAR(16) COLLATE holo_case_insensitive')
     expect(await countries.cachedLabel('FR')).toBe('France')
 

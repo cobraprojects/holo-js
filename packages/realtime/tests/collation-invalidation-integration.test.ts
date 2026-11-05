@@ -296,20 +296,36 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidati
   registerCaseInsensitiveScenarios('mysql')
   registerStringIdScenarios('mysql')
   registerTextNumberScenarios('mysql')
+
+  it('refreshes a subscription by an id as non-numeric text after an update matched by the number mysql converts it to', async () => {
+    const countries = await createNumericIdCountries('mysql')
+    const snapshots = await countries.subscribeById('5abc')
+
+    await countries.update(5, 'République')
+
+    expect(snapshots.at(-1)).toEqual({ id: 5, label: 'République', rank_no: 1 })
+  })
 })
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalidation on a case-sensitive column on postgres', () => {
   registerTextNumberScenarios('postgres')
 
-  for (const [type, setup] of [
-    ['citext', 'CREATE EXTENSION IF NOT EXISTS citext'],
-    ['VARCHAR(16) COLLATE holo_case_insensitive', `CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`],
+  for (const [type, setup, exists] of [
+    ['citext', 'CREATE EXTENSION IF NOT EXISTS citext', `SELECT 1 FROM pg_extension WHERE extname = 'citext'`],
+    ['VARCHAR(16) COLLATE holo_case_insensitive', `CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`, `SELECT 1 FROM pg_collation WHERE collname = 'holo_case_insensitive'`],
   ] as const) {
     it(`refreshes a subscription by a ${type} id after an update matched by a case-differing id`, async () => {
       const setupAdapter = createAdapter('postgres')
       await setupAdapter.initialize()
-      await setupAdapter.execute(setup)
-      await setupAdapter.disconnect()
+      try {
+        await setupAdapter.execute(setup)
+      } catch (error) {
+        if ((await setupAdapter.query(exists)).rows.length === 0) {
+          throw error
+        }
+      } finally {
+        await setupAdapter.disconnect()
+      }
       const countries = await createStringIdCountries('postgres', type)
       const snapshots = await countries.subscribe(async ({ db }) => await db.table(countries.tableName).where('id', 'FR').first())
 
