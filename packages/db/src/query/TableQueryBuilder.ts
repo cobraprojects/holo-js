@@ -98,7 +98,7 @@ import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
-import { awaitsGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
@@ -300,12 +300,12 @@ export class TableQueryBuilder<
     this.plan = applyDeferredPredicateNormalizations(this.plan)
   }
 
-  private awaitsGeneratedTable(): boolean {
-    return !this.source.table && awaitsGeneratedTableIdentity(this.ownSource.tableName, this.connection.getConnectionName())
+  private isAwaitingGeneratedTable(): boolean {
+    return !this.source.table && isAwaitingGeneratedTableIdentity(this.ownSource.tableName, this.connection.getConnectionName())
   }
 
-  private normalizedPredicate<TPredicate extends QueryPredicateNode>(predicate: TPredicate, normalize: () => Partial<TPredicate>): TPredicate {
-    return this.awaitsGeneratedTable()
+  private withNormalizedValue<TPredicate extends QueryPredicateNode>(predicate: TPredicate, normalize: () => Partial<TPredicate>): TPredicate {
+    return this.isAwaitingGeneratedTable()
       ? deferPredicateNormalization(predicate, normalize)
       : { ...predicate, ...normalize() }
   }
@@ -642,7 +642,7 @@ export class TableQueryBuilder<
       }))
     }
 
-    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
+    return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
@@ -698,7 +698,7 @@ export class TableQueryBuilder<
       value: partValue ?? normalized.value,
     }
     return this.clone(withPredicate(this.plan, partValue === undefined
-      ? this.normalizedPredicate(predicate, () => ({ value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator) }))
+      ? this.withNormalizedValue(predicate, () => ({ value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator) }))
       : predicate))
   }
 
@@ -980,7 +980,7 @@ export class TableQueryBuilder<
       return this.whereSubWithBoolean(boolean, column, operator, values)
     }
 
-    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
+    return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
@@ -995,7 +995,7 @@ export class TableQueryBuilder<
     range: readonly [unknown, unknown],
     operator: 'between' | 'not between',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
+    return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
@@ -1044,7 +1044,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const predicate: QueryBetweenColumnsPredicate = { kind: 'between-columns', boolean, subject, bounds, negated }
     return this.clone(withPredicate(this.plan, 'value' in subject
-      ? this.normalizedPredicate(predicate, () => ({ subject: { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) } }))
+      ? this.withNormalizedValue(predicate, () => ({ subject: { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) } }))
       : predicate))
   }
 

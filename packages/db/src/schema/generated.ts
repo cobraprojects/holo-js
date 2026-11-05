@@ -5,7 +5,7 @@ import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
 import { splitTablePath } from './identifiers'
-import { canonicalTableName, isTableIdentityResolved } from './tableIdentityRegistry'
+import { canonicalTableName, lastKnownCanonicalTableName } from './tableIdentityRegistry'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface GeneratedSchemaTables {}
@@ -113,17 +113,22 @@ export function getConnectionGeneratedTableDefinition(tableName: string, connect
   return schemaConnection === undefined || schemaConnection === connectionName ? findGeneratedTableByIdentity(tableName, connectionName) : undefined
 }
 
-export function getGeneratedModelTableDefinition(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
+export function findGeneratedModelTableDefinition(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
   const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
-  return schemaConnection === undefined ? generatedTables.get(tableName) : getConnectionGeneratedTableDefinition(tableName, schemaConnection)
+  if (schemaConnection === undefined) return generatedTables.get(tableName)
+  const table = getConnectionGeneratedTableDefinition(tableName, schemaConnection)
+  const known = lastKnownCanonicalTableName(schemaConnection, tableName)
+  if (table || known === undefined || isGeneratedSchemaSuspended()) return table
+  const spelling = listGeneratedTableSpellings(tableName).find(name => (lastKnownCanonicalTableName(schemaConnection, name) ?? name) === known)
+  return spelling === undefined ? undefined : generatedTables.get(spelling)
 }
 
-export function awaitsGeneratedTableIdentity(tableName: string, connectionName: string | undefined): boolean {
+export function isAwaitingGeneratedTableIdentity(tableName: string, connectionName: string | undefined): boolean {
   const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
   return schemaConnection !== undefined
     && !generatedTables.has(tableName)
     && listGeneratedTableSpellings(tableName).length > 0
-    && !isTableIdentityResolved(schemaConnection, tableName)
+    && lastKnownCanonicalTableName(schemaConnection, tableName) === undefined
 }
 
 export function isGeneratedSchemaConnection(connectionName: string): boolean {

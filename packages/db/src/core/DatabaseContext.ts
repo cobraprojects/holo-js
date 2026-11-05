@@ -16,6 +16,7 @@ import { markGenuineDatabaseContext } from './genuineContexts'
 import { isDatabaseConcurrencyError } from './driverErrors'
 import { discardCommitFailureRestores, moveCommitFailureRestores, runCommitFailureRestores } from './commitFailureCallbacks'
 import { advanceSchemaGeneration } from './schemaGeneration'
+import { isSchemaPreservingRawStatement } from './rawStatementEffects'
 import { currentRootTransaction, runInRootTransaction, type TransactionFrame } from './openTransactions'
 import { registerTransactionScopeEntry } from './transactionScope'
 import type { ModelDefinitionLike } from '../model/types'
@@ -309,7 +310,7 @@ export class DatabaseContext {
   ): Promise<DriverQueryResult<TRow>> {
     this._assertUnsafeRawAllowed()
     this._assertUnsafeStatement(statement)
-    return this._runSchemaChanging(() => this._runLogged('query', statement, async () => this._adapter.query<TRow>(
+    return this._runRawStatement(statement, () => this._runLogged('query', statement, async () => this._adapter.query<TRow>(
       statement.sql,
       statement.bindings ?? [],
       options,
@@ -322,7 +323,7 @@ export class DatabaseContext {
   ): Promise<DriverExecutionResult> {
     this._assertUnsafeRawAllowed()
     this._assertUnsafeStatement(statement)
-    return this._runSchemaChanging(() => this._runLogged('execute', statement, async () => this._adapter.execute(
+    return this._runRawStatement(statement, () => this._runLogged('execute', statement, async () => this._adapter.execute(
       statement.sql,
       statement.bindings ?? [],
       options,
@@ -378,10 +379,14 @@ export class DatabaseContext {
     statement: CompiledStatement,
     options?: DatabaseOperationOptions,
   ): Promise<DriverExecutionResult> {
-    return this._runSchemaChanging(() => this.executeCompiled(statement, options))
+    return this._runSchemaChange(() => this.executeCompiled(statement, options))
   }
 
-  private async _runSchemaChanging<T>(run: () => Promise<T>): Promise<T> {
+  private _runRawStatement<T>(statement: UnsafeStatement, run: () => Promise<T>): Promise<T> {
+    return isSchemaPreservingRawStatement(statement.sql) ? run() : this._runSchemaChange(run)
+  }
+
+  private async _runSchemaChange<T>(run: () => Promise<T>): Promise<T> {
     const transaction = currentRootTransaction(this)
     if (transaction) {
       transaction.schemaChanged = true
