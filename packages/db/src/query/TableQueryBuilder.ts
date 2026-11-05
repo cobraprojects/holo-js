@@ -98,7 +98,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
+import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
 import { storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
@@ -1951,10 +1951,7 @@ export class TableQueryBuilder<
 
   [projectModelRows](): { readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> } {
     const connectionName = this.connection.getConnectionName()
-    const plan = projectModelRowPlan(this.plan, this.connection.getDriver(), (join) => {
-      const definition = join.definition ?? (join.table ? getConnectionGeneratedTableDefinition(join.table, connectionName) : undefined)
-      return definition ? Object.keys(definition.columns) : undefined
-    })
+    const plan = projectModelRowPlan(this.plan, this.connection.getDriver(), join => knownJoinedColumns(join, connectionName))
     return { query: plan === this.plan ? this : this.clone(plan) }
   }
 

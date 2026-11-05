@@ -1,9 +1,15 @@
 import { CompilerError } from '../core/errors'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { QueryColumnSelection, QueryJoinClause, QuerySelection, QuerySource, SelectQueryPlan } from './ast'
 
 type JoinedColumns = (join: QueryJoinClause) => readonly string[] | undefined
 
 type SelectionRole = 'own' | 'joined' | 'other'
+
+export function knownJoinedColumns(join: QueryJoinClause, connectionName: string): readonly string[] | undefined {
+  const definition = join.definition ?? (join.table ? getConnectionGeneratedTableDefinition(join.table, connectionName) : undefined)
+  return definition ? Object.keys(definition.columns) : undefined
+}
 
 export function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
   return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))

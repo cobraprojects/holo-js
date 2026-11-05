@@ -279,6 +279,36 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect([first, second].map(page => page.data.map(entity => Number((entity.toAttributes() as Record<string, unknown>).product_key)))).toEqual([[1], [2]])
   })
 
+  it('shows the projected SQL that a joined model query runs', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const query = joined().orderBy('id')
+    expect(query.toSQL().sql).not.toMatch(/^SELECT \*/)
+    expect(query.debug().sql).toBe(query.toSQL().sql)
+    expect(query.toRawSql()).toMatch(/^SELECT [`"]/)
+    expect(query.toSQL().sql.indexOf(products, query.toSQL().sql.indexOf('ORDER BY'))).toBeGreaterThan(-1)
+    expect(() => joined().select(`${products}.price`, `${orders}.id as id` as never).toSQL()).toThrow(collision(`${orders}.id as id`, 'id', products))
+  })
+
+  it('keeps a joined column that shares a hidden cursor alias name', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('note_id')
+      table.integer('product_id')
+      table.integer('__holo_cursor_0')
+    })
+    await DB.table(notes).insert([{ note_id: 2, product_id: 1, __holo_cursor_0: 7 }, { note_id: 1, product_id: 2, __holo_cursor_0: 8 }])
+    registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { note_id: column.integer(), product_id: column.integer(), __holo_cursor_0: column.integer() }) })
+    onTestFinished(() => clearGeneratedTables())
+
+    const page = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).orderBy(`${notes}.note_id` as never).cursorPaginate(2)
+    expect(page.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 8], [1, 7]])
+  })
+
   it('accepts a joined column aliased to a name that is not a model column', async () => {
     const { products, orders, joined } = await createFixture(driver)
 

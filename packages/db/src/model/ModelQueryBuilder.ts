@@ -27,7 +27,7 @@ import {
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
 import { projectModelRows, resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
-import { selectionOutputName } from '../query/modelRowProjection'
+import { knownJoinedColumns, selectionOutputName } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -220,7 +220,12 @@ class ModelQueryBuilderBase<
     if (plan.unions.length > 0) {
       throw new CompilerError(`Cannot cursor paginate a union of joined "${plan.source.tableName}" model queries by "${joinedOrders[0]}". Select it under an alias in each query and order by that alias.`)
     }
-    const taken = new Set([...Object.keys(plan.source.table?.columns ?? {}), ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? [])])
+    const connectionName = this.getConnectionName()
+    const taken = new Set([
+      ...Object.keys(plan.source.table?.columns ?? {}),
+      ...plan.joins.flatMap(join => knownJoinedColumns(join, connectionName) ?? []),
+      ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? []),
+    ])
     const freeAlias = (index: number): string => taken.has(`__holo_cursor_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${index}`
     const cursorColumns = joinedOrders.map(() => {
       const alias = freeAlias(0)
@@ -1383,19 +1388,19 @@ class ModelQueryBuilderBase<
   }
 
   toSQL() {
-    return this.getTableQueryBuilder().toSQL()
+    return this.getModelRowsQuery().toSQL()
   }
 
   toRawSql(): string {
-    return this.getTableQueryBuilder().toRawSql()
+    return this.getModelRowsQuery().toRawSql()
   }
 
   debug() {
-    return this.getTableQueryBuilder().debug()
+    return this.getModelRowsQuery().debug()
   }
 
   dump(): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
-    this.getTableQueryBuilder().dump()
+    this.getModelRowsQuery().dump()
     return this.asScopedBuilder()
   }
 
