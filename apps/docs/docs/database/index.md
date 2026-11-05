@@ -73,6 +73,8 @@ export default defineDatabaseConfig({
 
 SQLite has no date type. A `Date` you write or bind on SQLite, in a model, in `DB.table()`, in `where()` or in a raw query, is stored as UTC text in the format SQLite's `CURRENT_TIMESTAMP` uses, such as `2026-01-02 03:04:05`. Milliseconds are kept when they aren't zero, as in `2026-01-02 03:04:05.678`, so a value reads back as the same `Date`. Because `defaultNow()` and `CURRENT_TIMESTAMP` defaults store the same format, a `Date` compares and orders correctly against `date`, `datetime` and `timestamp` columns, and against `TEXT` date columns created before 0.6 once their ISO 8601 values are rewritten as the [upgrade guide](/getting-started/upgrading#model-types-come-from-the-database-and-casts) shows. Holo reads these values as UTC.
 
+To reach a table in an [attached database](https://www.sqlite.org/lang_attach.html), or to name the main database explicitly, qualify the table with the schema name, as in `DB.table('archive.products')` or `DB.table('main.products')`. Holo quotes each part separately, as `"archive"."products"`, and each part must be a plain identifier of letters, digits and underscores.
+
 ### PostgreSQL and MySQL
 
 Use either a connection URL or separate host settings. When you set both, the URL wins: its host, port, credentials and database are used, and `holo migrate` creates the URL's database when it's missing, not the one `database` names. You can also set `ssl` next to a URL. It adds TLS settings to the URL. The URL's own `ssl` parameter takes precedence over the setting, and `ssl: false` doesn't disable TLS that the URL requests.

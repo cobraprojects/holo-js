@@ -290,7 +290,10 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
     name: 'sqlite',
     capabilities: { ...sqliteLike, returning: true },
     quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
+      return identifier
+        .split('.')
+        .map(part => `"${part}"`)
+        .join('.')
     },
     createPlaceholder() {
       return '?'
