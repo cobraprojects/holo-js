@@ -2017,6 +2017,25 @@ export class TableQueryBuilder<
     })
   }
 
+  private observesSQLiteDecimalColumn(): boolean {
+    if (this.connection.getDriver() !== 'sqlite') return false
+    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
+    for (const join of this.plan.joins) {
+      if (join.table) tables.set(join.alias ?? join.table, join.definition ?? getConnectionGeneratedTableDefinition(join.table, this.connection.getConnectionName()))
+    }
+    const readsDecimal = (column: string): boolean => {
+      const separator = column.lastIndexOf('.')
+      const table = separator < 0 ? this.source.table : tables.get(column.slice(0, separator))
+      const name = column.slice(separator + 1)
+      const columns = Object.entries(table?.columns ?? {})
+      return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')
+    }
+    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsDecimal(`${table}.*`)))
+      || this.plan.selections.some(selection => selection.kind === 'column' && readsDecimal(selection.column))
+      || this.plan.groupBy.some(readsDecimal)
+      || this.plan.orderBy.some(order => order.kind === 'column' && readsDecimal(order.column))
+  }
+
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
     activeDependencyCollector: boolean,
     observationDependencies: readonly string[] | undefined,
@@ -2034,6 +2053,11 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
+    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
+      recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
+      return
+    }
+
     const groupedAggregate = observation?.groupedAggregate
     if (
       !observation?.patchable
@@ -2068,12 +2092,6 @@ export class TableQueryBuilder<
       : observation)
   }
 
-  private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
-    const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
-    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
-    return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
-  }
-
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
@@ -2094,9 +2112,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
+    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result) {
+    for (const row of result.rows) {
       const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
       const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
       const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
@@ -2141,9 +2159,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
+    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
     const states: DatabaseQueryGroupedAggregateStateObservation[] = []
-    for (const row of result) {
+    for (const row of result.rows) {
       const aggregateValue = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
@@ -2198,9 +2216,9 @@ export class TableQueryBuilder<
         this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_COUNT_KEY, '*'),
       ]),
     }) satisfies SelectQueryPlan
-    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
+    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
     const groups: DatabaseQueryGroupedAggregateValueCountGroupObservation[] = []
-    for (const row of result) {
+    for (const row of result.rows) {
       const groupValue = row[GROUPED_AGGREGATE_GROUP_KEY]
       const value = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
@@ -3051,9 +3069,14 @@ export class TableQueryBuilder<
       return undefined
     }
 
+    const previousRows = Object.freeze(result.rows.map(row => Object.freeze({ ...row })))
+    const rows = Object.freeze(previousRows.map(row => Object.freeze(
+      this.applyCapturedUpdateValues(row, values),
+    )))
+
     return Object.freeze({
-      previousRows: this.freezeMutationRows(result.rows),
-      rows: this.freezeMutationRows(result.rows.map(row => this.applyCapturedUpdateValues(row, values))),
+      previousRows,
+      rows,
     })
   }
 
@@ -3068,7 +3091,7 @@ export class TableQueryBuilder<
     }
 
     return Object.freeze({
-      rows: this.freezeMutationRows(result.rows),
+      rows: Object.freeze(result.rows.map(row => Object.freeze({ ...row }))),
     })
   }
 
@@ -3161,11 +3184,12 @@ export class TableQueryBuilder<
         continue
       }
 
+      const previousRow = result.rows[resultIndex]!
       usedResultIndexes.add(resultIndex)
-      previousRows.push(result.rows[resultIndex]!)
+      previousRows.push(Object.freeze({ ...previousRow }))
     }
 
-    return this.freezeMutationRows(previousRows)
+    return Object.freeze(previousRows)
   }
 
   private rowsMatchUniqueBy(
@@ -3213,8 +3237,7 @@ export class TableQueryBuilder<
   private freezeMutationRows(
     rows: readonly Readonly<Record<string, unknown>>[],
   ): readonly Readonly<Record<string, unknown>>[] {
-    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, createSelectQueryPlan(this.source))
-    return Object.freeze(rows.map(row => Object.freeze(readConvertedResultColumns(row, convertedColumns))))
+    return Object.freeze(rows.map(row => Object.freeze({ ...row })))
   }
 
   private resolveSinglePrimaryKeyColumn(): string | undefined {

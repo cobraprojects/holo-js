@@ -471,7 +471,7 @@ table.real('rating').nullable()
 
 Adds an exact decimal column. It becomes `DECIMAL(10, 2)` on MySQL and `NUMERIC` on PostgreSQL and SQLite. The TypeScript type is `string`.
 
-Models and typed `DB.table()` queries read the value as a string on every database. MySQL returns two decimal places, and PostgreSQL returns the digits you stored. SQLite stores decimals as floating-point numbers and drops trailing zeros, so on SQLite Holo reads the value back with at least two decimal places, the scale of MySQL's `DECIMAL(10, 2)`: `'12.30'` reads back as `'12.30'` and `12` as `'12.00'`, and a value with more places keeps them. A SQLite decimal keeps about 15 significant digits, so a larger value reads back rounded. Raw queries and aggregates such as `sum()` return what the database driver returns.
+Models and typed `DB.table()` queries read the value as a string on every database. MySQL returns two decimal places, and PostgreSQL returns the digits you stored. SQLite stores decimals as floating-point numbers and drops trailing zeros, so on SQLite Holo reads the value back with at least two decimal places, the scale of MySQL's `DECIMAL(10, 2)`: `'12.30'` reads back as `'12.30'` and `12` as `'12.00'`, and a value with more places keeps them. A SQLite decimal keeps about 15 significant digits, so a larger value reads back rounded. Raw queries and aggregates such as `sum()` return what the database driver returns. On SQLite, a realtime query that reads, groups or orders by a decimal column runs again when its table changes, instead of patching its result.
 
 ```ts
 table.decimal('total')

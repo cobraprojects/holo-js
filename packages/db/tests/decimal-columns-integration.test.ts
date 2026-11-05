@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, queryCacheInternals, resetDB, type DatabaseDependencyInvalidationEvent } from '../src'
-import type { DatabaseMutationEvent } from '../src/cache'
+import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -23,17 +22,18 @@ async function openPrices(driver: Driver) {
     table.decimal('discount').nullable()
   })
   onTestFinished(() => schema.dropTable(name))
-  return defineGeneratedTable(name, {
+  const prices = defineGeneratedTable(name, {
     id: column.id(),
     label: column.string(),
     amount: column.decimal(),
     discount: column.decimal().nullable(),
   })
+  return { prices, schema }
 }
 
 describe.each(drivers)('decimal columns on %s', (driver) => {
   it('round-trips decimal text through models', async () => {
-    const prices = await openPrices(driver)
+    const { prices } = await openPrices(driver)
     const Price = defineModel(prices, { fillable: ['label', 'amount', 'discount'], timestamps: false })
 
     const exact = await Price.create({ label: 'exact', amount: '12.34', discount: '0.50' })
@@ -50,7 +50,7 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
   })
 
   it('round-trips decimal text through the query builder', async () => {
-    const prices = await openPrices(driver)
+    const { prices } = await openPrices(driver)
     await DB.table(prices).insert([
       { label: 'exact', amount: '12.34' },
       { label: 'padded', amount: '12.30' },
@@ -65,27 +65,8 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(await DB.table(prices).where('label', 'padded').first()).toMatchObject({ amount: '12.30', discount: null })
   })
 
-  it('publishes mutation rows with the decimal text that queries read', async () => {
-    const prices = await openPrices(driver)
-    const mutations: DatabaseMutationEvent[] = []
-    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
-      mutations.push(...event.mutations ?? [])
-    })
-    onTestFinished(unsubscribe)
-
-    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
-    await DB.table(prices).where('label', 'padded').update({ discount: '0.50' })
-    const { id } = (await DB.table(prices).where('label', 'padded').first())!
-    await DB.table(prices).upsert({ id, label: 'padded', amount: '12.30' }, ['id'], ['label'])
-    await DB.table(prices).where('label', 'padded').delete()
-
-    const snapshots = mutations.flatMap(mutation => [...mutation.rows ?? [], ...mutation.previousRows ?? []])
-    expect(snapshots.length).toBeGreaterThan(0)
-    expect(snapshots.map(row => row.amount)).toEqual(snapshots.map(() => '12.30'))
-  })
-
   it('chunks by a decimal column in numeric order when the rows are sorted in memory', async () => {
-    const prices = await openPrices(driver)
+    const { prices } = await openPrices(driver)
     await DB.table(prices).insert([
       { label: 'ten', amount: '10.00' },
       { label: 'two', amount: '2.00' },
@@ -106,26 +87,31 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(descending).toEqual(['10.00', '9.00', '2.00', '-3.50'])
   })
 
-  it('records grouped realtime state keyed by the decimal text that queries read', async () => {
-    const prices = await openPrices(driver)
+  it('chunks by a joined decimal column in numeric order', async () => {
+    const { prices, schema } = await openPrices(driver)
+    const ordersName = `holo_orders_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ordersName, (table) => {
+      table.id()
+      table.integer('price_id')
+    })
+    onTestFinished(() => schema.dropTable(ordersName))
+    const orders = defineGeneratedTable(ordersName, { id: column.id(), price_id: column.integer() })
     await DB.table(prices).insert([
-      { label: 'first', amount: '12.30', discount: '1.00' },
-      { label: 'second', amount: '12.30', discount: '3.00' },
-      { label: 'third', amount: '12.34', discount: '2.00' },
+      { id: 1, label: 'ten', amount: '10.00' },
+      { id: 2, label: 'two', amount: '2.00' },
+      { id: 3, label: 'nine', amount: '9.00' },
     ])
+    await DB.table(orders).insert([{ price_id: 1 }, { price_id: 2 }, { price_id: 3 }])
 
-    const collected = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
-      counted: await DB.table(prices).select('amount').addSelectCount('total').groupBy('amount').having('count(*)', '>', 1).get(),
-      averaged: await DB.table(prices).select('amount').addSelectAvg('average', 'id').groupBy('amount').orderBy('amount').get(),
-    }))
+    const amounts: string[] = []
+    await DB.table(orders)
+      .join(prices, `${ordersName}.price_id`, '=', `${prices.tableName}.id`)
+      .select(`${prices.tableName}.amount`)
+      .chunkById(2, (rows) => {
+        amounts.push(...rows.map(row => String(row.amount)))
+      }, `${prices.tableName}.amount`)
 
-    expect(collected.value.counted).toEqual([{ amount: '12.30', total: 2 }])
-    expect(collected.value.averaged.map(row => row.amount)).toEqual(['12.30', '12.34'])
-    const groupKeys = collected.queries.flatMap(query => [
-      ...query.groupedAggregate?.aggregateStates ?? [],
-      ...query.groupedAggregate?.averageStates ?? [],
-    ]).map(state => state.groupValue)
-    expect(groupKeys).toEqual(expect.arrayContaining(['12.30', '12.34']))
-    expect(groupKeys.every(key => typeof key === 'string')).toBe(true)
+    expect(amounts).toEqual(['2.00', '9.00', '10.00'])
   })
+
 })
