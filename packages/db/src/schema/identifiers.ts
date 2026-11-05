@@ -8,7 +8,7 @@ export function assertValidIdentifierSegment(identifier: string, context: string
   }
 }
 
-export function assertValidIdentifierPath(identifier: string, context: string): void {
+function assertValidIdentifierPath(identifier: string, context: string): void {
   if (!identifier.trim()) {
     throw new SchemaError(`${context} must not be empty.`)
   }
