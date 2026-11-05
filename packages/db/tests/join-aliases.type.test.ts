@@ -32,3 +32,14 @@ it('lets a model select every column of an aliased join by its alias', () => {
     Post.query().join('alias_join_posts as parent', 'parent.id', '=', 'alias_join_posts.parent_id').select('alias_join_posts as parent.*')
   }
 })
+
+it('reads aliases around any whitespace and keeps each member of a union of join targets', () => {
+  if (false) {
+    Post.query().crossJoin('alias_join_posts as\tparent').select('parent.*')
+    Post.query().crossJoin('alias_join_posts\nas parent\t').select('parent.*')
+    const target = Math.random() > 0.5 ? 'alias_join_authors' : 'alias_join_authors as parent'
+    const query = Post.query().crossJoin(target)
+    query.select('alias_join_authors.*')
+    query.select('parent.*')
+  }
+})
