@@ -127,7 +127,7 @@ type Library = Awaited<ReturnType<typeof openLibrary>>['qualifiedLibrary']
 describe.each(drivers)('realtime relations with table-qualified keys on %s', (driver) => {
   it('patches every relation kind like unqualified keys and the same as a fresh read', async () => {
     const { db, qualifiedLibrary, plainLibrary, names, posts, reviews, comments, postType } = await openLibrary(driver)
-    const readsOf = (library: Library) => ({
+    const readsOf = (library: Library): Record<string, () => Promise<unknown>> => ({
       topPost: () => db.model(library.Author).query().with('topPost').orderBy('id').getJson(),
       posts: () => db.model(library.Author).query().with('posts').orderBy('id').getJson(),
       latestPost: () => db.model(library.Author).query().with('latestPost').orderBy('id').getJson(),
@@ -143,7 +143,7 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
       for (const [name, handler] of Object.entries(reads)) {
         runs[name] = 0
         const subscription = await subscribeRealtimeQuery(
-          defineRealtimeQuery({ access: 'public', handler: () => {
+          defineRealtimeQuery({ access: 'public', handler: (): Promise<unknown> => {
             runs[name]! += 1
             return handler()
           } }),
