@@ -249,6 +249,17 @@ describe('native schema diff', () => {
     expect(diff.tables[0]).toMatchObject({ table: 'main.teams', missingColumns: ['name'], extraColumns: [], hasChanges: true })
   })
 
+  it('matches the main schema case-insensitively on sqlite', async () => {
+    const { db, schema } = openSQLiteSchema()
+    await createTestTable(db, defineTable('teams', { id: column.id() }))
+
+    const diff = await diffSchema(schema, [defineTable('MAIN.teams', { id: column.id() })])
+
+    expect(diff.missingTables).toEqual([])
+    expect(diff.extraTables).toEqual([])
+    expect(diff.tables[0]).toMatchObject({ table: 'MAIN.teams', hasChanges: false })
+  })
+
   it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps an unqualified table that shares its name with a table in another schema on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const name = table.tableName.split('.').at(-1)!

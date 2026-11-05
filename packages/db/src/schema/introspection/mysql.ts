@@ -102,6 +102,10 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
       return result.rows[0]?.table_schema
     },
 
+    async resolveReferencedTableSchema(tableName, ownerSchema) {
+      return splitTablePath(tableName).schema ?? ownerSchema
+    },
+
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]

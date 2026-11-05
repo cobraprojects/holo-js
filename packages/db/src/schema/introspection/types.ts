@@ -61,5 +61,6 @@ export interface DatabaseTableStructure {
 export interface DialectSchemaReader {
   listTables(): Promise<string[]>
   resolveTableSchema(tableName: string): Promise<string | undefined>
+  resolveReferencedTableSchema(tableName: string, ownerSchema: string): Promise<string | undefined>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
 }

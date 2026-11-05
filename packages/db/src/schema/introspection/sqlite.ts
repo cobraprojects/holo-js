@@ -251,7 +251,11 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     },
 
     async resolveTableSchema(tableName) {
-      return (await readSQLiteStoredTable(connection, tableName)) === undefined ? undefined : splitTableName(tableName).schema
+      return (await readSQLiteStoredTable(connection, tableName)) === undefined ? undefined : splitTableName(tableName).schema.toLowerCase()
+    },
+
+    async resolveReferencedTableSchema(tableName, ownerSchema) {
+      return splitTablePath(tableName).schema?.toLowerCase() ?? ownerSchema
     },
 
     async readTableStructure(tableName) {
