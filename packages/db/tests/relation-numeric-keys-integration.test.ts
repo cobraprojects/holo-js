@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne, resetDB, type Entity, type TableDefinition } from '../src'
+import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne, latestOfMany, resetDB, type Entity, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type KeyKind = 'decimal' | 'text'
@@ -10,8 +10,8 @@ function relation<TRelation>(entity: { getRelation<T>(name: string): T | undefin
   return entity.getRelation<TRelation>(name) as TRelation
 }
 
-function ids(entities: readonly Entity<TableDefinition>[]): unknown[] {
-  return entities.map(entity => entity.get('id' as never)).sort()
+function ids(entities: readonly Entity<TableDefinition>[]): number[] {
+  return entities.map(entity => entity.get('id' as never) as number).sort((left, right) => left - right)
 }
 
 async function openKeyFixtures(driver: 'sqlite' | 'postgres' | 'mysql', kind: KeyKind) {
@@ -61,12 +61,44 @@ async function openKeyFixtures(driver: 'sqlite' | 'postgres' | 'mysql', kind: Ke
     relations: {
       items: hasMany(() => Item, 'owner_id'),
       item: hasOne(() => Item, 'owner_id'),
+      latestItem: latestOfMany(() => Item, 'owner_id'),
       tags: belongsToMany(() => Tag, pivot, 'owner_id', 'tag_id'),
     },
   })
   const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id') } })
   return { Owner, Item: ItemWithOwner }
 }
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('text relation keys on %s', (driver) => {
+  it('keeps distinct numeric-looking text keys apart', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `tk_owners_${suffix}`, items: `tk_items_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.string('code').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.string('owner_code')
+    })
+    onTestFinished(() => schema.dropTable(names.items))
+    const owners = defineGeneratedTable(names.owners, { code: column.string().primaryKey() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_code: column.string() })
+    await DB.table(owners).insert([{ code: '1' }, { code: '1.0' }])
+    await DB.table(items).insert([{ id: 10, owner_code: '1' }, { id: 20, owner_code: '1.0' }])
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, { primaryKey: 'code', timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code') } })
+    const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_code', 'code') } })
+
+    const loadedOwners = await Owner.with('items').orderBy('code').get()
+    const loadedItems = await ItemWithOwner.with('owner').orderBy('id').get()
+
+    expect(loadedOwners.map(owner => ids(relation(owner, 'items')))).toEqual([[10], [20]])
+    expect(loadedItems.map(item => relation<Entity<TableDefinition>>(item, 'owner').get('code' as never))).toEqual(['1', '1.0'])
+  })
+})
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('relation keys across numeric column kinds on %s', (driver) => {
   describe.each(['decimal', 'text'] as const)('with a %s foreign key to an integer id', (kind) => {
@@ -81,6 +113,26 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       expect([10, 11]).toContain(relation<Entity<TableDefinition>>(first, 'item').get('id' as never))
       expect(relation<Entity<TableDefinition>>(second, 'item').get('id' as never)).toBe(20)
       expect(relation(empty, 'item')).toBeNull()
+    })
+
+    it('eager loads hasOneOfMany', async () => {
+      const { Owner } = await openKeyFixtures(driver, kind)
+
+      const [first, second, empty] = await Owner.with('latestItem').orderBy('id').get()
+
+      expect(relation<Entity<TableDefinition>>(first, 'latestItem').get('id' as never)).toBe(11)
+      expect(relation<Entity<TableDefinition>>(second, 'latestItem').get('id' as never)).toBe(20)
+      expect(relation(empty, 'latestItem')).toBeNull()
+    })
+
+    it('counts hasMany and belongsTo relations of loaded models', async () => {
+      const { Owner, Item } = await openKeyFixtures(driver, kind)
+
+      const owners = await (await Owner.orderBy('id').get()).loadCount('items')
+      const items = await (await Item.orderBy('id').get()).loadCount('owner')
+
+      expect(owners.map(owner => owner.get('items_count' as never))).toEqual([2, 1, 0])
+      expect(items.map(item => item.get('owner_count' as never))).toEqual([1, 1, 1, 0])
     })
 
     it('eager loads belongsTo', async () => {

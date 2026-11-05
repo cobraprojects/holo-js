@@ -19,7 +19,7 @@ import {
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
 import { canonicalStoredKey } from '../src/model/entityRuntime'
-import { StoredKeyMap } from '../src/model/storedKeyCollections'
+import { StoredKeyMap, StoredKeySet } from '../src/model/storedKeyCollections'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { queryCacheInternals } from '../src'
 import { createTestTable } from './support/schema'
@@ -331,8 +331,8 @@ describe('bounded relation loading', () => {
     expect(canonicalStoredKey(circular)).toBe(circular)
   })
 
-  it('matches relation dictionary numeric keys by value across integer, bigint, decimal and numeric text', () => {
-    const parents = new StoredKeyMap<string>([[1, 'one'], ['2.50', 'two and a half'], [9007199254740993n, 'big'], [0, 'zero']])
+  it('matches numeric relation dictionary keys by value across integer, bigint, decimal and numeric text', () => {
+    const parents = new StoredKeyMap<string>([[1, 'one'], ['2.50', 'two and a half'], [9007199254740993n, 'big'], [0, 'zero']], { numeric: true })
     expect(parents.get('1.00')).toBe('one')
     expect(parents.get('1')).toBe('one')
     expect(parents.get(1n)).toBe('one')
@@ -343,9 +343,18 @@ describe('bounded relation loading', () => {
     expect(parents.get('9007199254740993.00')).toBe('big')
     expect(parents.get('9007199254740992')).toBeUndefined()
     expect(parents.get('-0.00')).toBe('zero')
-    expect(parents.get('01')).toBeUndefined()
-    expect(parents.get('1e0')).toBeUndefined()
     expect(parents.get(true)).toBeUndefined()
+    expect(new StoredKeySet([1], { numeric: true }).has('1.00')).toBe(true)
+  })
+
+  it('keeps distinct numeric-looking text keys apart outside numeric relation dictionaries', () => {
+    const parents = new StoredKeyMap<string>([['1', 'one'], ['1.0', 'one point zero'], ['2.5', 'two and a half']])
+    expect(parents.get('1')).toBe('one')
+    expect(parents.get(1)).toBe('one')
+    expect(parents.get('1.0')).toBe('one point zero')
+    expect(parents.get('1.00')).toBeUndefined()
+    expect(parents.get('2.50')).toBeUndefined()
+    expect(new StoredKeySet(['1']).has('1.00')).toBe(false)
   })
 
   it('matches relation dictionary Date keys by instance so millisecond-truncated timestamps never attach unrelated parents', () => {

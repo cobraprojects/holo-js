@@ -1,9 +1,9 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
-import { canonicalNumericText, readIntegerKey } from '../schema/normalization'
+import { isFractionalDecimalText, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
 import { canonicalStoredKey, ownEntry } from './entityRuntime'
-import { StoredKeyMap } from './storedKeyCollections'
+import { StoredKeyMap, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
@@ -114,23 +114,17 @@ export async function loadRelationKeyChunks<TRow>(
   return rows
 }
 
-export function isIntegerKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
-  return definition?.kind === 'integer'
-    || definition?.kind === 'bigInteger'
-    || (definition?.kind === 'id' && definition.idStrategy === 'autoIncrement')
-}
-
 function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
-  if (!isIntegerKeyColumn(definition)) return [...keys]
-  return distinctStoredKeys(keys.flatMap((key) => {
-    const numeric = canonicalNumericText(key)
-    if (numeric === undefined || typeof key === 'number' || typeof key === 'bigint') return [key]
-    return numeric.includes('.') ? [] : [readIntegerKey(numeric)]
-  }))
+  if (!definition || !readsAsInteger(definition)) return [...keys]
+  return distinctStoredKeys(keys.filter(key => !isFractionalDecimalText(key)).map(readIntegralDecimalKey))
 }
 
 export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
-  return isIntegerKeyColumn(definition) && canonicalNumericText(value)?.includes('.') === true
+  return definition !== undefined && readsAsInteger(definition) && isFractionalDecimalText(value)
+}
+
+export function relationKeyOptions(...definitions: readonly (AnyColumnDefinition | undefined)[]): StoredKeyOptions {
+  return { numeric: definitions.some(definition => definition !== undefined && (definition.kind === 'decimal' || readsAsInteger(definition))) }
 }
 
 export async function retrieveRelation(
@@ -144,10 +138,11 @@ export async function retrieveRelation(
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
-  const table = probe.getTableQueryBuilder().getPlan().source.table
+  const probePlan = probe.getTableQueryBuilder().getPlan()
+  const table = probePlan.source.table
   const columnKeys = keysForColumn(keys, table ? ownEntry(table.columns, column) : undefined)
   const paginated = isPaginatedRelationQuery(probe)
-  if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
+  if (typeof observationCount === 'number') plan = probePlan
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
@@ -156,12 +151,12 @@ export async function retrieveRelation(
   return { entities, plan }
 }
 
-export function indexRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity> {
-  return new StoredKeyMap(entities.map(entity => [entity.get(column as never), entity]))
+export function indexRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity> {
+  return new StoredKeyMap(entities.map(entity => [entity.get(column as never), entity]), options)
 }
 
-export function groupRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity[]> {
-  const grouped = new StoredKeyMap<Entity[]>()
+export function groupRelation(entities: readonly Entity[], column: string, options: StoredKeyOptions = {}): StoredKeyMap<Entity[]> {
+  const grouped = new StoredKeyMap<Entity[]>([], options)
   for (const entity of entities) {
     const key = entity.get(column as never)
     const bucket = grouped.get(key)

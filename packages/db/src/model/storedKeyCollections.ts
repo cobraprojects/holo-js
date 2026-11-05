@@ -1,20 +1,49 @@
-import { canonicalNumericText } from '../schema/normalization'
+import { isCanonicalIntegerText, isFractionalDecimalText, readIntegralDecimalKey } from '../schema/normalization'
 import { canonicalStoredKey } from './entityRuntime'
 
-function dictionaryKey(value: unknown): unknown {
+export interface StoredKeyOptions {
+  readonly numeric?: boolean
+}
+
+function integerIdentity(value: unknown): unknown {
+  if (isCanonicalIntegerText(value)) {
+    return Number.isSafeInteger(Number(value)) ? Number(value) : BigInt(value)
+  }
+
+  return typeof value === 'bigint' && Number.isSafeInteger(Number(value)) ? Number(value) : value
+}
+
+function fractionalKey(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && !Number.isInteger(value)) {
+    return `numeric:${String(value)}`
+  }
+
+  return isFractionalDecimalText(value) ? `numeric:${String(value).replace(/0+$/, '')}` : undefined
+}
+
+function dictionaryKey(value: unknown, numeric: boolean): unknown {
   if (value instanceof Date) {
     return value
   }
 
-  const numeric = canonicalNumericText(value)
-  return numeric === undefined ? canonicalStoredKey(value) : `numeric:${numeric}`
+  if (!numeric) {
+    return canonicalStoredKey(integerIdentity(value))
+  }
+
+  return fractionalKey(value) ?? canonicalStoredKey(integerIdentity(readIntegralDecimalKey(value)))
 }
 
 export class StoredKeyMap<TValue> {
   readonly #entries = new Map<unknown, [unknown, TValue]>()
+  readonly #numeric: boolean
 
-  constructor(entries: Iterable<readonly [unknown, TValue]> = []) {
+  constructor(entries: Iterable<readonly [unknown, TValue]> = [], options: StoredKeyOptions = {}) {
+    this.#numeric = options.numeric === true
     for (const [key, value] of entries) this.set(key, value)
+  }
+
+  get options(): StoredKeyOptions {
+    return { numeric: this.#numeric }
   }
 
   get size(): number {
@@ -22,15 +51,15 @@ export class StoredKeyMap<TValue> {
   }
 
   get(key: unknown): TValue | undefined {
-    return this.#entries.get(dictionaryKey(key))?.[1]
+    return this.#entries.get(dictionaryKey(key, this.#numeric))?.[1]
   }
 
   has(key: unknown): boolean {
-    return this.#entries.has(dictionaryKey(key))
+    return this.#entries.has(dictionaryKey(key, this.#numeric))
   }
 
   set(key: unknown, value: TValue): this {
-    this.#entries.set(dictionaryKey(key), [key, value])
+    this.#entries.set(dictionaryKey(key, this.#numeric), [key, value])
     return this
   }
 
@@ -53,18 +82,20 @@ export class StoredKeyMap<TValue> {
 
 export class StoredKeySet {
   readonly #keys = new Map<unknown, unknown>()
+  readonly #numeric: boolean
 
-  constructor(values: Iterable<unknown> = []) {
+  constructor(values: Iterable<unknown> = [], options: StoredKeyOptions = {}) {
+    this.#numeric = options.numeric === true
     for (const value of values) this.add(value)
   }
 
   add(value: unknown): this {
-    this.#keys.set(dictionaryKey(value), value)
+    this.#keys.set(dictionaryKey(value, this.#numeric), value)
     return this
   }
 
   has(value: unknown): boolean {
-    return this.#keys.has(dictionaryKey(value))
+    return this.#keys.has(dictionaryKey(value, this.#numeric))
   }
 
   *values(): IterableIterator<unknown> {

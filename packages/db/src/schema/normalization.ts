@@ -107,23 +107,6 @@ function plainNumberText(value: number): string {
   return point >= digits.length ? `${sign}${digits.padEnd(point, '0')}` : `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
 }
 
-const DECIMAL_TEXT = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/
-
-export function canonicalNumericText(value: unknown): string | undefined {
-  const text = typeof value === 'number' && Number.isFinite(value)
-    ? plainNumberText(value)
-    : typeof value === 'bigint' ? String(value) : value
-  const match = typeof text === 'string' ? DECIMAL_TEXT.exec(text) : null
-  if (!match) {
-    return undefined
-  }
-
-  const [, sign = '', integer = '', fraction = ''] = match
-  const significant = fraction.replace(/0+$/, '')
-  const magnitude = significant === '' ? integer : `${integer}.${significant}`
-  return magnitude === '0' ? magnitude : `${sign}${magnitude}`
-}
-
 export function readSQLiteDecimal(value: unknown): unknown {
   const text = typeof value === 'number' && Number.isFinite(value)
     ? plainNumberText(value)
@@ -369,6 +352,19 @@ export function readNumericValue(value: unknown): number | undefined {
   if (typeof value !== 'string' || !DECIMAL_NUMBER_TEXT.test(value)) return undefined
   const number = Number(value)
   return Number.isFinite(number) ? number : undefined
+}
+
+const INTEGRAL_DECIMAL_TEXT = /^(-?(?:0|[1-9]\d*))(?:\.0+)?$/
+
+export function readIntegralDecimalKey(value: unknown): unknown {
+  const integer = typeof value === 'string' ? INTEGRAL_DECIMAL_TEXT.exec(value)?.[1] : undefined
+  return integer === undefined ? value : readIntegerKey(integer === '-0' ? '0' : integer)
+}
+
+const FRACTIONAL_DECIMAL_TEXT = /^-?\d+\.\d*[1-9]\d*$/
+
+export function isFractionalDecimalText(value: unknown): boolean {
+  return typeof value === 'string' && FRACTIONAL_DECIMAL_TEXT.test(value)
 }
 
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
