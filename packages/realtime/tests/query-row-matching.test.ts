@@ -19,5 +19,7 @@ describe('@holo-js/realtime row key matching', () => {
     expect(exactIdsDiffer(false, '0')).toBe(false)
     expect(rowIdentityIndexMayHold(new Map([[true, 0]]), 1)).toBe(true)
     expect(rowIdentityIndexMayHold(new Map([[false, 0]]), '0')).toBe(true)
+    expect(matchesExactRowIdentity({ active: true }, 1n, 'active')).toBe(true)
+    expect(matchesPatchedExactRowIdentity({ active: false }, { active: true }, 1n, 'active')).toBe(true)
   })
 })
