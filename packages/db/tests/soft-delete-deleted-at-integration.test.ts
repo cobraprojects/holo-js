@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
-import { column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -122,6 +122,13 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(await Post.whereDate('created_at', '2026-03-05').count()).toBe(1)
     expect(await Post.whereToday('created_at').count()).toBe(1)
     expect(await Post.whereBeforeToday('created_at').count()).toBe(0)
+    expect(await Post.where('created_at', post.created_at).count()).toBe(1)
+    expect(await Post.whereIn('created_at', [post.created_at]).count()).toBe(1)
+    expect(await Post.where('created_at', '<', new Date('2026-03-05T15:00:00.000Z')).count()).toBe(1)
+    expect(await Post.where('created_at', '>', midnight).count()).toBe(0)
+    expect(await Post.where('created_at', '>=', midnight).count()).toBe(1)
+    expect(await Post.whereBetween('created_at', [midnight, new Date('2026-03-05T15:00:00.000Z')]).count()).toBe(1)
+    expect((await Post.updateOrCreate({ created_at: post.created_at } as never, { title: 'Same' })).id).toBe(post.id)
 
     vi.setSystemTime(new Date('2026-03-05T16:00:00.000Z'))
     const nextMidnight = new Date('2026-03-05T15:00:00.000Z')
@@ -179,6 +186,33 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
 
       expect(post.created_at).toEqual(wallClockMidnight)
       expect(post.created_at).toEqual((await fresh()).created_at)
+    }
+  })
+
+  it('stores any instant written to a DATE column as the calendar date in the app timezone', async () => {
+    useTokyoAppAt(new Date('2026-03-04T20:00:00.123Z'))
+    const table = await createDatePostsTable(driver)
+    const Post = defineModel(table, { fillable: ['title'], timestamps: false })
+
+    await DB.table(table).insert({ id: 7, title: 'Raw', created_at: new Date('2026-03-04T20:00:00.000Z') })
+
+    const raw = await Post.findOrFail(7)
+    expect(raw.created_at).toEqual(new Date('2026-03-04T15:00:00.000Z'))
+    expect(await DB.table(table).where('created_at', raw.created_at).count()).toBe(1)
+  })
+
+  it('leaves an impossible calendar date for the database to judge', async () => {
+    useTokyoAppAt(new Date('2026-03-04T20:00:00.123Z'))
+    const table = await createDatePostsTable(driver)
+    const Post = defineModel(table, { fillable: ['title', 'created_at'] })
+
+    for (const impossible of ['2025-02-30', '2025-13-01', '2025-02-30T03:04:05Z', '2025-02-28 24:30:00']) {
+      if (driver === 'sqlite') {
+        const post = await Post.create({ title: impossible, created_at: impossible as never })
+        expect((await DB.table(table).where('id', post.id).first())?.created_at).toBe(impossible)
+      } else {
+        await expect(Post.create({ title: impossible, created_at: impossible as never })).rejects.toThrow()
+      }
     }
   })
 })

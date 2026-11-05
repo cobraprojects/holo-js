@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWallClockSeconds, formatWithOffset, parseCalendarDate, parseWallClockTimestamp, startOfDayInTimezone } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -203,13 +203,34 @@ function spacedWallClock(value: unknown): unknown {
   return match ? `${match[1]} ${match[2]}:${match[3] ?? '00'}` : value
 }
 
+const LEADING_CALENDAR_FIELDS = /^(\d{4,})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/
+
+function hasPossibleCalendarFields(text: string): boolean {
+  const match = LEADING_CALENDAR_FIELDS.exec(text)
+  if (!match) return true
+  const year = text.endsWith(' BC') ? 1 - Number(match[1]) : Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month)
+    && Number(match[4] ?? 0) <= 23 && Number(match[5] ?? 0) <= 59 && Number(match[6] ?? 0) <= 59
+}
+
 export function calendarDateWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+  if (typeof value === 'string' && !hasPossibleCalendarFields(value)) return value
   const instant = parseStoredCalendarDate(dialect, spacedWallClock(value))
   if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) return value
   return formatCalendarDate(instant, getApplicationTimezone())
 }
 
-function parseStoredCalendarDate(dialect: SchemaDialectName, value: unknown): unknown {
+export function calendarDatePredicateValue(dialect: SchemaDialectName, value: unknown): unknown {
+  if (dialect !== 'sqlite' || !(value instanceof Date) || Number.isNaN(value.getTime())) return dateLikeWriteValue(dialect, value)
+  const timeZone = getApplicationTimezone()
+  if (startOfDayInTimezone(value, timeZone).getTime() === value.getTime()) return formatCalendarDate(value, timeZone)
+  const millisecond = value.getUTCMilliseconds()
+  return `${formatWallClockSeconds(value, timeZone)}${millisecond === 0 ? '' : `.${String(millisecond).padStart(3, '0')}`}`
+}
+
+export function parseStoredCalendarDate(dialect: SchemaDialectName, value: unknown): unknown {
   const calendarDate = typeof value === 'string' ? parseCalendarDate(value, getApplicationTimezone()) : undefined
   return calendarDate ?? parseStoredDate(dialect, value)
 }
@@ -358,6 +379,7 @@ export function normalizeDialectWriteValue(
     case 'json':
       return value == null ? value : stringifyJson(value)
     case 'date':
+      return calendarDateWriteValue(dialect, value)
     case 'datetime':
     case 'timestamp':
       return dateLikeWriteValue(dialect, value)

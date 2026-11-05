@@ -1,6 +1,6 @@
 import { SecurityError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
-import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { booleanStorageValue, calendarDatePredicateValue, normalizeDialectWriteValue } from '../schema/normalization'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
@@ -33,9 +33,20 @@ export function normalizeQueryPredicateValue(
   operator: unknown = '=',
 ): unknown {
   if (Array.isArray(value) && typeof operator === 'string' && ['in', 'not in', 'between', 'not between'].includes(operator)) {
-    return value.map(item => normalizeQueryWriteValue(table, driver, columnName, item))
+    return value.map(item => normalizeQueryComparisonValue(table, driver, columnName, item))
   }
-  return normalizeQueryWriteValue(table, driver, columnName, value)
+  return normalizeQueryComparisonValue(table, driver, columnName, value)
+}
+
+function normalizeQueryComparisonValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+): unknown {
+  return table?.columns[columnName]?.kind === 'date'
+    ? calendarDatePredicateValue(driver as SchemaDialectName, value)
+    : normalizeQueryWriteValue(table, driver, columnName, value)
 }
 
 export function normalizeQueryWriteRecord(
