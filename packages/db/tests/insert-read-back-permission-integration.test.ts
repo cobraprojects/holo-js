@@ -5,8 +5,8 @@ import { column, createDatabase, createDialect, defineGeneratedTable, queryCache
 import type { DatabaseMutationEvent } from '../src/cache'
 import { mysqlIntegration, mysqlTestConnection, openDatabase } from './support/database'
 
-describe.runIf(mysqlIntegration)('MySQL inserts by a user that cannot read the table back', () => {
-  it('keep the inserted row and publish an insert without rows', async () => {
+describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners', () => {
+  it('keep the inserted row and publish an insert without rows when the user cannot read the table back', async () => {
     const { db, schema } = await openDatabase('mysql')
     const name = `holo_insert_only_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     await schema.createTable(name, (table) => {
@@ -34,5 +34,28 @@ describe.runIf(mysqlIntegration)('MySQL inserts by a user that cannot read the t
 
     expect(await db.table(notes).get()).toEqual([{ id: 4, name: 'written', note: null }])
     expect(mutations.map(mutation => [mutation.kind, mutation.rows])).toEqual([['insert', undefined]])
+  })
+
+  it('read back only the written rows of a table keyed by a composite key', async () => {
+    const reads: number[] = []
+    const { db, schema } = await openDatabase('mysql', { logger: { onQuerySuccess: (entry) => {
+      if (entry.kind === 'query') reads.push(entry.rowCount ?? 0)
+    } } })
+    const name = `holo_pairs_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`a\` INT NOT NULL, \`b\` INT NOT NULL, \`note\` VARCHAR(20) NULL, PRIMARY KEY (\`a\`, \`b\`))`, source: 'schema' })
+    onTestFinished(() => schema.dropTable(name))
+    const pairs = defineGeneratedTable(name, { a: column.integer().primaryKey(), b: column.integer().primaryKey(), note: column.string().nullable() })
+    await db.table(pairs).insert([{ a: 1, b: 2 }, { a: 2, b: 1 }])
+    const mutations: DatabaseMutationEvent[] = []
+    onTestFinished(() => queryCacheInternals.resetDatabaseDependencyInvalidationListeners())
+    queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+      mutations.push(...event.mutations ?? [])
+    })
+    reads.length = 0
+
+    await db.table(pairs).insert([{ a: 1, b: 1 }, { a: 2, b: 2 }])
+
+    expect(reads).toEqual([2])
+    expect(mutations.map(mutation => mutation.rows)).toEqual([[{ a: 1, b: 1, note: null }, { a: 2, b: 2, note: null }]])
   })
 })
