@@ -444,6 +444,18 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table('archive.items').count()).toBe(2)
   })
 
+  it('refuses to change a table that a temporary shadow table shadows', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."docs_config" ("k" TEXT PRIMARY KEY, "v" TEXT)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE INDEX "main"."old_idx" ON "docs_config" ("v")', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE VIRTUAL TABLE "temp"."docs" USING fts5("body")', source: 'schema' })
+
+    await expect(schema.table('docs_config', (table) => {
+      table.renameIndex('old_idx', 'new_idx')
+    })).rejects.toThrow('SQLite cannot change table "docs_config" because SQLite resolves it to shadow table "temp.docs_config".')
+    expect(await indexesOf(schema, 'main.docs_config')).toEqual([{ name: 'old_idx', unique: false, columns: ['v'] }])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {
