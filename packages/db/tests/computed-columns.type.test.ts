@@ -204,6 +204,7 @@ it('limits insertUsing destinations to bare writable columns', () => {
     await products.where('price', 1).insertOrIgnoreUsing(['price', 'quantity', 'name'], products.select('price', 'quantity', 'name'))
     await products.insertUsing(['id', 'price'], products.select('quantity', 'price'))
     await products.query().upsert({ price: 1, quantity: 2, name: 'Pen' }, ['id'], ['id', 'price'])
+    await products.query().upsert([{ id: 1, price: 1, quantity: 2, name: 'Pen' }, { id: 2, price: 3, quantity: 4, name: 'Ink' }], ['id'], ['price'])
     // @ts-expect-error computed columns cannot be insertUsing destinations
     await products.insertUsing(['price', 'total'], products.select('price', 'total'))
     // @ts-expect-error computed columns cannot be insertOrIgnoreUsing destinations
