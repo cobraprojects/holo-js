@@ -486,7 +486,7 @@ function runtimeModuleInstances(): RuntimeModuleInstances {
   return registry[slot]
 }
 
-function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
+export function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
   runtimeModuleInstances().set(specifier, instance)
 }
 
