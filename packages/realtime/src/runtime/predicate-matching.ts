@@ -30,6 +30,7 @@ export type PredicateQuery = {
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
   readonly result?: unknown
+  readonly selections?: readonly { readonly column: string, readonly resultKey: string }[]
 }
 
 export const NO_EXACT_ID_PREDICATE = Symbol('no exact id predicate')
@@ -281,6 +282,10 @@ export function readQueryExactIdPredicateValue(query: PredicateQuery): unknown |
     return exactId
   }
 
+  if (query.selections?.length && !query.selections.some(selection => selection.column === primaryKey && selection.resultKey === primaryKey)) {
+    return NO_EXACT_ID_PREDICATE
+  }
+
   const rows = isRecordArray(query.result) ? query.result : isRecord(query.result) ? [query.result] : []
   return readStoredExactId(rows, primaryKey)
 }
@@ -304,6 +309,10 @@ export function readMutationExactIdPredicateValue(
   const exactId = readExactIdPredicateValue(mutation.predicates, primaryKey)
   if (typeof exactId !== 'string' || mutation.rows?.length === 0) {
     return exactId
+  }
+
+  if (mutation.values && hasRecordKey(mutation.values, primaryKey)) {
+    return NO_EXACT_ID_PREDICATE
   }
 
   return readStoredExactId(mutation.rows ?? [], primaryKey)

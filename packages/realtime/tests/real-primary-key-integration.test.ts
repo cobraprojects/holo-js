@@ -189,6 +189,28 @@ describe('a Generated-schema table keyed on code', () => {
     ])
   })
 
+  it('moves a row in a list subscription when an update changes its key', async () => {
+    const live = await subscribe(db => db.table('countries').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'DE').update({ code: 'ES' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { code: 'ES', id: 1, name: 'Germany' },
+      { code: 'FR', id: 1, name: 'France' },
+      { code: 'IT', id: 2, name: 'Italy' },
+    ])
+  })
+
+  it('does not take an aliased column for the key of a detail subscription', async () => {
+    const live = await subscribe(db => db.table('countries').select('name as code').where('code', 'FR').first())
+    await mutate(async ({ db }) => {
+      await db.table('countries').where('code', 'FR').update({ name: 'République' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual({ code: 'République' })
+  })
+
   it('patches a list subscription when the changed row is matched by its id column', async () => {
     const live = await subscribe(db => db.table('countries').orderBy('code').get())
     await mutate(async ({ db }) => {
