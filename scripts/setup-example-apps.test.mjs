@@ -42,3 +42,15 @@ test('example apps run no holo or framework command from install lifecycle scrip
   }
   assert.deepEqual(exampleApps(repoRoot), ['blog-next', 'blog-nuxt', 'blog-sveltekit'])
 })
+
+test('example app test runners only run scripts their app defines', async () => {
+  for (const app of exampleApps(repoRoot)) {
+    const manifest = JSON.parse(await readFile(join(repoRoot, 'apps', app, 'package.json'), 'utf8'))
+    const runner = await readFile(join(repoRoot, 'apps', app, 'tests/run.mjs'), 'utf8')
+    const scripts = [...runner.matchAll(/\(\s*'bun',\s*\[\s*'run',\s*'([^']+)'/g)].map(match => match[1])
+    assert.ok(scripts.length > 0, `apps/${app}/tests/run.mjs runs no package scripts`)
+    for (const script of scripts) {
+      assert.ok(manifest.scripts[script], `apps/${app}/tests/run.mjs runs missing script ${script}`)
+    }
+  }
+})

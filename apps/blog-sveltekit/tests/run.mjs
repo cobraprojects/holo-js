@@ -650,7 +650,7 @@ async function startBroadcastWorker(appUrl) {
 try {
   await rm(join(cwd, '.svelte-kit'), { recursive: true, force: true })
   await rm(join(cwd, 'build'), { recursive: true, force: true })
-  await run('bun', ['run', 'prepare'])
+  await run('bun', ['run', 'setup'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)
