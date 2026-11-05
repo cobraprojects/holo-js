@@ -53,6 +53,8 @@ Command names and aliases must be unique. If one clashes with a built-in command
 
 Holo discovers `.ts`, `.mts`, `.cts`, `.js`, `.mjs`, and `.cjs` files. The command can be the default export or a named export.
 
+Holo keeps a list of your commands in `.holo-js/generated`. When you add, delete, or rename a command file, the next `holo` run updates that list, so you don't need to run `holo prepare` first. If you only change the `name`, `aliases`, `description`, or `usage` inside an existing file, run `npx holo prepare` to update the list. `holo dev` does this for you while it runs. Changes to `run` always take effect on the next run.
+
 Holo loads every command file to read its name and description. If a command file fails to load, for example because a module it imports is missing, the other commands still work. `holo list` shows the failed command under its file path name with `Failed to load:` and the error, and running it prints the same error. If another command already uses that name, `holo` leaves the failed command out. Once the file loads again, its custom `name` and `aliases` work again.
 
 ## Arguments and flags

@@ -671,12 +671,26 @@ function withoutShadowedFailedCommands(
   })
 }
 
+async function isCommandRegistryCurrent(
+  projectRoot: string,
+  config: NormalizedHoloProjectConfig,
+  registry: GeneratedProjectRegistry,
+): Promise<boolean> {
+  if (registry.commands.some(entry => entry.loadFailed)) return false
+  if (registry.paths.commands !== config.paths.commands) return false
+
+  const commandFiles = await collectFiles(resolve(projectRoot, config.paths.commands))
+  const registeredPaths = new Set(registry.commands.map(entry => entry.sourcePath))
+  return commandFiles.length === registeredPaths.size
+    && commandFiles.every(filePath => registeredPaths.has(makeProjectRelativePath(projectRoot, filePath)))
+}
+
 export async function discoverAppCommands(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
 ): Promise<DiscoveredAppCommand[]> {
   const cachedRegistry = await loadGeneratedProjectRegistry(projectRoot)
-  const registry = cachedRegistry && !cachedRegistry.commands.some(entry => entry.loadFailed)
+  const registry = cachedRegistry && await isCommandRegistryCurrent(projectRoot, config, cachedRegistry)
     ? cachedRegistry
     : await prepareProjectDiscovery(projectRoot, config)
 
