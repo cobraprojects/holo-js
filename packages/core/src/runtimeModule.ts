@@ -696,9 +696,6 @@ function sameWidthReplacement(functionName: string, original: string): string {
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
-const importMetaGap = String.raw`(?:\s|\/\*[^*]*\*+(?:[^*/][^*]*\*+)*\/|\/\/[^\n\r\u2028\u2029]*(?:[\n\r\u2028\u2029]|$))*`
-const importMetaPattern = new RegExp(String.raw`\bimport${importMetaGap}\.${importMetaGap}meta\b`)
-
 function createSourceModuleUrlPlugin(): Plugin {
   return {
     name: 'holo-source-module-url',
@@ -706,7 +703,7 @@ function createSourceModuleUrlPlugin(): Plugin {
       buildContext.onLoad({ filter: /\.(?:[cm]?[jt]s|[jt]sx)$/, namespace: 'file' }, async ({ path }) => {
         const contents = await readFile(path, 'utf8')
         const loader = sourceModuleLoaders[extname(path)] ?? 'js'
-        if (!importMetaPattern.test(contents)) return undefined
+        if (!contents.includes('meta') || !contents.includes('import')) return undefined
 
         const ts = await import('typescript')
         const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true)
