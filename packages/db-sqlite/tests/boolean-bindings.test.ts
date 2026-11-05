@@ -71,4 +71,17 @@ describe('SQLite boolean bindings without registered schema', () => {
       flags: [false, true, 1],
     })
   })
+
+  it('binds booleans and whole numbers as integers so a text column stores their integer text', async () => {
+    await createSchemaService(database).createTable('text_probe', table => {
+      table.integer('id').primaryKey()
+      table.text('value').nullable()
+    })
+    const records = database.table('text_probe')
+    await records.insert([{ id: 1, value: false }, { id: 2, value: true }, { id: 3, value: 42 }, { id: 4, value: 2.5 }])
+
+    expect(await records.orderBy('id').pluck('value')).toEqual(['0', '1', '42', '2.5'])
+    expect(await records.where('value', false).pluck('id')).toEqual([1])
+    expect(await records.where('value', 42).pluck('id')).toEqual([3])
+  })
 })
