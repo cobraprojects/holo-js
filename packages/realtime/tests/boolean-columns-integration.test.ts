@@ -281,6 +281,21 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rea
     expect(subscription.current.data).toEqual(await handler())
   })
 
+  it.runIf(driver !== 'postgres')('re-runs an ordered window once a backfill loads a value other than one or zero', async () => {
+    const { db, flags } = await openFlags(driver)
+    await db.table(flags).where('id', 1).update({ enabled: false })
+    await db.table(flags).where('id', 2).update({ enabled: true })
+    await db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 2 })
+    const handler = () => db.table(flags).orderBy('enabled').orderBy('id').limit(2).get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
+    expect(subscription.current.data).toEqual(await handler())
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 1, enabled: true }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it.runIf(driver !== 'postgres')('reads a value other than one or zero that a window backfill loads the way a fresh read does', async () => {
     const { db, flags } = await openFlags(driver)
     await db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 2 })

@@ -30,7 +30,8 @@ export function readBackfilledRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
-): Readonly<Record<string, unknown>>[] {
+): Readonly<Record<string, unknown>>[] | undefined {
+  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections))) return undefined
   return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
 }
 

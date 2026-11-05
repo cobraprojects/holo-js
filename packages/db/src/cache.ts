@@ -2212,17 +2212,34 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
+function booleanResultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
+  })
+}
+
+function hasUnstoredFetchedBoolean(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): boolean {
+  return booleanResultKeys(table, row, selections, value => isDriverScalar(value) && !isStoredBoolean(value)).length > 0
+}
+
 function readBooleanColumns(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[],
   reads: (value: unknown) => boolean,
 ): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const booleanKeys = Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
-  })
+  const booleanKeys = booleanResultKeys(table, row, selections, reads)
   if (booleanKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
@@ -2567,6 +2584,7 @@ export async function invalidateQueryCacheDependencies(
 export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
+  hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,
   setMutationPreviousRowsRequirement,

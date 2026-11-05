@@ -276,7 +276,7 @@ async function fetchRelatedRelationRow(
     .limit(1)
     .get())
 
-  return rows[0]
+  return rows?.[0]
 }
 
 function createBelongsToManyRelationRow(
