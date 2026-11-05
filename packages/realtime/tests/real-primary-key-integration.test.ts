@@ -249,6 +249,51 @@ describe('Generated-schema tables without a single-column primary key', () => {
   })
 })
 
+describe('a model whose primaryKey option differs from the table schema key', () => {
+  beforeEach(async () => {
+    registerGeneratedTables({
+      ledger: defineGeneratedTable('ledger', {
+        id: column.integer(),
+        entry_no: column.string(),
+        amount: column.integer(),
+      }, { primaryKeyColumns: [] }),
+    })
+    await adapter.execute('CREATE TABLE ledger (id INTEGER NOT NULL, entry_no TEXT NOT NULL, amount INTEGER NOT NULL)')
+    await adapter.execute("INSERT INTO ledger VALUES (1, 'A', 10), (1, 'B', 20), (2, 'C', 30)")
+  })
+
+  it('patches a model list subscription by the model primary key', async () => {
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+    const live = await subscribe(db => db.model(Entry).query().orderBy('entry_no').get())
+    await mutate(async ({ db }) => {
+      await db.model(Entry).query().where('entry_no', 'B').update({ amount: 25 })
+    })
+    await mutate(async ({ db }) => {
+      await db.model(Entry).query().where('entry_no', 'A').delete()
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([
+      { id: 1, entry_no: 'B', amount: 25 },
+      { id: 2, entry_no: 'C', amount: 30 },
+    ])
+    expect(live.reads()).toBe(1)
+  })
+
+  it('re-runs a DB.table() list subscription on the same keyless table', async () => {
+    const live = await subscribe(db => db.table('ledger').orderBy('entry_no').get())
+    await mutate(async ({ db }) => {
+      await db.table('ledger').where('entry_no', 'B').update({ amount: 25 })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([
+      { id: 1, entry_no: 'A', amount: 10 },
+      { id: 1, entry_no: 'B', amount: 25 },
+      { id: 2, entry_no: 'C', amount: 30 },
+    ])
+    expect(live.reads()).toBe(2)
+  })
+})
+
 describe('a Generated-schema table keyed on id', () => {
   it('keeps patching rows by id', async () => {
     registerGeneratedTables({

@@ -19,6 +19,7 @@ import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
+import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
@@ -896,7 +897,7 @@ export class ModelRepository<
         predicateDependency!,
       ])
 
-      const primaryKey = resolveRowDependencyKey(related.definition.table, related.getConnectionName())
+      const primaryKey = resolveModelRowKey(related.definition)
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
@@ -2183,9 +2184,9 @@ export class ModelRepository<
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
     const table = this.definition.table
-    return this.definition.untyped
-      ? new TableQueryBuilder(table, connection, createSelectQueryPlan(createTableSource(table.tableName)))
-      : new TableQueryBuilder(table, connection)
+    const source = createTableSource(this.definition.untyped ? table.tableName : table)
+    const primaryKey = resolveModelRowKey(this.definition)
+    return new TableQueryBuilder(table, connection, createSelectQueryPlan(primaryKey === undefined ? source : Object.freeze({ ...source, primaryKey })))
   }
 
   private createQuery(

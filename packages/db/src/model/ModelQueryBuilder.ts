@@ -1,4 +1,5 @@
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { resolveModelRowKey } from './defineModelHelpers'
 import {
   createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
@@ -8,7 +9,6 @@ import {
   rebindDatabaseQueryObservationResult,
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
-  resolveRowDependencyKey,
   type DatabaseQueryBelongsToHydrationObservation,
   type DatabaseQueryRelatedHydrationObservation,
   type QueryCacheConfig,
@@ -2591,7 +2591,7 @@ class ModelQueryBuilderBase<
         belongsToHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           ownerKey: relation.ownerKey,
-          primaryKey: resolveRowDependencyKey(relatedDefinition.table, relatedDefinition.connectionName ?? this.getConnectionName()),
+          primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: relatedDefinition.table.tableName,

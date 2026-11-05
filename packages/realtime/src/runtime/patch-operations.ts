@@ -29,6 +29,7 @@ export function createReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
 ): readonly RealtimeSubscriptionPatchOperation[] {
   if (areEquivalentPatchValues(previousValue, nextValue)) {
     return Object.freeze([])
@@ -39,7 +40,7 @@ export function createReplacePatchOperations(
     return recordOperations
   }
 
-  const arrayMoveOperations = createArrayMovePatchOperations(path, previousValue, nextValue)
+  const arrayMoveOperations = createArrayMovePatchOperations(path, previousValue, nextValue, primaryKey)
   if (arrayMoveOperations) {
     return arrayMoveOperations
   }
@@ -49,7 +50,7 @@ export function createReplacePatchOperations(
     return arrayWindowSlideOperations
   }
 
-  const arrayItemOperations = createArrayItemReplacePatchOperations(path, previousValue, nextValue)
+  const arrayItemOperations = createArrayItemReplacePatchOperations(path, previousValue, nextValue, primaryKey)
   if (arrayItemOperations) {
     return arrayItemOperations
   }
@@ -168,12 +169,13 @@ function createArrayMovePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
   }
 
-  const move = findSingleArrayMove(previousValue, nextValue)
+  const move = findSingleArrayMove(previousValue, nextValue, primaryKey)
   if (!move) {
     return undefined
   }
@@ -196,11 +198,12 @@ function createArrayMovePatchOperations(
 function findSingleArrayMove(
   previousValue: readonly unknown[],
   nextValue: readonly unknown[],
+  primaryKey: string,
 ): { readonly from: number, readonly to: number } | undefined {
   for (let from = 0; from < previousValue.length; from += 1) {
     const candidate = previousValue[from]
     for (let to = 0; to < nextValue.length; to += 1) {
-      if (!areSameArrayMoveItem(candidate, nextValue[to]) || from === to) {
+      if (!areSameArrayMoveItem(candidate, nextValue[to], primaryKey) || from === to) {
         continue
       }
 
@@ -243,18 +246,19 @@ function arraysMatchAfterMove(
   return true
 }
 
-function areSameArrayMoveItem(previousValue: unknown, nextValue: unknown): boolean {
+function areSameArrayMoveItem(previousValue: unknown, nextValue: unknown, primaryKey: string): boolean {
   if (areEquivalentPatchValues(previousValue, nextValue)) {
     return true
   }
 
-  return hasSameDefinedRecordIdentity(previousValue, nextValue)
+  return hasSameDefinedRecordIdentity(previousValue, nextValue, primaryKey)
 }
 
 function createArrayItemReplacePatchOperations(
   path: readonly RealtimePatchPathSegment[],
   previousValue: unknown,
   nextValue: unknown,
+  primaryKey: string,
 ): readonly RealtimeSubscriptionPatchOperation[] | undefined {
   if (!Array.isArray(previousValue) || !Array.isArray(nextValue) || previousValue.length !== nextValue.length) {
     return undefined
@@ -273,7 +277,7 @@ function createArrayItemReplacePatchOperations(
     }
 
     const itemOperations = createRecordFieldReplacePatchOperations([...path, index], previousItem, nextItem)
-    if (itemOperations && hasSameRecordIdentity(previousItem, nextItem)) {
+    if (itemOperations && hasSameRecordIdentity(previousItem, nextItem, primaryKey)) {
       operations.push(...itemOperations)
     } else {
       operations.push(createReplacePatchOperation([...path, index], nextItem))
@@ -309,24 +313,25 @@ function hasSamePatchableRecordKeys(
 function hasSameRecordIdentity(
   previousValue: Readonly<Record<string, unknown>>,
   nextValue: Readonly<Record<string, unknown>>,
+  primaryKey: string,
 ): boolean {
-  if (!Object.prototype.propertyIsEnumerable.call(previousValue, 'id') || !Object.prototype.propertyIsEnumerable.call(nextValue, 'id')) {
+  if (!Object.prototype.propertyIsEnumerable.call(previousValue, primaryKey) || !Object.prototype.propertyIsEnumerable.call(nextValue, primaryKey)) {
     return true
   }
 
-  return previousValue.id === nextValue.id
+  return previousValue[primaryKey] === nextValue[primaryKey]
 }
 
-function hasSameDefinedRecordIdentity(previousValue: unknown, nextValue: unknown): boolean {
+function hasSameDefinedRecordIdentity(previousValue: unknown, nextValue: unknown, primaryKey: string): boolean {
   if (!isRecord(previousValue) || !isRecord(nextValue)) {
     return false
   }
 
-  if (!Object.prototype.propertyIsEnumerable.call(previousValue, 'id') || !Object.prototype.propertyIsEnumerable.call(nextValue, 'id')) {
+  if (!Object.prototype.propertyIsEnumerable.call(previousValue, primaryKey) || !Object.prototype.propertyIsEnumerable.call(nextValue, primaryKey)) {
     return false
   }
 
-  return previousValue.id === nextValue.id
+  return previousValue[primaryKey] === nextValue[primaryKey]
 }
 
 function areEquivalentRecordValues(previousValue: unknown, nextValue: unknown): boolean {

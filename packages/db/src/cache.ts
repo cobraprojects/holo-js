@@ -1310,6 +1310,10 @@ function getColumnName(column: string): string {
   return column.split('.').at(-1)!
 }
 
+export function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>, connectionName: string): string | undefined {
+  return source.primaryKey ?? resolveRowDependencyKey(source, connectionName)
+}
+
 export function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
   const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   if (!table) return 'id'
@@ -1913,7 +1917,7 @@ function createDatabaseQueryObservationFromPlan(
   groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
-  const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
+  const primaryKey = resolveObservedRowKey(plan.source, connectionName)
   return Object.freeze({
     connectionName,
     belongsToHydrations: undefined,
@@ -1972,7 +1976,7 @@ export function createDatabaseQueryFallbackObservation(
 export function createDatabaseMutationEvent(
   kind: DatabaseMutationEvent['kind'],
   connectionName: string,
-  source: Pick<QuerySource, 'tableName' | 'table'>,
+  source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>,
   predicates: readonly QueryPredicateNode[] = [],
   values?: Readonly<Record<string, unknown>>,
   rows?: readonly Readonly<Record<string, unknown>>[],
@@ -1984,7 +1988,7 @@ export function createDatabaseMutationEvent(
     kind,
     predicates: collectQueryPredicateObservations(predicates),
     previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
-    primaryKey: resolveRowDependencyKey(source, connectionName),
+    primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? Object.freeze([...rows]) : undefined,
     values,
   })

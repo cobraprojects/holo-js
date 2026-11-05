@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, clearGeneratedTables, column, queryCacheInternals, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
+import { DB, clearGeneratedTables, column, defineModel, queryCacheInternals, registerGeneratedTables, type DatabaseDependencyInvalidationEvent } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
 import { defineTable } from './support/internal'
 import { openDatabase } from './support/database'
@@ -55,6 +55,28 @@ describe('query observations and mutation events carry the table primary key', (
       [undefined, false],
       [undefined, false],
     ])
+  })
+
+  it('identifies rows of a model query by the model primary key and of a DB.table() query by the schema key', async () => {
+    const adapter = await openTable('ledger', { id: column.id(), entry_no: column.string(), amount: column.integer() }, {}, 'CREATE TABLE ledger (id INTEGER PRIMARY KEY, entry_no TEXT, amount INTEGER)')
+    registerGeneratedTables({ seats: defineTable('seats', { row_no: column.integer().primaryKey(), seat_no: column.integer().primaryKey() }) })
+    await adapter.execute('CREATE TABLE seats (row_no INTEGER, seat_no INTEGER, PRIMARY KEY (row_no, seat_no))')
+    await DB.table('ledger').insert({ entry_no: 'A', amount: 10 })
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+    const Seat = defineModel('seats', { timestamps: false })
+    const mutations = captureMutations()
+
+    const model = observe(Entry.query().getTableQueryBuilder())
+    const table = observe(DB.table('ledger'))
+    const composite = observe(Seat.query().getTableQueryBuilder())
+    await Entry.query().where('entry_no', 'A').update({ amount: 11 })
+
+    expect([model, table, composite].map(observation => [observation?.primaryKey, observation?.patchable])).toEqual([
+      ['entry_no', true],
+      ['id', true],
+      [undefined, false],
+    ])
+    expect(mutations.map(mutation => mutation.primaryKey)).toEqual(['entry_no'])
   })
 
   it('keeps id as the key of tables without schema metadata', async () => {
