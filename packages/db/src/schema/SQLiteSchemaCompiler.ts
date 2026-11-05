@@ -64,6 +64,9 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     assertValidTablePath(toTableName, 'Table name')
     const from = splitTablePath(fromTableName)
     const to = splitTablePath(toTableName)
+    if (to.schema !== undefined && from.schema === undefined) {
+      throw new SchemaError(`SQLite cannot rename table "${fromTableName}" to "${toTableName}" because "${fromTableName}" names no database. Qualify the table, as in "${to.schema}.${from.table}".`)
+    }
     if (to.schema !== undefined && !sameSQLiteSchema(to.schema, from.schema)) {
       throw new SchemaError(`SQLite cannot move table "${fromTableName}" to another database as "${toTableName}".`)
     }

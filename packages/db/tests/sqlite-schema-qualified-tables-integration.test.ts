@@ -319,6 +319,19 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table('archive.children').orderBy('id').pluck('parent_id')).toEqual([1, 99])
   })
 
+  it('refuses to guess the database of an unqualified table renamed into a named database', async () => {
+    const { db, schema } = await openArchive()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+
+    await expect(schema.renameTable('items', 'main.goods'))
+      .rejects.toThrow('SQLite cannot rename table "items" to "main.goods" because "items" names no database. Qualify the table, as in "main.items".')
+
+    await schema.renameTable('main.items', 'main.goods')
+    expect(await DB.table('main.goods').get()).toEqual([])
+    expect(await DB.table('temp.items').get()).toEqual([])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {
@@ -333,7 +346,7 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await schema.getTables()).not.toContain('stock')
 
     await expect(schema.renameTable('archive.stock', 'main.stock')).rejects.toThrow('SQLite cannot move table "archive.stock" to another database as "main.stock".')
-    await expect(schema.renameTable('products', 'archive.products')).rejects.toThrow('SQLite cannot move table "products" to another database as "archive.products".')
+    await expect(schema.renameTable('products', 'archive.products')).rejects.toThrow('SQLite cannot rename table "products" to "archive.products" because "products" names no database. Qualify the table, as in "archive.products".')
   })
 
   it('selects every column and single columns through schema-qualified references', async () => {
