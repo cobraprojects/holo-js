@@ -839,7 +839,7 @@ async function runPluginProjectPreparersUnlocked(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
   options: RunPluginPreparationOptions,
-): Promise<void> {
+): Promise<boolean> {
   const root = resolve(projectRoot)
   const generatedRoot = resolve(root, '.holo-js/generated')
   const pluginPreparation = await loadProjectPluginPreparation(root)
@@ -913,6 +913,7 @@ async function runPluginProjectPreparersUnlocked(
   const manifestWrites: StagedWrite[] = []
   const committedMutations: CommittedMutation[] = []
   let snapshotCommitted = false
+  let managedArtifactsChanged = false
   try {
     for (const snapshot of snapshots) {
       for (const artifact of [...snapshot.generatedArtifacts, ...snapshot.managedArtifacts]) {
@@ -932,12 +933,14 @@ async function runPluginProjectPreparersUnlocked(
       options.signal?.throwIfAborted()
       await assertNoSymbolicLinkParents(root, write.target)
       committedMutations.push(await trackOutputWrite(write.target, write.contents, () => commitWrite(write)))
+      if (!isPathInside(generatedRoot, write.target)) managedArtifactsChanged = true
     }
     for (const removal of removals) {
       options.signal?.throwIfAborted()
       await assertNoSymbolicLinks(removal.root, removal.target)
       const mutation = await trackOutputWrites([removal.target], () => commitRemoval(removal))
       if (mutation) committedMutations.push(mutation)
+      if (mutation && !isPathInside(generatedRoot, removal.target)) managedArtifactsChanged = true
     }
     for (const write of manifestWrites) {
       options.signal?.throwIfAborted()
@@ -972,17 +975,18 @@ async function runPluginProjectPreparersUnlocked(
       else options.writeInfo?.(message)
     }
   }
+  return managedArtifactsChanged
 }
 
 export async function runPluginProjectPreparers(
   projectRoot: string,
   config: NormalizedHoloProjectConfig,
   options: RunPluginPreparationOptions,
-): Promise<void> {
+): Promise<boolean> {
   const root = resolve(projectRoot)
   const release = await acquireProjectPrepareLock(root, options.signal)
   try {
-    await runPluginProjectPreparersUnlocked(root, config, options)
+    return await runPluginProjectPreparersUnlocked(root, config, options)
   } finally {
     await release()
   }

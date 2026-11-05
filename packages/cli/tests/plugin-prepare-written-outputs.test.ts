@@ -64,3 +64,26 @@ it('tracks only the managed artifacts a preparation run actually changes', async
   expect(tracked).toContain(join(root, 'app/changing.ts'))
   expect(tracked).not.toContain(join(root, 'app/stable.ts'))
 })
+
+it('reports whether a preparation run changed managed artifacts', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'holo-plugin-managed-changes-')))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture' }))
+  let managed = 'v1'
+  let generated = 'g1'
+  await installPreparers(root, [loadedPreparer(root, {
+    apiVersion: 1,
+    prepare: () => ({
+      kind: 'prepared',
+      generatedArtifacts: [{ path: 'registry.json', contents: generated }],
+      managedArtifacts: managed ? [{ path: 'server/models/Generated.ts', contents: managed }] : [],
+    }),
+  })])
+  const options = { run: { kind: 'full', command: 'prepare', reason: 'explicit' } } as const
+  await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), options)).resolves.toBe(true)
+  await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), options)).resolves.toBe(false)
+  generated = 'g2'
+  await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), options)).resolves.toBe(false)
+  managed = ''
+  await expect(runPluginProjectPreparers(root, normalizeHoloProjectConfig(), options)).resolves.toBe(true)
+})

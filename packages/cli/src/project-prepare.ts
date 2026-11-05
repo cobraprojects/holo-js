@@ -38,7 +38,7 @@ async function prepareFrameworkPass(
   const preparation = await resolveFrameworkPreparation(projectRoot)
   const { framework, sync } = preparation
   options.signal?.throwIfAborted()
-  await runPluginProjectPreparers(projectRoot, project.config, {
+  const managedArtifactsChanged = await runPluginProjectPreparers(projectRoot, project.config, {
     run,
     ...(framework ? {
       framework: {
@@ -53,6 +53,8 @@ async function prepareFrameworkPass(
     writeInfo: message => io?.stdout.write(`${message}\n`),
     writeWarning: message => io?.stderr.write(`${message}\n`),
   })
+  options.signal?.throwIfAborted()
+  if (managedArtifactsChanged) await prepareProjectDiscovery(projectRoot, project.config, false)
   options.signal?.throwIfAborted()
   await preparation.writeArtifacts()
   options.signal?.throwIfAborted()
