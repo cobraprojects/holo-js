@@ -54,9 +54,13 @@ export function rowValuesChanged(
   return false
 }
 
+function isNumberLike(value: unknown): boolean {
+  return typeof value === 'number' || typeof value === 'bigint'
+}
+
 function comparesBooleanWithNumber(left: unknown, right: unknown): boolean {
-  return (typeof left === 'boolean' && (typeof right === 'boolean' || typeof right === 'number'))
-    || (typeof right === 'boolean' && typeof left === 'number')
+  return (typeof left === 'boolean' && (typeof right === 'boolean' || isNumberLike(right)))
+    || (typeof right === 'boolean' && isNumberLike(left))
 }
 
 export function compareValues(left: unknown, right: unknown): number | undefined {
