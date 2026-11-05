@@ -11,6 +11,7 @@ export type * from './types'
 
 export interface SchemaReader {
   listTables(): Promise<string[]>
+  resolveTableSchema(tableName: string): Promise<string | undefined>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
   readTable(tableName: string): Promise<TableDefinition | undefined>
   readGeneratedSchema(): Promise<TableDefinition[]>
@@ -35,6 +36,7 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 
   return {
     listTables: () => reader.listTables(),
+    resolveTableSchema: tableName => reader.resolveTableSchema(tableName),
     readTableStructure: tableName => reader.readTableStructure(tableName),
     readTable,
     async readGeneratedSchema() {
@@ -52,4 +54,9 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 export function readTableStructure(connection: DatabaseContext, tableName: string): Promise<DatabaseTableStructure | undefined> {
   assertValidIdentifierPath(tableName, 'Table name')
   return createSchemaReader(connection).readTableStructure(tableName)
+}
+
+export function resolveTableSchema(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  assertValidIdentifierPath(tableName, 'Table name')
+  return createSchemaReader(connection).resolveTableSchema(tableName)
 }

@@ -5,7 +5,8 @@ import type {
   TableIndexDefinition,
 } from './types'
 import { getSchemaServiceConnection, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
-import { readTableStructure } from './introspection'
+import { resolveTableSchema } from './introspection'
+import { isPostgresConnection } from './connectionDialect'
 import { readPostgresSearchPathTableSchema } from './introspection/postgres'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
@@ -148,8 +149,8 @@ function memoizeTableSchemaLookup(lookup: TableSchemaLookup): TableSchemaLookup 
 function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
   const connection = getSchemaServiceConnection(schema)
   return {
-    table: memoizeTableSchemaLookup(async tableName => (await readTableStructure(connection, tableName))?.schema),
-    ...(/^postgres/.test(schema.getDialectName())
+    table: memoizeTableSchemaLookup(tableName => resolveTableSchema(connection, tableName)),
+    ...(isPostgresConnection(connection)
       ? { searchPath: memoizeTableSchemaLookup(tableName => readPostgresSearchPathTableSchema(connection, tableName)) }
       : {}),
   }

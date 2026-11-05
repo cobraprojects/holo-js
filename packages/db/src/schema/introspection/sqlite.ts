@@ -250,6 +250,10 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       return result.rows.map(row => row.name).sort()
     },
 
+    async resolveTableSchema(tableName) {
+      return (await readSQLiteStoredTable(connection, tableName)) === undefined ? undefined : splitTableName(tableName).schema
+    },
+
     async readTableStructure(tableName) {
       const { schema, table } = splitTableName(tableName)
       const createTableSql = await readSQLiteCreateTableSql(connection, tableName)

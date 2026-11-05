@@ -6,6 +6,7 @@ import type { ComputedColumn } from '../types'
 import type { DatabaseColumnDefault, DatabaseEnumCheckStructure, DatabaseIndexStructure, DialectSchemaReader } from './types'
 
 type TableNameRow = { name: string }
+type TableSchemaRow = { table_schema: string }
 type ColumnRow = { table_schema: string, name: string, data_type: string, column_type: string, is_nullable: 'YES' | 'NO', column_default: string | null, extra: string, generation_expression: string | null }
 type IndexRow = { name: string, non_unique: number | string, column_name: string | null, sub_part: number | null, expression: string | null }
 type ForeignKeyRow = { name: string, table_schema: string, referenced_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -95,12 +96,15 @@ export function createMySQLSchemaReader(connection: DatabaseContext): DialectSch
       return result.rows.map(row => row.name).sort()
     },
 
+    async resolveTableSchema(tableName) {
+      const { schema, table } = splitTablePath(tableName)
+      const result = await introspect<TableSchemaRow>(`SELECT table_schema AS table_schema FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? AND ${BASE_TABLE_FILTER}`, [schema ?? configuredSchema, table], `schema:introspect:table:${tableName}`)
+      return result.rows[0]?.table_schema
+    },
+
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? configuredSchema, table]
-      const exists = await introspect<TableNameRow>(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? AND ${BASE_TABLE_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
-      if (exists.rows.length === 0) return undefined
-
       const columns = await introspect<ColumnRow>(`SELECT table_schema AS table_schema, column_name AS name, data_type AS data_type, column_type AS column_type, is_nullable AS is_nullable, column_default AS column_default, extra AS extra, generation_expression AS generation_expression FROM information_schema.columns WHERE table_schema = ${SCHEMA_BINDING} AND table_name = ? ORDER BY ordinal_position`, bindings, `schema:introspect:columns:${tableName}`)
       const resolvedSchema = columns.rows[0]?.table_schema
       if (resolvedSchema === undefined) return undefined

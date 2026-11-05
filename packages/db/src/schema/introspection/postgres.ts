@@ -110,17 +110,24 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const introspect = createIntrospect(connection)
 
+  async function resolveTableSchema(tableName: string): Promise<string | undefined> {
+    const { schema, table } = splitTablePath(tableName)
+    const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
+    return exists.rows[0]?.schema
+  }
+
   return {
     async listTables() {
       const result = await introspect<TableNameRow>('SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = current_schema() ORDER BY tablename', [], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
+    resolveTableSchema,
+
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? null, table]
-      const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
-      const resolvedSchema = exists.rows[0]?.schema
+      const resolvedSchema = await resolveTableSchema(tableName)
       if (resolvedSchema === undefined) return undefined
 
       const columns = await introspect<ColumnRow>(COLUMNS_SQL, bindings, `schema:introspect:columns:${tableName}`)
