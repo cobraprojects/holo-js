@@ -261,4 +261,36 @@ describe.each(drivers)('model upsert keeps protected columns out on %s', (driver
     const rows = await DB.table(name).get()
     expect(rows.map(row => [Number(row.id), row.title])).toEqual([[1, 'Own']])
   })
+
+  it('leaves a row that conflicts on another unique column unchanged when there are no update columns', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = `posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('slug').unique()
+      table.string('title')
+    })
+    await DB.table(name).insert({ id: 1, slug: 'own', title: 'Own' })
+    const posts = defineTable(name, {
+      id: column.id(),
+      slug: column.string().unique(),
+      title: column.string(),
+    })
+    const Post = defineModelFromTable(posts, { fillable: ['slug', 'title'], timestamps: false })
+
+    const upserts = [
+      () => Post.query().upsert([{ id: 99, slug: 'own', title: 'Taken' }], ['id'], []),
+      () => DB.table(name).upsert([{ id: 98, slug: 'own', title: 'Taken' }], ['id']),
+    ]
+    for (const upsert of upserts) {
+      if (driver === 'mysql') await upsert()
+      else await expect(upsert()).rejects.toThrow()
+    }
+
+    const rows = await DB.table(name).get()
+    expect(rows.map(row => [Number(row.id), row.slug, row.title])).toEqual([[1, 'own', 'Own']])
+  })
 })
