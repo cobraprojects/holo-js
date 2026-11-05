@@ -164,10 +164,11 @@ function insertsRowsWithUnknownPrimaryKey(
 }
 
 function upsertChangesPrimaryKey(mutation: DatabaseMutationEvent, primaryKey: string): boolean {
-  if (mutation.kind !== 'upsert' || !mutation.previousRows) {
+  if (mutation.kind !== 'upsert' || !mutation.previousRows || mutation.previousRows.length === 0) {
     return false
   }
 
+  const previousKeys = new Set(mutation.previousRows.map(row => row[primaryKey]))
   const keys = new Set((mutation.rows ?? []).map(row => row[primaryKey]))
-  return mutation.previousRows.some(row => !keys.has(row[primaryKey]))
+  return previousKeys.size !== keys.size || [...keys].some(key => !previousKeys.has(key))
 }
