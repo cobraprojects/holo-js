@@ -265,4 +265,65 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(ids(relation(second, 'tags'))).toEqual([2])
     expect(relation(fractional, 'tags')).toEqual([])
   })
+
+  it('eager loads belongsToMany through an unregistered pivot table with decimal keys', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `up_owners_${suffix}`, tags: `up_tags_${suffix}`, pivot: `up_owner_tags_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.tags, (table) => {
+      table.integer('id').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.tags))
+    await schema.createTable(names.pivot, (table) => {
+      table.integer('id').primaryKey()
+      table.decimal('owner_id')
+      table.decimal('tag_id')
+    })
+    onTestFinished(() => schema.dropTable(names.pivot))
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    await DB.table(owners).insert([{ id: 1 }])
+    await DB.table(tags).insert([{ id: 1 }])
+    await DB.table(names.pivot).insert([{ id: 1, owner_id: '1.00', tag_id: '1.00' }, { id: 2, owner_id: '1.00', tag_id: '1.50' }])
+    const Tag = defineModel(tags, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.pivot, 'owner_id', 'tag_id') } })
+
+    const [owner] = await Owner.with('tags').get()
+
+    expect(ids(relation(owner, 'tags'))).toEqual([1])
+  })
+
+  it('loads a related row once when equal numeric keys fall into different key chunks', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `ck_owners_${suffix}`, items: `ck_items_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+      table.string('code')
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.decimal('owner_code')
+    })
+    onTestFinished(() => schema.dropTable(names.items))
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), code: column.string() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_code: column.decimal() })
+    const filler = Array.from({ length: 256 }, (_, index) => ({ id: index + 2, code: String(index + 100) }))
+    await DB.table(owners).insert([{ id: 1, code: '1.0' }, ...filler, { id: 258, code: '1.00' }])
+    await DB.table(items).insert([{ id: 10, owner_code: '1.00' }])
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { items: hasMany(() => Item, 'owner_code', 'code') } })
+
+    const loaded = await Owner.with('items').orderBy('id').get()
+
+    expect(ids(relation(loaded[0], 'items'))).toEqual([10])
+    expect(ids(relation(loaded[257], 'items'))).toEqual([10])
+  })
 })

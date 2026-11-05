@@ -373,7 +373,7 @@ export function readIntegralDecimalKey(value: unknown): unknown {
 }
 
 export function readFractionalDecimalKey(value: unknown): string | undefined {
-  const text = readDecimalKeyText(value)
+  const text = readDecimalKeyText(typeof value === 'number' && Number.isFinite(value) ? plainNumberText(value) : value)
   return text === undefined || text.fraction === '' ? undefined : `${text.integer}.${text.fraction}`
 }
 

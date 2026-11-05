@@ -14,10 +14,6 @@ function integerIdentity(value: unknown): unknown {
 }
 
 function fractionalKey(value: unknown): string | undefined {
-  if (typeof value === 'number' && Number.isFinite(value) && !Number.isInteger(value)) {
-    return `numeric:${String(value)}`
-  }
-
   const fraction = readFractionalDecimalKey(value)
   return fraction === undefined ? undefined : `numeric:${fraction}`
 }

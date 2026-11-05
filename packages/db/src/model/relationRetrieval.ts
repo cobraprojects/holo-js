@@ -3,7 +3,7 @@ import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
 import { readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
 import { canonicalStoredKey, ownEntry } from './entityRuntime'
-import { StoredKeyMap, type StoredKeyOptions } from './storedKeyCollections'
+import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
@@ -119,8 +119,9 @@ export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, 
 }
 
 export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
-  if (!definition || !readsAsInteger(definition)) return [...keys]
-  return distinctStoredKeys(keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey))
+  if (!definition || !isNumericKeyColumn(definition)) return [...keys]
+  const columnKeys = readsAsInteger(definition) ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey) : keys
+  return [...new StoredKeySet(columnKeys, { numeric: true })]
 }
 
 function columnDefinition(query: TableQueryBuilder<string | TableDefinition>, column: string): AnyColumnDefinition | undefined {
