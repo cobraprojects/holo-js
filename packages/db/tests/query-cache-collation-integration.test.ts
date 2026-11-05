@@ -110,6 +110,26 @@ function registerExactCollationScenarios(driver: Exclude<Driver, 'postgres'>, co
     expect(await countries.cachedLabel('FR')).toBe('France')
   })
 
+  it('refreshes a cached read by an exact key after an upsert matched through another unique column', async () => {
+    const { adapter } = await openDatabase(driver)
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), region: column.string(), label: column.string() }) })
+    await adapter.execute(`CREATE TABLE ${name} (code ${codeType} PRIMARY KEY NOT NULL, region VARCHAR(16) NOT NULL UNIQUE, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      clearGeneratedTables()
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (code, region, label) VALUES ('FR', 'Europe', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).upsert({ code: 'DE', region: 'Europe', label: 'Changed' }, ['region'], ['label'])
+
+    expect(await cachedLabel()).toBe('Changed')
+  })
+
   it('refreshes a cached read by an exact key after an update of the same key', async () => {
     const countries = await createCountries(driver, codeType)
     expect(await countries.cachedLabel('FR')).toBe('France')
@@ -327,7 +347,7 @@ describe.skipIf(!mysqlIntegration)('query cache invalidation on mysql when the c
 })
 
 describe.skipIf(!mysqlIntegration)('column collation lookup on mysql', () => {
-  it('reads the collation of a temporary table that shadows a permanent one', async () => {
+  it('treats every column as loose when a temporary table shadows a permanent one', async () => {
     const { db, adapter } = await openDatabase('mysql')
     const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL)`)
@@ -335,14 +355,32 @@ describe.skipIf(!mysqlIntegration)('column collation lookup on mysql', () => {
       await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
     })
 
-    const exact = await db.transaction(async (transaction) => {
+    const columns = await db.transaction(async (transaction) => {
       await transaction.executeCompiled({ sql: `CREATE TEMPORARY TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL)`, source: 'test' })
-      const columns = await resolveCaseInsensitiveColumns(transaction, name)
+      const resolved = await resolveCaseInsensitiveColumns(transaction, name)
       await transaction.executeCompiled({ sql: `DROP TEMPORARY TABLE ${name}`, source: 'test' })
-      return typeof columns === 'object' && 'findTextColumn' in columns ? columns.findTextColumn('code')?.exact : undefined
+      return resolved
     })
 
-    expect(exact).toBe(false)
+    expect(columns).toBe('all')
+  })
+
+  it('does not reuse the collation of a temporary table for a lookup in another session', async () => {
+    const { db, adapter } = await openDatabase('mysql')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL)`)
+    onTestFinished(async () => {
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await db.transaction(async (transaction) => {
+      await transaction.executeCompiled({ sql: `CREATE TEMPORARY TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL)`, source: 'test' })
+      await resolveCaseInsensitiveColumns(transaction, name)
+      await transaction.executeCompiled({ sql: `DROP TEMPORARY TABLE ${name}`, source: 'test' })
+    })
+
+    const columns = await resolveCaseInsensitiveColumns(db, name)
+
+    expect(typeof columns === 'object' && 'findTextColumn' in columns ? columns.findTextColumn('code')?.exact : undefined).toBe(false)
   })
 })
 

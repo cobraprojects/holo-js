@@ -2372,9 +2372,12 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   lastInsertId?: number | string,
   includeMetadata = false,
   caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
+  conflictColumns?: readonly string[],
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
   const primaryKey = resolveRowDependencyKey(source, connectionName)
+  const conflictsBeyondPrimaryKey = conflictColumns !== undefined
+    && (primaryKey === undefined || conflictColumns.some(column => getColumnName(column) !== primaryKey))
   const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
   const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined
@@ -2433,7 +2436,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
     directDependencies.add(dependency)
   }
 
-  if (hasUnknownRowKey && !lastInsertDependencies) {
+  if ((hasUnknownRowKey && !lastInsertDependencies) || conflictsBeyondPrimaryKey) {
     const rowWildcardDependency = createTableRowWildcardCacheDependency(connectionName, tableName)
     dependencies.add(rowWildcardDependency)
     directDependencies.add(rowWildcardDependency)

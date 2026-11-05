@@ -22,6 +22,7 @@ export type CaseInsensitiveColumns = ReadonlySet<string> | 'all' | TextColumnCol
 
 type MySQLColumnRow = { Field: string, Type: string, Collation: string | null }
 type MySQLPadRow = { name: string, pad_attribute: string | null }
+type MySQLCreateTableRow = { 'Create Table'?: string }
 type SQLiteIndexColumnRow = { name: string, coll: string | null }
 type ColumnReader = (reader: DatabaseContext) => Promise<CaseInsensitiveColumns>
 
@@ -57,6 +58,7 @@ FROM pragma_index_list(?, ?) il, pragma_index_xinfo(il.name, ?) ii
 WHERE il."unique" = 1 AND ii."key" = 1 AND ii.name IS NOT NULL`
 
 const MYSQL_EXACT_COLLATION_PATTERN = /_bin$/i
+const MYSQL_PERMANENT_TABLE_PATTERN = /^\s*CREATE\s+TABLE\b/i
 const MYSQL_NO_PAD = 'NO PAD'
 const MYSQL_PADDED_TYPE_PATTERN = /^char\b/i
 const LOOSE_TEXT_COLUMN: TextColumn = { exact: false, padSpace: true }
@@ -139,9 +141,20 @@ function createMySQLReader(connection: DatabaseContext, tableName: string): Colu
   const { schema, table } = splitTablePath(tableName)
   const dialect = connection.getDialect()
   const configuredSchema = schema ?? connection.getSchemaName()
+  const qualifiedTable = configuredSchema === undefined
+    ? dialect.quoteIdentifier(table)
+    : `${dialect.quoteIdentifier(configuredSchema)}.${dialect.quoteIdentifier(table)}`
   return async (reader) => {
+    const created = await reader.introspectCompiled<MySQLCreateTableRow>({
+      sql: `SHOW CREATE TABLE ${qualifiedTable}`,
+      source: `schema:introspect:createTable:${tableName}`,
+    })
+    if (!MYSQL_PERMANENT_TABLE_PATTERN.test(created.rows[0]?.['Create Table'] ?? '')) {
+      return 'all'
+    }
+
     const result = await reader.introspectCompiled<MySQLColumnRow>({
-      sql: `SHOW FULL COLUMNS FROM ${dialect.quoteIdentifier(table)}${configuredSchema === undefined ? '' : ` FROM ${dialect.quoteIdentifier(configuredSchema)}`}`,
+      sql: `SHOW FULL COLUMNS FROM ${qualifiedTable}`,
       source: `schema:introspect:columnCollations:${tableName}`,
     })
     if (result.rows.length === 0) {

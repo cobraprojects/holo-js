@@ -2940,7 +2940,7 @@ export class TableQueryBuilder<
       return upsertResult
     }
 
-    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, previousRows)
+    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, previousRows, result.rows ? undefined : uniqueBy)
     return upsertResult
   }
 
@@ -3412,6 +3412,7 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
     lastInsertId?: number | string,
     previousRows?: readonly Readonly<Record<string, unknown>>[],
+    conflictColumns?: readonly string[],
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
@@ -3447,6 +3448,7 @@ export class TableQueryBuilder<
       lastInsertId,
       hasInvalidationListeners,
       await this.resolveCaseInsensitiveColumns(rows),
+      conflictColumns,
     )
 
     await invalidateQueryCacheDependencies(
