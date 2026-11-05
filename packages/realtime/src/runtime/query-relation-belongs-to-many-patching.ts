@@ -21,6 +21,8 @@ import type {
 import type { BackfillCache } from './state'
 import { isRecord } from './value'
 
+const NO_CHANGED_COLUMNS: ReadonlySet<string> = new Set()
+
 export async function tryPatchBelongsToManyRelation(
   query: DatabaseQueryObservation,
   value: unknown,
@@ -67,7 +69,7 @@ export async function tryPatchBelongsToManyRelation(
       }
 
       if (mutation.kind === 'delete') {
-        const nextRows = removeBelongsToManyRelationRow(rows, pivotRow, relation, new Set())
+        const nextRows = removeBelongsToManyRelationRow(rows, pivotRow, relation, NO_CHANGED_COLUMNS)
         if (!nextRows) {
           return UNPATCHED_RESULT
         }
@@ -336,8 +338,7 @@ function holdsRelatedRow(
   pivotRow: Readonly<Record<string, unknown>>,
   relation: DatabaseQueryBelongsToManyRelationObservation,
 ): boolean {
-  const relatedId = pivotRow[relation.relatedPivotKey]
-  return rows.some(row => row[relation.relatedKey] === relatedId)
+  return findBelongsToManyRelationCandidates(rows, pivotRow, relation)?.length !== 0
 }
 
 function updateBelongsToManyRelationPivot(
@@ -398,18 +399,47 @@ function removeBelongsToManyRelationRow(
   ])
 }
 
+type BelongsToManyRelationRowMatch = { readonly index: number, readonly row: Readonly<Record<string, unknown>> }
+
 function findBelongsToManyRelationRow(
   rows: readonly Readonly<Record<string, unknown>>[],
   pivotRow: Readonly<Record<string, unknown>>,
   relation: DatabaseQueryBelongsToManyRelationObservation,
   changedColumns: ReadonlySet<string> | undefined,
-): { readonly index: number, readonly row: Readonly<Record<string, unknown>> } | null | undefined {
+): BelongsToManyRelationRowMatch | null | undefined {
+  const candidates = findBelongsToManyRelationCandidates(rows, pivotRow, relation)
+  if (!candidates) {
+    return undefined
+  }
+
+  if (candidates.length === 0) {
+    return null
+  }
+
+  const [candidate, ...others] = candidates
+  if (others.length === 0) {
+    return candidate
+  }
+
+  if (!changedColumns) {
+    return undefined
+  }
+
+  const matches = candidates.filter(match => pivotIdentityMatches(match.row, pivotRow, relation, changedColumns))
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+function findBelongsToManyRelationCandidates(
+  rows: readonly Readonly<Record<string, unknown>>[],
+  pivotRow: Readonly<Record<string, unknown>>,
+  relation: DatabaseQueryBelongsToManyRelationObservation,
+): readonly BelongsToManyRelationRowMatch[] | undefined {
   const relatedId = pivotRow[relation.relatedPivotKey]
   if (typeof relatedId === 'undefined') {
     return undefined
   }
 
-  const candidates: number[] = []
+  const candidates: BelongsToManyRelationRowMatch[] = []
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
     if (!row) {
@@ -417,27 +447,11 @@ function findBelongsToManyRelationRow(
     }
 
     if (row[relation.relatedKey] === relatedId) {
-      candidates.push(index)
+      candidates.push(Object.freeze({ index, row }))
     }
   }
 
-  if (candidates.length === 0) {
-    return null
-  }
-
-  if (candidates.length > 1 && !changedColumns) {
-    return undefined
-  }
-
-  const matches = candidates.length === 1
-    ? candidates
-    : candidates.filter(index => pivotIdentityMatches(rows[index]!, pivotRow, relation, changedColumns!))
-  if (matches.length !== 1) {
-    return undefined
-  }
-
-  const index = matches[0]!
-  return Object.freeze({ index, row: rows[index]! })
+  return candidates
 }
 
 function pivotIdentityMatches(

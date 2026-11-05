@@ -72,7 +72,6 @@ async function openFixture(driver: typeof drivers[number]) {
       { onData: () => {}, onError: (error) => { throw error } },
     )
     return {
-      subscription,
       expectFresh: async () => {
         expect(subscription.current.data).toEqual(await handler())
       },
