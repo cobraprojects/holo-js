@@ -696,11 +696,12 @@ function sameWidthReplacement(functionName: string, original: string, parenthesi
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
-function sourceModuleResolveSource(parentURL: string): string {
+function sourceModuleResolveSource(parentURL: string, parentPath: string): string {
   return [
-    'specifier => {',
+    '(specifier, ...parent) => {',
     'const target = `${specifier}`;',
-    `if (globalThis.Bun) return import.meta.resolve(target, ${parentURL});`,
+    'if (parent.length > 0 && import.meta.resolve(\'./\', \'file:///\') === \'file:///\') return import.meta.resolve(target, ...parent);',
+    `if (globalThis.Bun) return import.meta.resolve(target, ${parentPath});`,
     `const marker = ${JSON.stringify(importerResolutionRequest)};`,
     `const hooks = globalThis.process.getBuiltinModule('node:module').registerHooks({ resolve: (request, context, nextResolve) => request === marker ? nextResolve(target, { ...context, parentURL: ${parentURL} }) : nextResolve(request, context) });`,
     'try { return import.meta.resolve(marker) } finally { hooks.deregister() }',
@@ -815,7 +816,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: ${sourceModuleResolveSource(sourceValues.url)} } }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: ${sourceModuleResolveSource(sourceValues.url, sourceValues.filename)} } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
