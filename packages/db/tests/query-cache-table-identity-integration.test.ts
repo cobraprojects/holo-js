@@ -90,6 +90,20 @@ describe('sqlite query cache table identity across temp and attached schemas', (
     expect(await cachedNames(qualified)).toEqual(['first', 'second'])
   })
 
+  it('refreshes cached unqualified reads after a transaction starts shadowing the table with a temp table', async () => {
+    const { db, bare, qualified } = await openCachedTable('sqlite')
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+
+    await db.transaction(async (trx) => {
+      await trx.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
+      await trx.table(qualified).insert({ id: 2, name: 'second', active: false })
+    })
+
+    expect(await cachedNames(bare)).toEqual([])
+    expect(await cachedNames(qualified)).toEqual(['first', 'second'])
+  })
+
   it('keeps a temp table that shadows a main table separate from the main table', async () => {
     const { db, bare, qualified } = await openCachedTable('sqlite')
     await db.getAdapter().execute(`CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`)

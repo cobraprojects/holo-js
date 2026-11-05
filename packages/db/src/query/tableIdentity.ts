@@ -28,8 +28,7 @@ function schemaChangingTransaction(connection: DatabaseContext): TransactionFram
   return frame?.schemaChanged ? frame : undefined
 }
 
-function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
-  const owner = schemaChangingTransaction(connection) ?? getRootDatabaseContext(connection)
+function ownerIdentities(owner: object): Map<string, TableIdentityEntry> {
   const existing = resolvedIdentities.get(owner)
   if (existing) return existing
   const created = new Map<string, TableIdentityEntry>()
@@ -52,8 +51,11 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
   if (splitTablePath(tableName).schema === undefined) return tableName
-  const identities = ownerIdentities(connection)
+  const transaction = schemaChangingTransaction(connection)
+  const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
+  const identities = transaction ? ownerIdentities(transaction) : rootIdentities
   const cached = identities.get(tableName)
+  const previous = cached ?? rootIdentities.get(tableName)
   const entry = cached?.generation === currentSchemaGeneration()
     ? cached
     : { generation: currentSchemaGeneration(), identity: lookupTableIdentity(connection, tableName) }
@@ -64,9 +66,9 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
     })
   }
   const identity = await entry.identity
-  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, schemaChangingTransaction(connection))
-  if (cached && entry !== cached) {
-    const replaced = await cached.identity.catch(() => identity)
+  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, transaction)
+  if (previous && entry !== previous) {
+    const replaced = await previous.identity.catch(() => identity)
     if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
   }
   return identity
