@@ -104,5 +104,6 @@ describe('@holo-js/realtime predicate dependency matching', () => {
     expect(isQueryObservationContradictedByExactPredicates(query(9007199254740992n), createExactPredicates('n', ['9007199254740993']))).toBe(false)
     expect(readExactPredicateValues(createExactPredicates('n', ['9007199254740993']), 'main', 'posts', 'n')).toBeUndefined()
     expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('[1,9007199254740993]')]), 'main', 'posts', 'n')).toBeUndefined()
+    expect(readExactPredicateValues(createExactPredicates('n', [encodeURIComponent('{"n":[9007199254740993]}')]), 'main', 'posts', 'n')).toBeUndefined()
   })
 })

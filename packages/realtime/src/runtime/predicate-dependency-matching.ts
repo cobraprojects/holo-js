@@ -16,8 +16,8 @@ function createTableKey(connectionName: string, tableName: string): string {
 }
 
 function holdsUnsafeInteger(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some(holdsUnsafeInteger)
+  if (value && typeof value === 'object') {
+    return Object.values(value).some(holdsUnsafeInteger)
   }
 
   return typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)

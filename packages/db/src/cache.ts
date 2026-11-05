@@ -1015,7 +1015,7 @@ export function createDeterministicQueryCacheKey(
   statement: CompiledStatement,
   connectionName: string,
 ): string {
-  const digest = createHash('sha256').update(serializeWithIntegers({
+  const digest = createHash('sha256').update(stringifyBigIntsAsIntegers({
     connectionName,
     sql: statement.sql,
     bindings: statement.bindings ?? [],
@@ -1039,7 +1039,7 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${tableName}`
 }
 
-function serializeWithIntegers(value: unknown): string | undefined {
+function stringifyBigIntsAsIntegers(value: unknown): string | undefined {
   if (typeof value === 'bigint') {
     return value.toString()
   }
@@ -1049,16 +1049,16 @@ function serializeWithIntegers(value: unknown): string | undefined {
   }
 
   if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
-    return serializeWithIntegers((value as { toJSON: () => unknown }).toJSON())
+    return stringifyBigIntsAsIntegers((value as { toJSON: () => unknown }).toJSON())
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map(element => serializeWithIntegers(element) ?? 'null').join(',')}]`
+    return `[${value.map(element => stringifyBigIntsAsIntegers(element) ?? 'null').join(',')}]`
   }
 
   const entries: string[] = []
   for (const [key, element] of Object.entries(value)) {
-    const serialized = serializeWithIntegers(element)
+    const serialized = stringifyBigIntsAsIntegers(element)
     if (serialized !== undefined) {
       entries.push(`${JSON.stringify(key)}:${serialized}`)
     }
@@ -1068,7 +1068,7 @@ function serializeWithIntegers(value: unknown): string | undefined {
 }
 
 function encodeDependencyValue(value: unknown): string {
-  return encodeURIComponent(serializeWithIntegers(value)!)
+  return encodeURIComponent(stringifyBigIntsAsIntegers(value)!)
 }
 
 function createPredicateMetadata(

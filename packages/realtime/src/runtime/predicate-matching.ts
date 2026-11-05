@@ -73,6 +73,7 @@ export function compareValues(left: unknown, right: unknown): number | undefined
   }
 
   if (isNumberLike(left) && isNumberLike(right)) {
+    if (Number.isNaN(left) || Number.isNaN(right)) return undefined
     const leftNumber = left as number | bigint
     const rightNumber = right as number | bigint
     return leftNumber < rightNumber ? -1 : leftNumber > rightNumber ? 1 : 0

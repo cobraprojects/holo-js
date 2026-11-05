@@ -32,6 +32,8 @@ describe('@holo-js/realtime predicate matching', () => {
     expect(matchesPredicateValue(3, { column: 'n', operator: 'in', value: [1n, 2n] })).toBe(false)
     expect(matchesPredicateValue(3, { column: 'n', operator: '>', value: 2n })).toBe(true)
     expect(matchesPredicateValue(9007199254740992, { column: 'n', operator: '=', value: 9007199254740993n })).toBe(false)
+    expect(compareValues(Number.NaN, 5n)).toBeUndefined()
+    expect(matchesPredicateValue(Number.NaN, { column: 'n', operator: '=', value: 5n })).toBe(false)
   })
 
   it('compares typed values without assuming database string collation', () => {
