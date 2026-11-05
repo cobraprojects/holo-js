@@ -140,6 +140,8 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     await expect(joined().select(`${products}.price`, 'factor', `${orders}.factor as factor` as never).distinct().sum(`${products}.price`))
       .rejects.toThrow(collision(`${orders}.factor as factor`, 'factor', products))
+    await expect(joined().select(`${products}.id`, `${orders}.price as price` as never).groupBy(`${products}.id`, `${orders}.price`).get())
+      .rejects.toThrow(collision(`${orders}.price as price`, 'price', products))
     await expect(joined().select(`${orders}.factor as factor` as never).orderBy('factor').sum(`${products}.price`))
       .rejects.toThrow(collision(`${orders}.factor as factor`, 'factor', products))
   })
@@ -293,6 +295,23 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     const rows = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.price as label` as never, `${products}.*`, `${notes}.*`).get()
     expect(rows.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
+  })
+
+  it('applies model casts to the model columns of a joined query', async () => {
+    const { table, products, orders } = await createFixture(driver)
+    const CastProduct = defineModel(table, { timestamps: false, casts: { price: 'string', factor: 'string' } })
+
+    const rows = await CastProduct.query().join(orders, `${orders}.product_id`, '=', `${products}.id`).get()
+    expect(rows.map(entity => [entity.get('price'), entity.get('factor')]).sort()).toEqual([['10', '2'], ['20', '4']])
+  })
+
+  it('reads a cursor from an aliased selection of the qualified order column', async () => {
+    const { products } = await createFixture(driver)
+
+    const query = DB.table(products).select('id as product_key', 'price').orderBy(`${products}.id`)
+    const first = await query.cursorPaginate(1)
+    const second = await query.cursorPaginate(1, first.nextCursor)
+    expect([first, second].map(page => page.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
   })
 
   it('shows the projected SQL that a joined model query runs', async () => {

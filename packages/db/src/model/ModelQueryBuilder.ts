@@ -26,8 +26,8 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { projectModelRows, resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
-import { knownJoinedColumns, selectionOutputName } from '../query/modelRowProjection'
+import { projectModelRows, resolveAggregateSource, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -221,15 +221,15 @@ class ModelQueryBuilderBase<
       throw new CompilerError(`Cannot cursor paginate a union of joined "${plan.source.tableName}" model queries by "${joinedOrders[0]}". Select it under an alias in each query and order by that alias.`)
     }
     const connectionName = this.getConnectionName()
-    const taken = new Set([
+    const reservedNames = new Set([
       ...Object.keys(plan.source.table?.columns ?? {}),
       ...plan.joins.flatMap(join => knownJoinedColumns(join, connectionName) ?? []),
       ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? []),
     ])
-    const freeAlias = (index: number): string => taken.has(`__holo_cursor_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${index}`
+    const freeAlias = (index: number): string => reservedNames.has(`__holo_cursor_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${index}`
     const cursorColumns = joinedOrders.map(() => {
       const alias = freeAlias(0)
-      taken.add(alias)
+      reservedNames.add(alias)
       return alias
     })
     const selected = plan.selections.length === 0 ? this.select('*' as never) : this
@@ -1619,10 +1619,10 @@ class ModelQueryBuilderBase<
       : this
     const { query, cursorColumns } = ordered.selectJoinedCursorColumns()
     const page = await query.getModelRowsQuery().cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
-    const omitted = [...hiddenColumns, ...cursorColumns]
-    const rows = omitted.length === 0 ? page.data : page.data.map(row => {
+    const strippedColumns = [...hiddenColumns, ...cursorColumns]
+    const rows = strippedColumns.length === 0 ? page.data : page.data.map(row => {
       const attributes = { ...row }
-      for (const column of omitted) delete attributes[column]
+      for (const column of strippedColumns) delete attributes[column]
       return attributes
     })
     const collection = await this.hydrateRows(rows)

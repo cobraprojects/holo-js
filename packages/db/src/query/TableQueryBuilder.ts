@@ -181,7 +181,6 @@ type KeyedInsert = (
 
 let keyedInsert: KeyedInsert
 
-export { resolveSourceColumnName }
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,

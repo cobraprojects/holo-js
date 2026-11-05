@@ -6,6 +6,8 @@ type JoinedColumns = (join: QueryJoinClause) => readonly string[] | undefined
 
 type SelectionRole = 'own' | 'joined' | 'other'
 
+type AlignmentRole = SelectionRole | 'shadow'
+
 export function knownJoinedColumns(join: QueryJoinClause, connectionName: string): readonly string[] | undefined {
   const definition = join.definition ?? (join.table ? getConnectionGeneratedTableDefinition(join.table, connectionName) : undefined)
   return definition ? Object.keys(definition.columns) : undefined
@@ -39,6 +41,16 @@ function joinName(join: QueryJoinClause): string | undefined {
   return join.alias ?? join.table
 }
 
+function selectedAliases(plan: SelectQueryPlan): ReadonlySet<string> {
+  return new Set(plan.selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
+}
+
+function wildcardColumns(branch: SelectQueryPlan, wildcard: string, joinedColumns: JoinedColumns): readonly string[] | undefined {
+  const qualifier = wildcard.slice(0, -2)
+  const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+  return join ? joinedColumns(join) : undefined
+}
+
 function selectionRole(source: QuerySource, selection: QuerySelection): SelectionRole {
   if (selection.kind !== 'column') return 'other'
   return typeof resolveSourceColumnName(source, selection.column) === 'undefined' ? 'joined' : 'own'
@@ -58,25 +70,23 @@ function expandSelections(branch: SelectQueryPlan, driver: string): readonly Que
 function assertBranchSelections(branch: SelectQueryPlan, model: QuerySource, modelColumns: readonly string[], joinedColumns: JoinedColumns): void {
   const ownOutputs = new Set(branch.selections.flatMap(selection => selection.kind === 'column' && selectionRole(branch.source, selection) === 'own' ? [columnOutputName(selection)] : []))
   const replaces = (name: string) => modelColumns.includes(name) && !ownOutputs.has('*') && !ownOutputs.has(name)
-  const reject = (selected: string, name: string) => new CompilerError(`Cannot select "${selected}" on a joined "${model.tableName}" model query: "${name}" is a "${model.tableName}" column. Qualify or alias it to a non-model name.`)
+  const collisionError = (selected: string, name: string) => new CompilerError(`Cannot select "${selected}" on a joined "${model.tableName}" model query: "${name}" is a "${model.tableName}" column. Qualify or alias it to a non-model name.`)
 
   for (const selection of branch.selections) {
     if (selection.kind !== 'column' || selectionRole(branch.source, selection) === 'own') continue
     if (selection.column.endsWith('.*')) {
       if (ownOutputs.has('*')) continue
-      const qualifier = selection.column.slice(0, -2)
-      const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
-      const columns = join ? joinedColumns(join) : undefined
+      const columns = wildcardColumns(branch, selection.column, joinedColumns)
       if (!columns) {
         throw new CompilerError(`Cannot select "${selection.column}" on a joined "${model.tableName}" model query: its columns may replace "${model.tableName}" columns the query doesn't select. Select "${model.alias ?? model.tableName}.*" too, or select the joined columns by name.`)
       }
       const replaced = columns.find(replaces)
-      if (replaced) throw reject(selection.column, replaced)
+      if (replaced) throw collisionError(selection.column, replaced)
       continue
     }
     const name = columnOutputName(selection)
-    if (selection.alias && modelColumns.includes(name)) throw reject(`${selection.column} as ${selection.alias}`, name)
-    if (replaces(name)) throw reject(selection.column, name)
+    if (selection.alias && modelColumns.includes(name)) throw collisionError(`${selection.column} as ${selection.alias}`, name)
+    if (replaces(name)) throw collisionError(selection.column, name)
   }
 }
 
@@ -85,7 +95,7 @@ function shadowsModelColumn(branch: SelectQueryPlan, selection: QuerySelection, 
   return selection.column.endsWith('.*') || (!selection.alias && modelColumns.includes(columnOutputName(selection)))
 }
 
-function alignmentRole(branch: SelectQueryPlan, selection: QuerySelection, modelColumns: readonly string[]): string {
+function alignmentRole(branch: SelectQueryPlan, selection: QuerySelection, modelColumns: readonly string[]): AlignmentRole {
   return shadowsModelColumn(branch, selection, modelColumns) ? 'shadow' : selectionRole(branch.source, selection)
 }
 
@@ -97,12 +107,15 @@ function moveShadowingColumnsFirst(branch: SelectQueryPlan, selections: readonly
   return Object.freeze([...selections.slice(0, firstOwn), ...moved, ...following.filter(selection => !moved.includes(selection))])
 }
 
+function ordersByModelColumn(plan: SelectQueryPlan, modelColumns: readonly string[], aliases: ReadonlySet<string>) {
+  return (order: SelectQueryPlan['orderBy'][number]): order is Extract<SelectQueryPlan['orderBy'][number], { kind: 'column' }> =>
+    order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column)
+}
+
 function qualifyModelOrders(plan: SelectQueryPlan, modelColumns: readonly string[], driver: string): SelectQueryPlan['orderBy'] {
-  const aliases = new Set(plan.selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
+  const isModelOrder = ordersByModelColumn(plan, modelColumns, selectedAliases(plan))
   const own = tableWildcard(plan.source.alias ?? plan.source.tableName, driver).slice(0, -2)
-  return Object.freeze(plan.orderBy.map(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column)
-    ? Object.freeze({ ...order, column: `${own}.${order.column}` })
-    : order))
+  return Object.freeze(plan.orderBy.map(order => isModelOrder(order) ? Object.freeze({ ...order, column: `${own}.${order.column}` }) : order))
 }
 
 function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
@@ -110,26 +123,23 @@ function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
 }
 
 function orderedModelColumns(plan: SelectQueryPlan, modelColumns: readonly string[]): readonly string[] {
-  const aliases = new Set(plan.selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
-  return plan.orderBy.flatMap(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column) ? [order.column] : [])
+  return plan.orderBy.filter(ordersByModelColumn(plan, modelColumns, selectedAliases(plan))).map(order => order.column)
 }
 
 function sharesOrderedName(branch: SelectQueryPlan, selection: QuerySelection, ordered: readonly string[], joinedColumns: JoinedColumns): boolean {
   if (selection.kind !== 'column' || selectionRole(branch.source, selection) !== 'joined') return false
   if (!selection.column.endsWith('.*')) return !selection.alias && ordered.includes(columnOutputName(selection))
-  const qualifier = selection.column.slice(0, -2)
-  const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
-  const columns = join ? joinedColumns(join) : undefined
+  const columns = wildcardColumns(branch, selection.column, joinedColumns)
   return !columns || columns.some(column => ordered.includes(column))
 }
 
-function projectUnionBranch(branch: SelectQueryPlan, driver: string, modelColumns: readonly string[], leadingModelColumns: boolean): SelectQueryPlan {
+function projectUnionBranch(branch: SelectQueryPlan, driver: string, modelColumns: readonly string[], shouldLeadWithModelColumns: boolean): SelectQueryPlan {
   const selections = moveShadowingColumnsFirst(branch, expandSelections(branch, driver), modelColumns)
-  const leading = leadingModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
+  const leading = shouldLeadWithModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
   return Object.freeze({
     ...branch,
     selections: Object.freeze([...leading, ...selections]),
-    unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: projectUnionBranch(union.query, driver, modelColumns, leadingModelColumns) }))),
+    unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: projectUnionBranch(union.query, driver, modelColumns, shouldLeadWithModelColumns) }))),
   })
 }
 
@@ -149,6 +159,6 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }
   const ordered = branches.flatMap(branch => orderedModelColumns(branch, modelColumns))
-  const leadingModelColumns = driver === 'sqlite' && ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
-  return projectUnionBranch(plan, driver, modelColumns, leadingModelColumns)
+  const shouldLeadWithModelColumns = driver === 'sqlite' && ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
+  return projectUnionBranch(plan, driver, modelColumns, shouldLeadWithModelColumns)
 }
