@@ -451,11 +451,11 @@ export async function startDiscoveryWatch({
   }
 
   const findGainedDirectories = (baseline: WatchPolicyBaseline): readonly string[] => {
-    const gained = watchedDirectories.filter(directory => !baseline.directories.has(directory))
-    return gained
-      .filter(directory => !gained.some(other => other !== directory && directory.startsWith(`${other}${sep}`)))
+    const gained = watchedDirectories
+      .filter(directory => !baseline.directories.has(directory))
       .map(directory => toPosixSlashes(relative(projectRoot, directory)))
       .filter(path => isDiscoveryRelevantPath(path, project, pluginWatches))
+    return gained.filter(path => !gained.some(other => other !== path && pathIsWithin(path, other)))
   }
 
   const classify = async (
@@ -523,12 +523,14 @@ export async function startDiscoveryWatch({
 
   const acquireDirectories = (directories: readonly string[]): void => {
     releaseHandles()
-    watchedDirectories = directories
+    const acquired: string[] = []
+    watchedDirectories = acquired
     try {
       for (const directory of directories) {
         if (closed || signal.aborted) return
         try {
           acquire(directory, false)
+          acquired.push(directory)
         } catch (error) {
           if (!isIgnorableWatchError(error)) throw error
         }

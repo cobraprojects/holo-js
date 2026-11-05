@@ -497,7 +497,8 @@ async function declarePluginWatchRoots(root: string, roots: readonly string[]): 
   await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots, excludes: [] } }))
 }
 
-async function startDeferredWatch(root: string, recursive: boolean, config = defaultProjectConfig()) {
+async function startDeferredWatch(root: string, recursive: boolean, config = defaultProjectConfig(), unwatchableOnce: readonly string[] = []) {
+  const unwatchable = new Set(unwatchableOnce.map(path => join(root, path)))
   const listeners = new Map<string, DeferredWatchListener[]>()
   const captured = captureChanges()
   const watcher = await startDiscoveryWatch({
@@ -510,6 +511,9 @@ async function startDeferredWatch(root: string, recursive: boolean, config = def
     createWatcher: ((path: string, options: { recursive: boolean }, listener: DeferredWatchListener) => {
       if (options.recursive && !recursive) {
         throw Object.assign(new Error('recursive watch unavailable'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
+      }
+      if (unwatchable.delete(path)) {
+        throw Object.assign(new Error('directory vanished'), { code: 'ENOENT' })
       }
       listeners.set(path, [...listeners.get(path) ?? [], listener])
       return { close() {} }
@@ -666,4 +670,29 @@ it.each([
   watcher.resume()
   await settled()
   expect(changes).toEqual([])
+})
+
+it('replays a relevant folder the non-recursive watcher gains inside a gained folder that is not relevant itself', async () => {
+  const root = await createProject()
+  const defaults = defaultProjectConfig()
+  const config = { ...defaults, paths: { ...defaults.paths, generatedSchema: 'server/schema.generated.ts' } }
+  const { watcher, changes, settled } = await startDeferredWatch(root, false, config)
+  await write(root, 'server/models/User.ts')
+  await writeOutputFile(join(root, 'server/schema.generated.ts'), 'export {}')
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'server/models', kind: 'changed' }])
+})
+
+it('replays a folder the non-recursive watcher could not watch at startup once it watches it', async () => {
+  const root = await createProject()
+  await write(root, 'server/models/User.ts')
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false, config, ['server/models'])
+  await write(root, 'server/models/User.ts', 'edited')
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'server/models', kind: 'changed' }])
 })
