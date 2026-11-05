@@ -840,6 +840,22 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(loaded.default).toEqual({ origin: 'application' })
   })
 
+  it('fails loudly when a Holo package installed only in the application brings its own copy of a runtime package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-split')
+    const nestedDbRoot = join(packageRoot, 'node_modules/@holo-js/db')
+    await mkdir(nestedDbRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-split', type: 'module', exports: { '.': './index.mjs' }, dependencies: { '@holo-js/db': '*' } }))
+    await writeFile(join(packageRoot, 'index.mjs'), "import { Entity } from '@holo-js/db'\nexport class PluginEntity extends Entity {}\n")
+    await writeFile(join(nestedDbRoot, 'package.json'), JSON.stringify({ name: '@holo-js/db', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(nestedDbRoot, 'index.mjs'), 'export class Entity {}\n')
+    const entryPath = join(projectRoot, 'server/models/plugin.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { PluginEntity } from '@holo-js/app-only-split'\nexport default PluginEntity\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@holo-js/app-only-split" uses its own copy of "@holo-js/db"')
+  })
+
   it('rewrites every import.meta url read and leaves assignment targets alone', async () => {
     const projectRoot = await realpath(await createTempProject())
     const entryPath = join(projectRoot, 'server/jobs/meta-forms.ts')

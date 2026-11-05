@@ -500,12 +500,78 @@ function runtimeInstanceModuleSource(specifier: string, instance: Record<string,
   return lines.join('\n')
 }
 
-function resolveHoloPackageFromRuntime(specifier: string): string {
+function holoPackageName(specifier: string): string {
+  return specifier.split('/').slice(0, 2).join('/')
+}
+
+function readPackageManifest(packageRoot: string): Record<string, unknown> | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as unknown
+    return isRecord(manifest) ? manifest : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function installedPackageRoot(fromDirectory: string, packageName: string): string | undefined {
+  let directory = fromDirectory
+  while (true) {
+    const candidate = join(directory, 'node_modules', packageName)
+    if (existsSync(join(candidate, 'package.json'))) return realpathSync(candidate)
+    const parent = dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
+  }
+}
+
+function runtimePackageRoot(packageName: string): string | undefined {
+  let resolved: string
+  try {
+    resolved = fileURLToPath(import.meta.resolve(packageName))
+  } catch {
+    return undefined
+  }
+  let directory = dirname(resolved)
+  while (true) {
+    if (readPackageManifest(directory)?.name === packageName) return realpathSync(directory)
+    const parent = dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
+  }
+}
+
+function assertApplicationHoloPackageSharesRuntime(specifier: string, resolveDir: string): void {
+  const visited = new Set<string>()
+  const check = (packageName: string, fromDirectory: string): void => {
+    const packageRoot = installedPackageRoot(fromDirectory, packageName)
+    if (!packageRoot || visited.has(packageRoot)) return
+    visited.add(packageRoot)
+    const manifest = readPackageManifest(packageRoot)
+    const dependencyNames = ['dependencies', 'peerDependencies', 'optionalDependencies']
+      .flatMap(field => isRecord(manifest?.[field]) ? Object.keys(manifest[field]) : [])
+      .filter(name => name.startsWith('@holo-js/'))
+    for (const dependencyName of new Set(dependencyNames)) {
+      const runtimeRoot = runtimePackageRoot(dependencyName)
+      if (!runtimeRoot) {
+        check(dependencyName, packageRoot)
+        continue
+      }
+      const applicationRoot = installedPackageRoot(packageRoot, dependencyName)
+      if (applicationRoot && applicationRoot !== runtimeRoot) {
+        throw new Error(`[@holo-js/core] "${holoPackageName(specifier)}" uses its own copy of "${dependencyName}", so it cannot share the Holo runtime's instances. Install "${holoPackageName(specifier)}" in the same node_modules as @holo-js/core.`)
+      }
+    }
+  }
+  check(holoPackageName(specifier), resolveDir)
+}
+
+function resolveHoloPackageFromRuntime(specifier: string, resolveDir: string): string {
   try {
     return import.meta.resolve(specifier)
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') return specifier
-    throw error
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND')) throw error
+    assertApplicationHoloPackageSharesRuntime(specifier, resolveDir)
+    return specifier
   }
 }
 
@@ -516,7 +582,7 @@ function bridgeRuntimeModuleInstances(): Plugin {
       build.onResolve({ filter: /^@holo-js\// }, args => (
         runtimeModuleInstances().has(args.path)
           ? { path: args.path, namespace: runtimeInstanceNamespace }
-          : { path: resolveHoloPackageFromRuntime(args.path), external: true }
+          : { path: resolveHoloPackageFromRuntime(args.path, args.resolveDir), external: true }
       ))
       build.onLoad({ filter: /.*/, namespace: runtimeInstanceNamespace }, args => ({
         contents: runtimeInstanceModuleSource(args.path, runtimeModuleInstances().get(args.path) ?? {}),
