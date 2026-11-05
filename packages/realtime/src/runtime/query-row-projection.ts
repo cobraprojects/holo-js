@@ -1,5 +1,6 @@
 import {
   hasRecordKey,
+  readPrimaryKey,
 } from './predicate-matching'
 import {
   copyRecord,
@@ -50,7 +51,7 @@ export function projectedRowIdentity(
   row: Readonly<Record<string, unknown>>,
 ): unknown | typeof MISSING_PROJECTED_IDENTITY {
   if (!context.hasProjectedSelections) {
-    return rowIdentity(row)
+    return rowIdentity(row, readPrimaryKey(context))
   }
 
   if (context.projectedIdentityColumn === NO_PROJECTED_IDENTITY_COLUMN) {

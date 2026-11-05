@@ -1,3 +1,4 @@
+import { readPrimaryKey } from './predicate-matching'
 import type {
   DatabaseMutationEvent,
 } from './dependencies'
@@ -120,7 +121,7 @@ function applyInsertMutationToRows(
     }
 
     if (mutation.kind === 'upsert') {
-      const withoutRow = removeRowByIdentityValueFromQueryRowsLazily(rows, nextRows, query, rowIdentity(row))
+      const withoutRow = removeRowByIdentityValueFromQueryRowsLazily(rows, nextRows, query, rowIdentity(row, readPrimaryKey(context)))
       if (withoutRow) {
         nextRows = withoutRow
       }

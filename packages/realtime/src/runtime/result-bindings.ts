@@ -1,6 +1,7 @@
 import {
   createQueryObservationMetadata,
 } from './query-metadata'
+import { readPrimaryKey } from './predicate-matching'
 import { createQueryRowIdentityIndex } from './query-row-identity'
 import {
   EMPTY_RESULT_PATH,
@@ -166,7 +167,7 @@ export function bindQueryObservationsToSerializedValue(
         result: binding.value,
         resultPath: binding.path,
         resultPathKey: binding.pathKey,
-        rowIdentityIndex: createQueryRowIdentityIndex(binding.value),
+        rowIdentityIndex: createQueryRowIdentityIndex(binding.value, readPrimaryKey(query)),
       }))
     }
   }
@@ -194,7 +195,7 @@ function bindExplicitQueryObservationPaths(
       resultBound: true,
       resultPath,
       resultPathKey: createResultPathKey(resultPath),
-      rowIdentityIndex: createQueryRowIdentityIndex(result),
+      rowIdentityIndex: createQueryRowIdentityIndex(result, readPrimaryKey(query)),
     }))
   }
 

@@ -4,6 +4,7 @@ import {
 } from './query-metadata'
 import {
   NO_EXACT_ID_PREDICATE,
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
 } from './predicate-matching'
 import {
@@ -31,7 +32,7 @@ export async function getGroupedExactRowBackfill(
 ): Promise<BackfillRows | undefined> {
   const rowGroups = backfills.rowGroups
   const exactId = readQueryExactIdPredicateValue(query)
-  if (!rowGroups || exactId === NO_EXACT_ID_PREDICATE) {
+  if (!rowGroups || exactId === NO_EXACT_ID_PREDICATE || query.predicates.length !== 1) {
     return undefined
   }
 
@@ -109,9 +110,11 @@ function exactRowBackfillQueriesShareScope(
   candidate: DatabaseQueryObservation,
 ): boolean {
   return readQueryRowWindowMode(candidate) === 'single'
+    && candidate.predicates.length === 1
     && readQueryExactIdPredicateValue(candidate) !== NO_EXACT_ID_PREDICATE
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
+    && readPrimaryKey(query) === readPrimaryKey(candidate)
     && selectionsEqual(query.selections ?? [], candidate.selections ?? [])
 }
 
@@ -163,6 +166,8 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(query.connectionName)
     + ',"exactRowIds":'
     + stableStringify(values)
+    + ',"primaryKey":'
+    + stableStringify(readPrimaryKey(query))
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
@@ -179,24 +184,26 @@ async function fetchGroupedExactRowBackfill(
     return undefined
   }
 
+  const primaryKey = readPrimaryKey(query)
   let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   const selections = query.selections ?? []
   const usesHiddenIdentity = selections.length > 0
   if (usesHiddenIdentity) {
     builder = builder.select(...[
       ...selections.map(createBackfillSelection),
-      `id as ${GROUPED_ROW_ID_ALIAS}`,
+      `${primaryKey} as ${GROUPED_ROW_ID_ALIAS}`,
     ])
   }
 
   const rows = await builder
-    .where('id', 'in', values)
+    .where(primaryKey, 'in', values)
     .get()
 
+  const requestedValues = new Set(values)
   const rowsById = new Map<unknown, BackfillRows>()
   for (const row of rows) {
-    const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row.id
-    if (typeof id === 'undefined') {
+    const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey]
+    if (typeof id === 'undefined' || !requestedValues.has(id)) {
       return undefined
     }
 
@@ -366,10 +373,11 @@ function groupWindowRows(
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
+  const requestedValues = new Set(values)
   const rowsByGroup = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const groupValue = row[GROUPED_ROW_ID_ALIAS]
-    if (typeof groupValue === 'undefined') {
+    if (typeof groupValue === 'undefined' || !requestedValues.has(groupValue)) {
       return undefined
     }
 

@@ -18,6 +18,7 @@ import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
+import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
@@ -89,6 +90,7 @@ type AggregateLoad = {
 type RelationAggregateObservationTarget = {
   readonly column: string
   readonly connectionName: string
+  readonly primaryKey: string | undefined
   readonly tableName: string
   readonly value: unknown
 }
@@ -785,6 +787,7 @@ export class ModelRepository<
           : Object.freeze([createTableCacheDependency(target.connectionName, target.tableName)])
         const resultPath = createPath(index, key)
         const data = entity.toJSON() as Readonly<Record<string, unknown>>
+        const primaryKey = target.primaryKey
         recordDatabaseQueryObservation(Object.freeze({
           aggregate: aggregate.kind === 'exists'
             ? Object.freeze({
@@ -795,13 +798,14 @@ export class ModelRepository<
           connectionName: target.connectionName,
           dependencies,
           orderBy: [],
-          patchable: true,
+          patchable: primaryKey !== undefined,
           ...serializedFlag(modelNeedsSerialization(this.definition)),
           predicates: Object.freeze([Object.freeze({
             column: target.column,
             operator: '=' as const,
             value: target.value,
           })]),
+          primaryKey,
           result: data[key],
           resultPath,
           selections: [],
@@ -893,17 +897,19 @@ export class ModelRepository<
         predicateDependency!,
       ])
 
+      const primaryKey = resolveModelRowKey(related.definition)
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: relatedRowsArePatchable(related) && primaryKey !== undefined,
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.foreignKey,
           operator: '=' as const,
           value: parentKey,
         })]),
+        primaryKey,
         resultPath: createPath(index, relationName),
         selections: [],
         tableName: related.definition.table.tableName,
@@ -1362,6 +1368,7 @@ export class ModelRepository<
         return {
           column: relation.ownerKey,
           connectionName: related.getConnectionName(),
+          primaryKey: resolveModelRowKey(related.definition),
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -1373,6 +1380,7 @@ export class ModelRepository<
         return {
           column: relation.foreignKey,
           connectionName: related.getConnectionName(),
+          primaryKey: resolveModelRowKey(related.definition),
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -2177,9 +2185,9 @@ export class ModelRepository<
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
     const table = this.definition.table
-    return this.definition.untyped
-      ? new TableQueryBuilder(table, connection, createSelectQueryPlan(createTableSource(table.tableName)))
-      : new TableQueryBuilder(table, connection)
+    const source = createTableSource(this.definition.untyped ? table.tableName : table)
+    const primaryKey = resolveModelRowKey(this.definition)
+    return new TableQueryBuilder(table, connection, createSelectQueryPlan(primaryKey === undefined ? source : Object.freeze({ ...source, primaryKey })))
   }
 
   private createQuery(

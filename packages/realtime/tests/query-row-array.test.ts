@@ -328,7 +328,7 @@ describe('@holo-js/realtime row array patch helpers', () => {
   })
 
   it('keeps original row references when identity removals do not change the set', () => {
-    expect(removeRowsByIdentityValues(rows, new Set([10]))).toBe(rows)
+    expect(removeRowsByIdentityValues(rows, new Set([10]), 'id')).toBe(rows)
   })
 
   it('removes multiple identities through direct scanned lazy helpers', () => {
@@ -339,16 +339,16 @@ describe('@holo-js/realtime row array patch helpers', () => {
       rows[2],
     ] as unknown as readonly TestRow[]
 
-    expect(removeRowsByIdentityValuesLazily(rows, undefined, new Set([1, 3]))).toEqual([rows[1]])
-    expect(removeRowsByIdentityValuesLazily(rows, undefined, new Set([4]))).toBeUndefined()
-    expect(removeRowsByIdentityValues(sparseRows, new Set([1, 3]))).toEqual([rows[1]])
-    expect(removeRowsByIdentityValuesLazily(sparseRows, undefined, new Set([1, 3]))).toEqual([rows[1]])
-    expect(removeRowsByTwoIdentityValues(rows, 1, 3)).toEqual([rows[1]])
-    expect(removeRowsByTwoIdentityValues(rows, 4, 5)).toBe(rows)
-    expect(removeRowsByTwoIdentityValues(sparseRows, 1, 3)).toEqual([rows[1]])
-    expect(removeRowsByTwoIdentityValuesLazily(rows, undefined, 1, 3)).toEqual([rows[1]])
-    expect(removeRowsByTwoIdentityValuesLazily(rows, undefined, 4, 5)).toBeUndefined()
-    expect(removeRowsByTwoIdentityValuesLazily(sparseRows, undefined, 1, 3)).toEqual([rows[1]])
+    expect(removeRowsByIdentityValuesLazily(rows, undefined, new Set([1, 3]), 'id')).toEqual([rows[1]])
+    expect(removeRowsByIdentityValuesLazily(rows, undefined, new Set([4]), 'id')).toBeUndefined()
+    expect(removeRowsByIdentityValues(sparseRows, new Set([1, 3]), 'id')).toEqual([rows[1]])
+    expect(removeRowsByIdentityValuesLazily(sparseRows, undefined, new Set([1, 3]), 'id')).toEqual([rows[1]])
+    expect(removeRowsByTwoIdentityValues(rows, 1, 3, 'id')).toEqual([rows[1]])
+    expect(removeRowsByTwoIdentityValues(rows, 4, 5, 'id')).toBe(rows)
+    expect(removeRowsByTwoIdentityValues(sparseRows, 1, 3, 'id')).toEqual([rows[1]])
+    expect(removeRowsByTwoIdentityValuesLazily(rows, undefined, 1, 3, 'id')).toEqual([rows[1]])
+    expect(removeRowsByTwoIdentityValuesLazily(rows, undefined, 4, 5, 'id')).toBeUndefined()
+    expect(removeRowsByTwoIdentityValuesLazily(sparseRows, undefined, 1, 3, 'id')).toEqual([rows[1]])
 
     const nextRows = [
       rows[0],
@@ -357,7 +357,7 @@ describe('@holo-js/realtime row array patch helpers', () => {
       rows[2],
     ] as unknown as TestRow[]
 
-    expect(removeRowsByTwoIdentityValuesLazily(rows, nextRows, 1, 3)).toBe(nextRows)
+    expect(removeRowsByTwoIdentityValuesLazily(rows, nextRows, 1, 3, 'id')).toBe(nextRows)
     expect(nextRows).toEqual([rows[1]])
   })
 
@@ -447,7 +447,7 @@ describe('@holo-js/realtime row array patch helpers', () => {
 
     expect(readMutationRowsContainExactQueryId(currentContext, createMutation())).toBe(false)
     expect(readPreviousMutationRowsContainExactQueryId(previousContext, createMutation())).toBe(false)
-    expect(mutationRowsContainExactId(undefined, 2)).toBe(false)
+    expect(mutationRowsContainExactId(undefined, 2, 'id')).toBe(false)
   })
 
   it('finds row indexes through indexed and scanned identity paths', () => {
