@@ -104,6 +104,29 @@ describe('sqlite query cache table identity across temp and attached schemas', (
     expect(await cachedNames(qualified)).toEqual(['first', 'second'])
   })
 
+  it('refreshes cached unqualified reads when a rolled-back savepoint resolved the shadowed identity first', async () => {
+    const { db, bare, qualified } = await openCachedTable('sqlite')
+    expect(await cachedNames(bare)).toEqual(['first'])
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    const createShadow = { sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' }
+    const rollback = new Error('rollback')
+
+    await db.transaction(async (trx) => {
+      await trx.transaction(async (savepoint) => {
+        await savepoint.executeSchemaStatement(createShadow)
+        await savepoint.table(qualified).insert({ id: 3, name: 'discarded', active: false })
+        throw rollback
+      }).catch((error: unknown) => {
+        if (error !== rollback) throw error
+      })
+      await trx.executeSchemaStatement(createShadow)
+      await trx.table(qualified).insert({ id: 2, name: 'second', active: false })
+    })
+
+    expect(await cachedNames(bare)).toEqual([])
+    expect(await cachedNames(qualified)).toEqual(['first', 'second'])
+  })
+
   it('keeps a temp table that shadows a main table separate from the main table', async () => {
     const { db, bare, qualified } = await openCachedTable('sqlite')
     await db.getAdapter().execute(`CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`)

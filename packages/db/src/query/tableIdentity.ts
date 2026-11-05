@@ -50,12 +50,11 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
-  if (splitTablePath(tableName).schema === undefined) return tableName
+  if (splitTablePath(tableName).schema === undefined || tableName.split('.').length > 2) return tableName
   const transaction = schemaChangingTransaction(connection)
   const rootIdentities = ownerIdentities(getRootDatabaseContext(connection))
   const identities = transaction ? ownerIdentities(transaction) : rootIdentities
   const cached = identities.get(tableName)
-  const previous = cached ?? rootIdentities.get(tableName)
   const entry = cached?.generation === currentSchemaGeneration()
     ? cached
     : { generation: currentSchemaGeneration(), identity: lookupTableIdentity(connection, tableName) }
@@ -67,14 +66,19 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
   }
   const identity = await entry.identity
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, transaction)
-  if (previous && entry !== previous) {
+  const previousEntries = new Set([cached, rootIdentities.get(tableName)].filter((previous): previous is TableIdentityEntry => previous !== undefined && previous !== entry))
+  const replacedIdentities = new Set<string>()
+  for (const previous of previousEntries) {
     const replaced = await previous.identity.catch(() => identity)
-    if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
+    if (replaced !== identity) replacedIdentities.add(replaced)
+  }
+  for (const replaced of replacedIdentities) {
+    await invalidateReplacedTableIdentity(connection, replaced)
   }
   return identity
 }
 
-export async function resolveGeneratedTableIdentity(connection: DatabaseContext, tableName: string): Promise<void> {
+async function resolveGeneratedTableIdentity(connection: DatabaseContext, tableName: string): Promise<void> {
   const spellings = listGeneratedTableSpellings(tableName)
   if (spellings.length === 0 || spellings.includes(tableName)) return
   await resolveTableIdentity(connection, tableName)
