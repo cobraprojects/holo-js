@@ -1,4 +1,4 @@
-import { readIntegerColumnValue, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { parseInteger, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
@@ -16,8 +16,16 @@ function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 
+function holdsInteger(value: unknown): boolean {
+  return typeof value === 'number' || readsIntegerText(value)
+}
+
+function readIntegerResult(value: unknown): unknown {
+  return holdsInteger(value) ? parseInteger(value) : value
+}
+
 function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
-  if (column && readsAsInteger(column)) return value => readsIntegerText(value) ? readIntegerColumnValue(column, value) : value
+  if (column && readsAsInteger(column)) return readIntegerResult
   return column && readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
@@ -34,6 +42,8 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 }
 
 function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefined>, name: string): AnyColumnDefinition | undefined {
+  const [source] = tables.values()
+  if (source && Object.hasOwn(source.columns, name)) return source.columns[name]
   const definitions = [...tables.values()]
   if (definitions.some(table => table === undefined)) return undefined
   const owners = definitions.filter(table => Object.hasOwn(table!.columns, name))

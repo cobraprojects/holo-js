@@ -58,7 +58,7 @@ export function booleanStorageValue(value: unknown): number | null | undefined {
   return coerceBoolean(value) ? 1 : 0
 }
 
-function parseInteger(value: unknown): unknown {
+export function parseInteger(value: unknown): unknown {
   if (value == null) {
     return value
   }
@@ -84,15 +84,6 @@ export function readIntegerKey(value: unknown): unknown {
 
   const integer = Number(value)
   return Number.isSafeInteger(integer) ? integer : value
-}
-
-function parseIncrementingKey(value: unknown): unknown {
-  if (typeof value !== 'bigint' && !(typeof value === 'string' && /^-?\d+$/.test(value))) {
-    return parseInteger(value)
-  }
-
-  const integer = Number(value)
-  return Number.isSafeInteger(integer) ? integer : String(value)
 }
 
 const SQLITE_DECIMAL_PLACES = 2
@@ -365,10 +356,6 @@ export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColu
   return dialect === 'sqlite' && column.kind === 'decimal'
 }
 
-export function readIntegerColumnValue(column: AnyColumnDefinition, value: unknown): unknown {
-  return column.kind === 'id' ? parseIncrementingKey(value) : parseInteger(value)
-}
-
 export function normalizeDialectReadValue(
   dialect: SchemaDialectName,
   column: AnyColumnDefinition,
@@ -376,7 +363,7 @@ export function normalizeDialectReadValue(
 ): unknown {
   switch (column.kind) {
     case 'id':
-      return column.idStrategy === 'autoIncrement' ? parseIncrementingKey(value) : value
+      return column.idStrategy === 'autoIncrement' ? parseInteger(value) : value
     case 'integer':
     case 'bigInteger':
       return parseInteger(value)

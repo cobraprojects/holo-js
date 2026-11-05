@@ -115,4 +115,17 @@ describe('postgres bigint keys', () => {
       for (const name of Object.values(names).reverse()) await schema.dropTable(name)
     }
   })
+
+  it('throws HydrationError when a model reads an id() beyond the safe integer range', async () => {
+    const { schema, names } = await openBigintScenario()
+    try {
+      const groups = defineGeneratedTable(names.groups, { id: column.id(), name: column.string() })
+      const Group = defineModel(groups, { timestamps: false, fillable: ['name'] })
+      await DB.table(names.groups).insert({ id: '9007199254740993', name: 'g' })
+
+      await expect(Group.where('name', 'g').first()).rejects.toThrow(HydrationError)
+    } finally {
+      for (const name of Object.values(names).reverse()) await schema.dropTable(name)
+    }
+  })
 })
