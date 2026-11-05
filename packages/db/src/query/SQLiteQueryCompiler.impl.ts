@@ -1,7 +1,8 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import { formatSQLiteDateTime } from '../sqliteDateTime'
+import { formatSQLiteDateTime, sqliteWallClockExpression } from '../sqliteDateTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
-import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
+import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -199,14 +200,32 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return expression
   }
 
+  private compileAppWallClock(column: string, valueType: 'date' | undefined): string {
+    const timeZone = getApplicationTimezone()
+    if (timeZone === 'UTC') return column
+
+    const wallClock = sqliteWallClockExpression(column, this.createSqlStringLiteral(timeZone))
+    return valueType === 'date'
+      ? `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
+      : wallClock
+  }
+
+  protected override compileComparisonSubject(predicate: QueryPredicate): string {
+    const column = this.compileColumnReference(predicate.column)
+    return predicate.valueType === 'date' ? `date(${this.compileAppWallClock(column, 'date')})` : column
+  }
+
   protected override compileDatePredicate(
     predicate: QueryDatePredicate,
     placeholder: string,
   ): string {
-    const column = this.compileColumnReference(predicate.column)
+    const reference = this.compileColumnReference(predicate.column)
+    if (predicate.part === 'instant') {
+      return `julianday(${reference}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
+    }
+
+    const column = this.compileAppWallClock(reference, predicate.valueType)
     switch (predicate.part) {
-      case 'instant':
-        return `julianday(${column}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
       case 'date':
         return `date(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':

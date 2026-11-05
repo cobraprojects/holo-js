@@ -99,7 +99,7 @@ export interface QueryPredicate {
   readonly column: string
   readonly operator: QueryOperator
   readonly value: unknown
-  readonly valueType?: 'json'
+  readonly valueType?: 'json' | 'date'
 }
 
 export interface QueryColumnPredicate {
@@ -144,6 +144,7 @@ export interface QueryDatePredicate {
   readonly part: QueryDatePart
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly value: unknown
+  readonly valueType?: 'date'
 }
 
 export type QueryJsonMode = 'value' | 'contains' | 'length' | 'key'

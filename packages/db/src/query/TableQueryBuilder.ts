@@ -116,10 +116,13 @@ import type {
   SelectQueryPlan,
 } from './ast'
 import {
+  normalizeCalendarDatePredicateValue,
+  normalizeDatePartPredicateValue,
   normalizeQueryPredicateValue,
   normalizeQueryUpdateValues,
   normalizeQueryWriteRecord,
   normalizeQueryWriteValue,
+  normalizeSQLiteCalendarDatePredicateValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 
@@ -619,6 +622,7 @@ export class TableQueryBuilder<
     value?: unknown,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalized = this.normalizeOperatorValue(operator, value)
+    const partValue = normalizeDatePartPredicateValue(part, normalized.value)
 
     return this.clone(withPredicate(this.plan, {
       kind: 'date',
@@ -626,7 +630,8 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
+      value: partValue ? partValue.value : this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
+      ...(this.getSourceColumnDefinition(column)?.kind === 'date' ? { valueType: 'date' as const } : {}),
     }))
   }
 
@@ -3627,6 +3632,14 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    if (this.getSourceColumnDefinition(columnName)?.kind === 'date') {
+      const normalized = this.normalizePredicateValueForColumn(columnName, normalizeCalendarDatePredicateValue(value), operator)
+      return {
+        value: this.connection.getDriver() === 'sqlite' ? normalizeSQLiteCalendarDatePredicateValue(normalized) : normalized,
+        valueType: 'date',
+      }
+    }
+
     return {
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
       ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),

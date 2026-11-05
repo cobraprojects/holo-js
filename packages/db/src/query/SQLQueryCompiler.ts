@@ -670,17 +670,21 @@ export class SQLQueryCompiler {
         bindings.push(value)
         return this.compileComparisonPlaceholder(predicate, bindings.length)
       }).join(', ')
-      return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} (${placeholders})`
+      return `${this.compileComparisonSubject(predicate)} ${predicate.operator.toUpperCase()} (${placeholders})`
     }
 
     if (predicate.operator === 'between' || predicate.operator === 'not between') {
       const values = predicate.value as readonly [unknown, unknown]
       bindings.push(values[0], values[1])
-      return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length - 1)} AND ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+      return `${this.compileComparisonSubject(predicate)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length - 1)} AND ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
     }
 
     bindings.push(predicate.value)
-    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+    return `${this.compileComparisonSubject(predicate)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+  }
+
+  protected compileComparisonSubject(predicate: QueryPredicate): string {
+    return this.compileColumnReference(predicate.column)
   }
 
   protected compileComparisonPlaceholder(_predicate: QueryPredicate, index: number): string {

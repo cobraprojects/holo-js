@@ -89,6 +89,7 @@ export interface SQLiteDatabaseLike {
   prepare(sql: string): SQLiteStatementLike
   exec(sql: string): unknown
   close(): unknown
+  function?(name: string, options: { deterministic: boolean }, implementation: (...args: unknown[]) => unknown): unknown
 }
 
 export interface SQLiteAdapterOptions {
@@ -99,6 +100,7 @@ export interface SQLiteAdapterOptions {
 
 export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
+  private functionsRegistered = false
   private connected: boolean
   private readonly transactionKey: string | SQLiteAdapter
   private readonly filename: string
@@ -275,7 +277,14 @@ export class SQLiteAdapter implements DriverAdapter {
   }
 
   private getDatabase(): SQLiteDatabaseLike {
-    this.database ??= this.openDatabase()
+    if (!this.database) {
+      this.database = this.openDatabase()
+      this.functionsRegistered = false
+    }
+    if (!this.functionsRegistered) {
+      this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.sqliteWallClock)
+      this.functionsRegistered = true
+    }
     this.connected = true
     return this.database
   }

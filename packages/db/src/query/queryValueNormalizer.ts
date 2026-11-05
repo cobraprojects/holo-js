@@ -1,10 +1,12 @@
 import { SecurityError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
-import { formatSQLiteDateTime } from '../sqliteDateTime'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
+import { formatCalendarDate, formatWallClockSeconds } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
-import type { QueryJsonUpdateOperation } from './ast'
+import type { QueryDatePart, QueryJsonUpdateOperation } from './ast'
 
 type JsonPathParser = (value: string) => { readonly column: string, readonly path: readonly string[] }
 
@@ -36,6 +38,38 @@ export function normalizeQueryPredicateValue(
     return value.map(item => normalizeQueryWriteValue(table, driver, columnName, item))
   }
   return normalizeQueryWriteValue(table, driver, columnName, value)
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime())
+}
+
+export function normalizeCalendarDatePredicateValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeCalendarDatePredicateValue)
+  return isValidDate(value) ? formatCalendarDate(value, getApplicationTimezone()) : value
+}
+
+export function normalizeSQLiteCalendarDatePredicateValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeSQLiteCalendarDatePredicateValue)
+  const instant = typeof value === 'string' ? parseSQLiteDateTime(value) : undefined
+  return instant ? formatCalendarDate(instant, getApplicationTimezone()) : value
+}
+
+export function normalizeDatePartPredicateValue(part: QueryDatePart, value: unknown): { readonly value: unknown } | undefined {
+  if (part === 'instant' || !isValidDate(value)) return undefined
+  const wallClock = formatWallClockSeconds(value, getApplicationTimezone())
+  switch (part) {
+    case 'date':
+      return { value: wallClock.slice(0, -9) }
+    case 'time':
+      return { value: wallClock.slice(-8) }
+    case 'year':
+      return { value: Number(wallClock.slice(0, -15)) }
+    case 'month':
+      return { value: Number(wallClock.slice(-14, -12)) }
+    case 'day':
+      return { value: Number(wallClock.slice(-11, -9)) }
+  }
 }
 
 export function normalizeQueryWriteRecord(
