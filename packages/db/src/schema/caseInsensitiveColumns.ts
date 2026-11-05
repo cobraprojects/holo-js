@@ -4,7 +4,7 @@ import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
 import { splitTablePath } from './identifiers'
-import { readSQLiteCreateTableSql } from './introspection/sqlite'
+import { readSQLiteCreateTableSql, resolveSQLiteTablePath } from './introspection/sqlite'
 import { parseCreateTableSql } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier } from './introspection/sqliteTokens'
 
@@ -88,7 +88,8 @@ function createPostgresReader(connection: DatabaseContext, tableName: string): C
 
 function createSQLiteReader(tableName: string): ColumnReader {
   return async (reader) => {
-    const createTableSql = await readSQLiteCreateTableSql(reader, tableName)
+    const tablePath = await resolveSQLiteTablePath(reader, tableName)
+    const createTableSql = tablePath === undefined ? undefined : await readSQLiteCreateTableSql(reader, tablePath)
     const table = createTableSql ? parseCreateTableSql(createTableSql) : undefined
     if (!table) {
       return 'all'

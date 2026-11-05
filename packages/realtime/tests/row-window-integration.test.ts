@@ -17,7 +17,7 @@ beforeEach(async () => {
     dialect: createDialect('sqlite'),
     connectionName: 'main',
     security: { debugSqlInLogs: true },
-    logger: { onQuerySuccess: entry => { if (entry.kind === 'query' && entry.sql?.startsWith('SELECT ') && !entry.sql.includes('sqlite_master')) rowCounts.push(entry.rowCount) } },
+    logger: { onQuerySuccess: entry => { if (entry.kind === 'query' && entry.sql?.startsWith('SELECT ') && !entry.source?.startsWith('schema:introspect:')) rowCounts.push(entry.rowCount) } },
   })
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })

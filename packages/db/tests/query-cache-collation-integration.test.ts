@@ -179,6 +179,28 @@ describe('query cache invalidation by a key with the default collation on sqlite
   registerExactCollationScenarios('sqlite', 'TEXT')
 })
 
+describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
+  it('refreshes a cached read by key after an update matched by a case-differing key on a temporary table that shadows a BINARY one', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), label: column.string() }) })
+    onTestFinished(() => {
+      clearGeneratedTables()
+      resetCacheRuntime()
+    })
+    await adapter.execute(`CREATE TABLE ${name} (code TEXT PRIMARY KEY COLLATE BINARY NOT NULL, label VARCHAR(64) NOT NULL)`)
+    await adapter.execute(`CREATE TEMP TABLE ${name} (code TEXT PRIMARY KEY COLLATE NOCASE NOT NULL, label VARCHAR(64) NOT NULL)`)
+    await adapter.execute(`INSERT INTO temp.${name} (code, label) VALUES ('FR', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).where('code', 'fr').update({ label: 'République' })
+
+    expect(await cachedLabel()).toBe('République')
+  })
+})
+
 describe('query cache invalidation by an RTRIM key on sqlite', () => {
   it('refreshes a cached read by key after an update matched by the key with trailing spaces', async () => {
     const countries = await createCountries('sqlite', 'TEXT COLLATE RTRIM')
