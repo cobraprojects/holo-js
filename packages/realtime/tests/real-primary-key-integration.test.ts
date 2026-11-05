@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { belongsTo, clearGeneratedTables, column, defineModel, hasMany, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners } from '@holo-js/db'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { createMySQLAdapter } from '../../db-mysql/src'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -261,5 +263,34 @@ describe('a Generated-schema table keyed on id', () => {
 
     expect(live.snapshots.at(-1)).toEqual([{ id: 1, title: 'First' }, { id: 2, title: 'Updated' }])
     expect(live.reads()).toBe(1)
+  })
+})
+
+describe('a MySQL table whose key the database generates without auto-increment', () => {
+  it('re-runs a list subscription when an inserted row arrives without its key', async () => {
+    const name = `regions_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const mysql = createMySQLAdapter({ config: {
+      host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
+      port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
+      user: process.env.HOLO_MYSQL_USER ?? 'root',
+      password: process.env.HOLO_MYSQL_PASSWORD ?? '',
+      database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+    } })
+    const db = createDatabase({ adapter: mysql, dialect: createDialect('mysql'), connectionName: 'main' })
+    configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    registerGeneratedTables({ [name]: defineGeneratedTable(name, { code: column.string().primaryKey(), name: column.string() }) })
+    await mysql.execute(`CREATE TABLE ${name} (code VARCHAR(8) PRIMARY KEY DEFAULT 'XX', name VARCHAR(32) NOT NULL)`)
+    try {
+      const live = await subscribe(db => db.table(name).orderBy('name').get())
+      await mutate(async ({ db }) => {
+        await db.table(name).insert({ name: 'North' })
+      })
+
+      expect(live.snapshots.at(-1)).toEqual([{ code: 'XX', name: 'North' }])
+    } finally {
+      await mysql.execute(`DROP TABLE ${name}`)
+      await mysql.disconnect()
+    }
   })
 })
