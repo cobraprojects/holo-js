@@ -3342,43 +3342,18 @@ export class ModelRepository<
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
-      grouped.set(key, [await this.selectOneOfManyWinner(relation, related, parentColumn, bucket, constraint)])
+      this.assertOneStoredOneOfManyKey(related, parentColumn, bucket)
+      grouped.set(key, [bucket[0]!])
     }
 
     return grouped
   }
 
-  private async selectOneOfManyWinner(
-    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
-    related: ModelRepository,
-    parentColumn: string,
-    bucket: readonly Entity[],
-    constraint?: RelationConstraint,
-  ): Promise<Entity> {
-    const primaryKey = related.definition.primaryKey
-    const firstByStoredKey = new Map<unknown, Entity>()
-    for (const entity of bucket) {
-      const storedKey = canonicalStoredKey(entity.get(parentColumn as never))
-      if (!firstByStoredKey.has(storedKey)) firstByStoredKey.set(storedKey, entity)
+  private assertOneStoredOneOfManyKey(related: ModelRepository, parentColumn: string, bucket: readonly Entity[]): void {
+    const storedKeys = new Map(bucket.map(entity => [canonicalStoredKey(entity.get(parentColumn as never)), entity.get(parentColumn as never)]))
+    if (storedKeys.size > 1) {
+      throw new RelationError(`One-of-many relation on model "${this.definition.name}" found "${related.definition.name}" rows whose "${parentColumn}" stores the same key in different forms (${[...storedKeys.values()].map(value => JSON.stringify(value)).join(', ')}). Store each key in one form.`)
     }
-    const candidates = [...firstByStoredKey.values()]
-    if (candidates.length === 1 || candidates.some(candidate => candidate.get(primaryKey as never) == null)) {
-      return bucket[0]!
-    }
-
-    const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
-    const query = this.applyRelationConstraint(relation, related, constraint)
-    const source = query.getTableQueryBuilder().getPlan().source
-    const qualify = (column: string) => `${source.alias ?? source.tableName}.${column}` as never
-    const winner = await query
-      .limit()
-      .offset()
-      .reorder(qualify(relation.aggregateColumn), direction)
-      .orderBy(qualify(primaryKey), direction)
-      .where(qualify(primaryKey), 'in', candidates.map(candidate => candidate.get(primaryKey as never)))
-      .first()
-    const winnerKey = canonicalStoredKey(winner?.get(primaryKey as never))
-    return candidates.find(candidate => canonicalStoredKey(candidate.get(primaryKey as never)) === winnerKey) ?? candidates[0]!
   }
 
   private createOneOfManyQuery(
