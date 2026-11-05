@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { DB, SecurityError, defineModel, queryCacheInternals, resetDB } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 describe('aliased table joins', () => {
   afterEach(() => resetDB())
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('self-joins a table through an alias on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('self-joins a table through an alias on %s', async driver => {
     const { table } = await openDatabase(driver)
     const source = table.tableName
     await DB.table(table).insert([
@@ -44,7 +44,7 @@ describe('aliased table joins', () => {
     expect(collected.dependencies).toEqual([`db:default:${source}`])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('quotes the joined table and alias on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('quotes the joined table and alias on %s', async driver => {
     const { table } = await openDatabase(driver)
     const quote = (value: string) => driver === 'mysql' ? `\`${value}\`` : `"${value}"`
     const reference = table.tableName.split('.').map(quote).join('.')

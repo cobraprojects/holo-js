@@ -4,17 +4,14 @@ import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { Client, Pool, types as pgTypes } from 'pg'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createDatabase, createDialect } from '../src'
+import { postgresTestConnection } from './support/database'
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL date and timestamp values in app.timezone', () => {
   it('reads and writes calendar dates and wall-clock timestamps in app.timezone, not the process timezone', async () => {
     configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
     process.env.TZ = 'America/New_York'
     const adapter = createPostgresAdapter({ config: {
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+      ...postgresTestConnection(),
       max: 2,
     } })
     const db = createDatabase({ adapter, dialect: createDialect('postgres') })
@@ -49,14 +46,6 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL date 
   })
 })
 
-const liveConfig = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-  password: process.env.HOLO_POSTGRES_PASSWORD,
-  database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-}
-
 async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>): Promise<T> {
   const previousTimeZone = process.env.TZ
   configureConfigRuntime({ app: { timezone: timeZone } } as never)
@@ -76,7 +65,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates
     { zone: 'America/Havana', day: '2026-03-08', instant: '2026-03-08T05:00:00.000Z' },
   ])('keeps a DATE on its calendar day when local midnight does not exist in $zone', async ({ zone, day, instant }) => {
     await withAppTimezone(zone, async () => {
-      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const source = `holo_gap_date_${randomUUID().replaceAll('-', '')}`
       const copy = `${source}_copy`
@@ -101,7 +90,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates
 
   it('resolves a TIMESTAMP inside a New York spring-forward gap forward, as PostgreSQL does', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const source = `holo_gap_ts_${randomUUID().replaceAll('-', '')}`
       const copy = `${source}_copy`
@@ -130,7 +119,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates
 
   it('binds timestamptz values with historical offsets that include seconds exactly', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const table = `holo_tstz_${randomUUID().replaceAll('-', '')}`
       const original = new Date('1800-06-01T12:00:00Z')
@@ -151,7 +140,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates
   it('keeps TIMESTAMP values in app.timezone when custom types customize an unrelated OID', async () => {
     await withAppTimezone('Asia/Tokyo', async () => {
       const adapter = createPostgresAdapter({ config: {
-        ...liveConfig,
+        ...postgresTestConnection(),
         max: 2,
         types: {
           getTypeParser(oid: number, format?: 'text' | 'binary') {
@@ -178,7 +167,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL dates
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL injected clients read dates in app.timezone', () => {
   it.each(['client', 'pool'] as const)('reads DATE and TIMESTAMP in app.timezone through an injected pg %s', async kind => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const injected = kind === 'client' ? new Client(liveConfig) : new Pool({ ...liveConfig, max: 2 })
+      const injected = kind === 'client' ? new Client(postgresTestConnection()) : new Pool({ ...postgresTestConnection(), max: 2 })
       if (injected instanceof Client) await injected.connect()
       const adapter = createPostgresAdapter(kind === 'client' ? { client: injected as Client } : { pool: injected as Pool })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
@@ -203,7 +192,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL injec
 
   it('resolves a fall-back TIMESTAMP to standard time, as PostgreSQL does', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const table = `holo_fallback_${randomUUID().replaceAll('-', '')}`
       try {
@@ -226,7 +215,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL injec
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL bindings keep sub-second precision in app.timezone', () => {
   it.each(['UTC', 'Asia/Tokyo'])('round-trips a Date with milliseconds through TIMESTAMP and TIMESTAMPTZ in %s', async zone => {
     await withAppTimezone(zone, async () => {
-      const adapter = createPostgresAdapter({ config: { ...liveConfig, max: 2 } })
+      const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('postgres') })
       const table = `holo_millis_${randomUUID().replaceAll('-', '')}`
       const original = new Date('2024-03-15T10:00:00.600Z')

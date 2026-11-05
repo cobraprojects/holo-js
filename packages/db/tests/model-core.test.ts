@@ -38,7 +38,7 @@ import { getGlobalModel } from '../src/model/ModelRegistry'
 import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
-import { openDatabase } from './support/database'
+import { openDatabase, postgresIntegration } from './support/database'
 
 type Row = Record<string, unknown>
 type TestEntity = Entity<TableDefinition>
@@ -1719,7 +1719,7 @@ describe('model core slice', () => {
     ])
   })
 
-  it('runs model full-text searches on PostgreSQL', async () => {
+  it.runIf(postgresIntegration)('runs model full-text searches on PostgreSQL', async () => {
     const { db, table } = await openDatabase('postgres')
     await db.table(table).insert([
       { id: 1, name: 'Database framework', active: true },
@@ -1731,7 +1731,7 @@ describe('model core slice', () => {
     expect(await Record.where('active', false).orWhereFullText('name', 'framework').orderBy('id').pluck('id')).toEqual([1, 2])
   })
 
-  it('runs model vector similarity queries on PostgreSQL with pgvector', async () => {
+  it.runIf(postgresIntegration)('runs model vector similarity queries on PostgreSQL with pgvector', async () => {
     const { db, table, schema } = await openDatabase('postgres')
     await db.executeCompiled({ sql: 'CREATE EXTENSION IF NOT EXISTS vector', source: 'schema' })
     await schema.table(table.tableName, table => { table.vector('embedding', { dimensions: 3 }).nullable() })

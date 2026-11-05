@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DB, SchemaError, column, holoRuntimeInternals, renderGeneratedSchemaModule, type AnyColumnDefinition, type TableDefinition } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -200,7 +200,7 @@ const expectedRawDefaults = {
   },
 } as const
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`${driver} column defaults in the Generated schema`, () => {
     const nativeJson = builderKinds[driver].settings === 'json'
     const builderTable = `column_defaults_builder_${driver}`

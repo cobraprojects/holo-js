@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Entity, belongsTo, column, hasMany, latestOfMany, type TableDefinition } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { mysqlTestConnection, openDatabase } from './support/database'
 
 function loaded<TRelation>(entity: { getRelation<T>(name: string): T | undefined } | undefined, name: string): TRelation | undefined {
   if (!entity) throw new Error(`expected a loaded parent before reading ${name}`)
@@ -19,7 +19,7 @@ function registerBinaryRelationScenario(driver: 'postgres' | 'mysql') {
     const names = { owners: `bk_owners_${suffix}`, items: `bk_items_${suffix}` }
     const qualify = (name: string) => driver === 'postgres'
       ? name
-      : `${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`
+      : `${mysqlTestConnection().database}.${name}`
 
     try {
       await schema.createTable(names.owners, table => {

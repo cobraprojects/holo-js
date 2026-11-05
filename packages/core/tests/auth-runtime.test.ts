@@ -8,6 +8,7 @@ import { DatabaseContext, TransactionError, createDialect, ModelRepository, Tabl
 import { configureAuthRuntime, createAsyncAuthContext, getAuthRuntime, normalizeAuthConfig, authRuntimeInternals } from '../../auth/src'
 import { configureSessionRuntime, createFileSessionStore, getSessionRuntime, normalizeSessionConfig, parseCookieHeader } from '@holo-js/session'
 import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
+import { mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, initializeHoloAdapterProject, resetHoloRuntime } from '../src'
@@ -2797,14 +2798,13 @@ export async function prepareAuthUpdateInput(user, input) {
   })
 
   describe.each(['sqlite', 'postgres', 'mysql'] as const)('native %s verification persistence', (driver) => {
-    it.runIf(driver === 'sqlite' || !!process.env[`HOLO_AUTH_REDEMPTION_${driver.toUpperCase()}_DATABASE`])(
+    it.runIf(driver === 'sqlite' || (driver === 'postgres' ? postgresIntegration : mysqlIntegration))(
       'rolls back verification and the user mutation together after a save failure', async () => {
         const root = await createProject({ auth: true })
         if (driver !== 'sqlite') {
           await symlink(resolve(import.meta.dirname, `../../db-${driver}`), join(root, `node_modules/@holo-js/db-${driver}`))
-          const connection = driver === 'postgres'
-            ? { driver, host: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_HOST ?? '/tmp', port: Number(process.env.HOLO_AUTH_REDEMPTION_POSTGRES_PORT ?? 5432), username: 'postgres', database: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_DATABASE }
-            : { driver, host: '127.0.0.1', port: Number(process.env.HOLO_AUTH_REDEMPTION_MYSQL_PORT ?? 33183), username: 'root', database: process.env.HOLO_AUTH_REDEMPTION_MYSQL_DATABASE }
+          const { user, ...server } = driver === 'postgres' ? postgresTestConnection() : mysqlTestConnection()
+          const connection = { driver, ...server, username: user }
           await writeFile(join(root, 'config/database.ts'), `
     import { defineDatabaseConfig } from ${databaseEntry}
     export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: ${JSON.stringify(connection)} } })
