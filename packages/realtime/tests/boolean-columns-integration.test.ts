@@ -120,6 +120,17 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(subscription.current.data).toEqual(await handler())
   })
 
+  it('reads a backfilled column that two selections alias alike the way SQL does', async () => {
+    const { db, flags } = await openFlags(driver)
+    await db.table(flags).insert({ id: 3, group_id: 42, enabled: true })
+    const handler = () => db.table(flags).select('id', 'enabled as value', 'group_id as value').orderBy('id').limit(2).get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('patches model and eager-loaded subscriptions over a boolean column to equal fresh reads', async () => {
     const { db, flags, schema } = await openFlags(driver)
     const groupsName = `holo_live_flag_groups_${randomUUID().replaceAll('-', '').slice(0, 12)}`

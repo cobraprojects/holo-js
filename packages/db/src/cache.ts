@@ -2038,7 +2038,7 @@ function readBooleanColumns(
 ): Readonly<Record<string, unknown>> {
   if (!table) return row
   const booleanKeys = Object.keys(row).filter((key) => {
-    const selection = selections.find(candidate => candidate.resultKey === key)
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
     return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
   })
   if (booleanKeys.length === 0) return row
