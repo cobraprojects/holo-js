@@ -274,6 +274,17 @@ describe('relation loading over binary keys', () => {
     expect(await db.table(ownerSlot).count()).toBe(1)
     expect(await owner.detach('slots', startsAt)).toBe(1)
     expect(await db.table(ownerSlot).count()).toBe(0)
+
+    const adminBytes = new Uint8Array(admin)
+    await owner.attach('roles', adminBytes)
+    expect(await owner.syncWithoutDetaching('roles', [adminBytes, admin])).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await owner.toggle('roles', adminBytes)).toEqual({ attached: [], detached: [adminBytes] })
+    expect(await pivotRows()).toEqual([])
+
+    await owner.attach('slots', startsAt)
+    expect(await owner.sync('slots', new Date(startsAt.getTime()))).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await owner.toggle('slots', [new Date(startsAt.getTime())])).toEqual({ attached: [], detached: [startsAt] })
+    expect(await db.table(ownerSlot).count()).toBe(0)
   })
 
   it('attaches morphToMany and morphedByMany rows across blob keys', async () => {

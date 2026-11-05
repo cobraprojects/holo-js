@@ -3991,7 +3991,19 @@ export class ModelRepository<
         break
     }
     const connection = this.getConnection()
-    return new PivotMutation({ table: this.resolvePivotTable(relation.pivotTable, connection), scope, relatedColumn, allowedColumns: relation.pivotColumns, timestamps: relation.pivotTimestamps === true, relationName }, connection)
+    const table = this.resolvePivotTable(relation.pivotTable, connection)
+    const relatedKey = (typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn))
+      ?? ownEntry(this.resolveRelatedRepository(relation.related).definition.table.columns, relation.relatedKey)
+    return new PivotMutation({
+      table,
+      scope,
+      relatedColumn,
+      relatedKey,
+      dialect: connection.getDriver() as SchemaDialectName,
+      allowedColumns: relation.pivotColumns,
+      timestamps: relation.pivotTimestamps === true,
+      relationName,
+    }, connection)
   }
 
   private async dispatchCancelableEvent(

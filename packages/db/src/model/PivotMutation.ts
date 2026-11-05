@@ -1,8 +1,11 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { TableDefinition } from '../schema/types'
+import { normalizeDialectReadValue } from '../schema/normalization'
+import type { SchemaDialectName } from '../schema/typeMapping'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import { assertColumnWritable, ownEntry } from './entityRuntime'
+import { storedKeyIdentity } from './storedKeyCollections'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -12,6 +15,8 @@ type Context = {
   table: string | TableDefinition
   scope: Attributes
   relatedColumn: string
+  relatedKey: AnyColumnDefinition | undefined
+  dialect: SchemaDialectName
   allowedColumns: readonly string[]
   timestamps: boolean
   relationName: string
@@ -68,10 +73,10 @@ export class PivotMutation {
 
     await this.connection.transaction(async connection => {
       const rows = await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id))
-      const current = new Map(rows.map(row => [String(row[this.context.relatedColumn]), row]))
+      const current = new Map(rows.map(row => [storedKeyIdentity(this.relatedKeyOf(row)), row]))
       const actions: Action[] = []
       for (const entry of entries) {
-        const existing = current.get(String(entry.id))
+        const existing = current.get(storedKeyIdentity(entry.id))
         if (kind === 'toggle' && existing) {
           actions.push({ ...entry, kind: 'delete' })
           result.detached.push(entry.id)
@@ -84,12 +89,12 @@ export class PivotMutation {
         }
       }
       if (detachMissing) {
-        const desired = new Set(entries.map(entry => String(entry.id)))
+        const desired = new Set(entries.map(entry => storedKeyIdentity(entry.id)))
         for (const [key, row] of current) {
           const id = row[this.context.relatedColumn]
           if (!desired.has(key) && typeof id !== 'undefined') {
             actions.push({ kind: 'delete', id, attributes: {} })
-            result.detached.push(id)
+            result.detached.push(this.relatedKeyOf(row))
           }
         }
       }
@@ -165,8 +170,13 @@ export class PivotMutation {
     return [{ id: ids, attributes: { ...attributes } }]
   }
 
+  private relatedKeyOf(row: Attributes): unknown {
+    const value = row[this.context.relatedColumn]
+    return this.context.relatedKey ? normalizeDialectReadValue(this.context.dialect, this.context.relatedKey, value) : value
+  }
+
   private dedupe(entries: readonly Entry[]): Entry[] {
-    return [...new Map(entries.map(entry => [String(entry.id), entry])).values()]
+    return [...new Map(entries.map(entry => [storedKeyIdentity(entry.id), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {

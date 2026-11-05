@@ -9,8 +9,12 @@ function integerIdentity(value: unknown): unknown {
   return typeof value === 'bigint' && Number.isSafeInteger(Number(value)) ? Number(value) : value
 }
 
+export function storedKeyIdentity(value: unknown): unknown {
+  return canonicalStoredKey(integerIdentity(value))
+}
+
 function dictionaryKey(value: unknown): unknown {
-  return value instanceof Date ? value : canonicalStoredKey(integerIdentity(value))
+  return value instanceof Date ? value : storedKeyIdentity(value)
 }
 
 export class StoredKeyMap<TValue> {
