@@ -1039,32 +1039,12 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${tableName}`
 }
 
+const BIGINT_MARKER = `bigint:${randomUUID()}:`
+const BIGINT_MARKER_PATTERN = new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, 'g')
+
 function stringifyBigIntsAsIntegers(value: unknown): string | undefined {
-  if (typeof value === 'bigint') {
-    return value.toString()
-  }
-
-  if (!value || typeof value !== 'object' || value instanceof Number || value instanceof String || value instanceof Boolean) {
-    return JSON.stringify(value)
-  }
-
-  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
-    return stringifyBigIntsAsIntegers((value as { toJSON: () => unknown }).toJSON())
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map(element => stringifyBigIntsAsIntegers(element) ?? 'null').join(',')}]`
-  }
-
-  const entries: string[] = []
-  for (const [key, element] of Object.entries(value)) {
-    const serialized = stringifyBigIntsAsIntegers(element)
-    if (serialized !== undefined) {
-      entries.push(`${JSON.stringify(key)}:${serialized}`)
-    }
-  }
-
-  return `{${entries.join(',')}}`
+  return JSON.stringify(value, (_key, element: unknown) => typeof element === 'bigint' ? `${BIGINT_MARKER}${element}` : element)
+    ?.replace(BIGINT_MARKER_PATTERN, '$1')
 }
 
 function encodeDependencyValue(value: unknown): string {

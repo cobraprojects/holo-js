@@ -472,6 +472,13 @@ describe('query cache BigInt values', () => {
       .toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1] }, 'main'))
     expect(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: [1n] }, 'main'))
       .not.toBe(createDeterministicQueryCacheKey({ sql: 'select 1 where n = ?', bindings: ['1'] }, 'main'))
+    expect(createDeterministicQueryCacheKey({ sql: 'select cardinality(?)', bindings: [Array(1)] }, 'main'))
+      .not.toBe(createDeterministicQueryCacheKey({ sql: 'select cardinality(?)', bindings: [[]] }, 'main'))
+    const selfSerializing = { n: 1, toJSON() { return this } }
+    expect(createTablePredicateCacheDependency('main', 'users', 'status', selfSerializing)).toBe(`db:main:users:where:status:${encodeURIComponent(JSON.stringify(selfSerializing))}`)
+    const keyed = { toJSON: (key: string) => key }
+    expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [keyed] }, 'main'))
+      .toBe(`db:query:${createHash('sha256').update(JSON.stringify({ connectionName: 'main', sql: 'select ?', bindings: [keyed] })).digest('hex')}`)
     expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: ['plain'] }, 'main'))
       .toBe(`db:query:${createHash('sha256').update(JSON.stringify({ connectionName: 'main', sql: 'select ?', bindings: ['plain'] })).digest('hex')}`)
   })
