@@ -3042,6 +3042,7 @@ export class TableQueryBuilder<
       await this.invalidateMutationQueries(
         rows ? this.withReadDecimalValues(normalizedValues, rows) : normalizedValues,
         rows ? { ...capturedRows, rows } : capturedRows,
+        rows === null,
       )
     }
     return {
@@ -3284,10 +3285,10 @@ export class TableQueryBuilder<
     values: Readonly<Record<string, unknown>>,
     rows: readonly Readonly<Record<string, unknown>>[] | undefined,
     rowsWereReturned: boolean,
-  ): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
+  ): Promise<readonly Readonly<Record<string, unknown>>[] | null | undefined> {
     if (!rows || !this.writesDecimalColumn(Object.keys(values))) return undefined
     if (rowsWereReturned) return rows
-    return await this.readWrittenRows(rows) ?? rows
+    return await this.readWrittenRows(rows) ?? null
   }
 
   private withoutDecimalColumns(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
@@ -3501,6 +3502,7 @@ export class TableQueryBuilder<
   private async invalidateMutationQueries(
     writtenValues: Readonly<Record<string, unknown>> = {},
     writtenRows?: CapturedMutationRows,
+    hasUnreadDecimals = false,
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
@@ -3517,14 +3519,14 @@ export class TableQueryBuilder<
     const invalidation = inferAutomaticQueryCacheInvalidationPlan(
       this.plan,
       this.connection.getConnectionName(),
-      values,
+      hasUnreadDecimals ? this.withoutDecimalColumns(values) : values,
       hasInvalidationListeners,
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
     const holdsUnsafeInteger = this.holdsUnsafeInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
-    const mutations = !hasInvalidationListeners ? [] : holdsUnsafeInteger
+    const mutations = !hasInvalidationListeners ? [] : holdsUnsafeInteger || hasUnreadDecimals
       ? [createDatabaseMutationEvent(hasValues ? 'update' : 'delete', this.connection.getConnectionName(), this.source, this.plan.predicates)]
       : numericColumns.length > 0 && capturedRows?.rows
       ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])

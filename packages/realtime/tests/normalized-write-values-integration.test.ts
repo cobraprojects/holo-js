@@ -130,6 +130,29 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     if (driver !== 'sqlite') expect(reads).toBe(Object.keys(queries).length)
   })
 
+  it('keeps a table keyed by a decimal column equal to a fresh query after updating its key', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_norm_prices_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.decimal('code').primaryKey()
+      table.decimal('rate')
+    })
+    if (driver === 'postgres') {
+      await db.executeCompiled({ sql: `ALTER TABLE "${name}" ALTER COLUMN "code" TYPE NUMERIC(10, 2), ALTER COLUMN "rate" TYPE NUMERIC(10, 2)`, source: 'schema' })
+    }
+    onTestFinished(() => schema.dropTable(name))
+    const prices = defineGeneratedTable(name, { code: column.decimal().primaryKey(), rate: column.decimal() })
+    await db.table(prices).insert({ code: '1.00', rate: '1.00' })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = () => db.table(prices).orderBy('code').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await mutate(() => db.table(prices).where('code', '1.00').update({ code: '2.5', rate: '3.5' }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('keeps integer columns written in other representations equal to a fresh query', async () => {
     const { db, rates, Group } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
