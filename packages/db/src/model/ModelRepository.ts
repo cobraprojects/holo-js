@@ -941,7 +941,7 @@ export class ModelRepository<
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-        }, resultPath))
+        }, resultPath, 'limited'))
         continue
       }
 
@@ -974,7 +974,7 @@ export class ModelRepository<
         })]),
         selections: [],
         tableName: related.definition.table.tableName,
-      }), resultPath))
+      }), resultPath, 'limited'))
     }
   }
 
@@ -1101,13 +1101,14 @@ export class ModelRepository<
   private createNullableSingleRecordRelationObservation(
     observation: DatabaseQueryObservation,
     resultPath: readonly DatabaseQueryResultPathSegment[],
+    rowWindowMode: 'limited' | 'single' = 'single',
   ): DatabaseQueryObservation {
     return Object.freeze({
       ...observation,
       emptyRecordValue: null,
       limit: 1,
       resultPath,
-      rowWindowMode: 'single',
+      rowWindowMode,
     })
   }
 

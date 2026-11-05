@@ -621,7 +621,7 @@ describe('model relation slice', () => {
         patchable: true,
         predicates: [{ column: 'userId', operator: '=', value: 1 }],
         resultPath: [0, 'profile'],
-        rowWindowMode: 'single',
+        rowWindowMode: 'limited',
         tableName: 'profiles',
       }),
       expect.objectContaining({

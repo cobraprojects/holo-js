@@ -71,6 +71,10 @@ export async function tryPatchQueryRecord(
     }
 
     if ('rows' in result) {
+      if (result.backfill) {
+        return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
+      }
+
       if (result.rows.length > 1) {
         return UNPATCHED_RESULT
       }
