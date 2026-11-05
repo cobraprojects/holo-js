@@ -21,6 +21,7 @@ export interface QuerySource {
   readonly kind: 'table'
   readonly tableName: string
   readonly alias?: string
+  readonly primaryKey?: string
   readonly table?: TableDefinition
 }
 
@@ -99,7 +100,7 @@ export interface QueryPredicate {
   readonly column: string
   readonly operator: QueryOperator
   readonly value: unknown
-  readonly valueType?: 'json'
+  readonly valueType?: 'json' | 'date'
 }
 
 export interface QueryColumnPredicate {
@@ -108,6 +109,7 @@ export interface QueryColumnPredicate {
   readonly column: string
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly compareTo: string
+  readonly dateOperands?: { readonly column: boolean, readonly compareTo: boolean }
 }
 
 export interface QueryNullPredicate {

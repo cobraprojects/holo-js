@@ -6,6 +6,7 @@ import {
   hasRecordKey,
   matchesPredicateValue,
   mutationChangesColumns,
+  readPrimaryKey,
   rowValuesChanged,
 } from './predicate-matching'
 import {
@@ -43,7 +44,7 @@ import {
   rowIdentity,
 } from './query-row-identity'
 import {
-  exactIdsDiffer,
+  mutationCannotReachExactId,
 } from './query-row-matching'
 import {
   readMutationRowsContainExactQueryId,
@@ -110,7 +111,7 @@ export function applyUpdateMutationToRows(
     return applyUpdatedMutationRowsToQuery(rows, query, mutation, context, mutation.values)
   }
 
-  if (exactIdsDiffer(context.exactQueryId, context.exactMutationId)) {
+  if (mutationCannotReachExactId(context.exactQueryId, context.exactMutationId, mutation.values, readPrimaryKey(context))) {
     return UNCHANGED_ROWS_RESULT
   }
 
@@ -233,7 +234,7 @@ function tryApplyPreviousRowsUpdateMutationToRows(
       return UNPATCHED_RESULT
     }
 
-    const identity = rowIdentity(previousRow)
+    const identity = rowIdentity(previousRow, readPrimaryKey(context))
     if (typeof identity === 'undefined') {
       return UNPATCHED_RESULT
     }
@@ -249,7 +250,7 @@ function tryApplyPreviousRowsUpdateMutationToRows(
     }
 
     const targetRows = nextRows ?? rows
-    const rowIndex = findPreviousRowsUpdateIndex(targetRows, rowIdentityIndex, identity, Boolean(nextRows))
+    const rowIndex = findPreviousRowsUpdateIndex(targetRows, rowIdentityIndex, identity, Boolean(nextRows), readPrimaryKey(context))
     if (previousMatches && !nextMatches) {
       if (typeof rowIndex === 'undefined') {
         continue
@@ -326,6 +327,7 @@ function findPreviousRowsUpdateIndex(
   rowIdentityIndex: ReadonlyMap<unknown, number>,
   identity: unknown,
   scanRows: boolean,
+  primaryKey: string,
 ): number | undefined {
   if (!scanRows) {
     return rowIdentityIndex.get(identity)
@@ -333,7 +335,7 @@ function findPreviousRowsUpdateIndex(
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
-    if (row && rowIdentity(row) === identity) {
+    if (row && rowIdentity(row, primaryKey) === identity) {
       return index
     }
   }
@@ -425,7 +427,7 @@ function tryApplyExactUpdatedMutationRowsToQuery(
     return undefined
   }
 
-  const identity = rowIdentity(row)
+  const identity = rowIdentity(row, readPrimaryKey(context))
   if (typeof identity === 'undefined' || identity !== context.exactMutationId) {
     return undefined
   }

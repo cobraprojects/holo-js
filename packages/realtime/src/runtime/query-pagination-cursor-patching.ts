@@ -5,6 +5,7 @@ import {
   matchesPatchedPredicate,
   matchesPredicates,
   readMutationValueKeys,
+  readPrimaryKey,
   valueKeysChangeColumns,
 } from './predicate-matching'
 import {
@@ -214,6 +215,7 @@ function applyCursorDeleteMutation(
     return undefined
   }
 
+  const primaryKey = readPrimaryKey(query)
   let nextRows = rows
   let nextRowCount = rowCount
   let changed = false
@@ -227,7 +229,7 @@ function applyCursorDeleteMutation(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (typeof identity === 'undefined') {
       return undefined
     }
@@ -237,7 +239,7 @@ function applyCursorDeleteMutation(
       return undefined
     }
 
-    const remainingRows = removeCursorRowByIdentity(nextRows, identity)
+    const remainingRows = removeCursorRowByIdentity(nextRows, identity, primaryKey)
     if (remainingRows) {
       nextRows = remainingRows
     }
@@ -263,6 +265,7 @@ function applyCursorPatchedPreviousRowsMutation(
   rows: readonly Readonly<Record<string, unknown>>[],
   rowCount: number,
 ): CursorPaginationMutationResult | undefined {
+  const primaryKey = readPrimaryKey(query)
   let nextRows = rows
   let nextRowCount = rowCount
   let changed = false
@@ -278,7 +281,7 @@ function applyCursorPatchedPreviousRowsMutation(
       continue
     }
 
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (typeof identity === 'undefined') {
       return undefined
     }
@@ -289,7 +292,7 @@ function applyCursorPatchedPreviousRowsMutation(
         return undefined
       }
 
-      const remainingRows = removeCursorRowByIdentity(nextRows, identity)
+      const remainingRows = removeCursorRowByIdentity(nextRows, identity, primaryKey)
       if (remainingRows) {
         nextRows = remainingRows
       }
@@ -301,7 +304,7 @@ function applyCursorPatchedPreviousRowsMutation(
       ...row,
       ...mutation.values,
     })
-    const rowIndex = nextRows.findIndex(candidate => rowIdentity(candidate) === identity)
+    const rowIndex = nextRows.findIndex(candidate => rowIdentity(candidate, primaryKey) === identity)
     if (!previousMatches && nextMatches) {
       if (rowIndex >= 0) {
         return undefined
@@ -358,8 +361,9 @@ function matchesPatchedPredicates(
 function removeCursorRowByIdentity(
   rows: readonly Readonly<Record<string, unknown>>[],
   identity: unknown,
+  primaryKey: string,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
-  const index = rows.findIndex(row => rowIdentity(row) === identity)
+  const index = rows.findIndex(row => rowIdentity(row, primaryKey) === identity)
   if (index < 0) {
     return undefined
   }
