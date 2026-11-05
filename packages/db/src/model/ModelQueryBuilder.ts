@@ -26,7 +26,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { projectModelRows, resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -201,6 +201,10 @@ class ModelQueryBuilderBase<
       query = this.softDeleteMode === 'only' ? query.whereNotNull(column as never) : query.whereNull(column as never)
     }
     return query
+  }
+
+  private getModelRowsQuery(): TableQueryBuilder<TTable, Record<string, unknown>> {
+    return this.getTableQueryBuilder()[projectModelRows]().query
   }
 
   applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
@@ -1369,7 +1373,7 @@ class ModelQueryBuilderBase<
   async get(): Promise<
     ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
   > {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -1396,7 +1400,7 @@ class ModelQueryBuilderBase<
   }
 
   async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     const collection = await this.hydrateRows(rows)
     this.recordCollectionRelationObservations(collection)
     this.recordCollectionRelationAggregateObservations(collection)
@@ -1491,7 +1495,7 @@ class ModelQueryBuilderBase<
   }
 
   private async paginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.getTableQueryBuilder().paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getModelRowsQuery().paginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1530,7 +1534,7 @@ class ModelQueryBuilderBase<
   }
 
   private async simplePaginatedPage(perPage: number, pageNumber: number, options: PaginationOptions) {
-    const page = await this.getTableQueryBuilder().simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
+    const page = await this.getModelRowsQuery().simplePaginate<ModelRecord<TTable>>(perPage, pageNumber, options)
     const collection = await this.hydrateRows(page.data)
     this.recordPaginatedRelationObservations(collection)
     this.recordPaginatedRelationAggregateObservations(collection)
@@ -1571,8 +1575,8 @@ class ModelQueryBuilderBase<
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
     const query = this.tableQuery.getPlan().orderBy.length === 0
-      ? this.getTableQueryBuilder().orderBy(this.repository.definition.primaryKey)
-      : this.getTableQueryBuilder()
+      ? this.getModelRowsQuery().orderBy(this.repository.definition.primaryKey)
+      : this.getModelRowsQuery()
     const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
     const rows = hiddenColumns.length === 0 ? page.data : page.data.map(row => {
       const attributes = { ...row }
@@ -1592,7 +1596,7 @@ class ModelQueryBuilderBase<
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     let page = 1
-    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
+    for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       if (await callback(rows, page) === false) return
@@ -1633,7 +1637,7 @@ class ModelQueryBuilderBase<
   }
 
   private idBatches(size: number, column: ModelAttributeKey<TTable>, direction: 'asc' | 'desc') {
-    return queryBatches(this.getTableQueryBuilder(), size, {
+    return queryBatches(this.getModelRowsQuery(), size, {
       column,
       direction,
       fallbackOrder: direction === 'asc' ? 'database' : 'rows',
@@ -1687,7 +1691,7 @@ class ModelQueryBuilderBase<
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
     assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
-    for await (const rows of queryBatches(this.getTableQueryBuilder(), size, {
+    for await (const rows of queryBatches(this.getModelRowsQuery(), size, {
       primaryKey: this.repository.definition.primaryKey,
     }, (rows: readonly ModelRecord<TTable>[]) => this.hydrateTraversalRows(rows))) {
       yield* rows
@@ -2486,6 +2490,7 @@ class ModelQueryBuilderBase<
     const { key, joined, selections, cache } = this.tableQuery[resolveAggregateSource](column, true)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
+    this.getModelRowsQuery()
     const projected = this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>
     return { query: this.clone(cache ? projected.cache(cache) : projected), column: key }
   }
@@ -2511,7 +2516,7 @@ class ModelQueryBuilderBase<
     readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>, TScopes>
     readonly rows: readonly ModelRecord<TTable>[]
   }> {
-    const rows = await this.getTableQueryBuilder().get<ModelRecord<TTable>>()
+    const rows = await this.getModelRowsQuery().get<ModelRecord<TTable>>()
     return {
       collection: await this.hydrateRows(rows),
       rows,

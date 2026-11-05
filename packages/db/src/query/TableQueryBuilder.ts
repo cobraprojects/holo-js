@@ -172,6 +172,7 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
+export const projectModelRows = Symbol('projectModelRows')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -1960,6 +1961,45 @@ export class TableQueryBuilder<
         ? [...implicitSelections, wildcard(source)]
         : this.modelAggregateSelections(column, source, key, wildcard(source))
     return { key, joined: !!join, selections, cache: this.plan.joins.length > 0 ? this.projectAggregate(selections).queryCacheConfig : undefined }
+  }
+
+  [projectModelRows](): { readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> } {
+    const { joins, selections, unions, orderBy } = this.plan
+    if (joins.length === 0) return { query: this }
+
+    const isOwn = (selection: QuerySelection) => selection.kind === 'column' && typeof this.resolveSourceColumnName(selection.column) !== 'undefined'
+    const ownOutputs = new Set(selections.flatMap(selection => isOwn(selection) ? [selectionOutputName(selection)!] : []))
+    const modelColumns = Object.keys(this.source.table?.columns ?? {})
+    for (const selection of selections) {
+      if (selection.kind !== 'column' || isOwn(selection) || selection.column.endsWith('.*')) continue
+      const name = selectionOutputName(selection)!
+      if (!modelColumns.includes(name) || (!selection.alias && (ownOutputs.has('*') || ownOutputs.has(name)))) continue
+      const selected = selection.alias ? `${selection.column} as ${selection.alias}` : selection.column
+      throw new CompilerError(`Cannot select "${selected}" on a joined "${this.source.tableName}" model query: "${name}" is a "${this.source.tableName}" column. Qualify or alias it to a non-model name.`)
+    }
+    if (unions.length > 0) return { query: this }
+
+    const qualifier = (table: string) => this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table
+    const own = qualifier(this.source.alias ?? this.source.tableName)
+    const wildcard = (table: string): QuerySelection => Object.freeze({ kind: 'column' as const, column: `${table}.*` })
+    const joinedWildcards = joins.map(join => wildcard(qualifier(join.alias ?? join.table!)))
+    const aliases = new Set(selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
+    const ordered = Object.freeze(orderBy.map(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column)
+      ? Object.freeze({ ...order, column: `${own}.${order.column}` })
+      : order))
+    const expanded = selections.length === 0
+      ? [...joinedWildcards, wildcard(own)]
+      : selections.flatMap(selection => selection.kind === 'column' && selection.column === '*' ? [...joinedWildcards, wildcard(own)] : [selection])
+    const columns = expanded.filter(selection => selection.kind === 'column')
+    const projected = [...columns.filter(selection => !isOwn(selection)), ...columns.filter(isOwn)]
+    let next = 0
+    return {
+      query: this.clone({
+        ...this.plan,
+        orderBy: ordered,
+        selections: Object.freeze(expanded.map(selection => selection.kind === 'column' ? projected[next++]! : selection)),
+      }),
+    }
   }
 
   cache(

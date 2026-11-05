@@ -205,6 +205,25 @@ Alias a column with `as`:
 const posts = await Post.select('id', 'title as heading').get()
 ```
 
+### Joined columns
+
+A model from a joined query keeps its own table's columns:
+
+```ts
+const posts = await Post.query()
+  .join('users', 'users.id', '=', 'posts.user_id')
+  .select('posts.*', 'users.name as author_name')
+  .get()
+```
+
+When the joined table has a column with a model column's name, such as `id`, the model reads its own column: `post.id` is `posts.id`, `sum('views')` and the other unqualified aggregates read `posts.views`, and `orderBy('id')` orders by `posts.id`.
+
+A selection that would put a joined column into a model column throws a `CompilerError` before the query runs. That covers `select('users.id as id')`, and `select('posts.title', 'users.id')` when the query doesn't also select the model's own `id`. Alias the joined column to a name that isn't a model column, such as `users.id as author_id`, or select the model's own column too, such as `posts.*`.
+
+::: info Differs from Laravel
+In Laravel, a joined column overwrites the model attribute of the same name, so a model can carry another table's `id`, and a later `save()` writes to the wrong row. Holo keeps the model's own columns and rejects selections that would replace them.
+:::
+
 ## Ordering and limiting
 
 ```ts
