@@ -2068,6 +2068,12 @@ export class TableQueryBuilder<
       : observation)
   }
 
+  private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
+    const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
+    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
+    return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
+  }
+
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
@@ -2088,9 +2094,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
       const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
       const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
@@ -2135,9 +2141,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const states: DatabaseQueryGroupedAggregateStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const aggregateValue = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
@@ -2192,9 +2198,9 @@ export class TableQueryBuilder<
         this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_COUNT_KEY, '*'),
       ]),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const groups: DatabaseQueryGroupedAggregateValueCountGroupObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const groupValue = row[GROUPED_AGGREGATE_GROUP_KEY]
       const value = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
@@ -3155,12 +3161,11 @@ export class TableQueryBuilder<
         continue
       }
 
-      const previousRow = result.rows[resultIndex]!
       usedResultIndexes.add(resultIndex)
-      previousRows.push(Object.freeze({ ...previousRow }))
+      previousRows.push(result.rows[resultIndex]!)
     }
 
-    return Object.freeze(previousRows)
+    return this.freezeMutationRows(previousRows)
   }
 
   private rowsMatchUniqueBy(

@@ -75,10 +75,35 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
 
     await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
     await DB.table(prices).where('label', 'padded').update({ discount: '0.50' })
+    const { id } = (await DB.table(prices).where('label', 'padded').first())!
+    await DB.table(prices).upsert({ id, label: 'padded', amount: '12.30' }, ['id'], ['label'])
     await DB.table(prices).where('label', 'padded').delete()
 
     const snapshots = mutations.flatMap(mutation => [...mutation.rows ?? [], ...mutation.previousRows ?? []])
     expect(snapshots.length).toBeGreaterThan(0)
     expect(snapshots.map(row => row.amount)).toEqual(snapshots.map(() => '12.30'))
+  })
+
+  it('records grouped realtime state keyed by the decimal text that queries read', async () => {
+    const prices = await openPrices(driver)
+    await DB.table(prices).insert([
+      { label: 'first', amount: '12.30', discount: '1.00' },
+      { label: 'second', amount: '12.30', discount: '3.00' },
+      { label: 'third', amount: '12.34', discount: '2.00' },
+    ])
+
+    const collected = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
+      counted: await DB.table(prices).select('amount').addSelectCount('total').groupBy('amount').having('count(*)', '>', 1).get(),
+      averaged: await DB.table(prices).select('amount').addSelectAvg('average', 'id').groupBy('amount').orderBy('amount').get(),
+    }))
+
+    expect(collected.value.counted).toEqual([{ amount: '12.30', total: 2 }])
+    expect(collected.value.averaged.map(row => row.amount)).toEqual(['12.30', '12.34'])
+    const groupKeys = collected.queries.flatMap(query => [
+      ...query.groupedAggregate?.aggregateStates ?? [],
+      ...query.groupedAggregate?.averageStates ?? [],
+    ]).map(state => state.groupValue)
+    expect(groupKeys).toEqual(expect.arrayContaining(['12.30', '12.34']))
+    expect(groupKeys.every(key => typeof key === 'string')).toBe(true)
   })
 })
