@@ -25,14 +25,14 @@ const ensureCaseInsensitiveCollation = () => ensurePostgresObject(
   `SELECT 1 FROM pg_collation WHERE collname = 'holo_case_insensitive'`,
 )
 
-async function createCountries(driver: Driver, postgresCodeType = 'VARCHAR(16) COLLATE "C"') {
+async function createCountries(driver: Driver, codeType = driver === 'postgres' ? 'VARCHAR(16) COLLATE "C"' : undefined) {
   const { adapter } = await openDatabase(driver)
   const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
   registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), label: column.string() }) })
-  const code = driver === 'sqlite'
-    ? 'code TEXT PRIMARY KEY COLLATE NOCASE NOT NULL'
-    : `code ${driver === 'mysql' ? 'VARCHAR(16) COLLATE utf8mb4_0900_ai_ci' : postgresCodeType} PRIMARY KEY NOT NULL`
+  const code = codeType === undefined
+    ? driver === 'sqlite' ? 'code TEXT PRIMARY KEY COLLATE NOCASE NOT NULL' : 'code VARCHAR(16) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL'
+    : `code ${codeType} PRIMARY KEY NOT NULL`
   await adapter.execute(`CREATE TABLE ${name} (${code}, label VARCHAR(64) NOT NULL)`)
   onTestFinished(async () => {
     clearGeneratedTables()
@@ -42,7 +42,7 @@ async function createCountries(driver: Driver, postgresCodeType = 'VARCHAR(16) C
   await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
   return {
     cachedLabel: async (value: string) => (await DB.table(name).where('code', value).cache(60).first())?.label,
-    update: (value: string, label: string) => DB.table(name).where('code', value).update({ label }),
+    update: (value: string | number, label: string) => DB.table(name).where('code', value).update({ label }),
     upsert: (value: string, label: string) => DB.table(name).upsert({ code: value, label }, ['code'], ['label']),
     writeBehindTheCache: (value: string, label: string) => adapter.execute(`UPDATE ${name} SET label = '${label}' WHERE code = '${value}'`),
   }
@@ -65,6 +65,57 @@ function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
     await countries.upsert('de', 'Deutschland')
 
     expect(await countries.cachedLabel('DE')).toBe('Deutschland')
+  })
+
+  it('refreshes a cached read by another key after an update of a case-insensitive key', async () => {
+    const countries = await createCountries(driver)
+    expect(await countries.cachedLabel('DE')).toBe('Germany')
+    await countries.writeBehindTheCache('DE', 'Hidden')
+
+    await countries.update('FR', 'République')
+
+    expect(await countries.cachedLabel('DE')).toBe('Hidden')
+  })
+}
+
+function registerExactCollationScenarios(driver: Exclude<Driver, 'postgres'>, codeType: string) {
+  it('keeps a cached read by another key after an update of an exact key', async () => {
+    const countries = await createCountries(driver, codeType)
+    expect(await countries.cachedLabel('DE')).toBe('Germany')
+    await countries.writeBehindTheCache('DE', 'Hidden')
+
+    await countries.update('FR', 'République')
+
+    expect(await countries.cachedLabel('DE')).toBe('Germany')
+  })
+
+  it('keeps a cached read by another key after an upsert of an exact key', async () => {
+    const countries = await createCountries(driver, codeType)
+    expect(await countries.cachedLabel('DE')).toBe('Germany')
+    await countries.writeBehindTheCache('DE', 'Hidden')
+
+    await countries.upsert('FR', 'République')
+
+    expect(await countries.cachedLabel('DE')).toBe('Germany')
+  })
+
+  it('keeps a cached read by key after an update of a case-differing exact key', async () => {
+    const countries = await createCountries(driver, codeType)
+    expect(await countries.cachedLabel('FR')).toBe('France')
+    await countries.writeBehindTheCache('FR', 'Hidden')
+
+    await countries.update('fr', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('France')
+  })
+
+  it('refreshes a cached read by an exact key after an update of the same key', async () => {
+    const countries = await createCountries(driver, codeType)
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.update('FR', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
   })
 }
 
@@ -118,6 +169,81 @@ function registerTextNumberScenarios(driver: Driver) {
 describe('query cache invalidation by a NOCASE key on sqlite', () => {
   registerTextNumberScenarios('sqlite')
   registerCaseInsensitiveScenarios('sqlite')
+})
+
+describe('query cache invalidation by a BINARY key on sqlite', () => {
+  registerExactCollationScenarios('sqlite', 'TEXT COLLATE BINARY')
+})
+
+describe('query cache invalidation by a key with the default collation on sqlite', () => {
+  registerExactCollationScenarios('sqlite', 'TEXT')
+})
+
+describe('query cache invalidation by an RTRIM key on sqlite', () => {
+  it('refreshes a cached read by key after an update matched by the key with trailing spaces', async () => {
+    const countries = await createCountries('sqlite', 'TEXT COLLATE RTRIM')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.update('FR  ', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_bin key on mysql', () => {
+  registerExactCollationScenarios('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
+
+  it('refreshes a cached read by a text key after an update matched by a number mysql compares it with', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.update(0, 'Zero')
+
+    expect(await countries.cachedLabel('FR')).toBe('Zero')
+  })
+
+  it('refreshes a cached read by a key with trailing spaces after an update matched by the key without them', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
+    expect(await countries.cachedLabel('FR  ')).toBe('France')
+
+    await countries.update('FR', 'République')
+
+    expect(await countries.cachedLabel('FR  ')).toBe('République')
+  })
+
+  it('refreshes a cached read by key after an update matched by the key with trailing spaces', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_bin')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.update('FR  ', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_0900_bin key on mysql', () => {
+  registerExactCollationScenarios('mysql', 'VARCHAR(16) COLLATE utf8mb4_0900_bin')
+
+  it('keeps a cached read by key after an update of the key with trailing spaces', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_0900_bin')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+    await countries.writeBehindTheCache('FR', 'Hidden')
+
+    await countries.update('FR  ', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('France')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_0900_as_cs key on mysql', () => {
+  it('refreshes a cached read by key after an update matched by the key with an ignorable character', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_0900_as_cs')
+    expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.update('F\u200BR', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
+  })
 })
 
 describe.skipIf(!mysqlIntegration)('query cache invalidation by a default _ci key on mysql', () => {

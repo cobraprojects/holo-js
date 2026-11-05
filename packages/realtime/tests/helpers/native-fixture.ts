@@ -30,8 +30,13 @@ export async function createNativeRelationalAdapter(
   }
   const queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
   const executions: Array<{ sql: string, bindings: readonly unknown[] }> = []
+  const introspections: Array<{ sql: string, bindings: readonly unknown[] }> = []
   const query = adapter.query.bind(adapter)
   const execute = adapter.execute.bind(adapter)
+  adapter.introspect = async <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[] = []): Promise<DriverQueryResult<TRow>> => {
+    introspections.push({ sql, bindings })
+    return query<TRow>(sql, bindings)
+  }
   adapter.query = async <TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[] = []): Promise<DriverQueryResult<TRow>> => {
     queries.push({ sql, bindings })
     return query<TRow>(sql, bindings)
@@ -40,5 +45,5 @@ export async function createNativeRelationalAdapter(
     executions.push({ sql, bindings })
     return execute(sql, bindings)
   }
-  return Object.assign(adapter, { queries, executions })
+  return Object.assign(adapter, { queries, executions, introspections })
 }

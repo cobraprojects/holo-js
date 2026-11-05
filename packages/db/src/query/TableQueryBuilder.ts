@@ -36,6 +36,7 @@ import {
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
   writesTextLiterals,
+  type QueryTextMatching,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -100,7 +101,7 @@ import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schem
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
-import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
@@ -1996,7 +1997,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
-          textMatchesAnyNumber(this.connection),
+          cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -3460,13 +3461,26 @@ export class TableQueryBuilder<
     records: readonly Readonly<Record<string, unknown>>[],
     predicates: readonly QueryPredicateNode[] = [],
   ): Promise<CaseInsensitiveColumns> {
-    if (!isPostgresConnection(this.connection)) {
+    if (isMySQLConnection(this.connection)) {
+      return await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+    }
+
+    if (!isPostgresConnection(this.connection) && !isSQLiteConnection(this.connection)) {
       return 'all'
     }
 
     return writesTextLiterals(predicates, records)
       ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
       : new Set<string>()
+  }
+
+  private async resolveQueryTextMatching(): Promise<QueryTextMatching> {
+    if (!isMySQLConnection(this.connection) || !writesTextLiterals(this.plan.predicates, [])) {
+      return textMatchesAnyNumber(this.connection)
+    }
+
+    const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : true
   }
 
   private async invalidateMutationQueries(
