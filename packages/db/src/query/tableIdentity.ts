@@ -2,6 +2,10 @@ import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { splitTablePath } from '../schema/identifiers'
+import { listGeneratedTableSpellings } from '../schema/generated'
+import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
+
+export { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { SelectQueryPlan, QueryPredicateNode } from './ast'
 
@@ -17,7 +21,6 @@ type TableIdentityEntry = {
 }
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
-const canonicalNames = new Map<string, Map<string, string>>()
 
 function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
   const owner = getRootDatabaseContext(connection)
@@ -26,12 +29,6 @@ function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentity
   const created = new Map<string, TableIdentityEntry>()
   resolvedIdentities.set(owner, created)
   return created
-}
-
-function rememberCanonicalName(connectionName: string, tableName: string, identity: string): void {
-  const names = canonicalNames.get(connectionName) ?? new Map<string, string>()
-  names.set(tableName, identity)
-  canonicalNames.set(connectionName, names)
 }
 
 function toCanonicalName(tableName: string, row: TableIdentityRow | undefined): string {
@@ -45,10 +42,6 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
   if (!statement) return tableName
   const { rows } = await connection.queryCompiled<TableIdentityRow>(statement)
   return toCanonicalName(tableName, rows[0])
-}
-
-export function canonicalTableName(connectionName: string, tableName: string): string {
-  return canonicalNames.get(connectionName)?.get(tableName) ?? tableName
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
@@ -65,8 +58,17 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
     })
   }
   const identity = await entry.identity
-  rememberCanonicalName(connection.getConnectionName(), tableName, identity)
+  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
   return identity
+}
+
+export async function resolveGeneratedTableIdentity(connection: DatabaseContext, tableName: string): Promise<void> {
+  const spellings = listGeneratedTableSpellings(tableName)
+  if (spellings.length === 0 || spellings.includes(tableName)) return
+  await resolveTableIdentity(connection, tableName)
+  for (const spelling of spellings) {
+    await resolveTableIdentity(connection, spelling)
+  }
 }
 
 function collectPredicateTables(predicate: QueryPredicateNode, tables: Set<string>, seen: Set<SelectQueryPlan>): void {
