@@ -54,7 +54,7 @@ import {
   unregisterDatabaseDriverFactory,
   type DatabaseDriverFactory,
 } from '@holo-js/db'
-import { importBundledRuntimeModule, importOptionalRuntimeModule, loadProjectDefinitionRuntimeModules, registerRuntimeModuleInstance } from '../runtimeModule'
+import { importBundledRuntimeModule, importOptionalRuntimeModule, loadProjectDefinitionRuntimeModules } from '../runtimeModule'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
@@ -2450,7 +2450,6 @@ export const holoRuntimeInternals = {
   configureQueueSubsystem,
   setProjectDefinitionImporter,
   loadProjectDefinitionRuntimeModules,
-  registerRuntimeModuleInstance,
   createAuthMailDeliveryHook,
   createAuthNotificationsDeliveryHook,
   createCoreNotificationBroadcaster,

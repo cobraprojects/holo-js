@@ -493,7 +493,7 @@ function runtimeModuleLocations(): Map<string, string> {
   return registry[slot]
 }
 
-export function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>, location?: string): void {
+function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>, location?: string): void {
   runtimeModuleInstances().set(specifier, instance)
   if (location) runtimeModuleLocations().set(specifier, location)
   else runtimeModuleLocations().delete(specifier)

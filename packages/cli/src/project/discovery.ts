@@ -782,7 +782,6 @@ async function importAppCommandAndInstallDefinitionImporter(
     .map(entry => resolve(projectRoot, entry.sourcePath))
   if (definitionPaths.length === 0) return importProjectModule(projectRoot, commandPath)
   const { holoRuntimeInternals: coreRuntimeInternals } = await import('@holo-js/core')
-  coreRuntimeInternals.registerRuntimeModuleInstance('@holo-js/cli', await import('../index'))
   const runtimeRoot = join(projectRoot, '.holo-js', 'runtime')
   await mkdir(runtimeRoot, { recursive: true })
   const markerDirectory = await mkdtemp(join(runtimeRoot, 'command-'))
