@@ -16,6 +16,18 @@ describe('real database test support', () => {
   })
 
   it.each([
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', 'postgres'],
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', 'template1'],
+    ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'mysql'],
+    ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'Information_Schema'],
+    ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'sys'],
+  ] as const)('refuses to open %s on the %s system database %s', async (driver, flag, database, name) => {
+    vi.stubEnv(flag, '1')
+    vi.stubEnv(database, name)
+    await expect(openDatabase(driver)).rejects.toThrow(`${database} must name a scratch test database`)
+  })
+
+  it.each([
     ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE'],
     ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE'],
   ] as const)('refuses to open %s when its integration flag is off', async (driver, flag, database) => {

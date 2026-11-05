@@ -21,12 +21,14 @@ export function integrationDrivers<const D extends TestDriver>(drivers: readonly
 export const postgresIntegration = integrationEnabled('postgres')
 export const mysqlIntegration = integrationEnabled('mysql')
 
+const systemDatabases = new Set(['postgres', 'template0', 'template1', 'mysql', 'information_schema', 'performance_schema', 'sys'])
+
 function scratchDatabase(flag: string, variable: string): string {
   if (process.env[flag] !== '1') {
     throw new Error(`Real database tests must be gated on ${flag}=1 before they connect.`)
   }
   const database = process.env[variable]
-  if (!database) {
+  if (!database || systemDatabases.has(database.toLowerCase())) {
     throw new Error(`${variable} must name a scratch test database; real database tests never fall back to a default or system database.`)
   }
   return database
@@ -66,7 +68,7 @@ async function dropFixture(driver: 'postgres' | 'mysql', fixture: string) {
   }
 }
 
-export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'schemaName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
+export async function openDatabase(driver: TestDriver = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'schemaName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
   const { wrapAdapter, ...databaseOptions } = options
   const mysql = driver === 'mysql' ? mysqlTestConnection() : undefined
   const createdAdapter = mysql ? createMySQLAdapter({ config: mysql })
