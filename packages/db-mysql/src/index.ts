@@ -84,9 +84,17 @@ function dateStringTypes(config: PoolOptions): ReadonlySet<string> {
   return new Set()
 }
 
+function uriFlag(value: string): boolean {
+  try {
+    return Boolean(JSON.parse(value))
+  } catch {
+    return value.length > 0
+  }
+}
+
 function readsJsonAsText(config: PoolOptions): boolean {
   const uriOption = typeof config.uri === 'string' ? new URL(config.uri).searchParams.get('jsonStrings') : null
-  return config.jsonStrings ?? uriOption === 'true'
+  return Boolean(config.jsonStrings) || (uriOption !== null && uriFlag(uriOption))
 }
 
 function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
@@ -209,14 +217,6 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 const DEFAULT_MAX_PREPARED_STATEMENTS = 256
 
 const BIG_NUMBER_OPTIONS = ['supportBigNumbers', 'bigNumberStrings'] as const
-
-function uriFlag(value: string): boolean {
-  try {
-    return Boolean(JSON.parse(value))
-  } catch {
-    return value.length > 0
-  }
-}
 
 function resolveBigNumberOptions(config: PoolOptions): PoolOptions {
   const defaults = { supportBigNumbers: true, bigNumberStrings: false }

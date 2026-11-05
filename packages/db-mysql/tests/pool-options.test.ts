@@ -76,9 +76,15 @@ describe('@holo-js/db-mysql pool options', () => {
     expect(readField(options, field({ type: 'LONG_BLOB', text: '{"a":1}' }))).toBe('driver')
   })
 
-  it('leaves JSON to the driver when jsonStrings is set', async () => {
-    const options = await poolOptions({ uri: 'mysql://root@db/app?jsonStrings=true' })
+  it.each(['true', '1'])('leaves JSON to the driver when the URL sets jsonStrings=%s', async (value) => {
+    const options = await poolOptions({ uri: `mysql://root@db/app?jsonStrings=${value}` })
 
     expect(readField(options, field({ extendedFormat: 'json', text: '[1]' }))).toBe('driver')
+  })
+
+  it('parses JSON when the URL sets jsonStrings=false', async () => {
+    const options = await poolOptions({ uri: 'mysql://root@db/app?jsonStrings=false' })
+
+    expect(readField(options, field({ type: 'JSON', text: '[1]' }))).toEqual([1])
   })
 })
