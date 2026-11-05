@@ -98,6 +98,25 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
   })
 
+  it.each(kinds)('%s reads the requested table on a joined query with a having clause', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+
+    const query = DB.table(name)
+      .join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)
+      .select(`${name}.price`, `${ordersName}.price`)
+      .groupBy(`${name}.id`, `${ordersName}.id`)
+      .having('count(*)', '>', 0)
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
+  })
+
+  it.each(kinds)('%s rejects a qualified column on a joined query with a union', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+
+    const joined = () => DB.table(name).join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price`, `${ordersName}.price`)
+    await expect(joined().union(joined())[kind](`${name}.price`)).rejects.toThrow(`Cannot aggregate column "${name}.price" on a joined query with a union.`)
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 
@@ -128,6 +147,18 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
     expect(Number(await query[kind](`${ordersName}.price` as never))).toBe(expected[kind] * 10)
     expect(Number(await query.where(`${ordersName}.price`, '>', 100)[kind](`${name}.price`))).toBe(kind === 'sum' ? 50 : kind === 'avg' ? 25 : kind === 'min' ? 20 : 30)
+  })
+
+  it.each(kinds)('%s on a joined model query applies the model accessor to its own column', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), {
+      timestamps: false,
+      accessors: { price: value => Number(value) * 2 },
+    })
+
+    expect(await Product.query()[kind](`${name}.price`)).toBe(expected[kind] * 2)
+    expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
+    expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {

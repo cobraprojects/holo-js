@@ -24,7 +24,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { TableQueryBuilder, resolveSourceColumn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, resolveAggregateSource } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -1764,8 +1764,8 @@ class ModelQueryBuilderBase<
   }
 
   async sum(requestedColumn: ModelColumnName<TTable>): Promise<number> {
-    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().sum(requestedColumn)
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.sum(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1786,8 +1786,8 @@ class ModelQueryBuilderBase<
   }
 
   async avg(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().avg(requestedColumn)
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.avg(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1806,8 +1806,8 @@ class ModelQueryBuilderBase<
   }
 
   async min(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().min(requestedColumn)
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.min(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1830,8 +1830,8 @@ class ModelQueryBuilderBase<
   }
 
   async max(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().max(requestedColumn)
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.max(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -2462,8 +2462,16 @@ class ModelQueryBuilderBase<
     })
   }
 
-  private aggregatesInSql(column: string): boolean {
-    return this.tableQuery.getPlan().joins.length > 0 && column.split('->', 1)[0]!.includes('.')
+  private resolveAggregateTarget(column: string): {
+    readonly query: ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables> | TableQueryBuilder<TTable, Record<string, unknown>>
+    readonly column: string
+  } {
+    if (!column.split('->', 1)[0]!.includes('.')) return { query: this, column }
+
+    const { key, source, joined } = this.tableQuery[resolveAggregateSource](column)
+    if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
+    if (joined) return { query: this.getTableQueryBuilder(), column }
+    return { query: this.clone(this.tableQuery.addSelect(`${source}.*`) as TableQueryBuilder<TTable, Record<string, unknown>>), column: key }
   }
 
   private extractNumericValues(

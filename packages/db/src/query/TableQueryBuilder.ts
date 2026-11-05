@@ -166,7 +166,7 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
-export const resolveSourceColumn = Symbol('resolveSourceColumn')
+export const resolveAggregateSource = Symbol('resolveAggregateSource')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -185,6 +185,8 @@ export function insertGetIdByKey(
 
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
+
+const aggregateValueKey = 'holo_aggregate_value'
 
 function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
   return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
@@ -1897,8 +1899,16 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
-  [resolveSourceColumn](column: string): string {
-    return Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
+  [resolveAggregateSource](column: string): { readonly key: string, readonly source: string, readonly joined: boolean } {
+    const root = column.split('->', 1)[0]!
+    const qualifier = root.slice(0, root.lastIndexOf('.'))
+    const join = this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
+    if (this.plan.joins.length > 0 && this.plan.unions.length > 0) {
+      throw new CompilerError(`Cannot aggregate column "${column}" on a joined query with a union.`)
+    }
+    return join
+      ? { key: column.slice(qualifier.length + 1), source: join.alias ?? join.table!, joined: true }
+      : { key: Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!, source: this.source.alias ?? this.source.tableName, joined: false }
   }
 
   cache(
@@ -3605,19 +3615,16 @@ export class TableQueryBuilder<
     readonly key: string
     readonly column: string
   } {
-    const root = column.split('->', 1)[0]!
-    if (!root.includes('.')) return { query: this, key: column, column }
+    if (!column.split('->', 1)[0]!.includes('.')) return { query: this, key: column, column }
 
-    const qualifier = root.slice(0, root.lastIndexOf('.'))
-    const join = this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
-    const key = join ? column.slice(qualifier.length + 1) : this[resolveSourceColumn](column)
+    const { key, source, joined } = this[resolveAggregateSource](column)
     if (this.plan.joins.length === 0) return { query: this, key, column: key }
 
-    const source = join ? join.alias ?? join.table : this.source.alias ?? this.source.tableName
-    const query = this.plan.unions.length > 0 || this.plan.having.length > 0
-      ? this
-      : this.clone(withSelections(this.plan, [`${source}.${key}`]))
-    return { query, key, column: join ? column : key }
+    return {
+      query: this.clone(appendSelections(this.plan, [`${source}.${key} as ${aggregateValueKey}`])),
+      key: aggregateValueKey,
+      column: joined ? column : key,
+    }
   }
 
   private extractNumericValues(
