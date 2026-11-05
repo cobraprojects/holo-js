@@ -2,7 +2,7 @@ import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
-import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate } from './ast'
+import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -206,6 +206,14 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
 
     const wallClock = compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
     return `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
+  }
+
+  protected override compileColumnComparison(predicate: QueryColumnPredicate): string {
+    if (predicate.valueType !== 'date') return super.compileColumnComparison(predicate)
+
+    const column = `datetime(${this.compileAppWallClock(this.compileColumnReference(predicate.column))})`
+    const compareTo = `datetime(${this.compileAppWallClock(this.compileColumnReference(predicate.compareTo))})`
+    return `${column} ${predicate.operator.toUpperCase()} ${compareTo}`
   }
 
   protected override compileComparisonSubject(predicate: QueryPredicate): string {

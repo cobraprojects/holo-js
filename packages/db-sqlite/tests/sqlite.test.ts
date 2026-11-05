@@ -77,6 +77,19 @@ describe('@holo-js/db-sqlite', () => {
     }
   })
 
+  it('names the function() requirement when an injected database cannot register holo_wall_clock', async () => {
+    const real = new Database(':memory:')
+    const adapter = createSQLiteAdapter({ database: { prepare: sql => real.prepare(sql), exec: sql => real.exec(sql), close: () => real.close() } })
+    try {
+      await adapter.execute('CREATE TABLE events (at TEXT)')
+      await expect(adapter.query('SELECT holo_wall_clock((julianday(at) - 2440587.5) * 86400000.0, ?) AS local FROM events', ['Asia/Tokyo']))
+        .rejects.toMatchObject({ code: 'CAPABILITY_ERROR', message: expect.stringContaining('function()') })
+      await expect(adapter.query('SELECT at FROM events')).resolves.toMatchObject({ rows: [] })
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
   it('uses a real injected database for bound writes and rollback in each transaction mode', async () => {
     const adapter = createSQLiteAdapter({ database: new Database(':memory:') })
     try {

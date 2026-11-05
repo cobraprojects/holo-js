@@ -25,6 +25,7 @@ import type {
   QueryPlan,
   QueryPredicateNode,
   QueryPredicate,
+  QueryColumnPredicate,
   QueryUpdateValue,
   QueryVectorPredicate,
   SelectQueryPlan,
@@ -661,7 +662,7 @@ export class SQLQueryCompiler {
     }
 
     if (predicate.kind === 'column') {
-      return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
+      return this.compileColumnComparison(predicate)
     }
 
     if (predicate.operator === 'in' || predicate.operator === 'not in') {
@@ -681,6 +682,10 @@ export class SQLQueryCompiler {
 
     bindings.push(predicate.value)
     return `${this.compileComparisonSubject(predicate)} ${predicate.operator.toUpperCase()} ${this.compileComparisonPlaceholder(predicate, bindings.length)}`
+  }
+
+  protected compileColumnComparison(predicate: QueryColumnPredicate): string {
+    return `${this.compileColumnReference(predicate.column)} ${predicate.operator.toUpperCase()} ${this.compileColumnReference(predicate.compareTo)}`
   }
 
   protected compileComparisonSubject(predicate: QueryPredicate): string {

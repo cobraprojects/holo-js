@@ -147,6 +147,31 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
     await expect(joined().whereNot(query => query.where(`${others.tableName}.day`, losAngelesNoonNov5)).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['model', 'later'])
   })
 
+  it('pages through a DATE column by app-timezone calendar date', async () => {
+    useAppTimezoneAt(new Date('2026-11-04T20:00:00Z'))
+    const { Event } = await createEventsTable(driver)
+    const seen: unknown[] = []
+    let cursor: string | null = null
+    for (let page = 0; page < 5; page += 1) {
+      const result: { data: readonly { title: unknown }[], nextCursor: string | null } = await Event.query().orderBy('day').orderBy('id').cursorPaginate(1, cursor)
+      seen.push(...result.data.map(row => row.title))
+      cursor = result.nextCursor
+      if (cursor === null) break
+    }
+
+    expect(seen).toEqual(['model', 'calendar', 'later'])
+  })
+
+  it('compares a DATE column with a DATETIME column in the app timezone', async () => {
+    useAppTimezoneAt(new Date('2026-11-04T20:00:00Z'))
+    const { events } = await createEventsTable(driver)
+    await DB.table(events).insert({ title: 'midnight', day: '2026-11-05', at: tokyoMidnightNov5 })
+
+    await expect(titles(DB.table(events).whereColumn('day', '=', 'at'))).resolves.toEqual(['midnight'])
+    await expect(titles(DB.table(events).whereColumn('at', '>', 'day'))).resolves.toEqual(['model', 'calendar', 'later'])
+    await expect(titles(DB.table(events).whereColumn('day', '<', 'at'))).resolves.toEqual(['model', 'calendar', 'later'])
+  })
+
   it('matches calendar text by its own day on a table without a column definition', async () => {
     useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
     const { events } = await createEventsTable(driver)
