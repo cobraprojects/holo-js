@@ -1975,7 +1975,6 @@ class ModelQueryBuilderBase<
     updateColumns: readonly ModelWritableColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {
     this.repository.assertWriteTargets(updateColumns)
-    await this.repository.loadGuardableColumns()
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
       this.repository.withWriteTimestamps(this.repository.sanitizeUpsertRow(value), 'create', timestamp)

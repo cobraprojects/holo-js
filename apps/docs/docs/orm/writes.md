@@ -195,11 +195,9 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
-Rows may carry the auto-increment `id`, which is the usual unique column, as in Laravel. Rows that carry it update the record with that `id` and insert the rest under the `id` they give. The model's `fillable` must list `id`, because the primary key isn't mass assignable by default:
+As in Laravel, the rows skip the model's `fillable` and `guarded` rules, so they may carry the auto-increment `id`, which is the usual unique column. Rows that carry it update the record with that `id` and insert the rest under the `id` they give. Casts and mutators still apply to each value:
 
 ```ts
-const Product = defineModel('products', { fillable: ['id', 'name', 'price'] })
-
 await Product.query().upsert(
   [
     { id: 1, name: 'T-Shirt S', price: 1999 },
@@ -412,6 +410,8 @@ Inside the callback, mass assignment rules are off for every model, not only `Us
 ::: danger
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
 :::
+
+A query's `upsert()` skips these rules, as Laravel's does, because it writes rows without making models. Pick the fields of each row yourself before you pass request input to it.
 
 ## Method reference
 

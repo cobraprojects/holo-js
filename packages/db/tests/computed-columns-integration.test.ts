@@ -217,10 +217,10 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await Product.findOrFail(product.get('id'))).get('price')).toBe(2)
   })
 
-  it('upserts rows that carry the auto-increment id as the conflict target', async () => {
+  it('upserts rows that carry the auto-increment id as the conflict target when id is not fillable', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))
-    const Product = defineModel(names.products, { fillable: ['id', 'price', 'quantity', 'name'], timestamps: false })
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
     const existingId = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
     const newId = existingId + 100
 
@@ -235,20 +235,20 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     ])
   })
 
-  it('keeps the auto-increment id out of upsert rows unless the model lists it as fillable', async () => {
+  it('writes upsert rows without the mass assignment filter, as Laravel does', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))
-    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
-    const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+    const Product = defineModel(names.products, { guarded: ['*'], timestamps: false })
+    await Product.query().upsert([{ id: 7, price: 2, quantity: 3, name: 'Ink', note: 'first' }], ['id'], ['price', 'note'])
+    await Product.query().upsert([{ id: 7, price: 5, quantity: 3, name: 'Ink', note: 'second' }], ['id'], ['price', 'note'])
 
-    await expect(Product.query().upsert([{ id, price: 5, quantity: 3, name: 'Ink' }], ['id'], ['price'])).rejects.toThrow(`Column "id" is not writable on model "${Product.definition.name}".`)
-    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price])).toEqual([[id, 2]])
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, row.note, Number(row.total)])).toEqual([[7, 5, 'second', 15]])
   })
 
   it('rejects a computed column in the upsert rows before any SQL runs', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))
-    const Product = defineModel(names.products, { fillable: ['id', 'price', 'quantity', 'name'], timestamps: false })
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
     const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
 
     await expect(Product.query().upsert([
