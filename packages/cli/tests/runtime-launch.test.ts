@@ -58,4 +58,23 @@ describe('runtime worker launch', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toBe('launched')
   })
+
+  it('forwards the worker stderr as it arrives and keeps it for failure reporting', async () => {
+    const dir = await createTempDirectory()
+    const workerPath = join(dir, 'worker.mjs')
+    await writeFile(workerPath, 'process.stderr.write("[holo:db] query ok\\n")\nprocess.stdout.write("done")\n')
+    const invocation = createRuntimeInvocation(workerPath)
+    const forwarded: string[] = []
+
+    const result = await runRuntimeInvocation(invocation.command, invocation.args, {
+      cwd: dir,
+      env: process.env,
+      onStderr: chunk => forwarded.push(chunk),
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe('done')
+    expect(forwarded.join('')).toBe('[holo:db] query ok\n')
+    expect(result.stderr).toBe('[holo:db] query ok\n')
+  })
 })
