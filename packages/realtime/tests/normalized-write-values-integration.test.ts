@@ -96,6 +96,40 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"4.50"')
   })
 
+  it('keeps a filtered subscription equal to a fresh query when an update moves a row into it', async () => {
+    const { db, rates } = await openFixture(driver)
+    await db.table(rates).insert({ id: 2, group_id: 2, tag_id: 2, rate: '5.00' })
+    const queries: Record<string, () => Promise<unknown>> = {
+      rows: () => db.table(rates).where('group_id', 2).orderBy('id').get(),
+      projected: () => db.table(rates).select('id', 'tag_id').where('group_id', 2).orderBy('id').get(),
+      first: () => db.table(rates).where('group_id', 2).orderBy('id').first(),
+      count: () => db.table(rates).where('group_id', 2).count(),
+    }
+    let reads = 0
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler: () => {
+        reads += 1
+        return handler()
+      } }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectFresh = async () => {
+      const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    }
+
+    await mutate(() => db.table(rates).where('id', 1).update({ group_id: 2 }))
+    await expectFresh()
+    expect(subscriptions[0]!.current.data).toEqual([{ id: 1, group_id: 2, tag_id: 1, rate: '12.30' }, { id: 2, group_id: 2, tag_id: 2, rate: '5.00' }])
+    await mutate(() => db.table(rates).where('id', 1).update({ tag_id: 3 }))
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', 2).update({ group_id: 1 }))
+    await expectFresh()
+    expect(subscriptions[0]!.current.data).toEqual([{ id: 1, group_id: 2, tag_id: 3, rate: '12.30' }])
+    if (driver !== 'sqlite') expect(reads).toBe(Object.keys(queries).length)
+  })
+
   it('keeps integer columns written in other representations equal to a fresh query', async () => {
     const { db, rates, Group } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
