@@ -27,28 +27,24 @@ export default { plugins: [sveltekit(withHoloSvelteKit({ adapter: adapter({ out:
 `)
     await execute(process.execPath, [vite, 'build', '--logLevel', 'error'], {
       cwd: root,
-      env: { ...process.env, APP_URL: 'http://127.0.0.1:43203' },
+      env: { ...process.env, APP_URL: 'http://build.test' },
     })
     await access(join(root, out, 'index.js'))
     if (out !== 'build') await expect(access(join(root, 'build'))).rejects.toThrow()
     await rm(join(root, '.svelte-kit'), { recursive: true, force: true })
     const responses = await Promise.all([0, 1].map(async (deployment) => {
       const { stdout } = await execute(process.execPath, ['--input-type=module', '-e', `
-import { createServer } from 'node:net'
-const reservation = createServer()
-await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve))
-const port = reservation.address().port
-await new Promise(resolve => reservation.close(resolve))
-const runtimeOrigin = 'http://127.0.0.1:' + port
+const runtimeOrigin = 'http://deployment-${deployment}.test'
 process.env.APP_URL = runtimeOrigin
-process.env.PORT = String(port)
+process.env.PORT = '0'
 process.env.HOST = '127.0.0.1'
 ${deployment === 0 ? 'delete process.env.BODY_SIZE_LIMIT' : "process.env.BODY_SIZE_LIMIT = '2M'"}
 const { server } = await import(${JSON.stringify('./' + out + '/index.js')})
+const endpoint = 'http://127.0.0.1:' + server.address().port
 const statuses = []
 try {
-  for (const origin of [runtimeOrigin, 'http://127.0.0.1:43203', 'https://attacker.example', 'https://canonical.example', null]) {
-    const response = await fetch(runtimeOrigin, {
+  for (const origin of [runtimeOrigin, 'http://build.test', 'https://attacker.example', 'https://canonical.example', null]) {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         ...(origin ? { origin } : {}),
@@ -62,10 +58,10 @@ try {
     await response.text()
   }
   const headers = { origin: ${JSON.stringify(canonicalOrigin)} ?? runtimeOrigin, 'content-type': 'application/x-www-form-urlencoded' }
-  const sized = await fetch(runtimeOrigin, { method: 'POST', headers, body: 'a'.repeat(1024 * 1024) })
+  const sized = await fetch(endpoint, { method: 'POST', headers, body: 'a'.repeat(1024 * 1024) })
   if (sized.status !== ${deployment === 0 ? 413 : 200}) throw new Error('Configured body limit failed: ' + sized.status)
   await sized.text()
-  const streamed = await fetch(runtimeOrigin, {
+  const streamed = await fetch(endpoint, {
     method: 'POST', headers, duplex: 'half',
     body: new ReadableStream({ start(controller) {
       for (let index = 0; index < 3; index++) controller.enqueue(new Uint8Array(1024 * 1024))
@@ -79,7 +75,7 @@ try {
   await new Promise(resolve => server.close(resolve))
 }
 console.log(JSON.stringify(statuses))
-`], { cwd: root, env: { ...process.env, APP_URL: 'http://127.0.0.1:43233' } })
+`], { cwd: root, env: { ...process.env, APP_URL: 'http://inherited.test' } })
       return JSON.parse(stdout.trim().split('\n').at(-1) ?? 'null') as number[]
     }))
     return responses.flat()
