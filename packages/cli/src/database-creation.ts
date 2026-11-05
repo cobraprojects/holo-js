@@ -18,8 +18,8 @@ class DatabaseCreatingAdapter implements DriverAdapter {
     return this.adapter.supportsConcurrentTransactionScopes
   }
 
-  get [holoRuntimeInternals.transactionScopeKey](): string | object {
-    return holoRuntimeInternals.transactionScopeIdentity(this.adapter)
+  get [holoRuntimeInternals.driverConnectionKey](): DriverAdapter {
+    return holoRuntimeInternals.driverConnection(this.adapter)
   }
 
   private createDatabaseOnFirstUse(): Promise<void> {

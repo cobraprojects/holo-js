@@ -4,7 +4,7 @@ import { getApplicationTimezone } from './applicationTimezone'
 import { SERVER_WALL_CLOCK_AMBIGUITY, formatWallClockSeconds, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from './applicationTime'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from './sqliteDateTime'
 import { driverErrorCodes, isDatabaseDeadlockError } from './core/driverErrors'
-import { transactionScopeIdentity, transactionScopeKey } from './core/transactionScope'
+import { driverConnection, driverConnectionKey, transactionScopeKey } from './core/transactionScope'
 import { whereColumnNotExpiredByDatabaseClock } from './query'
 import { getQueryBounds } from './query/queryBounds'
 import { createSchemaReader } from './schema/introspection'
@@ -420,5 +420,6 @@ export const holoRuntimeInternals = Object.freeze({
   driverErrorCodes,
   isDatabaseDeadlockError,
   transactionScopeKey,
-  transactionScopeIdentity,
+  driverConnectionKey,
+  driverConnection,
 })

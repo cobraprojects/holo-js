@@ -144,6 +144,10 @@ export class SQLiteAdapter implements DriverAdapter {
     return this.connected
   }
 
+  get [holoRuntimeInternals.driverConnectionKey](): SQLiteAdapter {
+    return this
+  }
+
   get [holoRuntimeInternals.transactionScopeKey](): string | SQLiteAdapter {
     return this.transactionKey
   }

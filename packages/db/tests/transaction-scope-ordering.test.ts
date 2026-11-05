@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSQLiteAdapter, sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { createDatabase, createDeferredDatabaseDriverAdapter, createDialect, createMigrationService, createQueryScheduler, createSchemaService, DB, defineMigration, registerDatabaseDriverFactory, unregisterDatabaseDriverFactory, type DatabaseLogger, type DriverAdapter } from '../src'
+import { createDatabase, createDeferredDatabaseDriverAdapter, createDialect, createMigrationService, createQueryScheduler, createSchemaService, DB, defineMigration, registerDatabaseDriverFactory, TransactionError, unregisterDatabaseDriverFactory, type DatabaseLogger, type DriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 
 function deferred(): { promise: Promise<void>, resolve: () => void } {
@@ -392,6 +392,74 @@ for (const [label, pair] of Object.entries(sharedSQLitePairs)) {
     }, 5_000)
   })
 }
+
+describe('foreign-key suspension guards across a SQLite adapter and a wrapper of it', () => {
+  const wrapperPair = sharedSQLitePairs['a SQLite adapter and a wrapper of it']
+
+  it('rejects a write through the wrapper that starts inside the callback and resumes after it returned', async () => {
+    const resumed = deferred()
+    let pauseNextInsert = false
+    const { other, schema } = await openSharedSQLite(wrapperPair, {
+      onQueryStart: async (entry) => {
+        if (pauseNextInsert && entry.source?.startsWith('query:insert')) {
+          pauseNextInsert = false
+          await resumed.promise
+        }
+      },
+    })
+    let late!: Promise<unknown>
+
+    await schema.withoutForeignKeyConstraints(async () => {
+      pauseNextInsert = true
+      late = other.table('records').insert({ id: 1, name: 'late' }).then(() => 'ran', (error: unknown) => error)
+    })
+    resumed.resolve()
+
+    expect(await late).toBeInstanceOf(TransactionError)
+    expect(await other.table('records').pluck('id')).toEqual([])
+  }, 5_000)
+
+  it('rejects a write through the wrapper that would join a transaction open on the connection', async () => {
+    const { db, other, schema } = await openSharedSQLite(wrapperPair)
+    const opened = deferred()
+    const finish = deferred()
+    let outcome: unknown
+
+    await schema.withoutForeignKeyConstraints(async () => {
+      const transaction = db.transaction(async (tx) => {
+        await tx.table('records').insert({ id: 1, name: 'transaction' })
+        opened.resolve()
+        await finish.promise
+        throw new Error('transaction failed')
+      })
+      await opened.promise
+      outcome = await other.table('records').insert({ id: 2, name: 'outside' }).then(() => 'ran', (error: unknown) => error)
+      finish.resolve()
+      await expect(transaction).rejects.toThrow('transaction failed')
+    })
+
+    expect(outcome).toBeInstanceOf(TransactionError)
+    expect(await other.table('records').pluck('id')).toEqual([])
+  }, 5_000)
+})
+
+describe('foreign-key suspensions on two connections to one SQLite file', () => {
+  it('turns off the checks of the other connection when its suspension runs inside the first one', async () => {
+    const { other, schema, first, second } = await openSharedSQLite(sharedSQLitePairs['two adapter objects on one SQLite file'])
+    const otherSchema = createSchemaService(other)
+    const seen: number[] = []
+
+    await schema.withoutForeignKeyConstraints(async () => {
+      await otherSchema.withoutForeignKeyConstraints(async () => {
+        seen.push(await readForeignKeys(first), await readForeignKeys(second))
+      })
+    })
+
+    expect(seen).toEqual([0, 0])
+    expect(await readForeignKeys(first)).toBe(1)
+    expect(await readForeignKeys(second)).toBe(1)
+  }, 5_000)
+})
 
 describe('query scheduler exclusive gate', () => {
   it('never runs two exclusive sections at once when one starts while the gate hands over to a waiter', async () => {
