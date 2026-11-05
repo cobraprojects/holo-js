@@ -1,4 +1,4 @@
-import { readIntegerColumnValue, readsAsInteger } from '../schema/normalization'
+import { parseInteger, readsAsInteger } from '../schema/normalization'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
@@ -57,11 +57,15 @@ function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 
+function readsInteger(value: unknown): boolean {
+  return typeof value === 'number' || readsIntegerText(value)
+}
+
 export function readIntegerResultColumns(row: Record<string, unknown>, columns: IntegerResultColumns): Record<string, unknown> {
   const values: Record<string, unknown> = { ...row }
-  for (const [key, column] of columns) {
+  for (const key of columns.keys()) {
     const value = row[key]
-    if (readsIntegerText(value)) values[key] = readIntegerColumnValue(column, value)
+    if (readsInteger(value)) values[key] = parseInteger(value)
   }
   return values
 }
