@@ -358,6 +358,14 @@ export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColu
   return dialect === 'sqlite' && column.kind === 'decimal'
 }
 
+export function readsAsCoercedBoolean(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
+  return dialect !== 'postgres' && column.kind === 'boolean'
+}
+
+export function rewritesDriverValue(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
+  return readsAsSQLiteDecimal(dialect, column) || readsAsCoercedBoolean(dialect, column)
+}
+
 export function normalizeDialectReadValue(
   dialect: SchemaDialectName,
   column: AnyColumnDefinition,

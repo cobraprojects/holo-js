@@ -1,4 +1,4 @@
-import { parseInteger, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
@@ -25,8 +25,10 @@ function readIntegerResult(value: unknown): unknown {
 }
 
 function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
-  if (column && readsAsInteger(column)) return readIntegerResult
-  return column && readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
+  if (!column) return undefined
+  if (readsAsInteger(column)) return readIntegerResult
+  if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
+  return readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {

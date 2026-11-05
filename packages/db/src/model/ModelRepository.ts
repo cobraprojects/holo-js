@@ -17,7 +17,7 @@ import {
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
+import { normalizeDialectReadValue, rewritesDriverValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
@@ -101,12 +101,12 @@ type BelongsToManyRelatedObservationMetadata = {
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
 
-function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableDefinition | undefined): boolean {
-  return connection.getDriver() === 'sqlite' && typeof table === 'object' && Object.values(table.columns).some(column => column.kind === 'decimal')
+function readsRewrittenValues(connection: DatabaseContext, table: string | TableDefinition | undefined): boolean {
+  return typeof table === 'object' && Object.values(table.columns).some(column => rewritesDriverValue(connection.getDriver() as SchemaDialectName, column))
 }
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
-  return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+  return !modelNeedsSerialization(related.definition) && !readsRewrittenValues(related.getConnection(), related.definition.table)
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -1284,10 +1284,10 @@ export class ModelRepository<
 
   private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
     const connection = this.getConnection()
-    if (readsSQLiteDecimals(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
+    if (readsRewrittenValues(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
     if (!relation.pivotModel) return true
     const pivot = this.resolveRelatedRepository(relation.pivotModel)
-    return !modelNeedsSerialization(pivot.definition) && !readsSQLiteDecimals(connection, pivot.definition.table)
+    return !modelNeedsSerialization(pivot.definition) && !readsRewrittenValues(connection, pivot.definition.table)
   }
 
   private createBelongsToManyRelatedObservationMetadata(
