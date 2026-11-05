@@ -286,7 +286,9 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
   return {
     name: 'sqlite',
     capabilities: { ...sqliteLike, returning: true, schemaQualifiedIdentifiers: true },
-    quoteIdentifier: (identifier: string) => quoteIdentifierSegments(identifier, '"'),
+    quoteIdentifier(identifier: string) {
+      return `"${identifier}"`
+    },
     createPlaceholder() {
       return '?'
     },

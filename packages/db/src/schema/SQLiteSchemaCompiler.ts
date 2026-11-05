@@ -86,7 +86,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   compileCopyTableRows(tableName: string, temporaryTableName: string, columnNames: readonly string[]): DDLStatement {
     const columns = columnNames.map(columnName => this.quoteIdentifier(columnName)).join(', ')
     return {
-      sql: `INSERT INTO ${this.quoteIdentifier(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${this.quoteIdentifier(tableName)}`,
+      sql: `INSERT INTO ${this.compileIdentifierPath(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${this.compileIdentifierPath(tableName)}`,
       source: `schema:sqliteRebuild:copy:${tableName}`,
     }
   }

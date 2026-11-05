@@ -240,7 +240,7 @@ export class SQLQueryCompiler {
     }).join(', ')
 
     return this.withMetadata({
-      sql: `${this.compileInsertPrefix(plan)} ${this.quoteIdentifier(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileInsertSuffix(plan)}`,
+      sql: `${this.compileInsertPrefix(plan)} ${this.compileTableReference(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileInsertSuffix(plan)}`,
       bindings,
       source: `query:insert:${plan.source.tableName}`,
     }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -304,7 +304,7 @@ export class SQLQueryCompiler {
     }).join(', ')
 
     return this.withMetadata({
-      sql: `INSERT INTO ${this.quoteIdentifier(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileUpsertSuffix(plan, columns)}`,
+      sql: `INSERT INTO ${this.compileTableReference(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileUpsertSuffix(plan, columns)}`,
       bindings,
       source: `query:upsert:${plan.source.tableName}`,
     }, this.createWriteMetadata('upsert', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -319,7 +319,7 @@ export class SQLQueryCompiler {
     const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
+      sql: `UPDATE ${this.compileTableReference(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
       bindings,
       unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:update:${plan.source.tableName}`,
@@ -332,7 +332,7 @@ export class SQLQueryCompiler {
     const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}${returningClause}`,
+      sql: `DELETE FROM ${this.compileTableReference(plan.source.tableName)}${whereClause}${returningClause}`,
       bindings,
       unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:delete:${plan.source.tableName}`,

@@ -272,6 +272,21 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     ])
   })
 
+  it('keeps dotted view and column names when it rebuilds a table', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "parents" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "prices" ("id" INTEGER PRIMARY KEY, "unit.price" INTEGER)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE VIEW "price.summary" AS SELECT "id", "unit.price" FROM "prices"', source: 'schema' })
+    await db.executeCompiled({ sql: 'INSERT INTO "prices" ("id", "unit.price") VALUES (1, 12)', source: 'schema' })
+
+    await schema.table('prices', (table) => {
+      table.foreignId('parent_id').nullable().constrained('parents')
+    })
+
+    expect((await schema.getColumns('prices')).map(columnInfo => columnInfo.name)).toEqual(['id', 'unit.price', 'parent_id'])
+    expect((await db.queryCompiled<Record<string, unknown>>({ sql: 'SELECT * FROM "price.summary"', source: 'test' })).rows).toEqual([{ 'id': 1, 'unit.price': 12 }])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {
