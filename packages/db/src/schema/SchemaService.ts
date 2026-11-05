@@ -5,7 +5,7 @@ import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, cr
 import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
-import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment, splitTablePath } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
 import { PostgresVirtualColumns } from './PostgresVirtualColumns'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
@@ -14,7 +14,7 @@ import { executeStatements, runAtomically } from './ddlExecution'
 import { SQLiteSchemaOperations } from './SQLiteSchemaOperations'
 import { TableDefinitionBuilder } from './TableDefinitionBuilder'
 import { TableMutationBuilder } from './TableMutationBuilder'
-import { createSchemaReader, readTableStructure } from './introspection'
+import { createSchemaReader, locateTable, readTableStructure } from './introspection'
 import { inferColumnKind } from './introspection/definitions'
 import type { AnyColumnBuilder } from './columns'
 import type { SQLSchemaCompiler } from './SQLSchemaCompiler'
@@ -47,6 +47,12 @@ export interface IntrospectedForeignKey {
   onDelete: string
 }
 
+const schemaServiceConnections = new WeakMap<SchemaService, DatabaseContext>()
+
+export function getSchemaServiceConnection(schema: SchemaService): DatabaseContext {
+  return schemaServiceConnections.get(schema)!
+}
+
 export class SchemaService {
   private pinnedRestorePending = false
   private readonly sqlite: SQLiteSchemaOperations
@@ -54,6 +60,7 @@ export class SchemaService {
   private readonly postgresVirtualColumns: PostgresVirtualColumns
 
   constructor(private readonly connection: DatabaseContext) {
+    schemaServiceConnections.set(this, connection)
     this.sqlite = new SQLiteSchemaOperations(connection, callback => this.withoutForeignKeyConstraints(callback))
     this.postgresEnumChecks = new PostgresEnumChecks(connection)
     this.postgresVirtualColumns = new PostgresVirtualColumns(connection)
@@ -155,6 +162,7 @@ export class SchemaService {
 
   async hasTable(name: string): Promise<boolean> {
     assertValidTablePath(name, 'Table name')
+    if (splitTablePath(name).schema !== undefined) return (await locateTable(this.connection, name)) !== undefined
     const tables = await this.getTables()
     return tables.includes(name)
   }

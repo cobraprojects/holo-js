@@ -1994,7 +1994,6 @@ export class ModelRepository<
         const written = this.softDeleteWrite(deletedAtColumn, deletedAt)
         await this.query().withTrashed().getTableQueryBuilder().where(primaryKey as never, id).update(written)
         entity.forceFill(this.normalizeFromStorage(written as Partial<ModelRecord<TTable>>))
-        entity.forceFill({ [deletedAtColumn]: this.applyCastGet(this.valueTransformer.resolveCast(deletedAtColumn), deletedAt) } as never)
         entity.syncOriginalAttributes(Object.keys(written))
         await this.dispatchEvent('trashed', entity)
       } else {
@@ -3994,7 +3993,18 @@ export class ModelRepository<
         break
     }
     const connection = this.getConnection()
-    return new PivotMutation({ table: this.resolvePivotTable(relation.pivotTable, connection), scope, relatedColumn, allowedColumns: relation.pivotColumns, timestamps: relation.pivotTimestamps === true, relationName }, connection)
+    const table = this.resolvePivotTable(relation.pivotTable, connection)
+    const relatedKey = typeof table === 'string' ? undefined : ownEntry(table.columns, relatedColumn)
+    return new PivotMutation({
+      table,
+      scope,
+      relatedColumn,
+      relatedKey,
+      dialect: connection.getDriver() as SchemaDialectName,
+      allowedColumns: relation.pivotColumns,
+      timestamps: relation.pivotTimestamps === true,
+      relationName,
+    }, connection)
   }
 
   private async dispatchCancelableEvent(

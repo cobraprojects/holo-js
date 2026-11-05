@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readTextFile } from './project/runtime'
 import { terminateChildProcess } from './framework-run'
+import { trackPackageManifestWrites } from './written-outputs'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike, SupportedScaffoldPackageManager } from './cli-types'
 
 export function resolvePackageManagerSpawn(
@@ -106,6 +107,15 @@ export async function runProjectDependencyInstall(
 }
 
 export async function installProjectDependencies(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn,
+  signal?: AbortSignal,
+): Promise<void> {
+  await trackPackageManifestWrites(projectRoot, () => runProjectDependencyInstallProcess(io, projectRoot, spawnProcess, signal))
+}
+
+async function runProjectDependencyInstallProcess(
   io: IoStreams,
   projectRoot: string,
   spawnProcess: typeof spawn,

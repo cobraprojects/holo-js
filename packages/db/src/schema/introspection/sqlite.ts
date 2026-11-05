@@ -244,10 +244,28 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     return foreignKeys
   }
 
+  async function readAttachedSchema(schema: string): Promise<string | undefined> {
+    const result = await introspect<TableNameRow>('SELECT name FROM pragma_database_list WHERE name = ? COLLATE NOCASE', [schema], `schema:introspect:schema:${schema}`)
+    return result.rows[0]?.name
+  }
+
   return {
     async listTables() {
       const result = await introspect<TableNameRow>('SELECT name FROM pragma_table_list WHERE schema = ? AND type IN (\'table\', \'virtual\') AND name NOT LIKE \'sqlite_%\' ORDER BY name', [MAIN_SCHEMA], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
+    },
+
+    async locateTable(tableName) {
+      const { schema, table } = splitTableName(tableName)
+      const attachedSchema = await readAttachedSchema(schema)
+      if (attachedSchema === undefined) return undefined
+      const stored = await readSQLiteStoredTable(connection, `${attachedSchema}.${table}`)
+      return stored && { schema: attachedSchema, table: stored.name }
+    },
+
+    async resolveReferencedTableSchema(tableName, ownerSchema) {
+      const { schema } = splitTablePath(tableName)
+      return schema === undefined ? ownerSchema : await readAttachedSchema(schema) ?? schema
     },
 
     async readTableStructure(tableName) {
@@ -262,6 +280,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       const structure: DatabaseTableStructure = {
         dialect: 'sqlite',
         tableName,
+        schema,
         columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
           name: row.name,
           dataType: row.type,

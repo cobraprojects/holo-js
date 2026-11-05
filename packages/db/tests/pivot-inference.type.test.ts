@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from 'vitest'
-import { belongsToMany, column, defineModel, defineGeneratedTable, hasMany, morphToMany, morphedByMany, type InferSelect } from '../src'
+import { belongsToMany, column, defineFactory, defineModel, defineGeneratedTable, hasMany, morphToMany, morphedByMany, type InferSelect } from '../src'
 
 const registeredPivot = defineGeneratedTable('pivot_type_registered', {
   user_id: column.integer(),
@@ -71,6 +71,144 @@ it('infers all pivot fields on eager-loaded relations', () => {
       expectTypeOf(json?.roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
       const team = await Team.with('users.roles').firstOrFail()
       expectTypeOf(team.users[0]?.roles[0]?.pivot.approved).toEqualTypeOf<boolean | undefined>()
+    }
+    void check
+  }
+})
+
+const typedPivotWrites = defineGeneratedTable('pivot_type_typed_writes', {
+  user_id: column.integer(),
+  role_id: column.integer(),
+  approved: column.boolean(),
+  note: column.string().nullable(),
+  score: column.integer().storedAs('1').nullable(),
+})
+
+declare module '../src' {
+  interface GeneratedSchemaTables {
+    pivot_type_typed_writes: typeof typedPivotWrites
+  }
+}
+
+it('types pivot attribute writes from the pivot table columns', () => {
+  const roles = defineGeneratedTable('pivot_type_write_roles', { id: column.id() })
+  const users = defineGeneratedTable('pivot_type_write_users', { id: column.id() })
+  const Role = defineModel(roles)
+  const User = defineModel(users, {
+    relations: {
+      roles: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('approved', 'note'),
+      registered: belongsToMany(() => Role, { pivotTable: 'pivot_type_typed_writes', foreignPivotKey: 'user_id', relatedPivotKey: 'role_id' }).withPivot('approved'),
+      undeclared: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id'),
+      onlyApproved: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('approved').wherePivot('approved', true),
+      declaredKeys: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('user_id', 'role_id', 'note', 'score'),
+      morphRoles: morphToMany(() => Role, 'owner', typedPivotWrites, 'role_id').withPivot('approved', 'role_id'),
+      inverseMorphRoles: morphedByMany(() => Role, 'owner', typedPivotWrites, 'user_id').withPivot('approved', 'user_id'),
+      untyped: belongsToMany(() => Role, 'pivot_type_untyped_writes', 'user_id', 'role_id'),
+    },
+  })
+  const RoleFactory = defineFactory(Role, () => ({}))
+  const UserFactory = defineFactory(User, () => ({}))
+
+  if (false) {
+    const check = async () => {
+      const user = await User.firstOrFail()
+
+      await user.roles().attach(1, { approved: true, note: null })
+      await user.roles().attach([1, 2], { approved: false })
+      await user.roles().attach({ 1: { approved: true } })
+      await user.roles().sync([1, 2])
+      await user.roles().sync(null)
+      await user.roles().sync({ 1: null, 2: undefined })
+      await user.attach('roles', { 1: null })
+      await user.roles().toggle(undefined)
+      await user.roles().attach([new Uint8Array([1])])
+      await user.roles().attach([new Date()])
+      await user.roles().attach(true)
+      await user.roles().sync({ 1: { approved: true }, 2: { note: 'x' } })
+      await user.roles().toggle({ 1: { approved: true } })
+      await user.roles().updateExistingPivot(1, { note: 'x' })
+      await user.registered().attach(1, { approved: true })
+      await user.morphRoles().updateExistingPivot(1, { approved: true })
+      await user.inverseMorphRoles().sync({ 1: { approved: true } })
+      await user.attach('roles', 1, { approved: true })
+      await user.sync('roles', { 1: { approved: true } })
+      await user.syncWithoutDetaching('roles', { 1: { note: null } })
+      await user.toggle('roles', [1])
+      await user.updateExistingPivot('roles', 1, { approved: false })
+      UserFactory.hasAttached(RoleFactory, 'roles', { approved: true })
+
+      await user.roles().attach(new Uint8Array([1]))
+      await user.roles().sync(new Uint16Array([1]))
+      await user.roles().detach(new Date())
+      await user.roles().toggle(new Date())
+      // @ts-expect-error unknown pivot column
+      await user.roles().attach(1, { aproved: true })
+      // @ts-expect-error computed pivot column
+      await user.roles().attach(1, { score: 1 })
+      // @ts-expect-error wrong pivot value type
+      await user.roles().attach(1, { approved: 'yes' })
+      // @ts-expect-error unknown pivot column
+      await user.roles().sync({ 1: { aproved: true } })
+      // @ts-expect-error computed pivot column
+      await user.roles().sync({ 1: { score: 1 } })
+      // @ts-expect-error unknown pivot column
+      await user.roles().toggle({ 1: { aproved: true } })
+      // @ts-expect-error computed pivot column
+      await user.roles().updateExistingPivot(1, { score: 1 })
+      // @ts-expect-error unknown pivot column
+      await user.registered().attach(1, { aproved: true })
+      // @ts-expect-error computed pivot column
+      await user.morphRoles().updateExistingPivot(1, { score: 1 })
+      // @ts-expect-error wrong pivot value type
+      await user.inverseMorphRoles().sync({ 1: { approved: 'yes' } })
+      // @ts-expect-error unknown pivot column
+      await user.attach('roles', 1, { aproved: true })
+      // @ts-expect-error computed pivot column
+      await user.sync('roles', { 1: { score: 1 } })
+      // @ts-expect-error unknown pivot column
+      await user.syncWithoutDetaching('roles', { 1: { aproved: true } })
+      // @ts-expect-error computed pivot column
+      await user.toggle('roles', { 1: { score: 1 } })
+      // @ts-expect-error wrong pivot value type
+      await user.updateExistingPivot('roles', 1, { approved: 'yes' })
+      // @ts-expect-error unknown pivot column
+      UserFactory.hasAttached(RoleFactory, 'roles', { aproved: true })
+      // @ts-expect-error foreign pivot key
+      await user.roles().attach(1, { user_id: 1 })
+      // @ts-expect-error related pivot key
+      await user.attach('roles', 1, { role_id: 1 })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.undeclared().attach(1, { approved: true })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.onlyApproved().sync({ 1: { note: 'x' } })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.registered().updateExistingPivot(1, { note: 'x' })
+      // @ts-expect-error pivot keys stay reserved after withPivot
+      await user.declaredKeys().attach(1, { user_id: 1 })
+      // @ts-expect-error computed pivot column stays unwritable after withPivot
+      await user.declaredKeys().attach(1, { score: 1 })
+      // @ts-expect-error related pivot key of a morphToMany relation
+      await user.morphRoles().attach(1, { role_id: 1 })
+      // @ts-expect-error morph columns of a morphToMany relation
+      await user.morphRoles().attach(1, { owner_id: 1 })
+      // @ts-expect-error foreign pivot key of a morphedByMany relation
+      await user.inverseMorphRoles().attach(1, { user_id: 1 })
+      // @ts-expect-error pivot column not declared with withPivot
+      UserFactory.hasAttached(RoleFactory, 'undeclared', { approved: true })
+      // @ts-expect-error computed pivot column
+      UserFactory.hasAttached(RoleFactory, 'roles', { score: 1 })
+
+      await user.undeclared().attach(1)
+      await user.undeclared().sync({ 1: {} })
+      await user.onlyApproved().attach(1, { approved: true })
+      await user.declaredKeys().attach(1, { note: null })
+
+      await user.untyped().attach(1, { anything: 'goes' })
+      await user.untyped().sync({ 1: { anything: 'goes' } })
+      await user.untyped().updateExistingPivot(1, { anything: 1 })
+      await user.attach('untyped', 1, { anything: 'goes' })
+      await user.syncWithoutDetaching('untyped', { 1: { anything: 'goes' } })
+      UserFactory.hasAttached(RoleFactory, 'untyped', { anything: 'goes' })
     }
     void check
   }

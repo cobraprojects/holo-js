@@ -4,10 +4,11 @@ import { createIntrospect } from './introspect'
 import { readForeignKeyColumns, readStringLength, readStringLiterals } from './sqlDefinitions'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { ComputedColumn } from '../types'
-import type { DatabaseEnumCheckStructure, DialectSchemaReader } from './types'
+import type { DatabaseEnumCheckStructure, DialectSchemaReader, TableLocation } from './types'
 
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
+type TableLocationRow = { schema: string, table: string }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -110,17 +111,32 @@ function readEnumCheck(row: CheckRow): DatabaseEnumCheckStructure | undefined {
 export function createPostgresSchemaReader(connection: DatabaseContext): DialectSchemaReader {
   const introspect = createIntrospect(connection)
 
+  async function locateTable(tableName: string): Promise<TableLocation | undefined> {
+    const { schema, table } = splitTablePath(tableName)
+    const exists = await introspect<TableLocationRow>(`SELECT n.nspname AS schema, t.relname AS table ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, [schema ?? null, table], `schema:introspect:table:${tableName}`)
+    const row = exists.rows[0]
+    return row && { schema: row.schema, table: row.table }
+  }
+
   return {
     async listTables() {
       const result = await introspect<TableNameRow>('SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = current_schema() ORDER BY tablename', [], 'schema:introspect:tables')
       return result.rows.map(row => row.name).sort()
     },
 
+    locateTable,
+
+    async resolveReferencedTableSchema(tableName) {
+      const { schema } = splitTablePath(tableName)
+      if (schema !== undefined) return schema
+      const result = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE t.oid = pg_catalog.to_regclass(pg_catalog.quote_ident($1)) AND t.relkind IN ('r', 'p')`, [tableName], `schema:introspect:searchPath:${tableName}`)
+      return result.rows[0]?.schema
+    },
+
     async readTableStructure(tableName) {
       const { schema, table } = splitTablePath(tableName)
       const bindings = [schema ?? null, table]
-      const exists = await introspect<TableRow>(`SELECT n.nspname AS schema ${TABLE_RELATION} WHERE ${TABLE_RELATION_FILTER}`, bindings, `schema:introspect:table:${tableName}`)
-      const resolvedSchema = exists.rows[0]?.schema
+      const resolvedSchema = (await locateTable(tableName))?.schema
       if (resolvedSchema === undefined) return undefined
 
       const columns = await introspect<ColumnRow>(COLUMNS_SQL, bindings, `schema:introspect:columns:${tableName}`)

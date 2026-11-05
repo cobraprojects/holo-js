@@ -65,6 +65,18 @@ describe('SQLite schema-qualified table names', () => {
     expect(await DB.table('archive.products').count()).toBe(0)
   })
 
+  it('updates and deletes through an aliased table in an attached database', async () => {
+    const { db } = await openProducts()
+    await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS archive`, source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."products" ("id" INTEGER PRIMARY KEY, "name" TEXT, "price" INTEGER)', source: 'schema' })
+    await DB.table('archive.products').insert([{ id: 1, name: 'first', price: 10 }, { id: 2, name: 'second', price: 20 }])
+
+    await DB.table('archive.products as a').where('a.id', 1).update({ price: 11 })
+    await DB.table('archive.products as a').where('a.id', 2).delete()
+
+    expect(await readProducts('archive.products')).toEqual([{ id: 1, name: 'first', price: 11 }])
+  })
+
   it('persists and queries a model on a main-qualified table', async () => {
     await openProducts()
     const products = defineGeneratedTable('main.products', { id: column.id(), name: column.string(), price: column.integer() })
