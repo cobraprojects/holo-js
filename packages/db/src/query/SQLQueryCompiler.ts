@@ -852,7 +852,7 @@ export class SQLQueryCompiler {
       return `${subquery} AS ${this.quoteIdentifier(join.alias!)}`
     }
 
-    return this.compileTableReference(join.table!)
+    return this.compileSource({ kind: 'table', tableName: join.table!, alias: join.alias })
   }
 
   protected compileLateralJoinSource(_subquery: string, _alias: string): string {

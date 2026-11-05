@@ -12814,6 +12814,137 @@ export default {
     })()
   })
 
+  it('discovers command files added, removed, renamed, or edited after the registry was prepared', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/alpha.mjs', `
+export default {
+  description: 'Alpha command.',
+  async run() {},
+}
+`)
+    await writeProjectFile(projectRoot, 'server/commands/beta.mjs', `
+export default {
+  description: 'Beta command.',
+  async run() {},
+}
+`)
+
+    const loaded = await loadProjectConfig(projectRoot, { required: true })
+    await prepareProjectDiscovery(projectRoot, loaded.config)
+    const registryPath = join(projectRoot, '.holo-js/generated/registry.json')
+    const preparedRegistry = await readFile(registryPath, 'utf8')
+
+    const listUnchanged = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listUnchanged.io))).resolves.toBe(0)
+    await expect(readFile(registryPath, 'utf8')).resolves.toBe(preparedRegistry)
+
+    await writeProjectFile(projectRoot, 'server/commands/reports/send.mjs', `
+export default {
+  description: 'Send reports.',
+  async run() {},
+}
+`)
+    const listAdded = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listAdded.io))).resolves.toBe(0)
+    expect(listAdded.read().stdout).toContain('reports:send')
+    expect(listAdded.read().stdout).toContain('Send reports.')
+
+    await rm(join(projectRoot, 'server/commands/beta.mjs'))
+    const listRemoved = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listRemoved.io))).resolves.toBe(0)
+    expect(listRemoved.read().stdout).not.toContain('Beta command.')
+
+    await rename(join(projectRoot, 'server/commands/alpha.mjs'), join(projectRoot, 'server/commands/gamma.mjs'))
+    const runRenamed = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['gamma'], runRenamed.io))).resolves.toBe(0)
+    const listAfterRename = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listAfterRename.io))).resolves.toBe(0)
+    expect(listAfterRename.read().stdout).toMatch(/^\s+gamma\b/m)
+    expect(listAfterRename.read().stdout).not.toMatch(/^\s+alpha\b/m)
+
+    const gammaPath = join(projectRoot, 'server/commands/gamma.mjs')
+    const gammaSource = await readFile(gammaPath, 'utf8')
+    const gammaStat = await stat(gammaPath)
+    await writeFile(gammaPath, gammaSource.replace('Alpha command.', 'Gamma command.'))
+    await utimes(gammaPath, gammaStat.atime, gammaStat.mtime)
+    const listEdited = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listEdited.io))).resolves.toBe(0)
+    expect(listEdited.read().stdout).toContain('Gamma command.')
+    expect(listEdited.read().stdout).not.toContain('Alpha command.')
+
+    await writeFile(gammaPath, `
+export default {
+  name: 'gamma:renamed',
+  aliases: ['gr'],
+  description: 'Renamed gamma command.',
+  async run() {},
+}
+`)
+    const runEditedName = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['gr'], runEditedName.io))).resolves.toBe(0)
+    const listEditedName = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listEditedName.io))).resolves.toBe(0)
+    expect(listEditedName.read().stdout).toContain('gamma:renamed')
+    expect(listEditedName.read().stdout).toContain('Renamed gamma command.')
+
+    const editedRegistry = await readFile(registryPath, 'utf8')
+    const listStable = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['list'], listStable.io))).resolves.toBe(0)
+    await expect(readFile(registryPath, 'utf8')).resolves.toBe(editedRegistry)
+  })
+
+  it('keeps healthy commands available when a command file cannot be read', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/good.mjs', `
+export default {
+  description: 'Good command.',
+  async run() {},
+}
+`)
+    await writeProjectFile(projectRoot, 'server/commands/locked.mjs', `
+export default {
+  description: 'Locked command.',
+  async run() {},
+}
+`)
+    const lockedPath = join(projectRoot, 'server/commands/locked.mjs')
+    await chmod(lockedPath, 0o000)
+
+    try {
+      const commands = await discoverAppCommands(projectRoot, defaultProjectConfig())
+      expect(commands.map(command => [command.name, command.loadFailed === true])).toEqual([
+        ['good', false],
+        ['locked', true],
+      ])
+    } finally {
+      await chmod(lockedPath, 0o644)
+    }
+  })
+
+  it('rediscovers commands when the commands path changes after the registry was prepared', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/commands/report.mjs', `
+export default {
+  description: 'Server report.',
+  async run() {},
+}
+`)
+    await writeProjectFile(projectRoot, 'app/commands/report.mjs', `
+export default {
+  description: 'App report.',
+  async run() {},
+}
+`)
+
+    await prepareProjectDiscovery(projectRoot, defaultProjectConfig())
+    const config = defaultProjectConfig()
+    const commands = await discoverAppCommands(projectRoot, { ...config, paths: { ...config.paths, commands: 'app/commands' } })
+    expect(commands.map(command => [command.name, command.description])).toEqual([['report', 'App report.']])
+  })
+
   it('covers fallback manifest resolution and existing project config reuse', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

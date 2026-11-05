@@ -61,6 +61,7 @@ export type GeneratedCommandRegistryEntry = {
   readonly description: string
   readonly usage?: string
   readonly loadFailed?: true
+  readonly sourceHash?: string
 }
 
 export type GeneratedJobRegistryEntry = {

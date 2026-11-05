@@ -339,13 +339,19 @@ export type QueryUpdateValue
     | QueryJsonUpdateOperation
     | readonly QueryJsonUpdateOperation[]
 
+export function parseTableReference(table: string): { readonly tableName: string, readonly alias?: string } {
+  const aliasMatch = table.trim().match(/^([A-Z_][\w.]*)(?:\s+as\s+([A-Z_]\w*))?$/i)
+  return {
+    tableName: aliasMatch?.[1] ?? table,
+    alias: aliasMatch?.[2],
+  }
+}
+
 export function createTableSource(table: string | TableDefinition): QuerySource {
   if (typeof table === 'string') {
-    const aliasMatch = table.trim().match(/^([A-Z_][\w.]*)(?:\s+as\s+([A-Z_]\w*))?$/i)
     return Object.freeze({
       kind: 'table',
-      tableName: aliasMatch?.[1] ?? table,
-      alias: aliasMatch?.[2],
+      ...parseTableReference(table),
     })
   }
 

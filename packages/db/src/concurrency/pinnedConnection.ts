@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TransactionError } from '../core/errors'
+import { driverConnection } from '../core/transactionScope'
 import type { DatabaseOperationOptions, DriverAdapter } from '../core/types'
 
 export type PinnedConnection = {
@@ -20,14 +21,14 @@ const pinnedConnections = new AsyncLocalStorage<ReadonlyMap<DriverAdapter, Pinne
 const pinnedTransactionScopes = new AsyncLocalStorage<ReadonlySet<PinnedTransactionScope>>()
 
 export function currentPinnedConnection(adapter: DriverAdapter): PinnedConnection | undefined {
-  const pinned = pinnedConnections.getStore()?.get(adapter)
+  const pinned = pinnedConnections.getStore()?.get(driverConnection(adapter))
   return pinned?.active ? pinned : undefined
 }
 
 export function runPinnedConnection<T>(adapter: DriverAdapter, callback: () => Promise<T>): Promise<T> {
   const pinned: PinnedConnection = { active: true, closed: false, tail: Promise.resolve(), inFlight: 0 }
   const pinnedMap = new Map(pinnedConnections.getStore())
-  pinnedMap.set(adapter, pinned)
+  pinnedMap.set(driverConnection(adapter), pinned)
   return pinnedConnections.run(pinnedMap, () => callback().finally(() => {
     pinned.active = false
   }))
@@ -93,7 +94,7 @@ async function serializeOnPinnedConnection<T>(
 }
 
 export function markPinnedTransactionStuck(adapter: DriverAdapter): void {
-  const scope = pinnedConnections.getStore()?.get(adapter)?.transaction
+  const scope = pinnedConnections.getStore()?.get(driverConnection(adapter))?.transaction
   if (scope) scope.stuck = true
 }
 
