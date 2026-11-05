@@ -208,6 +208,14 @@ await Product.query().upsert(
 )
 ```
 
+On PostgreSQL, an `id` you write yourself with `upsert()` or `insert()` doesn't advance the table's identity sequence, as in Laravel. The next `create()` then takes an `id` from the sequence that may already exist and fails on the primary key. After writing explicit ids, move the sequence past the largest `id` with [`unsafeQuery()`](/database/#unsafequery):
+
+```ts
+await DB.unsafeQuery(DB.raw(
+  `select setval(pg_get_serial_sequence('products', 'id'), coalesce(max(id), 0) + 1, false) from products`,
+))
+```
+
 The rows' keys and the update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes
