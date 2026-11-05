@@ -50,7 +50,7 @@ await DB.table('tags').insert([
 
 ### insertGetId()
 
-`insertGetId()` inserts one row and returns its auto-incrementing ID. An integer ID is a number on every database, as in Laravel, including a PostgreSQL `bigint` key that the driver returns as text. A key beyond `Number.MAX_SAFE_INTEGER`, such as a snowflake ID, comes back as its exact text instead, so no digits are lost and the call never fails after the row is written. A model's auto-increment key reads the same way. A key that isn't numeric, such as a UUID, comes back as the string the database returns:
+`insertGetId()` inserts one row and returns its auto-incrementing ID. An integer ID is a number on every database, as in Laravel, including a PostgreSQL `bigint` key that the driver returns as text. A key beyond `Number.MAX_SAFE_INTEGER`, such as a snowflake ID, comes back as its exact text instead, so no digits are lost and the call never fails after the row is written. A key that isn't numeric, such as a UUID, comes back as the string the database returns:
 
 ```ts
 const userId = await DB.table('users').insertGetId({
@@ -59,7 +59,7 @@ const userId = await DB.table('users').insertGetId({
 })
 ```
 
-On a model whose table is in the Generated schema, the key's TypeScript type stays `number`, even though a key beyond `Number.MAX_SAFE_INTEGER` is a string at runtime. Other integer columns past that range still throw `HydrationError` when read. Making the type match the runtime value is tracked in [#499](https://github.com/cobraprojects/holo-js/issues/499).
+A model whose table is in the Generated schema throws a `HydrationError` instead when it reads such a key, including the one `create()` gets back. `create()` then rolls back the insert, unless you run it inside your own transaction. See [Primary keys](/orm/#primary-keys).
 
 ### insertOrIgnore()
 
