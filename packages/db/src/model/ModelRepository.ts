@@ -155,11 +155,6 @@ function hasDefinition<TTable extends TableDefinition>(
   return 'definition' in reference
 }
 
-function loadedRelationJson<TTable extends TableDefinition>(entity: Entity<TTable>, relationName: string): unknown {
-  const loaded = entity.getRelation<unknown>(relationName)
-  return isEntity(loaded) ? loaded.toJSON() : null
-}
-
 function isEntity(value: unknown): value is Entity {
   return value instanceof Entity
 }
@@ -976,8 +971,7 @@ export class ModelRepository<
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-          result: loadedRelationJson(entity, relationName),
-        }, resultPath, 'limited'))
+        }, resultPath))
         continue
       }
 
@@ -1009,10 +1003,9 @@ export class ModelRepository<
           operator: '=' as const,
           value: parentKey,
         })]),
-        result: loadedRelationJson(entity, relationName),
         selections: [],
         tableName: related.definition.table.tableName,
-      }), resultPath, 'limited'))
+      }), resultPath))
     }
   }
 
@@ -1043,7 +1036,7 @@ export class ModelRepository<
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-        }, resultPath, 'single'))
+        }, resultPath))
         continue
       }
 
@@ -1081,7 +1074,7 @@ export class ModelRepository<
         })]),
         selections: [],
         tableName: related.definition.table.tableName,
-      }), resultPath, 'single'))
+      }), resultPath))
     }
   }
 
@@ -1141,14 +1134,13 @@ export class ModelRepository<
   private createNullableSingleRecordRelationObservation(
     observation: DatabaseQueryObservation,
     resultPath: readonly DatabaseQueryResultPathSegment[],
-    rowWindowMode: 'limited' | 'single',
   ): DatabaseQueryObservation {
     return Object.freeze({
       ...observation,
       emptyRecordValue: null,
       limit: 1,
       resultPath,
-      rowWindowMode,
+      rowWindowMode: 'single',
     })
   }
 

@@ -12,7 +12,6 @@ import {
   type RealtimePatchPathSegment,
 } from './result-patching'
 import type { DatabaseQueryObservation, QueryResultBinding } from './query-state'
-import { stableStringify } from './stable-stringify'
 import { isRecord } from './value'
 
 function addSerializedResultBinding(
@@ -176,14 +175,6 @@ export function bindQueryObservationsToSerializedValue(
   return Object.freeze(boundQueries)
 }
 
-function deliveredAsRecorded(recorded: unknown, delivered: unknown): boolean {
-  if (typeof recorded === 'undefined') {
-    return true
-  }
-
-  return stableStringify(JSON.parse(JSON.stringify(recorded) ?? 'null')) === stableStringify(delivered)
-}
-
 function bindExplicitQueryObservationPaths(
   queries: readonly DatabaseQueryObservation[],
   serializedValue: unknown,
@@ -200,7 +191,6 @@ function bindExplicitQueryObservationPaths(
     boundQueries.push(Object.freeze({
       ...query,
       ...createQueryObservationMetadata(query),
-      patchable: query.patchable && deliveredAsRecorded(query.result, result),
       result,
       resultBound: true,
       resultPath,

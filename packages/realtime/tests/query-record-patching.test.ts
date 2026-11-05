@@ -81,8 +81,22 @@ function createApplier(
 }
 
 describe('@holo-js/realtime record patching', () => {
-  it('backfills the record when a delete leaves its limited window short', async () => {
-    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }], rowWindowMode: 'limited' })
+  it('patches a record to empty when nothing else matches after its row leaves', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }] })
+    const backfillKey = createBackfillQueryKey(query, 0, 1)
+
+    await expect(tryPatchQueryRecord(
+      query,
+      { id: 1, author_id: 1 },
+      [createMutation({ kind: 'delete' })],
+      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([])]]) }),
+      createQueryContext(),
+      createApplier({ patched: true, rows: [] }),
+    )).resolves.toEqual({ patched: true, query, value: undefined })
+  })
+
+  it('leaves a record unpatched when another row matches after its row leaves', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }] })
     const backfillKey = createBackfillQueryKey(query, 0, 1)
 
     await expect(tryPatchQueryRecord(
@@ -91,25 +105,7 @@ describe('@holo-js/realtime record patching', () => {
       [createMutation({ kind: 'delete' })],
       createBackfills({ rows: new Map([[backfillKey, Promise.resolve([{ id: 2, author_id: 1 }])]]) }),
       createQueryContext(),
-      createApplier({ patched: true, backfill: true, rows: [] }),
-    )).resolves.toEqual({
-      patched: true,
-      query,
-      value: { id: 2, author_id: 1 },
-    })
-  })
-
-  it('leaves the record unpatched when its backfill carries fields the current record lacks', async () => {
-    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }], rowWindowMode: 'limited' })
-    const backfillKey = createBackfillQueryKey(query, 0, 1)
-
-    await expect(tryPatchQueryRecord(
-      query,
-      { id: 1, author_id: 1 },
-      [createMutation({ kind: 'delete' })],
-      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([{ id: 2, author_id: 1, secret: 'hidden' }])]]) }),
-      createQueryContext(),
-      createApplier({ patched: true, backfill: true, rows: [] }),
+      createApplier({ patched: true, rows: [] }),
     )).resolves.toEqual({ patched: false })
   })
 

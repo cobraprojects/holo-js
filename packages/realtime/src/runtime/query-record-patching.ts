@@ -25,6 +25,7 @@ import type {
   QueryRowPatchContext,
   RowMutationApplier,
 } from './query-state'
+import { isSingleIdQuery } from './query-metadata'
 import type { BackfillCache } from './state'
 
 export async function tryPatchQueryRecord(
@@ -62,19 +63,15 @@ export async function tryPatchQueryRecord(
         )
       : undefined
     if (!hydratedMutation) {
-      return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
+      return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
     }
 
     const result = applyMutation(patchedRows, query, hydratedMutation, createMutationRowPatchContext(queryContext, metadata))
     if (!result.patched) {
-      return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
+      return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
     }
 
     if ('rows' in result) {
-      if (result.backfill) {
-        return await tryBackfillCurrentQueryRecord(query, value, emptyValue, backfills)
-      }
-
       if (result.rows.length > 1) {
         return UNPATCHED_RESULT
       }
@@ -88,6 +85,13 @@ export async function tryPatchQueryRecord(
     return UNCHANGED_QUERY_RESULT
   }
 
+  if (value && patchedRows.length === 0 && !isSingleIdQuery(query)) {
+    const rows = await backfillCurrentQueryRows(query, backfills)
+    if (!rows || rows.length > 0) {
+      return UNPATCHED_RESULT
+    }
+  }
+
   return Object.freeze({
     patched: true,
     query,
@@ -97,7 +101,6 @@ export async function tryPatchQueryRecord(
 
 async function tryBackfillCurrentQueryRecord(
   query: DatabaseQueryObservation,
-  value: Readonly<Record<string, unknown>> | null | undefined,
   emptyValue: null | undefined,
   backfills: BackfillCache,
 ): Promise<PatchQueryResult> {
@@ -106,22 +109,9 @@ async function tryBackfillCurrentQueryRecord(
     return UNPATCHED_RESULT
   }
 
-  const row = rows[0]
-  if (value && row && !hasSameKeys(value, row)) {
-    return UNPATCHED_RESULT
-  }
-
   return Object.freeze({
     patched: true,
     query,
     value: rows[0] ?? emptyValue,
   })
-}
-
-function hasSameKeys(
-  current: Readonly<Record<string, unknown>>,
-  next: Readonly<Record<string, unknown>>,
-): boolean {
-  const currentKeys = Object.keys(current)
-  return currentKeys.length === Object.keys(next).length && currentKeys.every(key => Object.hasOwn(next, key))
 }
