@@ -14,7 +14,7 @@ export { PACKAGE_MANIFEST_DISCOVERY_PATHS }
 
 export const DISCOVERY_WATCH_PROBE_PATH = '.holo-js/runtime/discovery-watch.probe'
 
-const ATOMIC_WRITE_STAGING_FILE = /\.holo-\d+-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.tmp$/
+const ATOMIC_WRITE_STAGING_FILE = /\.holo-\d+-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.(?:tmp|backup)$/
 
 const LIVENESS_PROBE_INTERVAL_MS = 50
 const LIVENESS_TIMEOUT_MS = 10_000
@@ -418,17 +418,14 @@ export async function startDiscoveryWatch({
 
   const dispatch = (path: string, eventType: WatchEventType): void => {
     if (!isDiscoveryRelevantPath(path, project, pluginWatches)) return
-    if (isAlwaysWatchedPath(path, project)) {
-      const unchanged = isUnchangedWrittenOutput(resolve(projectRoot, path))
-      observe(async () => await unchanged ? [] : classify(path, eventType))
-      return
-    }
-    if (eventType !== 'rename') {
-      observe({ path, kind: 'changed' })
-      return
-    }
-    const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
-    observe(async () => classifyWatchedPathChange(path, await observedSnapshot, snapshots))
+    const unchanged = isUnchangedWrittenOutput(resolve(projectRoot, path))
+    const observedSnapshot = eventType === 'rename' ? readWatchedPathSnapshot(resolve(projectRoot, path)) : undefined
+    observe(async () => {
+      const change = observedSnapshot
+        ? classifyWatchedPathChange(path, await observedSnapshot, snapshots)
+        : { path, kind: 'changed' as const }
+      return await unchanged ? [] : change
+    })
   }
 
   const classify = async (path: string, eventType: WatchEventType): Promise<HoloProjectPrepareChange> => eventType === 'rename'
@@ -519,10 +516,10 @@ export async function startDiscoveryWatch({
     const relevant = [...events].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
     if (relevant.length === 0) return
     observe(async () => {
-      const changes = await Promise.all(relevant.map(async ([path, eventType]) =>
-        isAlwaysWatchedPath(path, project) && await isUnchangedWrittenOutput(resolve(projectRoot, path))
-          ? undefined
-          : classify(path, eventType)))
+      const changes = await Promise.all(relevant.map(async ([path, eventType]) => {
+        const change = await classify(path, eventType)
+        return await isUnchangedWrittenOutput(resolve(projectRoot, path)) ? undefined : change
+      }))
       return changes.filter(change => change !== undefined)
     })
   }

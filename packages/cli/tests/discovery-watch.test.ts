@@ -8,7 +8,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
-import { trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
+import { isUnchangedWrittenOutput, trackOutputWrites, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
@@ -289,6 +289,7 @@ it('ignores the staging files of atomic writes in watched roots', async () => {
   emit(`server/models/User.ts.holo-${process.pid}-${randomUUID()}.tmp`)
   watcher.resume()
   emit(`config/app.ts.holo-${process.pid}-${randomUUID()}.tmp`)
+  emit(`server/models/User.ts.holo-${process.pid}-${randomUUID()}.backup`)
   await captured.settled()
   expect(captured.changes).toEqual([])
 })
@@ -319,4 +320,62 @@ it('judges a manifest event that arrives while the CLI is writing it against the
   emit('package.json')
   await captured.settled()
   expect(captured.changes).toEqual([])
+})
+
+it('ignores events for source files the CLI wrote or removed while they still match what it left', async () => {
+  const root = await createProject()
+  await write(root, 'server/models/Stale.ts', 'stale')
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    deferred: true,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('rename', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  await trackOutputWrites([join(root, 'server/models/Managed.ts'), join(root, 'server/models/Stale.ts')], async () => {
+    await write(root, 'server/models/Managed.ts', 'managed')
+    emit('server/models/Managed.ts')
+    await rm(join(root, 'server/models/Stale.ts'))
+    emit('server/models/Stale.ts')
+  })
+  watcher.resume()
+  emit('server/models/Managed.ts')
+  await captured.settled()
+  expect(captured.changes).toEqual([])
+  await write(root, 'server/models/Managed.ts', 'edited')
+  emit('server/models/Managed.ts')
+  await captured.settled()
+  expect(captured.changes).toEqual([{ path: 'server/models/Managed.ts', kind: 'changed' }])
+})
+
+it('judges written content against a write that starts while the check is reading', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  await writeOutputFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
+  const checked = isUnchangedWrittenOutput(manifest)
+  const installed = trackPackageManifestWrites(root, async () => {
+    await writeFile(manifest, '{"name":"watch-fixture","type":"module","dependencies":{}}')
+  })
+  await installed
+  await expect(checked).resolves.toBe(true)
+})
+
+it('shares the written-output ledger between separately loaded copies of the CLI modules', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  await writeOutputFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
+  vi.resetModules()
+  const copy = await import('../src/written-outputs')
+  await expect(copy.isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
 })
