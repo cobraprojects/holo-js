@@ -319,7 +319,7 @@ export class SQLQueryCompiler {
     const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
+      sql: `UPDATE ${this.compileWriteTarget(plan.source)} SET ${assignments}${whereClause}${returningClause}`,
       bindings,
       unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:update:${plan.source.tableName}`,
@@ -332,11 +332,19 @@ export class SQLQueryCompiler {
     const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}${returningClause}`,
+      sql: `${this.compileDeleteTarget(plan.source)}${whereClause}${returningClause}`,
       bindings,
       unsafe: this.isUnsafeWritePlan(plan) ? true : undefined,
       source: `query:delete:${plan.source.tableName}`,
     }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan), plan.predicates))
+  }
+
+  protected compileWriteTarget(source: UpdateQueryPlan['source']): string {
+    return source.alias ? this.compileSource(source) : this.quoteIdentifier(source.tableName)
+  }
+
+  protected compileDeleteTarget(source: DeleteQueryPlan['source']): string {
+    return `DELETE FROM ${this.compileWriteTarget(source)}`
   }
 
   protected withMetadata(

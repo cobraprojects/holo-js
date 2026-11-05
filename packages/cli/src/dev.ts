@@ -7,6 +7,7 @@ import { watch } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureProjectConfig } from './project'
+import { startRecordingWrittenOutputs } from './written-outputs'
 import { runProjectPrepare } from './project-prepare'
 import type {
   IoStreams,
@@ -199,7 +200,20 @@ export async function runProjectDevServer(
       return nextServerArgs
     }
 
-    const initialArgs = await prepareDiscovery(true)
+    discoveryWatch = await startDiscoveryWatch({
+      projectRoot,
+      project,
+      signal: session.signal,
+      createWatcher,
+      deferred: true,
+      observe: change => restart?.observe(change),
+      writeWarning: message => io.stderr.write(message),
+    })
+
+    await discoveryWatch.ready
+    session.signal.throwIfAborted()
+    const stopRecordingWrittenOutputs = startRecordingWrittenOutputs()
+    const initialArgs = await prepareDiscovery(true).finally(stopRecordingWrittenOutputs)
     restart = createFrameworkRestart({
       session,
       initialArgs,
@@ -207,23 +221,15 @@ export async function runProjectDevServer(
       io,
       prepare: changes => prepareDiscovery(false, changes),
     })
-    const frameworkRestart = restart
+    discoveryWatch.resume()
 
-    discoveryWatch = await startDiscoveryWatch({
-      projectRoot,
-      project,
-      signal: session.signal,
-      createWatcher,
-      observe: frameworkRestart.observe,
-      writeWarning: message => io.stderr.write(message),
-    })
-
-    await frameworkRestart.run()
+    await restart.run()
   } catch (error) {
     if (!session.signal.aborted) throw error
   } finally {
     if (restart) await restart.shutdown()
     else session.dispose()
     discoveryWatch?.close()
+    await discoveryWatch?.ready
   }
 }
