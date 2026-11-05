@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import {
   column,
@@ -12,17 +12,37 @@ import {
   resetDB,
   resolveRuntimeConnectionManagerOptions,
 } from '../src'
-import { postgresTestConnection, testConnectionUrl } from './support/database'
+import { postgresIntegration, postgresTestConnection, testConnectionUrl } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
+const database = `holo_search_path_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+
+function searchPathConnection() {
+  return { ...postgresTestConnection(), database }
+}
+
+beforeAll(async () => {
+  if (!postgresIntegration) return
+  const admin = createPostgresAdapter({ config: postgresTestConnection() })
+  await admin.execute(`CREATE DATABASE ${database}`)
+  await admin.disconnect()
+})
+
+afterAll(async () => {
+  if (!postgresIntegration) return
+  const admin = createPostgresAdapter({ config: postgresTestConnection() })
+  await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
+  await admin.disconnect()
+})
+
 function structuredConnection() {
-  const { user, ...connection } = postgresTestConnection()
+  const { user, ...connection } = searchPathConnection()
   return { ...connection, username: user }
 }
 
 function connectionUrl(searchPath?: string): string {
-  const url = testConnectionUrl('postgresql', postgresTestConnection())
+  const url = testConnectionUrl('postgresql', searchPathConnection())
   if (searchPath) url.searchParams.set('options', `-c statement_timeout=5000 -c search_path=${searchPath}`)
   return url.toString()
 }
@@ -32,7 +52,7 @@ function quoted(identifier: string): string {
 }
 
 async function createNotesTables(schemas: readonly string[], tableName: string): Promise<void> {
-  const admin = createPostgresAdapter({ config: postgresTestConnection() })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     for (const schema of schemas.filter(name => name !== 'public')) await admin.execute(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
     await admin.execute(`DROP TABLE IF EXISTS public.${quoted(tableName)}`)
@@ -64,7 +84,7 @@ async function bodiesThroughQueriesAndModels(connection: Record<string, unknown>
   return (await Note.query().orderBy('id').get()).map(note => note.get('body'))
 }
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL search_path from the configured schema', () => {
+describe.skipIf(!postgresIntegration)('PostgreSQL search_path from the configured schema', () => {
   it.each([
     { mode: 'url', connection: (schema: string) => ({ url: connectionUrl(), schema }) },
     { mode: 'structured', connection: (schema: string) => ({ ...structuredConnection(), schema }) },
@@ -122,7 +142,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL searc
 })
 
 async function createSchemas(schemas: readonly string[]): Promise<void> {
-  const admin = createPostgresAdapter({ config: postgresTestConnection() })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     for (const schema of schemas) await admin.execute(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
     await admin.disconnect()
@@ -131,7 +151,7 @@ async function createSchemas(schemas: readonly string[]): Promise<void> {
 }
 
 async function createTableWithColumn(schema: string, tableName: string, columnName: string): Promise<void> {
-  const admin = createPostgresAdapter({ config: postgresTestConnection() })
+  const admin = createPostgresAdapter({ config: searchPathConnection() })
   onTestFinished(async () => {
     await admin.execute(`DROP TABLE IF EXISTS ${quoted(schema)}.${quoted(tableName)}`)
     await admin.disconnect()
@@ -157,7 +177,7 @@ async function readSchemaAfterUnqualifiedCreate(connection: Record<string, unkno
   }
 }
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL schema reads follow the schema unqualified statements use', () => {
+describe.skipIf(!postgresIntegration)('PostgreSQL schema reads follow the schema unqualified statements use', () => {
   const written = { generatedColumns: ['id', 'written_by_migration'], listed: true, columns: ['id', 'written_by_migration'] }
 
   it('reads public when the search_path names a missing configured schema before public', async () => {

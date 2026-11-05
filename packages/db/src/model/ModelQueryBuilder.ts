@@ -27,7 +27,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -57,6 +57,7 @@ import type {
   ModelWritableAttributeKey,
   ModelWritableColumnName,
   ModelWritableJsonColumnPath,
+  ModelAggregateColumn,
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
@@ -1766,7 +1767,9 @@ class ModelQueryBuilderBase<
     return value
   }
 
-  async sum(column: ModelColumnName<TTable>): Promise<number> {
+  async sum(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number> {
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.sum(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1782,11 +1785,13 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  average(column: ModelColumnName<TTable>): Promise<number | null> {
+  average(column: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
     return this.avg(column)
   }
 
-  async avg(column: ModelColumnName<TTable>): Promise<number | null> {
+  async avg(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.avg(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1804,7 +1809,9 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async min(column: ModelColumnName<TTable>): Promise<number | null> {
+  async min(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.min(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1826,7 +1833,9 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async max(column: ModelColumnName<TTable>): Promise<number | null> {
+  async max(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
+    const { query, column } = this.resolveAggregateTarget(requestedColumn)
+    if (query !== this) return query.max(column as never)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -2467,6 +2476,19 @@ class ModelQueryBuilderBase<
         ? query => query.whereNull(relatedKey as never).whereNotNull(relatedKey as never)
         : query => query.whereIn(relatedKey as never, keys),
     })
+  }
+
+  private resolveAggregateTarget(column: string): {
+    readonly query: ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables> | TableQueryBuilder<TTable, Record<string, unknown>>
+    readonly column: string
+  } {
+    if (!column.split('->', 1)[0]!.includes('.')) return { query: this, column }
+
+    const { key, joined, selections, cache } = this.tableQuery[resolveAggregateSource](column, true)
+    if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
+    if (joined) return { query: this.getTableQueryBuilder(), column }
+    const projected = this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>
+    return { query: this.clone(cache ? projected.cache(cache) : projected), column: key }
   }
 
   private extractNumericValues(
