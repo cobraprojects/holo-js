@@ -143,6 +143,8 @@ export class SQLQueryCompiler {
       && typeof plan.offset === 'undefined'
       && !plan.lockMode
     ) {
+      validateQueryPlan(plan, this.dialect)
+      this.compile({ ...plan, orderBy: [] })
       return this.compile({
         ...plan,
         orderBy: [],
@@ -200,7 +202,7 @@ export class SQLQueryCompiler {
 
           const allColumnsOf = readAllColumnsSelectionTable(selection.column)
           if (allColumnsOf !== undefined && !selection.alias) {
-            return `${this.compileTableReference(allColumnsOf)}.*`
+            return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
           const column = this.compileColumnReference(selection.column)
@@ -241,7 +243,7 @@ export class SQLQueryCompiler {
     }).join(', ')
 
     return this.withMetadata({
-      sql: `${this.compileInsertPrefix(plan)} ${this.quoteIdentifier(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileInsertSuffix(plan)}`,
+      sql: `${this.compileInsertPrefix(plan)} ${this.compileTableReference(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileInsertSuffix(plan)}`,
       bindings,
       source: `query:insert:${plan.source.tableName}`,
     }, this.createWriteMetadata('insert', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -305,7 +307,7 @@ export class SQLQueryCompiler {
     }).join(', ')
 
     return this.withMetadata({
-      sql: `INSERT INTO ${this.quoteIdentifier(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileUpsertSuffix(plan, columns)}`,
+      sql: `INSERT INTO ${this.compileTableReference(plan.source.tableName)} (${columns.map(column => this.quoteIdentifier(column)).join(', ')}) VALUES ${rowsSql}${this.compileUpsertSuffix(plan, columns)}`,
       bindings,
       source: `query:upsert:${plan.source.tableName}`,
     }, this.createWriteMetadata('upsert', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -341,7 +343,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileWriteTarget(source: UpdateQueryPlan['source']): string {
-    return source.alias ? this.compileSource(source) : this.quoteIdentifier(source.tableName)
+    return this.compileSource(source)
   }
 
   protected compileDeleteTarget(source: DeleteQueryPlan['source']): string {
@@ -846,6 +848,10 @@ export class SQLQueryCompiler {
       .split('.')
       .map(part => this.quoteIdentifier(part))
       .join('.')
+  }
+
+  protected compileAllColumnsOf(tableReference: string, _plan: SelectQueryPlan): string {
+    return `${this.compileTableReference(tableReference)}.*`
   }
 
   protected compileTableReference(reference: string): string {

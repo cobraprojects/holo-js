@@ -1,13 +1,14 @@
 import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
-import { createSchemaReader, readTableStructure } from './introspection'
-import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
+import { readTableStructure } from './introspection'
+import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, resolveSQLiteTablePath, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withAddedColumn, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
+import { splitTablePath } from './identifiers'
 import type { DDLStatement } from './ddl'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { runInTransactionScope } from '../core/transactionScope'
@@ -22,7 +23,10 @@ type SQLiteForeignKeysRow = {
 type SQLiteTableRewrite = (
   structure: DatabaseTableStructure,
   table: StoredTable,
+  resolvedTableName: string,
 ) => string[]
+
+type SQLiteFollowUp = (resolvedTableName: string) => readonly DDLStatement[]
 
 type UniqueRewrite = (table: StoredTable) => string[] | undefined
 
@@ -42,7 +46,7 @@ export class SQLiteSchemaOperations {
     await this.rebuildTable(
       tableName,
       (_structure, table) => withAddedColumn(table, this.compiler.compileAddedColumn(tableName, column)),
-      this.compiler.compileAddedColumnIndexes(tableName, column),
+      resolvedTableName => this.compiler.compileAddedColumnIndexesOn(tableName, resolvedTableName, column),
     )
   }
 
@@ -76,7 +80,8 @@ export class SQLiteSchemaOperations {
   }
 
   async renameIndex(tableName: string, fromIndexName: string, toIndexName: string): Promise<void> {
-    const index = (await readTableStructure(this.connection, tableName))?.indexes
+    const resolvedTableName = await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+    const index = (await readTableStructure(this.connection, resolvedTableName))?.indexes
       .find(candidate => sameIdentifier(candidate.name, fromIndexName))
     if (!index) {
       throw new SchemaError(`SQLite cannot rename missing index "${fromIndexName}" on table "${tableName}".`)
@@ -85,9 +90,9 @@ export class SQLiteSchemaOperations {
       throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it is a partial or expression index.`)
     }
 
-    const createIndexSql = (await readSQLiteTableObjects(this.connection, tableName))
+    const createIndexSql = (await readSQLiteTableObjects(this.connection, resolvedTableName))
       .find(object => object.type === 'index' && sameIdentifier(object.name, index.name))?.sql
-    const statements = createIndexSql === undefined ? undefined : this.compiler.compileRecreateIndex(tableName, index.name, toIndexName, createIndexSql)
+    const statements = createIndexSql === undefined ? undefined : this.compiler.compileRecreateIndex(resolvedTableName, index.name, toIndexName, createIndexSql)
     if (!statements) {
       throw new SchemaError(`SQLite cannot rename index "${fromIndexName}" on table "${tableName}" because it backs a constraint declared in the table definition.`)
     }
@@ -100,8 +105,8 @@ export class SQLiteSchemaOperations {
     reference: ForeignKeyReference,
     constraintName?: string,
   ): Promise<void> {
-    const foreignKey = this.compiler.compileTableForeignKey(tableName, columnName, reference, constraintName)
-    await this.rebuildTable(tableName, (structure, table) => {
+    await this.rebuildTable(tableName, (structure, table, resolvedTableName) => {
+      const foreignKey = this.compiler.compileTableForeignKey(tableName, columnName, reference, constraintName, resolvedTableName)
       if (structure.foreignKeys.some(existing => existing.name === foreignKey.name)) {
         throw new SchemaError(`SQLite cannot add foreign key "${foreignKey.name}" to table "${tableName}" because the table already has a foreign key with that name.`)
       }
@@ -138,34 +143,40 @@ export class SQLiteSchemaOperations {
   }
 
   private async resolveInlineUniqueRewrite(tableName: string, indexName: string): Promise<UniqueRewrite | undefined> {
-    const index = (await readTableStructure(this.connection, tableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
+    const resolvedTableName = await resolveSQLiteTablePath(this.connection, tableName) ?? tableName
+    const index = (await readTableStructure(this.connection, resolvedTableName))?.indexes.find(candidate => sameIdentifier(candidate.name, indexName))
     if (!index?.name.startsWith(SQLITE_AUTOINDEX_PREFIX)) {
       return undefined
     }
 
-    const indexKey = await readSQLiteIndexKey(this.connection, tableName, index.name)
+    const indexKey = await readSQLiteIndexKey(this.connection, resolvedTableName, index.name)
     return table => withoutUniquesBackingIndex(table, indexKey)
   }
 
-  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[] = []): Promise<void> {
+  private rebuildTable(tableName: string, rewrite: SQLiteTableRewrite, followUp: SQLiteFollowUp = () => []): Promise<void> {
     return runInTransactionScope(this.connection, () => this.rebuildTableWithinAdapterScope(tableName, rewrite, followUp))
   }
 
-  private async rebuildTableWithinAdapterScope(tableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {
+  private async rebuildTableWithinAdapterScope(requestedTableName: string, rewrite: SQLiteTableRewrite, followUp: SQLiteFollowUp): Promise<void> {
+    const tableName = await resolveSQLiteTablePath(this.connection, requestedTableName)
+    if (tableName === undefined) {
+      throw new SchemaError(`SQLite cannot rebuild table "${requestedTableName}" because it does not exist.`)
+    }
+
     if (!(await this.foreignKeysEnabled())) {
-      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite, followUp))
+      await this.connection.transaction(transaction => this.copyTable(transaction, requestedTableName, tableName, rewrite, followUp))
       return
     }
 
     if (this.connection.isInTransaction() || currentPinnedConnection(this.connection.getAdapter())) {
-      await this.assertTableUnreferenced(tableName)
-      await this.connection.transaction(transaction => this.copyTable(transaction, tableName, rewrite, followUp))
+      await this.assertTableUnreferenced(tableName, requestedTableName)
+      await this.connection.transaction(transaction => this.copyTable(transaction, requestedTableName, tableName, rewrite, followUp))
       return
     }
 
     await this.withoutForeignKeyConstraints(() => this.connection.transaction(async (transaction) => {
-      await this.copyTable(transaction, tableName, rewrite, followUp)
-      await this.assertNoForeignKeyViolations(transaction, tableName)
+      await this.copyTable(transaction, requestedTableName, tableName, rewrite, followUp)
+      await this.assertNoForeignKeyViolations(transaction, tableName, requestedTableName)
     }))
   }
 
@@ -174,55 +185,55 @@ export class SQLiteSchemaOperations {
     return Number(result.rows[0]?.foreign_keys) === 1
   }
 
-  private async assertTableUnreferenced(tableName: string): Promise<void> {
+  private async assertTableUnreferenced(tableName: string, requestedTableName: string): Promise<void> {
     const referencingTables = await listSQLiteReferencingTables(this.connection, tableName)
     if (referencingTables.length > 0) {
       throw new SchemaError(
-        `SQLite cannot rebuild table "${tableName}" inside a transaction while foreign-key enforcement is on, because table "${referencingTables.join('", "')}" references it. Run the change outside the transaction or in a migration.`,
+        `SQLite cannot rebuild table "${requestedTableName}" inside a transaction while foreign-key enforcement is on, because table "${referencingTables.join('", "')}" references it. Run the change outside the transaction or in a migration.`,
       )
     }
   }
 
-  private async assertNoForeignKeyViolations(connection: DatabaseContext, tableName: string): Promise<void> {
+  private async assertNoForeignKeyViolations(connection: DatabaseContext, tableName: string, requestedTableName: string): Promise<void> {
     const result = await connection.introspectCompiled(this.compiler.compileForeignKeyViolationsQuery(tableName))
     if (result.rows.length > 0) {
       throw new SchemaError(
-        `SQLite cannot rebuild table "${tableName}" because it would leave ${result.rows.length} foreign key violation${result.rows.length === 1 ? '' : 's'}.`,
+        `SQLite cannot rebuild table "${requestedTableName}" because it would leave ${result.rows.length} foreign key violation${result.rows.length === 1 ? '' : 's'}.`,
       )
     }
   }
 
-  private async copyTable(connection: DatabaseContext, requestedTableName: string, rewrite: SQLiteTableRewrite, followUp: readonly DDLStatement[]): Promise<void> {
-    const tableName = await readSQLiteStoredTableName(connection, requestedTableName)
-    const structure = tableName === undefined ? undefined : await readTableStructure(connection, tableName)
-    if (tableName === undefined || !structure) {
+  private async copyTable(connection: DatabaseContext, requestedTableName: string, tableName: string, rewrite: SQLiteTableRewrite, followUp: SQLiteFollowUp): Promise<void> {
+    const structure = await readTableStructure(connection, tableName)
+    if (!structure) {
       throw new SchemaError(`SQLite cannot rebuild table "${requestedTableName}" because it does not exist.`)
     }
 
-    const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
-    if ((await createSchemaReader(connection).listTables()).some(existing => sameIdentifier(existing, temporaryTableName))) {
+    const { schema } = splitTablePath(tableName)
+    const temporaryTableName = `${schema}.__holo_rebuild_${requestedTableName.replaceAll('.', '_')}`
+    if (await readSQLiteStoredTableName(connection, temporaryTableName) !== undefined) {
       throw new SchemaError(
-        `SQLite cannot rebuild table "${tableName}" because temporary table "${temporaryTableName}" already exists.`,
+        `SQLite cannot rebuild table "${requestedTableName}" because temporary table "${temporaryTableName}" already exists.`,
       )
     }
 
     const storedTable = parseCreateTableSql(await readSQLiteCreateTableSql(connection, tableName) ?? '')
     if (!storedTable) {
-      throw new SchemaError(`SQLite cannot read the definition of table "${tableName}" to rebuild it.`)
+      throw new SchemaError(`SQLite cannot read the definition of table "${requestedTableName}" to rebuild it.`)
     }
 
     const schemaObjects = await readSQLiteTableObjects(connection, tableName)
     const dependentObjects = await readSQLiteDependentObjects(connection, tableName)
-    const rebuildStatement = this.compiler.compileRebuildTable(tableName, temporaryTableName, rewrite(structure, storedTable), storedTable.options)
+    const rebuildStatement = this.compiler.compileRebuildTable(tableName, temporaryTableName, rewrite(structure, storedTable, tableName), storedTable.options)
     const rebuiltTable = parseCreateTableSql(rebuildStatement.sql)
     if (!rebuiltTable) {
-      throw new SchemaError(`SQLite cannot read the rebuilt definition of table "${tableName}".`)
+      throw new SchemaError(`SQLite cannot read the rebuilt definition of table "${requestedTableName}".`)
     }
     const copiedColumns = [
       ...rebuiltTable.columns
         .filter(rebuilt => !isGeneratedColumn(rebuilt) && storedTable.columns.some(stored => sameIdentifier(stored.name, rebuilt.name)))
         .map(rebuilt => rebuilt.name),
-      ...this.readHiddenRowIdColumns(tableName, rebuiltTable),
+      ...this.readHiddenRowIdColumns(requestedTableName, rebuiltTable),
     ]
 
     await executeStatements(connection, [
@@ -233,7 +244,7 @@ export class SQLiteSchemaOperations {
       ...this.compiler.compile(dropTableOperation(tableName)),
       ...this.compiler.compile(renameTableOperation(temporaryTableName, tableName)),
       ...this.compiler.compileRestoreSchemaObjects([...schemaObjects, ...dependentObjects]),
-      ...followUp,
+      ...followUp(tableName),
     ])
   }
 

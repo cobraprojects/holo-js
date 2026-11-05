@@ -72,6 +72,22 @@ export async function readSQLiteStoredTableName(connection: DatabaseContext, tab
   return storedName === undefined || schema === undefined ? storedName : `${schema}.${storedName}`
 }
 
+export async function resolveSQLiteTablePath(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  const { schema, table } = splitTablePath(tableName)
+  const schemaFilter = schema === undefined ? '' : 'AND t.schema = ? COLLATE NOCASE '
+  const result = await connection.introspectCompiled<{ schema: string, name: string, type: string }>({
+    sql: `SELECT t.schema, t.name, t.type FROM pragma_table_list t JOIN pragma_database_list d ON d.name = t.schema WHERE t.name = ? COLLATE NOCASE ${schemaFilter}ORDER BY CASE WHEN t.schema = '${TEMP_SCHEMA}' THEN 0 ELSE 1 END, d.seq LIMIT 1`,
+    bindings: schema === undefined ? [table] : [table, schema],
+    source: `schema:introspect:resolveTable:${tableName}`,
+  })
+  const row = result.rows[0]
+  if (row !== undefined && row.type !== 'table' && row.type !== 'virtual') {
+    const kind = row.type === 'shadow' ? 'shadow table' : row.type
+    throw new SchemaError(`SQLite cannot change table "${tableName}" because SQLite resolves it to ${kind} "${row.schema}.${row.name}".`)
+  }
+  return row && `${schema ?? row.schema}.${row.name}`
+}
+
 export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
   const { schema, table } = splitTableName(tableName)
   const result = await connection.introspectCompiled<Omit<SQLiteTableObject, 'schema'>>({
