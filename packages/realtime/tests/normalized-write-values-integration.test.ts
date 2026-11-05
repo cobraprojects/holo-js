@@ -96,6 +96,44 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"4.50"')
   })
 
+  it('keeps integer columns written in other representations equal to a fresh query', async () => {
+    const { db, rates, Group } = await openFixture(driver)
+    const queries: Record<string, () => Promise<unknown>> = {
+      rows: () => db.table(rates).orderBy('id').get(),
+      pivots: () => db.model(Group).query().with('tags').orderBy('id').getJson(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectFresh = async () => {
+      const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    }
+
+    await mutate(() => db.table(rates).insert({ id: '05', group_id: '+2', tag_id: '01', rate: '9.5' }))
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', 5).update({ group_id: '+1', rate: '3' }))
+    await expectFresh()
+    expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"id":5,"group_id":1,"tag_id":1,"rate":"3.00"')
+  })
+
+  it('re-runs subscriptions instead of patching an integer value queries cannot read', async () => {
+    const { db, rates } = await openFixture(driver)
+    const errors: unknown[] = []
+    let snapshots = 0
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => db.table(rates).orderBy('id').get() }), {}, {
+      onData: () => { snapshots += 1 },
+      onError: (error) => { errors.push(error) },
+    })
+
+    await mutate(() => db.table(rates).insert({ id: 2, group_id: '9007199254740993', tag_id: 1, rate: '1.00' }))
+
+    await expect(db.table(rates).orderBy('id').get()).rejects.toThrow('cannot be represented as a safe integer')
+    expect({ snapshots, errors: errors.length }).toEqual({ snapshots: 1, errors: 1 })
+  })
+
   it.runIf(driver === 'postgres')('re-runs subscriptions after an insert by a role that cannot read the written decimal back', async () => {
     const { db, rates } = await openFixture(driver)
     const role = `holo_insert_only_${randomUUID().replaceAll('-', '').slice(0, 12)}`

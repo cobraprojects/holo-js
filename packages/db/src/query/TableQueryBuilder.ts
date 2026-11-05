@@ -47,7 +47,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { holdsUnsafeInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -3263,6 +3263,11 @@ export class TableQueryBuilder<
     return readIntegerColumns(this.resolveSourceTable(), row)
   }
 
+  private holdsUnsafeInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
+    const table = this.resolveSourceTable()
+    return rows.some(row => holdsUnsafeInteger(table, row))
+  }
+
   private resolveSourceTable(): TableDefinition | undefined {
     return this.source.table ?? getConnectionGeneratedTableDefinition(this.source.tableName, this.connection.getConnectionName())
   }
@@ -3299,8 +3304,12 @@ export class TableQueryBuilder<
       new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
     )
     const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan()))
-    const sameKey = (left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>) => keys.every(key => String(left[key]) === String(right[key]))
-    const readRows = rows.map(row => result.rows.find(candidate => sameKey(candidate, row)))
+    const keyOf = (row: Readonly<Record<string, unknown>>) => {
+      const readRow = this.readIntegerValue(row)
+      return JSON.stringify(keys.map(key => String(readRow[key])))
+    }
+    const rowsByKey = new Map(result.rows.map(row => [keyOf(row), row]))
+    const readRows = rows.map(row => rowsByKey.get(keyOf(row)))
     return readRows.every(row => row !== undefined) ? Object.freeze(readRows.map(row => Object.freeze({ ...row }))) : undefined
   }
 
@@ -3467,19 +3476,12 @@ export class TableQueryBuilder<
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
     const eventRows = databaseRows && this.readIntegerValues(databaseRows)
     const dependencyRows = eventRows ?? this.readIntegerValues(keyedRows.map(row => this.withoutDecimalColumns(row)))
-    const mutations = hasInvalidationListeners
-      ? [
-          createDatabaseMutationEvent(
-            kind,
-            this.connection.getConnectionName(),
-            this.source,
-            [],
-            undefined,
-            eventRows,
-            options.previousRows && this.readIntegerValues(options.previousRows),
-          ),
-        ]
-      : []
+    const previousRows = options.previousRows && this.readIntegerValues(options.previousRows)
+    const mutations = !hasInvalidationListeners
+      ? []
+      : this.holdsUnsafeInteger([...eventRows ?? [], ...previousRows ?? []])
+        ? [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source)]
+        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, eventRows, previousRows)]
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
       this.source,
@@ -3521,7 +3523,10 @@ export class TableQueryBuilder<
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const mutations = !hasInvalidationListeners ? [] : numericColumns.length > 0 && capturedRows?.rows
+    const holdsUnsafeInteger = this.holdsUnsafeInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
+    const mutations = !hasInvalidationListeners ? [] : holdsUnsafeInteger
+      ? [createDatabaseMutationEvent(hasValues ? 'update' : 'delete', this.connection.getConnectionName(), this.source, this.plan.predicates)]
+      : numericColumns.length > 0 && capturedRows?.rows
       ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
