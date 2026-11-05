@@ -4,7 +4,6 @@ import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
-import { createSourceModuleUrlPlugin } from './source-module-url'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
@@ -169,7 +168,7 @@ export async function bundleProjectModules(
   }
 
   try {
-    const { packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
+    const { packageSubpathResolutionInternals, projectTsconfigInternals, sourceModuleUrlInternals } = await import('@holo-js/core')
     await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
       absWorkingDir: projectRoot,
       bundle: true,
@@ -184,7 +183,7 @@ export async function bundleProjectModules(
       tsconfig: tsconfigPath,
       sourcemap: false,
       plugins: [
-        createSourceModuleUrlPlugin(),
+        sourceModuleUrlInternals.createSourceModuleUrlPlugin(),
         createHoloPackageBundlerPlugin(projectRoot),
         ...(options.bundleDependencies ? [] : [packageSubpathResolutionInternals.createPackageSubpathResolutionPlugin()]),
       ],

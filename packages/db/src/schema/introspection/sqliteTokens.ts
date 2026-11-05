@@ -144,6 +144,10 @@ export function sameIdentifier(left: string, right: string | undefined): boolean
   return right !== undefined && foldAsciiCase(left) === foldAsciiCase(right)
 }
 
+export function sameSQLiteSchema(left: string | undefined, right: string | undefined): boolean {
+  return sameIdentifier(left ?? 'main', right ?? 'main')
+}
+
 export function sameIdentifiers(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((identifier, index) => sameIdentifier(identifier, right[index]))
 }
