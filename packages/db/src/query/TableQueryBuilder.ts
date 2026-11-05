@@ -3398,9 +3398,10 @@ export class TableQueryBuilder<
   }
 
   private async adjustNumericColumns(
-    amounts: Readonly<Record<string, number>>,
+    requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
+    const amounts = this.resolveArithmeticColumns(requestedAmounts)
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
@@ -3431,6 +3432,24 @@ export class TableQueryBuilder<
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
     return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
+  }
+
+  private resolveArithmeticColumns(amounts: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
+    const resolved: Record<string, number> = {}
+    for (const [column, amount] of Object.entries(amounts)) {
+      const separator = column.lastIndexOf('.')
+      const qualifier = separator === -1 ? undefined : column.slice(0, separator)
+      if (typeof qualifier !== 'undefined' && qualifier !== this.source.tableName && qualifier !== this.source.alias) {
+        throw new CompilerError(`Cannot increment/decrement column "${column}" outside table "${this.source.tableName}".`)
+      }
+      const columnName = column.slice(separator + 1)
+      if (Object.hasOwn(resolved, columnName)) {
+        throw new CompilerError(`Cannot increment/decrement column "${columnName}" more than once.`)
+      }
+      resolved[columnName] = amount
+    }
+
+    return resolved
   }
 
   private whereMultiColumns(
