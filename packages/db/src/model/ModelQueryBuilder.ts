@@ -2471,7 +2471,7 @@ class ModelQueryBuilderBase<
     const { key, source, joined } = this.tableQuery[resolveAggregateSource](column)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
-    return { query: this.clone(this.tableQuery.addSelect(`${source}.*`) as TableQueryBuilder<TTable, Record<string, unknown>>), column: key }
+    return { query: this.clone(this.tableQuery.addSelect(`${source}.${key}`) as TableQueryBuilder<TTable, Record<string, unknown>>), column: key }
   }
 
   private extractNumericValues(

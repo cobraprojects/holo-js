@@ -1902,7 +1902,9 @@ export class TableQueryBuilder<
   [resolveAggregateSource](column: string): { readonly key: string, readonly source: string, readonly joined: boolean } {
     const root = column.split('->', 1)[0]!
     const qualifier = root.slice(0, root.lastIndexOf('.'))
-    const join = this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
+    const join = typeof this.resolveSourceColumnName(root) === 'undefined'
+      ? this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
+      : undefined
     if (this.plan.joins.length > 0 && this.plan.unions.length > 0) {
       throw new CompilerError(`Cannot aggregate column "${column}" on a joined query with a union.`)
     }

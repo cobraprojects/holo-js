@@ -28,6 +28,7 @@ async function createProducts(driver: typeof drivers[number]) {
   await schema.createTable(name, (table) => {
     table.id()
     table.integer('price')
+    table.integer('parent_id').nullable()
   })
   await schema.createTable(ordersName, (table) => {
     table.id()
@@ -35,9 +36,9 @@ async function createProducts(driver: typeof drivers[number]) {
     table.integer('price')
   })
   await DB.table(name).insert([
-    { id: 1, price: 10 },
-    { id: 2, price: 20 },
-    { id: 3, price: 30 },
+    { id: 1, price: 10, parent_id: 3 },
+    { id: 2, price: 20, parent_id: 3 },
+    { id: 3, price: 30, parent_id: 3 },
   ])
   await DB.table(ordersName).insert([
     { id: 1, product_id: 1, price: 100 },
@@ -117,6 +118,14 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     await expect(joined().union(joined())[kind](`${name}.price`)).rejects.toThrow(`Cannot aggregate column "${name}.price" on a joined query with a union.`)
   })
 
+  it.each(kinds)('%s reads the query table rather than an aliased self-join', async (kind) => {
+    const { name } = await createProducts(driver)
+
+    const query = DB.table(name).join(`${name} as parent`, 'parent.id', '=', `${name}.parent_id`)
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind]('parent.price'))).toBe(kind === 'sum' ? 90 : 30)
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 
@@ -159,6 +168,25 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(await Product.query()[kind](`${name}.price`)).toBe(expected[kind] * 2)
     expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
     expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
+  })
+
+  it.each(kinds)('%s on a joined model query reads the model table rather than an aliased self-join', async (kind) => {
+    const { name } = await createProducts(driver)
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer(), parent_id: column.integer().nullable() }), { timestamps: false })
+
+    const query = Product.query().join(`${name} as parent`, 'parent.id', '=', `${name}.parent_id`)
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+  })
+
+  it.each(kinds)('%s on a distinct joined model query keeps the selected projection', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    await DB.table(name).insert({ id: 4, price: 10 })
+    await DB.table(ordersName).insert({ id: 4, product_id: 4, price: 400 })
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
+
+    const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price`).distinct()
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind]('price'))).toBe(expected[kind])
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {
