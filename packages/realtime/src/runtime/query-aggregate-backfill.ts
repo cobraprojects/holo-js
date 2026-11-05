@@ -76,7 +76,7 @@ async function fetchAggregateSqlBackfill(
     const column = columns[index]!
     aggregateBuilder = aggregateBuilder
       .addSelectSum(`__holo_sum_${index}`, column)
-      .addSelectAvg(`__holo_avg_${index}`, column)
+      .addSelectCount(`__holo_count_${index}`, column)
       .addSelectMin(`__holo_min_${index}`, column)
       .addSelectMax(`__holo_max_${index}`, column)
   }
@@ -108,7 +108,7 @@ async function fetchGroupedAggregateSqlBackfill(
     const column = columns[index]!
     aggregateBuilder = aggregateBuilder
       .addSelectSum(`__holo_sum_${index}`, column)
-      .addSelectAvg(`__holo_avg_${index}`, column)
+      .addSelectCount(`__holo_count_${index}`, column)
       .addSelectMin(`__holo_min_${index}`, column)
       .addSelectMax(`__holo_max_${index}`, column)
   }
@@ -434,11 +434,11 @@ function createAggregateBackfillResult(
     return Object.freeze({
       nextAggregate: Object.freeze({
         column,
-        count: result.count,
+        count: columnResult.count,
         kind: 'avg',
         sum: columnResult.sum,
       }),
-      value: columnResult.avg,
+      value: columnResult.count === 0 ? null : columnResult.sum / columnResult.count,
     })
   }
 

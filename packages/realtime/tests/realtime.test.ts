@@ -109,7 +109,7 @@ async function createPostsAdapter() {
   return createNativeRelationalAdapter({ posts: [{ id: 1, title: 'First' }] })
 }
 
-const postsViewsAggregateBackfillSql = 'SELECT COUNT(*) AS "__holo_count", SUM("views") AS "__holo_sum_0", AVG("views") AS "__holo_avg_0", MIN("views") AS "__holo_min_0", MAX("views") AS "__holo_max_0" FROM "posts"'
+const postsViewsAggregateBackfillSql = 'SELECT COUNT(*) AS "__holo_count", SUM("views") AS "__holo_sum_0", COUNT("views") AS "__holo_count_0", MIN("views") AS "__holo_min_0", MAX("views") AS "__holo_max_0" FROM "posts"'
 
 async function createContext(adapter?: DriverAdapter): Promise<DatabaseContext> {
   const resolvedAdapter = adapter ?? await createPostsAdapter()

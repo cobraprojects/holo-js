@@ -416,7 +416,7 @@ export type AggregateCountState = {
 }
 
 export type AggregateSqlColumnBackfillResult = {
-  readonly avg: number | null
+  readonly count: number
   readonly max: number | null
   readonly maxValueCount?: number
   readonly min: number | null
