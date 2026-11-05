@@ -2282,6 +2282,7 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
       true,
+      ownEntry(related.definition.table.columns, relation.ownerKey),
     )
     const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
 
@@ -2315,6 +2316,7 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
       true,
+      ownEntry(related.definition.table.columns, relation.foreignKey),
     )
     const grouped = groupRelation(relatedEntities, relation.foreignKey, this.keyOptionsFor(related, relation.localKey, relation.foreignKey))
 
@@ -2975,6 +2977,8 @@ export class ModelRepository<
       foreignKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
+      false,
+      ownEntry(related.definition.table.columns, relation.ownerKey),
     )
 
     return new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
@@ -2996,6 +3000,8 @@ export class ModelRepository<
       foreignKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
+      false,
+      ownEntry(related.definition.table.columns, relation.ownerKey),
     )
     const matching = new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
     const counts = new StoredKeyMap<number>()
@@ -3026,6 +3032,8 @@ export class ModelRepository<
       foreignKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
+      false,
+      ownEntry(related.definition.table.columns, relation.ownerKey),
     )
     const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
     const grouped = new StoredKeyMap<Entity[]>()
@@ -3166,6 +3174,8 @@ export class ModelRepository<
       localKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
+      false,
+      ownEntry(related.definition.table.columns, relation.foreignKey),
     )
     return groupRelation(relatedEntities, relation.foreignKey, this.keyOptionsFor(related, relation.localKey, relation.foreignKey))
   }

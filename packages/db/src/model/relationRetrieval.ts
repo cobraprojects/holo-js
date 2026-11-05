@@ -142,13 +142,14 @@ export async function retrieveRelation(
   createQuery: () => ModelQueryBuilder,
   column: string,
   observe = false,
+  definition?: AnyColumnDefinition,
 ): Promise<{ entities: Entity[], plan?: SelectQueryPlan }> {
   if (keys.length === 0) return { entities: [] }
   const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
-  const columnKeys = keysForColumn(keys, columnDefinition(probe.getTableQueryBuilder(), column))
+  const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column))
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
@@ -190,12 +191,12 @@ export async function retrievePivotRelation(
   const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
   const pivotKeys = pivotParentKey || keyDefinitions.parentKey?.kind !== 'decimal'
     ? keysForColumn(parentKeys, pivotParentKey)
-    : distinctStoredKeys(parentKeys.map(readIntegralDecimalKey))
+    : keysForColumn(parentKeys.map(readIntegralDecimalKey), keyDefinitions.parentKey)
   const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
-  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey)
+  const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey, false, keyDefinitions.relatedKey)
   return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn))) }
 }

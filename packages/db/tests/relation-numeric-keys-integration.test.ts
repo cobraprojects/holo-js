@@ -66,7 +66,7 @@ async function openKeyFixtures(driver: 'sqlite' | 'postgres' | 'mysql', kind: Ke
     },
   })
   const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id') } })
-  return { Owner, Item: ItemWithOwner }
+  return { Owner, Item: ItemWithOwner, ownersName: names.owners }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('text relation keys on %s', (driver) => {
@@ -139,6 +139,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       const { Item } = await openKeyFixtures(driver, kind)
 
       const items = await Item.with('owner').orderBy('id').get()
+
+      expect(items.map(item => relation<Entity<TableDefinition> | null>(item, 'owner')?.get('name' as never))).toEqual(['first', 'first', 'second', undefined])
+    })
+
+    it('eager loads belongsTo through an aliased related query', async () => {
+      const { Item, ownersName } = await openKeyFixtures(driver, kind)
+
+      const items = await Item.with({ owner: query => query.from(`${ownersName} as o`) }).orderBy('id').get()
 
       expect(items.map(item => relation<Entity<TableDefinition> | null>(item, 'owner')?.get('name' as never))).toEqual(['first', 'first', 'second', undefined])
     })
