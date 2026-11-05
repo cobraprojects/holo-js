@@ -727,11 +727,10 @@ function createSourceModuleUrlPlugin(): Plugin {
         const metaFunction = unusedHelperName('__hMeta00', '__hMeta', 9, contents, identifiers)
         const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
         const asSourceProperty = (name: string): SourceProperty | undefined => Object.hasOwn(sourceValues, name) ? name as SourceProperty : undefined
-        const isImportMetaMember = (node: TypeScriptNode): node is TypeScriptNode & { expression: TypeScriptNode } => (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isImportMeta(node.expression)
         const sourcePropertyRead = (node: TypeScriptNode): SourceProperty | undefined => {
-          if (!isImportMetaMember(node)) return undefined
-          if (ts.isPropertyAccessExpression(node)) return asSourceProperty(node.name.text)
+          if (ts.isPropertyAccessExpression(node) && isImportMeta(node.expression)) return asSourceProperty(node.name.text)
           if (ts.isElementAccessExpression(node)
+            && isImportMeta(node.expression)
             && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))) {
             return asSourceProperty(node.argumentExpression.text)
           }
@@ -763,7 +762,6 @@ function createSourceModuleUrlPlugin(): Plugin {
           }
           return false
         }
-        const isBareImportMeta = (node: TypeScriptNode): boolean => isImportMeta(node) && !isImportMetaMember(node.parent)
         const fragments: string[] = []
         let cursor = 0
         const usedProperties = new Set<SourceProperty>()
@@ -781,7 +779,7 @@ function createSourceModuleUrlPlugin(): Plugin {
             usedProperties.add(property)
             return
           }
-          if (isBareImportMeta(node)) {
+          if (isImportMeta(node)) {
             replace(node, metaFunction)
             usesMetaFunction = true
             return
@@ -793,10 +791,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) {
-          const sourceProperties = `{ url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} }`
-          fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= new Proxy(import.meta, { get: (meta, key) => Object.hasOwn(${metaFunction}.source ??= ${sourceProperties}, key) ? ${metaFunction}.source[key] : Reflect.get(meta, key) }) }\n`)
-        }
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
