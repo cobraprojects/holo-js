@@ -20,7 +20,9 @@ async function openQualifiedDatabase(driver: Driver) {
     await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS archive`, source: 'schema' })
   } else {
     await db.executeCompiled({ sql: `CREATE SCHEMA "${namespace}"`, source: 'schema' })
-    onTestFinished(() => db.executeCompiled({ sql: `DROP SCHEMA "${namespace}" CASCADE`, source: 'schema' }))
+    onTestFinished(async () => {
+      await db.executeCompiled({ sql: `DROP SCHEMA "${namespace}" CASCADE`, source: 'schema' })
+    })
   }
   onTestFinished(() => resetRealtimeRuntime())
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
@@ -51,7 +53,7 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
       { id: 7, group_id: 1, score: 70 },
       { id: 8, group_id: 2, score: 80 },
     ])
-    const read = (group: number) => db.table(records).where(qualify(tableName, 'group_id'), group).select(qualify(tableName, 'id'), qualify(tableName, 'score')).orderBy(qualify(tableName, 'id')).offset(1).limit(2).get()
+    const read = (group: number) => db.table(tableName).where(qualify(tableName, 'group_id'), group).select(qualify(tableName, 'id'), qualify(tableName, 'score')).orderBy(qualify(tableName, 'id')).offset(1).limit(2).get()
     let reads = 0
     const subscriptions = await Promise.all([1, 2].map(group => subscribeRealtimeQuery(
       defineRealtimeQuery({ access: 'public', handler: () => {
