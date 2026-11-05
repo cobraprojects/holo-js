@@ -840,7 +840,7 @@ function collectBundleSources(
   const sourcePath = entryPath === undefined ? undefined : projectRelative(projectRoot, entryPath)
   const output = Object.entries(metafile?.outputs ?? {}).find(([outputPath]) => resolve(projectRoot, outputPath) === bundlePath)?.[1]
   const loadedImports = new Set(output?.imports.map(dependency => `${dependency.kind}:${dependency.path}`))
-  const importers: Record<string, string> = {}
+  const importers: Record<string, string> = Object.create(null)
   const staticImporters = new Set<string>()
   for (const inputPath of Object.keys(output?.inputs ?? {})) {
     if (namespacedInput.test(inputPath)) continue
@@ -886,8 +886,28 @@ function bundleRealPath(path: string): string {
   }
 }
 
+function rewritesInPlace(error: Error, message: string, attributed: string): boolean {
+  try {
+    if (typeof error.stack === 'string') error.stack = error.stack.replace(message, () => attributed)
+    error.message = attributed
+    return true
+  } catch {
+    return false
+  }
+}
+
+const moduleResolutionErrorCodes = new Set([
+  'ERR_MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_PACKAGE_IMPORT_NOT_DEFINED',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
+  'ERR_INVALID_PACKAGE_TARGET',
+  'ERR_INVALID_MODULE_SPECIFIER',
+])
+
 function withBundleSources(error: unknown, sources: BundleSources): unknown {
   if (!error || typeof error !== 'object' || typeof (error as { message?: unknown }).message !== 'string') return error
+  if (!moduleResolutionErrorCodes.has(String((error as { code?: unknown }).code))) return error
   const message = (error as { message: string }).message
   const locations = [...new Set([sources.path, bundleRealPath(sources.path)])]
     .flatMap(path => [pathToFileURL(path).href, path])
@@ -897,13 +917,8 @@ function withBundleSources(error: unknown, sources: BundleSources): unknown {
   const source = loadErrorSource(message, sources)
   if (source === undefined) return error
   const attributed = message.replace(bundleLocation, () => source)
-  if (error instanceof Error) {
-    error.message = attributed
-    if (typeof error.stack === 'string') error.stack = error.stack.replace(message, () => attributed)
-    return error
-  }
-  const code = (error as { code?: unknown }).code
-  return Object.assign(new Error(attributed, { cause: error }), typeof code === 'string' ? { code } : {})
+  if (error instanceof Error && rewritesInPlace(error, message, attributed)) return error
+  return Object.assign(new Error(attributed, { cause: error }), { code: (error as { code: string }).code })
 }
 
 async function importBundle(sources: BundleSources, importModule: (url: string) => Promise<unknown>, query = `t=${Date.now()}`): Promise<unknown> {

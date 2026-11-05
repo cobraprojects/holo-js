@@ -1105,7 +1105,7 @@ describe('bundled module load errors', () => {
 
   it('keeps dollar signs in the source path when rewriting a formatted stack', () => {
     const bundlePath = join(tmpdir(), 'bundle-dollar', 'User.mjs')
-    const error = new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`)
+    const error = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
     expect(error.stack).toContain(bundlePath)
     bundleSourceInternals.withBundleSources(error, { path: bundlePath, sourcePath: 'server/$&lib/User.ts', importers: {} })
     expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/$&lib/User.ts")
@@ -1131,10 +1131,21 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     const bundlePath = join(tmpdir(), 'bundle-installed', 'User.mjs')
     for (const separator of ['/', '\\']) {
       const installed = ['', 'app', 'node_modules', 'closed-package', 'package.json'].join(separator)
-      const error = new Error(`Package subpath './hidden' is not defined by "exports" in ${installed} imported from ${bundlePath}`)
+      const error = Object.assign(new Error(`Package subpath './hidden' is not defined by "exports" in ${installed} imported from ${bundlePath}`), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })
       bundleSourceInternals.withBundleSources(error, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: { 'closed-package/hidden': 'server/support/closed.ts' } })
       expect(error.message).toBe(`Package subpath './hidden' is not defined by "exports" in ${installed} imported from server/support/closed.ts`)
     }
+  })
+
+  it('wraps a load error whose stack is read-only and keeps its code', () => {
+    const bundlePath = join(tmpdir(), 'bundle-frozen', 'User.mjs')
+    const failure = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    Object.defineProperty(failure, 'stack', { value: `Error: ${failure.message}`, writable: false, configurable: false })
+    const error = bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: {} }) as Error & { code?: string }
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.code).toBe('ERR_MODULE_NOT_FOUND')
+    expect(error.cause).toBe(failure)
+    expect(failure.message).toContain(bundlePath)
   })
 
   it('wraps a non-Error load failure with the source file and keeps its code', () => {
@@ -1149,13 +1160,14 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
 
   it('records importers of packages named like object prototype members', async () => {
     const projectRoot = await createSourceProject({
-      'server/support/build.ts': "import { make } from 'constructor'\nimport { get } from 'toString/sub'\nexport const built = [make, get]\n",
+      'server/support/build.ts': "import { make } from 'constructor'\nimport { get } from 'toString/sub'\nimport { proto } from '__proto__'\nexport const built = [make, get, proto]\n",
       'server/models/User.ts': "import { built } from '../support/build'\nexport default { built }\n",
     })
     const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'server/models/User.ts'))
     try {
       const sources = bundleSourceInternals.collectBundleSources(projectRoot, bundled.metafile, bundled.path)
-      expect({ ...sources.importers }).toEqual({ 'constructor': 'server/support/build.ts', 'toString/sub': 'server/support/build.ts' })
+      expect(Object.entries(sources.importers)).toEqual(expect.arrayContaining([['constructor', 'server/support/build.ts'], ['toString/sub', 'server/support/build.ts'], ['__proto__', 'server/support/build.ts']]))
+      expect(Object.keys(sources.importers)).toHaveLength(3)
     } finally {
       await bundled.cleanup()
     }
@@ -1178,6 +1190,14 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     })
     const error = await loadError(projectRoot, 'server/models/User.ts')
     expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/slugger.ts")
+  })
+
+  it('leaves errors that are not module resolution failures unchanged when their message names the bundle', () => {
+    const bundlePath = join(tmpdir(), 'bundle-thrown', 'User.mjs')
+    const message = `model failed\n    at ${pathToFileURL(bundlePath).href}:3:9`
+    const failure = new Error(message)
+    expect(bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: {} })).toBe(failure)
+    expect(failure.message).toBe(message)
   })
 
   it('leaves errors thrown by the loaded module unchanged', async () => {

@@ -159,7 +159,7 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await indexesOf(schema, 'main.things')).toEqual([
       { name: 'main_things_name_index', unique: false, columns: ['name'] },
     ])
-    expect(await indexesOf(schema, 'items')).toEqual([])
+    expect(await indexesOf(schema, 'main.items')).toEqual([])
     await expect(DB.table('archive.items').insert([{ id: 1, name: 'a', code: 'same' }, { id: 2, name: 'b', code: 'same' }])).rejects.toThrow('UNIQUE constraint failed')
   })
 
