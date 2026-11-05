@@ -150,6 +150,21 @@ it('resolves import.meta.url to the command source when the command loads with d
   }
 }, 30000)
 
+it('evaluates a command that throws while loading with discovered jobs only once', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/commands/record.ts', "import { appendFileSync } from 'node:fs'\nappendFileSync('attempts.log', 'attempt\\n')\nif (process.env.FAIL_COMMAND_INIT === '1') throw new Error('command init failed')\nexport default { description: 'Record an attempt', async run() {} }")
+    await execute(process.execPath, [cli, 'record'], { cwd: root })
+    await writeFile(join(root, 'attempts.log'), '')
+    await expect(execute(process.execPath, [cli, 'record'], { cwd: root, env: { ...process.env, FAIL_COMMAND_INIT: '1' } })).rejects.toThrow('command init failed')
+    expect(await readFile(join(root, 'attempts.log'), 'utf8')).toBe('attempt\n')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('runs app commands that do not use a discovered job whose imports fail to load', async () => {
   const { root, write } = await createProject()
   try {

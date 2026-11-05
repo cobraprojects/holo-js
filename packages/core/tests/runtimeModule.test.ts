@@ -790,6 +790,31 @@ try { ability.manageTenants({ id: 7 }) } catch (error) { console.log(JSON.string
     expect(mappedSources).toContain(abilityPath)
   }, 30_000)
 
+  it('keeps source positions when bundled modules read import.meta.url', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const abilityPath = join(projectRoot, 'server/abilities/locate.ts')
+    await mkdir(dirname(abilityPath), { recursive: true })
+    const source = "type Tenant = { id: number }\nexport const origin = import.meta\n  .url\nexport function locate(tenant: Tenant): never {\n  const where = import.meta.url; throw new Error(`denied ${tenant.id} ${where === origin}`)\n}\n"
+    await writeFile(abilityPath, source)
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const ability = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(abilityPath)})
+try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ origin: ability.origin, message: error.message, stack: error.stack })) }
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const { stdout } = await promisify(execFile)(process.execPath, ['--enable-source-maps', childPath], { cwd: projectRoot, env })
+
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { origin: string, message: string, stack: string }
+    const throwLine = source.split('\n')[4]!
+    expect(result.origin).toBe(pathToFileURL(abilityPath).href)
+    expect(result.message).toBe('denied 7 true')
+    expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
+  }, 30_000)
+
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')

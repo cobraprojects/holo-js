@@ -578,6 +578,17 @@ const sourceModuleLoaders: Readonly<Record<string, Loader>> = {
   '.jsx': 'jsx',
 }
 
+const sourceModuleUrlFunction = '__holoMetaUrl'
+
+function sourceModuleUrlReplacement(original: string): string {
+  const call = `${sourceModuleUrlFunction}()`
+  const lines = original.split(/(\r\n|\n|\r|\u2028|\u2029)/)
+  if (lines.length === 1) return call.padEnd(original.length, ' ')
+  const lastLine = lines.at(-1)!
+  const breaks = lines.filter((_, index) => index % 2 === 1).join('')
+  return `${call}${breaks}${' '.repeat(lastLine.length)}`
+}
+
 function createSourceModuleUrlPlugin(): Plugin {
   return {
     name: 'holo-source-module-url',
@@ -589,7 +600,6 @@ function createSourceModuleUrlPlugin(): Plugin {
 
         const ts = await import('typescript')
         const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest)
-        const sourceUrl = JSON.stringify(pathToFileURL(path).href)
         const fragments: string[] = []
         let cursor = 0
 
@@ -598,7 +608,8 @@ function createSourceModuleUrlPlugin(): Plugin {
             && node.name.text === 'url'
             && ts.isMetaProperty(node.expression)
             && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
-            fragments.push(contents.slice(cursor, node.getStart(source)), sourceUrl)
+            const start = node.getStart(source)
+            fragments.push(contents.slice(cursor, start), sourceModuleUrlReplacement(contents.slice(start, node.end)))
             cursor = node.end
             return
           }
@@ -606,7 +617,8 @@ function createSourceModuleUrlPlugin(): Plugin {
         }
 
         visit(source)
-        fragments.push(contents.slice(cursor))
+        if (cursor === 0) return { contents, loader }
+        fragments.push(contents.slice(cursor), `\nfunction ${sourceModuleUrlFunction}() { return ${JSON.stringify(pathToFileURL(path).href)} }\n`)
         return { contents: fragments.join(''), loader }
       })
     },

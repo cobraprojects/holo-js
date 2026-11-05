@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { basename, extname, resolve } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { basename, extname, join, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
@@ -740,6 +740,14 @@ async function hashSourceFile(filePath: string): Promise<string | undefined> {
   return contents === undefined ? undefined : createHash('sha256').update(contents).digest('hex')
 }
 
+type DefinitionsLoadedMarkers = Set<string>
+
+function definitionsLoadedMarkers(): DefinitionsLoadedMarkers {
+  const host = globalThis as typeof globalThis & { __holoAppCommandDefinitionsLoaded__?: DefinitionsLoadedMarkers }
+  host.__holoAppCommandDefinitionsLoaded__ ??= new Set<string>()
+  return host.__holoAppCommandDefinitionsLoaded__
+}
+
 async function importAppCommandAndInstallDefinitionImporter(
   projectRoot: string,
   registry: GeneratedProjectRegistry,
@@ -749,9 +757,25 @@ async function importAppCommandAndInstallDefinitionImporter(
     .map(entry => resolve(projectRoot, entry.sourcePath))
   if (definitionPaths.length === 0) return importProjectModule(projectRoot, commandPath)
   const { holoRuntimeInternals: coreRuntimeInternals } = await import('@holo-js/core')
-  const importDefinition = await coreRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, commandPath])
-    .catch(() => undefined)
-  if (!importDefinition) return importProjectModule(projectRoot, commandPath)
+  const runtimeRoot = join(projectRoot, '.holo-js', 'runtime')
+  await mkdir(runtimeRoot, { recursive: true })
+  const markerDirectory = await mkdtemp(join(runtimeRoot, 'command-'))
+  const marker = randomUUID()
+  const markerPath = join(markerDirectory, 'definitions-loaded.mjs')
+  let importDefinition: Awaited<ReturnType<typeof coreRuntimeInternals.loadProjectDefinitionRuntimeModules>>
+  try {
+    await writeFile(markerPath, `globalThis.__holoAppCommandDefinitionsLoaded__?.add(${JSON.stringify(marker)})\n`, 'utf8')
+    definitionsLoadedMarkers()
+    try {
+      importDefinition = await coreRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, markerPath, commandPath])
+    } catch (error) {
+      if (definitionsLoadedMarkers().has(marker)) throw error
+      return importProjectModule(projectRoot, commandPath)
+    }
+  } finally {
+    definitionsLoadedMarkers().delete(marker)
+    await rm(markerDirectory, { recursive: true, force: true })
+  }
   coreRuntimeInternals.setProjectDefinitionImporter(projectRoot, importDefinition)
   return importDefinition(commandPath)
 }
