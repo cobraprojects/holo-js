@@ -353,7 +353,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('mor
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
     const tag = suffix()
-    const names = { owners: `mt_owners_${tag}`, notes: `mt_notes_${tag}`, items: `mt_items_${tag}`, parts: `mt_parts_${tag}` }
+    const names = { owners: `mt_owners_${tag}`, notes: `mt_notes_${tag}`, items: `mt_items_${tag}`, parts: `mt_parts_${tag}`, tags: `mt_tags_${tag}`, taggables: `mt_taggables_${tag}` }
     await schema.createTable(names.owners, (table) => {
       table.string('code').primaryKey()
     })
@@ -374,16 +374,32 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('mor
       table.string('item_code')
     })
     onTestFinished(() => schema.dropTable(names.parts))
+    await schema.createTable(names.tags, (table) => {
+      table.string('code').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.tags))
+    await schema.createTable(names.taggables, (table) => {
+      table.integer('id').primaryKey()
+      table.string('tag_code')
+      table.string('taggable_type')
+      table.string('taggable_id')
+    })
+    onTestFinished(() => schema.dropTable(names.taggables))
     const owners = defineGeneratedTable(names.owners, { code: column.string().primaryKey() })
     const notes = defineGeneratedTable(names.notes, { id: column.integer().primaryKey(), noteable_type: column.string(), noteable_id: column.string() })
     const items = defineGeneratedTable(names.items, { code: column.string().primaryKey(), owner_code: column.string() })
     const parts = defineGeneratedTable(names.parts, { id: column.integer().primaryKey(), item_code: column.string() })
+    const tags = defineGeneratedTable(names.tags, { code: column.string().primaryKey() })
+    const taggables = defineGeneratedTable(names.taggables, { id: column.integer().primaryKey(), tag_code: column.string(), taggable_type: column.string(), taggable_id: column.string() })
     const ownerType = `MtOwner${tag}`
     await DB.table(owners).insert([{ code: '1' }, { code: '1.0' }])
     await DB.table(notes).insert([{ id: 10, noteable_type: ownerType, noteable_id: '1' }, { id: 20, noteable_type: ownerType, noteable_id: '1.0' }])
     await DB.table(items).insert([{ code: '2', owner_code: '1' }, { code: '2.0', owner_code: '1.0' }])
     await DB.table(parts).insert([{ id: 100, item_code: '2' }, { id: 200, item_code: '2.0' }])
-    const Note = defineModel(notes, { timestamps: false })
+    await DB.table(tags).insert([{ code: '3' }, { code: '3.0' }])
+    await DB.table(taggables).insert([{ id: 1, tag_code: '3', taggable_type: ownerType, taggable_id: '1' }, { id: 2, tag_code: '3.0', taggable_type: ownerType, taggable_id: '1.0' }])
+    const Note = defineModel(notes, { timestamps: false, relations: { noteable: morphTo('noteable') } })
+    const Tag = defineModel(tags, { primaryKey: 'code', timestamps: false })
     const Item = defineModel(items, { primaryKey: 'code', timestamps: false })
     const Part = defineModel(parts, { timestamps: false })
     const Owner = defineModel(owners, {
@@ -393,12 +409,22 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('mor
       relations: {
         notes: morphMany(() => Note, 'noteable', 'noteable_type', 'noteable_id', 'code'),
         parts: hasManyThrough(() => Part, () => Item, 'owner_code', 'item_code', 'code', 'code'),
+        part: hasOneThrough(() => Part, () => Item, 'owner_code', 'item_code', 'code', 'code'),
+        tags: morphToMany(() => Tag, 'taggable', taggables, 'tag_code', 'code', 'code'),
       },
     })
+    const TagWithOwners = defineModel(tags, { primaryKey: 'code', timestamps: false, relations: { owners: morphedByMany(() => Owner, 'taggable', taggables, 'tag_code', 'code', 'code') } })
+    const keysOf = (entities: readonly Loaded[]) => entities.map(entity => entity.get('code' as never))
 
-    const loaded = await Owner.with('notes', 'parts').orderBy('code').get()
+    const loaded = await Owner.with('notes', 'parts', 'part', 'tags').orderBy('code').get()
+    const loadedNotes = await Note.with('noteable').orderBy('id').get()
+    const loadedTags = await TagWithOwners.with('owners').orderBy('code').get()
 
     expect(loaded.map(owner => ids(relation(owner, 'notes')))).toEqual([[10], [20]])
     expect(loaded.map(owner => ids(relation(owner, 'parts')))).toEqual([[100], [200]])
+    expect(loaded.map(owner => relation<Loaded>(owner, 'part').get('id' as never))).toEqual([100, 200])
+    expect(loaded.map(owner => keysOf(relation(owner, 'tags')))).toEqual([['3'], ['3.0']])
+    expect(loadedNotes.map(note => relation<Loaded>(note, 'noteable').get('code' as never))).toEqual(['1', '1.0'])
+    expect(loadedTags.map(item => keysOf(relation(item, 'owners')))).toEqual([['1'], ['1.0']])
   })
 })
