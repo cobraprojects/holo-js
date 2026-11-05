@@ -3167,7 +3167,10 @@ export class TableQueryBuilder<
       previousRows.push(Object.freeze({ ...previousRow }))
     }
 
-    return Object.freeze(previousRows)
+    const hasUnpairedStringMatch = result.rows.some((candidate, index) => !usedResultIndexes.has(index)
+      && rows.some(row => uniqueBy.every(column => candidate[column] === row[column]
+        || (typeof candidate[column] === 'string' && typeof row[column] === 'string'))))
+    return hasUnpairedStringMatch ? undefined : Object.freeze(previousRows)
   }
 
   private rowsMatchUniqueBy(
