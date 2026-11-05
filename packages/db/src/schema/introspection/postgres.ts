@@ -24,7 +24,7 @@ const TABLE_RELATION = `FROM pg_catalog.pg_class t
 
 const TABLE_RELATION_FILTER = `${TABLE_FILTER} AND t.relkind IN ('r', 'p')`
 
-const RELATION_ID = 't.oid = $1::oid'
+const RELATION_ID_FILTER = 't.oid = $1::oid'
 
 const COLUMNS_SQL = `SELECT a.attname AS name,
   COALESCE(ic.data_type, pg_catalog.format_type(a.atttypid, a.atttypmod)) AS data_type,
@@ -38,7 +38,7 @@ const COLUMNS_SQL = `SELECT a.attname AS name,
   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
   LEFT JOIN information_schema.columns ic ON ic.table_schema = n.nspname AND ic.table_name = t.relname AND ic.column_name = a.attname
-  WHERE ${RELATION_ID}
+  WHERE ${RELATION_ID_FILTER}
   ORDER BY a.attnum`
 
 const INDEXES_SQL = `SELECT ic.relname AS name,
@@ -50,7 +50,7 @@ const INDEXES_SQL = `SELECT ic.relname AS name,
   FROM pg_catalog.pg_index i
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
-  WHERE ${RELATION_ID}
+  WHERE ${RELATION_ID_FILTER}
   ORDER BY ic.relname`
 
 const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
@@ -69,10 +69,10 @@ const FOREIGN_KEYS_SQL = `SELECT con.conname AS name,
   CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(from_attnum, to_attnum, position)
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.from_attnum
   JOIN pg_catalog.pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = k.to_attnum
-  WHERE con.contype = 'f' AND ${RELATION_ID}
+  WHERE con.contype = 'f' AND ${RELATION_ID_FILTER}
   ORDER BY con.conname, k.position`
 
-const CHECKS_SQL = `SELECT name, column_name, definition FROM (SELECT con.conname AS name,
+const CHECKS_SQL = `SELECT con.conname AS name,
   a.attname AS column_name,
   'CHECK (' || pg_catalog.pg_get_expr(con.conbin, con.conrelid) || ')'
     || CASE WHEN con.connoinherit THEN ' NO INHERIT' ELSE '' END
@@ -80,11 +80,10 @@ const CHECKS_SQL = `SELECT name, column_name, definition FROM (SELECT con.connam
   FROM pg_catalog.pg_constraint con
   JOIN pg_catalog.pg_class t ON t.oid = con.conrelid
   JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${RELATION_ID}) checks
-  WHERE definition IS NOT NULL
-  ORDER BY name`
+  WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${RELATION_ID_FILTER}
+  ORDER BY con.conname`
 
-const RELATION_EXISTS_SQL = `SELECT t.oid::text AS oid FROM pg_catalog.pg_class t WHERE ${RELATION_ID}`
+const RELATION_EXISTS_SQL = `SELECT t.oid::text AS oid FROM pg_catalog.pg_class t WHERE ${RELATION_ID_FILTER}`
 
 const REFERENTIAL_ACTIONS: Readonly<Record<string, string>> = {
   a: 'NO ACTION',
@@ -152,8 +151,8 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
       const indexes = await introspect<IndexRow>(INDEXES_SQL, bindings, `schema:introspect:indexes:${tableName}`)
       const foreignKeys = await introspect<ForeignKeyRow>(FOREIGN_KEYS_SQL, bindings, `schema:introspect:foreignKeys:${tableName}`)
       const checks = await introspect<CheckRow>(CHECKS_SQL, bindings, `schema:introspect:checks:${tableName}`)
-      const stillExists = await introspect<RelationRow>(RELATION_EXISTS_SQL, bindings, `schema:introspect:exists:${tableName}`)
-      if (stillExists.rows.length === 0) return undefined
+      const relationAfterRead = await introspect<RelationRow>(RELATION_EXISTS_SQL, bindings, `schema:introspect:exists:${tableName}`)
+      if (relationAfterRead.rows.length === 0) return undefined
 
       return {
         dialect: 'postgres',

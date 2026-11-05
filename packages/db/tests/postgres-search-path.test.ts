@@ -19,20 +19,20 @@ const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
 const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
 const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
 const password = process.env.HOLO_POSTGRES_PASSWORD
-const scratchDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
+const adminDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
 const database = `holo_search_path_${randomUUID().replaceAll('-', '').slice(0, 12)}`
 const postgresIntegration = process.env.HOLO_POSTGRES_INTEGRATION === '1'
 
 beforeAll(async () => {
   if (!postgresIntegration) return
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: scratchDatabase } })
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: adminDatabase } })
   await admin.execute(`CREATE DATABASE ${database}`)
   await admin.disconnect()
 })
 
 afterAll(async () => {
   if (!postgresIntegration) return
-  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: scratchDatabase } })
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: adminDatabase } })
   await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
   await admin.disconnect()
 })
