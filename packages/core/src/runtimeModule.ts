@@ -698,9 +698,9 @@ function sameWidthReplacement(functionName: string, original: string, parenthesi
 
 function sourceModuleResolveSource(parentURL: string, parentPath: string): string {
   return [
-    '(specifier, ...parent) => {',
+    '(specifier, parent) => {',
     'const target = `${specifier}`;',
-    'if (parent.length > 0 && import.meta.resolve(\'./\', \'file:///\') === \'file:///\') return import.meta.resolve(target, ...parent);',
+    'if (parent !== undefined && import.meta.resolve(\'./\', \'file:///\') === \'file:///\') return import.meta.resolve(target, parent);',
     `if (globalThis.Bun) return import.meta.resolve(target, ${parentPath});`,
     `const marker = ${JSON.stringify(importerResolutionRequest)};`,
     `const hooks = globalThis.process.getBuiltinModule('node:module').registerHooks({ resolve: (request, context, nextResolve) => request === marker ? nextResolve(target, { ...context, parentURL: ${parentURL} }) : nextResolve(request, context) });`,

@@ -836,6 +836,7 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
       "  import.meta.resolve('nested-locator'),",
       "  attempt(() => import.meta.resolve('./helper.ts', 'file:///elsewhere/entry.mjs')),",
       "  attempt(() => meta.resolve('missing-locator')),",
+      "  attempt(() => import.meta.resolve('./helper.ts', undefined)),",
       ']',
       '',
     ].join('\n'))
