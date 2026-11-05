@@ -28,7 +28,11 @@ async function openQualifiedDatabase(driver: Driver) {
 }
 
 describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => {
-  it('backfills offset windows of grouped subscriptions from a schema-qualified table', async () => {
+  it.each([
+    ['unqualified', (_table: string, column: string) => column],
+    ['table-qualified', (table: string, column: string) => `${table.slice(table.indexOf('.') + 1)}.${column}`],
+    ['schema-qualified', (table: string, column: string) => `${table}.${column}`],
+  ] as const)('backfills offset windows of grouped subscriptions from a schema-qualified table with %s columns', async (_label, qualify) => {
     const { db, schema, namespace, statements } = await openQualifiedDatabase(driver)
     const tableName = `${namespace}.records`
     await schema.createTable(tableName, (table) => {
@@ -47,7 +51,7 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
       { id: 7, group_id: 1, score: 70 },
       { id: 8, group_id: 2, score: 80 },
     ])
-    const read = (group: number) => db.table(records).where('group_id', group).select('id', 'score').orderBy('id').offset(1).limit(2).get()
+    const read = (group: number) => db.table(records).where(qualify(tableName, 'group_id'), group).select(qualify(tableName, 'id'), qualify(tableName, 'score')).orderBy(qualify(tableName, 'id')).offset(1).limit(2).get()
     let reads = 0
     const subscriptions = await Promise.all([1, 2].map(group => subscribeRealtimeQuery(
       defineRealtimeQuery({ access: 'public', handler: () => {
@@ -69,7 +73,11 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
     expect(statements.some(sql => sql.includes('ROW_NUMBER() OVER') && sql.includes(`FROM "${namespace}"."records"`))).toBe(true)
   })
 
-  it('hydrates the ordered has-one relation of inserted rows from a schema-qualified table', async () => {
+  it.each([
+    ['unqualified', (_table: string, column: string) => column],
+    ['table-qualified', (table: string, column: string) => `${table.slice(table.indexOf('.') + 1)}.${column}`],
+    ['schema-qualified', (table: string, column: string) => `${table}.${column}`],
+  ] as const)('hydrates the ordered has-one relation of inserted rows from a schema-qualified table with %s columns', async (_label, qualify) => {
     const { db, schema, namespace, statements } = await openQualifiedDatabase(driver)
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
     const postsName = `holo_live_posts_${suffix}`
@@ -96,7 +104,7 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
       { id: 3, author_id: 2, score: 50 },
       { id: 4, author_id: 2, score: 20 },
     ])
-    const read = () => db.model(Author).query().with('topPost', query => query.orderBy('score', 'desc')).orderBy('id').get()
+    const read = () => db.model(Author).query().with('topPost', query => query.where(qualify(postsTable, 'score'), '>', 0).orderBy(qualify(postsTable, 'score'), 'desc')).orderBy('id').get()
     let reads = 0
     const subscription = await subscribeRealtimeQuery(
       defineRealtimeQuery({ access: 'public', handler: () => {
