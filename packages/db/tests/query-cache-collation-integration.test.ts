@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { DB, clearGeneratedTables, column, registerGeneratedTables } from '../src'
+import { DB, clearGeneratedTables, column, queryCacheInternals, registerGeneratedTables, resetDatabaseDependencyInvalidationListeners } from '../src'
 import { resolveCaseInsensitiveColumns } from '../src/schema/caseInsensitiveColumns'
 import { defineTable } from './support/internal'
 import { mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
@@ -198,6 +198,29 @@ describe('query cache invalidation by a BINARY key on sqlite', () => {
 
 describe('query cache invalidation by a key with the default collation on sqlite', () => {
   registerExactCollationScenarios('sqlite', 'TEXT')
+})
+
+describe('query cache invalidation by an upsert that changes the key on sqlite', () => {
+  it('refreshes a cached read by the previous key after an upsert through another unique column moves the key while invalidation listeners run', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), region: column.string(), label: column.string() }) })
+    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onTestFinished(() => {
+      resetDatabaseDependencyInvalidationListeners()
+      clearGeneratedTables()
+      resetCacheRuntime()
+    })
+    await adapter.execute(`CREATE TABLE ${name} (code TEXT PRIMARY KEY NOT NULL, region VARCHAR(16) NOT NULL UNIQUE, label VARCHAR(64) NOT NULL)`)
+    await adapter.execute(`INSERT INTO ${name} (code, region, label) VALUES ('FR', 'Europe', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).upsert({ code: 'DE', region: 'Europe', label: 'Germany' }, ['region'], ['code', 'label'])
+
+    expect(await cachedLabel()).toBeUndefined()
+  })
 })
 
 describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
