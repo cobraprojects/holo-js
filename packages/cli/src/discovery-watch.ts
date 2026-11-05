@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js/kernel'
 import type { LoadedProjectConfig } from './types'
 import type { WatchFactory, WatchHandle } from './cli-types'
+import type { ObservedPrepareChange } from './framework-restart'
 import { resolveProjectPlugins } from './project/plugins'
 import { normalizeArtifactPath } from './project/plugin-prepare/paths'
 import { isIgnorableWatchError, isRecursiveWatchUnsupported, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
@@ -355,7 +356,7 @@ type DiscoveryWatchOptions = {
   readonly project: LoadedProjectConfig
   readonly signal: AbortSignal
   readonly createWatcher?: WatchFactory
-  readonly observe: (change: HoloProjectPrepareChange | (() => Promise<HoloProjectPrepareChange>)) => void
+  readonly observe: (change: ObservedPrepareChange) => void
   readonly writeWarning: (message: string) => void
   readonly deferred?: boolean
 }
@@ -427,6 +428,10 @@ export async function startDiscoveryWatch({
     const observedSnapshot = readWatchedPathSnapshot(resolve(projectRoot, path))
     observe(async () => classifyWatchedPathChange(path, await observedSnapshot, snapshots))
   }
+
+  const classify = async (path: string, eventType: WatchEventType): Promise<HoloProjectPrepareChange> => eventType === 'rename'
+    ? classifyWatchedPathChange(path, await readWatchedPathSnapshot(resolve(projectRoot, path)), snapshots)
+    : { path, kind: 'changed' }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
     if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return
@@ -509,7 +514,8 @@ export async function startDiscoveryWatch({
     const events = deferredEvents
     deferredEvents = undefined
     if (!events || closed || signal.aborted) return
-    for (const [path, eventType] of events) dispatch(path, eventType)
+    const relevant = [...events].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+    if (relevant.length > 0) observe(async () => Promise.all(relevant.map(([path, eventType]) => classify(path, eventType))))
   }
 
   const probeLiveness = async (): Promise<void> => {

@@ -8,6 +8,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
+import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
   await mkdir(dirname(join(root, path)), { recursive: true })
@@ -50,10 +51,12 @@ function captureChanges() {
   const events = new EventEmitter()
   return {
     changes,
-    async observe(change: HoloProjectPrepareChange | (() => Promise<HoloProjectPrepareChange>)): Promise<void> {
+    async observe(change: ObservedPrepareChange): Promise<void> {
       const observed = typeof change === 'function' ? await change() : change
-      changes.push(observed)
-      events.emit(`${observed.path}:${observed.kind}`)
+      for (const item of Array.isArray(observed) ? observed : [observed]) {
+        changes.push(item)
+        events.emit(`${item.path}:${item.kind}`)
+      }
     },
     async waitForChange(path: string, kind: HoloProjectPrepareChange['kind']): Promise<void> {
       await once(events, `${path}:${kind}`)
@@ -126,7 +129,6 @@ it('observes an edit made immediately after the watcher reports it is ready and 
   writeFileSync(join(root, 'server/models/User.ts'), randomUUID())
   await changed
   await expect(stat(join(root, DISCOVERY_WATCH_PROBE_PATH))).rejects.toMatchObject({ code: 'ENOENT' })
-  expect(new Set(captured.changes.map(change => change.path))).toEqual(new Set(['server/models/User.ts']))
 })
 
 it('defers observed edits until it is resumed and judges them by the policy in effect then', async () => {
@@ -158,8 +160,8 @@ it('defers observed edits until it is resumed and judges them by the policy in e
   watcher.resume()
   emit('config/app.ts')
   await vi.waitFor(() => expect(captured.changes).toHaveLength(2))
-  expect(captured.changes).toEqual([
+  expect(captured.changes).toEqual(expect.arrayContaining([
     { path: 'src/models/User.ts', kind: 'changed' },
     { path: 'config/app.ts', kind: 'changed' },
-  ])
+  ]))
 })

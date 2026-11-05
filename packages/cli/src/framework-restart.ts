@@ -2,6 +2,10 @@ import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import type { IoStreams, PackageManagerCommand } from './cli-types'
 import type { createFrameworkSession } from './framework-run'
 
+type ObservedChanges = HoloProjectPrepareChange | readonly HoloProjectPrepareChange[]
+
+export type ObservedPrepareChange = ObservedChanges | (() => Promise<ObservedChanges>)
+
 type FrameworkRestartOptions = {
   readonly session: ReturnType<typeof createFrameworkSession>
   readonly initialArgs: readonly string[]
@@ -11,7 +15,7 @@ type FrameworkRestartOptions = {
 }
 
 export function createFrameworkRestart({ session, initialArgs, invocation, io, prepare }: FrameworkRestartOptions): {
-  observe(change: HoloProjectPrepareChange | (() => Promise<HoloProjectPrepareChange>)): void
+  observe(change: ObservedPrepareChange): void
   run(): Promise<void>
   shutdown(): Promise<void>
 } {
@@ -22,10 +26,10 @@ export function createFrameworkRestart({ session, initialArgs, invocation, io, p
   let requestRestart: (() => void) | undefined
   const pendingChanges = new Map<string, HoloProjectPrepareChange['kind']>()
 
-  const enqueue = (change?: HoloProjectPrepareChange): void => {
+  const enqueue = (observed: ObservedChanges = []): void => {
     if (session.signal.aborted) return
 
-    if (change) pendingChanges.set(change.path, change.kind)
+    for (const change of Array.isArray(observed) ? observed : [observed]) pendingChanges.set(change.path, change.kind)
     if (pendingPrepare) {
       queued = true
       return

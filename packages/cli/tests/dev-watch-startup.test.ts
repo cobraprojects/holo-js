@@ -91,6 +91,22 @@ it('re-prepares before launching the server when a source edit lands during the 
   expect(calls).toEqual(['live', 'prepare', 'prepare', 'spawn'])
 })
 
+it('batches every source edit seen during the initial prepare into one catch-up prepare', async () => {
+  const root = await createProject()
+  await write(root, 'server/jobs/send.ts')
+  const calls: string[] = []
+  const watcher = createFakeWatcher(calls)
+
+  await runDev(root, watcher, calls, (call) => {
+    if (call !== 1) return
+    watcher.emit('change', 'server/models/User.ts')
+    watcher.emit('rename', 'server/jobs/send.ts')
+    watcher.emit('change', 'config/app.mjs')
+  })
+
+  expect(calls).toEqual(['live', 'prepare', 'prepare', 'spawn'])
+})
+
 it('removes its liveness probe when the initial prepare fails', async () => {
   const root = await createProject()
 
