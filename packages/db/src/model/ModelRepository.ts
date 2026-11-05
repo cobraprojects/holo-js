@@ -3396,6 +3396,17 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
+    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
+    const grouped = await this.groupThroughEntitiesByParentKey(entities, relation, constraint)
+    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
+    return grouped
+  }
+
+  private async groupThroughEntitiesByParentKey(
+    entities: readonly Entity<TTable>[],
+    relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
+    constraint?: RelationConstraint,
+  ): Promise<StoredKeyMap<Entity[]>> {
     const parentKeys = collectRelationKeys(entities, relation.localKey)
 
     if (parentKeys.length === 0) {
