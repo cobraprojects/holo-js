@@ -220,6 +220,8 @@ When the joined table has a column with a model column's name, such as `id`, the
 
 A selection that would put a joined column into a model column throws a `CompilerError` before the query runs. That covers `select('users.id as id')`, and `select('posts.title', 'users.id')` when the query doesn't also select the model's own `id`. Alias the joined column to a name that isn't a model column, such as `users.id as author_id`, or select the model's own column too, such as `posts.*`.
 
+A joined wildcard such as `users.*` throws the same way unless the query also selects the model's columns it would replace, such as `posts.*`. When Holo doesn't know the joined table's columns, select `posts.*` with it. Each query in a union of joined model queries must select the same tables' columns in the same order.
+
 ::: info Differs from Laravel
 In Laravel, a joined column overwrites the model attribute of the same name, so a model can carry another table's `id`, and a later `save()` writes to the wrong row. Holo keeps the model's own columns and rejects selections that would replace them.
 :::

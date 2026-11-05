@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { CompilerError, DB, column, defineModel, defineGeneratedTable, resetDB } from '../src'
+import { CompilerError, DB, clearGeneratedTables, column, defineModel, defineGeneratedTable, registerGeneratedTables, resetDB } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
@@ -151,6 +151,41 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     await expect(query.get()).rejects.toThrow(collision(`${orders}.id`, 'id', products))
     await expect(query.sum('price')).rejects.toThrow(collision(`${orders}.id`, 'id', products))
     await expect(joined().select(`${orders}.parent_id`, `${products}.price`).sum(`${products}.price`)).rejects.toThrow(collision(`${orders}.parent_id`, 'parent_id', products))
+  })
+
+  it('rejects a joined wildcard that would replace model columns the query does not select', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    await expect(joined().select(`${orders}.*`).get()).rejects.toThrow(
+      `Cannot select "${orders}.*" on a joined "${products}" model query: its columns may replace "${products}" columns the query doesn't select. Select "${products}.*" too, or select the joined columns by name.`,
+    )
+    await expect(joined().select(`${orders}.*`).sum('price')).rejects.toThrow(CompilerError)
+
+    registerGeneratedTables({ [orders]: defineGeneratedTable(orders, { id: column.id(), product_id: column.integer(), price: column.integer(), parent_id: column.integer().nullable(), factor: column.integer().nullable() }) })
+    onTestFinished(() => clearGeneratedTables())
+    await expect(joined().select(`${orders}.*`).get()).rejects.toThrow(collision(`${orders}.*`, 'id', products))
+    await expect(joined().select(`${products}.price`, `${orders}.*`).first()).rejects.toThrow(collision(`${orders}.*`, 'id', products))
+    const rows = await joined().select(`${products}.id`, `${products}.price`, `${products}.parent_id`, `${products}.factor`, `${orders}.*`).get()
+    expect(attributes(rows)).toEqual(ownRows)
+  })
+
+  it('keeps the model columns across a union of joined queries', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const union = joined().where(`${orders}.id`, 101).union(joined().where(`${orders}.id`, 102))
+    expect(attributes(await union.get())).toEqual(ownRows)
+    expect(await union.sum('price')).toBe(90)
+    const product = (await union.get()).find(entity => Number(entity.toAttributes().id) === 2)!
+    product.set('factor', 8)
+    await product.save()
+    expect((await DB.table(products).orderBy('id').get()).map(row => [Number(row.id), Number(row.factor)])).toEqual([[1, 2], [2, 8]])
+
+    const explicit = joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)
+    expect(attributes(await explicit.union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 102)).get())).toEqual([ownRows[0], { ...ownRows[1]!, factor: 8 }])
+    await expect(explicit.union(joined().select(`${orders}.*`, `${products}.*`)).get()).rejects.toThrow(
+      `Cannot combine a joined "${products}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`,
+    )
+    await expect(joined().select(`${products}.*`).union(joined().select(`${products}.price`, `${orders}.id`)).get()).rejects.toThrow(collision(`${orders}.id`, 'id', products))
   })
 
   it('accepts a joined column aliased to a name that is not a model column', async () => {

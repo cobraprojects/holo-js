@@ -98,6 +98,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
 import { storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
@@ -114,7 +115,6 @@ import type {
   QueryPredicateNode,
   QueryPredicate,
   QuerySelection,
-  QuerySource,
   SelectQueryPlan,
 } from './ast'
 import {
@@ -181,12 +181,7 @@ type KeyedInsert = (
 
 let keyedInsert: KeyedInsert
 
-export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
-  const separator = column.lastIndexOf('.')
-  if (separator === -1) return column
-
-  return qualifiesTable(column.slice(0, separator), source.tableName, source.alias) ? column.slice(separator + 1) : undefined
-}
+export { resolveSourceColumnName }
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
@@ -200,15 +195,6 @@ const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: rea
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
-
-function selectionOutputName(selection: QuerySelection): string | undefined {
-  if (selection.kind === 'column') return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
-  return 'alias' in selection ? selection.alias : undefined
-}
-
-function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
-  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
-}
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
@@ -1951,7 +1937,7 @@ export class TableQueryBuilder<
     }
     const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
     const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
-    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table}.*`
+    const wildcard = (table: string) => tableWildcard(table, this.connection.getDriver())
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
@@ -1964,42 +1950,12 @@ export class TableQueryBuilder<
   }
 
   [projectModelRows](): { readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> } {
-    const { joins, selections, unions, orderBy } = this.plan
-    if (joins.length === 0) return { query: this }
-
-    const isOwn = (selection: QuerySelection) => selection.kind === 'column' && typeof this.resolveSourceColumnName(selection.column) !== 'undefined'
-    const ownOutputs = new Set(selections.flatMap(selection => isOwn(selection) ? [selectionOutputName(selection)!] : []))
-    const modelColumns = Object.keys(this.source.table?.columns ?? {})
-    for (const selection of selections) {
-      if (selection.kind !== 'column' || isOwn(selection) || selection.column.endsWith('.*')) continue
-      const name = selectionOutputName(selection)!
-      if (!modelColumns.includes(name) || (!selection.alias && (ownOutputs.has('*') || ownOutputs.has(name)))) continue
-      const selected = selection.alias ? `${selection.column} as ${selection.alias}` : selection.column
-      throw new CompilerError(`Cannot select "${selected}" on a joined "${this.source.tableName}" model query: "${name}" is a "${this.source.tableName}" column. Qualify or alias it to a non-model name.`)
-    }
-    if (unions.length > 0) return { query: this }
-
-    const qualifier = (table: string) => this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table
-    const own = qualifier(this.source.alias ?? this.source.tableName)
-    const wildcard = (table: string): QuerySelection => Object.freeze({ kind: 'column' as const, column: `${table}.*` })
-    const joinedWildcards = joins.map(join => wildcard(qualifier(join.alias ?? join.table!)))
-    const aliases = new Set(selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
-    const ordered = Object.freeze(orderBy.map(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column)
-      ? Object.freeze({ ...order, column: `${own}.${order.column}` })
-      : order))
-    const expanded = selections.length === 0
-      ? [...joinedWildcards, wildcard(own)]
-      : selections.flatMap(selection => selection.kind === 'column' && selection.column === '*' ? [...joinedWildcards, wildcard(own)] : [selection])
-    const columns = expanded.filter(selection => selection.kind === 'column')
-    const projected = [...columns.filter(selection => !isOwn(selection)), ...columns.filter(isOwn)]
-    let next = 0
-    return {
-      query: this.clone({
-        ...this.plan,
-        orderBy: ordered,
-        selections: Object.freeze(expanded.map(selection => selection.kind === 'column' ? projected[next++]! : selection)),
-      }),
-    }
+    const connectionName = this.connection.getConnectionName()
+    const plan = projectModelRowPlan(this.plan, this.connection.getDriver(), (join) => {
+      const definition = join.definition ?? (join.table ? getConnectionGeneratedTableDefinition(join.table, connectionName) : undefined)
+      return definition ? Object.keys(definition.columns) : undefined
+    })
+    return { query: plan === this.plan ? this : this.clone(plan) }
   }
 
   cache(

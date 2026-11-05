@@ -207,6 +207,10 @@ class ModelQueryBuilderBase<
     return this.getTableQueryBuilder()[projectModelRows]().query
   }
 
+  private assertModelRowSelections(): void {
+    this.getTableQueryBuilder()[projectModelRows]()
+  }
+
   applyGlobalScope(scope: (query: ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>) => ModelQueryBuilder<TTable, TRelations, TLoaded>): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
     const query = scope(this.asScopedBuilder())
     const predicates = query.tableQuery.getPlan().predicates
@@ -2490,7 +2494,7 @@ class ModelQueryBuilderBase<
     const { key, joined, selections, cache } = this.tableQuery[resolveAggregateSource](column, true)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
-    this.getModelRowsQuery()
+    this.assertModelRowSelections()
     const projected = this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>
     return { query: this.clone(cache ? projected.cache(cache) : projected), column: key }
   }
