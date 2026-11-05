@@ -24,7 +24,7 @@ import {
   resolveContainedPath,
 } from './paths'
 import { stageFile } from '../atomic-file'
-import { trackOutputWrites } from '../../written-outputs'
+import { trackOutputDirectories, trackOutputWrite, trackOutputWrites } from '../../written-outputs'
 
 const MAX_ARTIFACTS = 2_000
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
@@ -70,6 +70,7 @@ type PreparedSnapshot = {
 type StagedWrite = {
   readonly target: string
   readonly temporary: string
+  readonly contents: Uint8Array
   readonly plugin: LoadedProjectPreparer
 }
 
@@ -637,7 +638,7 @@ async function assertSnapshotOwnership(snapshot: PreparedSnapshot, projectRoot: 
 }
 
 async function stageWrite(path: string, contents: Uint8Array, plugin: LoadedProjectPreparer): Promise<StagedWrite> {
-  return { target: path, temporary: await stageFile(path, contents), plugin }
+  return { target: path, temporary: await trackOutputDirectories(path, () => stageFile(path, contents)), contents, plugin }
 }
 
 async function moveExistingPathToBackup(path: string): Promise<string | undefined> {
@@ -908,67 +909,61 @@ async function runPluginProjectPreparersUnlocked(
   for (const removal of removals) temporaryDirectories.add(dirname(removal.target))
   await cleanupAbandonedTemporaryFiles(temporaryDirectories)
 
-  const trackedPaths = [
-    ...snapshots.flatMap(snapshot => [...snapshot.generatedArtifacts, ...snapshot.managedArtifacts].map(artifact => artifact.absolutePath)),
-    ...removals.map(removal => removal.target),
-  ]
-  await trackOutputWrites(trackedPaths, async () => {
-    const artifactWrites: StagedWrite[] = []
-    const manifestWrites: StagedWrite[] = []
-    const committedMutations: CommittedMutation[] = []
-    let snapshotCommitted = false
-    try {
-      for (const snapshot of snapshots) {
-        for (const artifact of [...snapshot.generatedArtifacts, ...snapshot.managedArtifacts]) {
-          options.signal?.throwIfAborted()
-          if (await currentDigest(artifact.absolutePath) !== artifact.digest) {
-            artifactWrites.push(await stageWrite(artifact.absolutePath, artifact.contents, snapshot.plugin))
-          }
-        }
-        const manifestPath = resolve(generatedRoot, '.plugins', `${snapshot.plugin.plugin.definition.id}.json`)
-        const contents = snapshotManifestContents(snapshot)
-        if (await currentDigest(manifestPath) !== digest(contents)) {
-          manifestWrites.push(await stageWrite(manifestPath, contents, snapshot.plugin))
+  const artifactWrites: StagedWrite[] = []
+  const manifestWrites: StagedWrite[] = []
+  const committedMutations: CommittedMutation[] = []
+  let snapshotCommitted = false
+  try {
+    for (const snapshot of snapshots) {
+      for (const artifact of [...snapshot.generatedArtifacts, ...snapshot.managedArtifacts]) {
+        options.signal?.throwIfAborted()
+        if (await currentDigest(artifact.absolutePath) !== artifact.digest) {
+          artifactWrites.push(await stageWrite(artifact.absolutePath, artifact.contents, snapshot.plugin))
         }
       }
-
-      for (const write of artifactWrites) {
-        options.signal?.throwIfAborted()
-        await assertNoSymbolicLinkParents(root, write.target)
-        committedMutations.push(await commitWrite(write))
+      const manifestPath = resolve(generatedRoot, '.plugins', `${snapshot.plugin.plugin.definition.id}.json`)
+      const contents = snapshotManifestContents(snapshot)
+      if (await currentDigest(manifestPath) !== digest(contents)) {
+        manifestWrites.push(await stageWrite(manifestPath, contents, snapshot.plugin))
       }
-      for (const removal of removals) {
-        options.signal?.throwIfAborted()
-        await assertNoSymbolicLinks(removal.root, removal.target)
-        const mutation = await commitRemoval(removal)
-        if (mutation) committedMutations.push(mutation)
-      }
-      for (const write of manifestWrites) {
-        options.signal?.throwIfAborted()
-        await assertNoSymbolicLinkParents(root, write.target)
-        committedMutations.push(await commitWrite(write))
-      }
-      snapshotCommitted = true
-      await finalizeMutations(committedMutations)
-    } catch (error) {
-      if (!snapshotCommitted) {
-        try {
-          await rollbackMutations(committedMutations)
-        } catch (rollbackError) {
-          const plugin = snapshots[0]?.plugin
-          if (!plugin) throw rollbackError
-          throw hostError('HOLO_PLUGIN_PREPARE_COMMIT_FAILED', plugin, rollbackError instanceof Error ? rollbackError.message : String(rollbackError))
-        }
-      }
-      const plugin = [...artifactWrites, ...manifestWrites].find(write => write.temporary)
-        ?.plugin ?? snapshots[0]?.plugin
-      if (error instanceof HoloProjectPrepareError) throw error
-      if (!plugin) throw error
-      throw hostError('HOLO_PLUGIN_PREPARE_COMMIT_FAILED', plugin, error instanceof Error ? error.message : String(error))
-    } finally {
-      for (const write of [...artifactWrites, ...manifestWrites]) await rm(write.temporary, { force: true })
     }
-  })
+
+    for (const write of artifactWrites) {
+      options.signal?.throwIfAborted()
+      await assertNoSymbolicLinkParents(root, write.target)
+      committedMutations.push(await trackOutputWrite(write.target, write.contents, () => commitWrite(write)))
+    }
+    for (const removal of removals) {
+      options.signal?.throwIfAborted()
+      await assertNoSymbolicLinks(removal.root, removal.target)
+      const mutation = await trackOutputWrites([removal.target], () => commitRemoval(removal))
+      if (mutation) committedMutations.push(mutation)
+    }
+    for (const write of manifestWrites) {
+      options.signal?.throwIfAborted()
+      await assertNoSymbolicLinkParents(root, write.target)
+      committedMutations.push(await commitWrite(write))
+    }
+    snapshotCommitted = true
+    await finalizeMutations(committedMutations)
+  } catch (error) {
+    if (!snapshotCommitted) {
+      try {
+        await rollbackMutations(committedMutations)
+      } catch (rollbackError) {
+        const plugin = snapshots[0]?.plugin
+        if (!plugin) throw rollbackError
+        throw hostError('HOLO_PLUGIN_PREPARE_COMMIT_FAILED', plugin, rollbackError instanceof Error ? rollbackError.message : String(rollbackError))
+      }
+    }
+    const plugin = [...artifactWrites, ...manifestWrites].find(write => write.temporary)
+      ?.plugin ?? snapshots[0]?.plugin
+    if (error instanceof HoloProjectPrepareError) throw error
+    if (!plugin) throw error
+    throw hostError('HOLO_PLUGIN_PREPARE_COMMIT_FAILED', plugin, error instanceof Error ? error.message : String(error))
+  } finally {
+    for (const write of [...artifactWrites, ...manifestWrites]) await rm(write.temporary, { force: true })
+  }
 
   for (const snapshot of snapshots) {
     for (const diagnostic of snapshot.diagnostics) {

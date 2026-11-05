@@ -47,7 +47,7 @@ type Fingerprint = {
   readonly identity: string | null
 }
 
-async function readFingerprint(path: string, writtenContents?: string): Promise<Fingerprint> {
+async function readFingerprint(path: string, writtenContents?: string | Uint8Array): Promise<Fingerprint> {
   const stats = await stat(path).catch(() => undefined)
   if (!stats) return { content: null, identity: null }
   if (stats.isDirectory()) {
@@ -98,7 +98,8 @@ function setEntry(key: string, entry: LedgerEntry): void {
 async function trackWrites<TResult>(
   paths: readonly string[],
   write: () => Promise<TResult>,
-  writtenContents?: (key: string) => string | undefined,
+  writtenContents?: (key: string) => string | Uint8Array | undefined,
+  ancestorPaths: readonly string[] = paths,
 ): Promise<TResult> {
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
@@ -119,7 +120,8 @@ async function trackWrites<TResult>(
     const targets = await Promise.all(requested.map(path => resolveTrackedPath(path)))
     targets.forEach(markPending)
     recorded.push(...targets)
-    const ancestors = (await Promise.all(targets.map(findMissingAncestors))).flat()
+    const ancestorTargets = await Promise.all(ancestorPaths.map(path => resolveTrackedPath(path)))
+    const ancestors = (await Promise.all(ancestorTargets.map(findMissingAncestors))).flat()
     ancestors.forEach(markPending)
     recorded.push(...ancestors)
     await Promise.all(recorded.map(async (key) => {
@@ -148,12 +150,20 @@ export async function trackOutputWrites<TResult>(paths: readonly string[], write
   return await trackWrites(paths, write)
 }
 
-export async function writeOutputFile(path: string, contents: string): Promise<void> {
+export async function trackOutputWrite<TResult>(path: string, contents: string | Uint8Array, write: () => Promise<TResult>): Promise<TResult> {
   let target: string | undefined
-  await trackWrites([path], async () => {
+  return await trackWrites([path], async () => {
     target = await resolveTrackedPath(path)
-    await atomicFileInternals.writeTextFile(path, contents)
+    return await write()
   }, key => key === target ? contents : undefined)
+}
+
+export async function trackOutputDirectories<TResult>(path: string, write: () => Promise<TResult>): Promise<TResult> {
+  return await trackWrites([], write, undefined, [path])
+}
+
+export async function writeOutputFile(path: string, contents: string): Promise<void> {
+  await trackOutputWrite(path, contents, () => atomicFileInternals.writeTextFile(path, contents))
 }
 
 export async function recordPackageManifestBaseline(projectRoot: string): Promise<void> {
