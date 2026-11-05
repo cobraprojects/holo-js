@@ -270,6 +270,20 @@ describe('native schema diff', () => {
     expect(diff.extraTables).toEqual([])
   })
 
+  it('matches foreign keys of a qualified table by the stored referenced table name on sqlite', async () => {
+    const { adapter, schema } = openSQLiteSchema()
+    await adapter.execute('CREATE TABLE "Parents" (id INTEGER PRIMARY KEY NOT NULL)')
+    await adapter.execute('CREATE TABLE children (id INTEGER PRIMARY KEY NOT NULL, parent_id INTEGER NOT NULL, FOREIGN KEY (parent_id) REFERENCES parents (id))')
+    const children = defineTable('main.children', {
+      id: column.integer().primaryKey(),
+      parent_id: column.integer().references('id').on('main.PARENTS'),
+    })
+
+    const diff = await diffSchema(schema, [children])
+
+    expect(diff.tables[0]).toMatchObject({ missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [] })
+  })
+
   it('reports a table in an unattached schema as missing on sqlite', async () => {
     const { schema } = openSQLiteSchema()
 
@@ -295,7 +309,7 @@ describe('native schema diff', () => {
     await adapter.execute(`CREATE TABLE \`${children}\` (id BIGINT UNSIGNED PRIMARY KEY, parent_id BIGINT UNSIGNED NOT NULL, FOREIGN KEY (parent_id) REFERENCES \`${parents}\` (id))`)
     const declared = defineTable(`${database}.${children}`, {
       id: column.bigInteger().primaryKey(),
-      parent_id: column.bigInteger().references('id').on(`${database}.${parents}`),
+      parent_id: column.bigInteger().references('id').on(`${database}.${parents.toUpperCase()}`),
     })
 
     const diff = await diffSchema(schema, [declared])

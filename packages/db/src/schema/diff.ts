@@ -169,7 +169,33 @@ async function resolveReferencedTable(
   if (ownerSchema === undefined) return referencedTableName
   const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
-  return referencedSchema === ownerSchema ? referenced.table : `${referencedSchema}.${referenced.table}`
+  return canonicalTableName(tableLocations, ownerSchema, referencedSchema, referenced.table)
+}
+
+async function canonicalTableName(
+  tableLocations: TableLocator,
+  ownerSchema: string,
+  schemaName: string,
+  tableName: string,
+): Promise<string> {
+  const location = await tableLocations.table(`${schemaName}.${tableName}`)
+  const schema = location?.schema ?? schemaName
+  const table = location?.table ?? tableName
+  return schema === ownerSchema ? table : `${schema}.${table}`
+}
+
+async function canonicalActualForeignKeys(
+  tableLocations: TableLocator,
+  ownerTableName: string,
+  foreignKeys: readonly IntrospectedForeignKey[],
+): Promise<readonly IntrospectedForeignKey[]> {
+  if (splitTablePath(ownerTableName).schema === undefined) return foreignKeys
+  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
+  if (ownerSchema === undefined) return foreignKeys
+  return Promise.all(foreignKeys.map(async (foreignKey) => {
+    const { schema = ownerSchema, table } = splitTablePath(foreignKey.table)
+    return { ...foreignKey, table: await canonicalTableName(tableLocations, ownerSchema, schema, table) }
+  }))
 }
 
 async function diffTable(
@@ -177,11 +203,12 @@ async function diffTable(
   table: TableDefinition,
   tableLocations: TableLocator,
 ): Promise<TableSchemaDiff> {
-  const [actualColumns, actualIndexes, actualForeignKeys] = await Promise.all([
+  const [actualColumns, actualIndexes, introspectedForeignKeys] = await Promise.all([
     schema.getColumns(table.tableName),
     schema.getIndexes(table.tableName),
     schema.getForeignKeys(table.tableName),
   ])
+  const actualForeignKeys = await canonicalActualForeignKeys(tableLocations, table.tableName, introspectedForeignKeys)
 
   const expectedColumns = Object.values(table.columns)
   const expectedColumnByName = new Map(expectedColumns.map(column => [column.name, column]))
