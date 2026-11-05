@@ -339,29 +339,38 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     })
   })
 
-  it.runIf(driver === 'sqlite')('matches 64-bit keys stored in an integer column', async () => {
+  it.runIf(driver === 'sqlite')('matches 64-bit keys stored in integer columns and nothing beyond them', async () => {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
     const tag = suffix()
-    const names = { owners: `fw_owners_${tag}`, items: `fw_items_${tag}` }
+    const names = { owners: `fw_owners_${tag}`, codes: `fw_codes_${tag}`, items: `fw_items_${tag}` }
     await createTable(schema, names.owners, (table) => {
       table.integer('id').primaryKey()
       table.string('name')
     })
+    await createTable(schema, names.codes, (table) => {
+      table.integer('id').primaryKey()
+      table.bigInteger('code')
+    })
     await createTable(schema, names.items, (table) => {
       table.integer('id').primaryKey()
       table.string('owner_id')
+      table.string('owner_code')
     })
     const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), name: column.string() })
-    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.string() })
+    const codes = defineGeneratedTable(names.codes, { id: column.integer().primaryKey(), code: column.bigInteger() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.string(), owner_code: column.string() })
     await DB.table(owners).insert([{ id: 3000000000, name: 'wide' }])
-    await DB.table(items).insert([{ id: 10, owner_id: '3000000000' }])
+    await DB.table(codes).insert([{ id: 1, code: '-9223372036854775808' }])
+    await DB.table(items).insert([{ id: 10, owner_id: '3000000000', owner_code: '-9223372036854775808' }, { id: 20, owner_id: '1', owner_code: '-9223372036854775809' }])
     const Owner = defineModel(owners, { timestamps: false })
-    const Item = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+    const Code = defineModel(codes, { timestamps: false })
+    const Item = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id'), coded: belongsTo(() => Code, 'owner_code', 'code') } })
 
-    const [item] = await Item.with('owner').get()
+    const loaded = await Item.with('owner').orderBy('id').get()
 
-    expect(item?.getRelation<Loaded | null>('owner')?.get('name' as never)).toBe('wide')
+    expect(loaded.map(item => item.getRelation<Loaded | null>('owner')?.get('name' as never))).toEqual(['wide', undefined])
     expect(valuesOf(await Item.has('owner').get())).toEqual([10])
+    expect(valuesOf(await Item.has('coded').get())).toEqual([10])
   })
 })
