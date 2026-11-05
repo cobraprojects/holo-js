@@ -7,8 +7,8 @@ import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
 import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
-async function untilTimerScheduled(): Promise<void> {
-  while (vi.getTimerCount() === 0) {
+async function waitForTimerScheduledAfter(previousCount: number): Promise<void> {
+  while (vi.getTimerCount() <= previousCount) {
     await new Promise(resolve => setImmediate(resolve))
   }
 }
@@ -327,14 +327,16 @@ it('cancels a subscription\'s deferred remote refresh when it unsubscribes', asy
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
   onTestFinished(() => { vi.useRealTimers() })
 
+  const timersBeforeFirst = vi.getTimerCount()
   const firstReceived = bridge.receive(remoteInvalidation(['db:main:records']))
-  await untilTimerScheduled()
+  await waitForTimerScheduledAfter(timersBeforeFirst)
   vi.advanceTimersByTime(10)
   await firstReceived
   expect(runs).toBe(2)
 
+  const timersBeforeSecond = vi.getTimerCount()
   const secondReceived = bridge.receive(remoteInvalidation(['db:main:records']))
-  await untilTimerScheduled()
+  await waitForTimerScheduledAfter(timersBeforeSecond)
   vi.advanceTimersByTime(10)
   await secondReceived
   expect(vi.getTimerCount()).toBe(1)
@@ -483,11 +485,9 @@ it('does not run a remote refresh that a reset overtakes before the refresh resu
     const before = runs
 
     const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
+    const timersBefore = vi.getTimerCount()
     void bridge.receive(remoteInvalidation(['db:main:records']))
-    for (let attempt = 0; attempt < 100 && vi.getTimerCount() === 0; attempt += 1) {
-      await new Promise(resolve => setImmediate(resolve))
-    }
-    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    await waitForTimerScheduledAfter(timersBefore)
 
     vi.advanceTimersByTime(10)
     resetRemoteRefreshSchedule()

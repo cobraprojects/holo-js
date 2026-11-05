@@ -3,6 +3,16 @@ import { join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+const diagnosticHost: ts.FormatDiagnosticsHost = {
+  getCanonicalFileName: fileName => fileName,
+  getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
+  getNewLine: () => '\n',
+}
+
+function formatDiagnostic(diagnostic: ts.Diagnostic): string {
+  return ts.formatDiagnostic(diagnostic, diagnosticHost)
+}
+
 function emitFixtureDeclaration(tsconfigPath: string, fixturePath: string): { readonly errors: readonly string[], readonly declaration: string } {
   const config = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, {
     ...ts.sys,
@@ -29,12 +39,7 @@ function emitFixtureDeclaration(tsconfigPath: string, fixturePath: string): { re
     ...program.getDeclarationDiagnostics(fixture),
     ...emitted.diagnostics,
   ]
-  const errors = diagnostics.map(diagnostic => ts.formatDiagnostic(diagnostic, {
-    getCanonicalFileName: fileName => fileName,
-    getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
-    getNewLine: () => '\n',
-  }))
-  return { errors, declaration }
+  return { errors: diagnostics.map(formatDiagnostic), declaration }
 }
 
 describe('@holo-js/realtime declaration emit', () => {
