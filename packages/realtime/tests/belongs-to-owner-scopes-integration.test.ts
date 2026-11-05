@@ -100,6 +100,35 @@ describe.each(drivers)('realtime belongsTo owners hidden by constraints or scope
     expect(JSON.stringify(subscription.current.data)).not.toContain('"Ada Hidden"')
   })
 
+  it('keeps a date-constrained owner in step with a fresh query when a post moves onto it', async () => {
+    const { db, schema, suffix, posts } = await openPosts(driver)
+    const ownersName = `holo_owner_born_${suffix}`
+    await schema.createTable(ownersName, (table) => {
+      table.integer('id').primaryKey()
+      table.string('name')
+      table.date('birthday')
+    })
+    onTestFinished(() => schema.dropTable(ownersName))
+    const owners = defineGeneratedTable(ownersName, { id: column.integer().primaryKey(), name: column.string(), birthday: column.date() })
+    await db.table(owners).insert([
+      { id: 1, name: 'Ada', birthday: new Date('2020-01-01T00:00:00.000Z') },
+      { id: 2, name: 'Grace', birthday: new Date('2020-01-01T00:00:00.000Z') },
+      { id: 3, name: 'Hidden', birthday: new Date('2021-01-01T00:00:00.000Z') },
+    ])
+    const Owner = defineModel(owners, { timestamps: false })
+    const Post = defineModel(posts, { timestamps: false, relations: { author: belongsTo(() => Owner, 'author_id') } })
+    const handler = () => db.model(Post).query().with({ author: query => query.where('birthday', new Date('2020-01-01T00:00:00.000Z')) }).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await mutate(() => db.table(posts).where('id', 1).update({ author_id: 2 }))
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"Grace"')
+
+    await mutate(() => db.table(posts).where('id', 1).update({ author_id: 3 }))
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).not.toContain('"Hidden"')
+  })
+
   it('drops a soft-deleted owner', async () => {
     const { db, Author, Post } = await openPosts(driver)
     const handler = () => db.model(Post).query().with('author').orderBy('id').getJson()

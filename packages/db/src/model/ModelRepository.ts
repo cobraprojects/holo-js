@@ -22,7 +22,7 @@ import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
-import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
@@ -110,6 +110,11 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+}
+
+function hasTypedComparison(predicates: readonly QueryPredicateNode[]): boolean {
+  return predicates.some(predicate => (predicate.kind === 'comparison' && typeof predicate.valueType !== 'undefined')
+    || (predicate.kind === 'group' && hasTypedComparison(predicate.predicates)))
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -2517,31 +2522,34 @@ export class ModelRepository<
     return relatedRowsArePatchable(this.resolveRelatedRepository(related))
   }
 
+  resolveRelationHydrationQuery(
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' | 'hasMany' | 'hasOne' }>,
+    constraint?: RelationConstraint,
+  ): { readonly observation: DatabaseQueryObservation, readonly rowsPatchable: boolean } | undefined {
+    const related = this.resolveRelatedRepository(relation.related)
+    const query = this.applyRelationConstraint(relation, related, constraint)
+    const plan = query.getTableQueryBuilder().getPlan()
+    if (hasTypedComparison(plan.predicates)) {
+      return undefined
+    }
+
+    const observation = createDatabaseQueryObservation(plan, related.getConnectionName(), [])
+    if (!observation?.patchable || typeof observation.limit !== 'undefined' || typeof observation.offset !== 'undefined') {
+      return undefined
+    }
+
+    return Object.freeze({
+      observation,
+      rowsPatchable: relatedRowsArePatchable(related) && query.canPatchLoadedRows() && observation.selections.length === 0,
+    })
+  }
+
   resolveBelongsToOwnerPredicates(
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     constraint?: RelationConstraint,
   ): readonly DatabaseQueryPredicateObservation[] | undefined {
-    const related = this.resolveRelatedRepository(relation.related)
-    if (!relatedRowsArePatchable(related)) {
-      return undefined
-    }
-
-    const query = this.applyRelationConstraint(relation, related, constraint)
-    if (!query.canPatchLoadedRows()) {
-      return undefined
-    }
-
-    const observation = createDatabaseQueryObservation(query.getTableQueryBuilder().getPlan(), related.getConnectionName(), [])
-    if (
-      !observation?.patchable
-      || observation.selections.length > 0
-      || typeof observation.limit !== 'undefined'
-      || typeof observation.offset !== 'undefined'
-    ) {
-      return undefined
-    }
-
-    return observation.predicates
+    const resolved = this.resolveRelationHydrationQuery(relation, constraint)
+    return resolved?.rowsPatchable ? resolved.observation.predicates : undefined
   }
 
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {
