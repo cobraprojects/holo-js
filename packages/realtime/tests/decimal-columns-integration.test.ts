@@ -35,7 +35,7 @@ async function openPrices(driver: Driver) {
 describe.each(drivers)('realtime decimal columns on %s', (driver) => {
   it('keeps grouped and aggregate subscriptions over a decimal column correct after inserts and updates', async () => {
     const { db, prices } = await openPrices(driver)
-    const queries = {
+    const queries: Record<string, () => Promise<unknown>> = {
       groupedByAmount: () => db.table(prices).select('amount').addSelectCount('total').groupBy('amount').orderBy('amount').get(),
       havingByAmount: () => db.table(prices).select('amount').addSelectCount('total').groupBy('amount').having('count(*)', '>', 1).orderBy('amount').get(),
       summedByGroup: () => db.table(prices).select('group_id').addSelectSum('total', 'amount').groupBy('group_id').orderBy('group_id').get(),
