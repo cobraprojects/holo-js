@@ -1,3 +1,4 @@
+import { canonicalTableName } from '../query/tableIdentity'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -2609,7 +2610,7 @@ class ModelQueryBuilderBase<
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
         }))
         continue
       }
@@ -2634,7 +2635,7 @@ class ModelQueryBuilderBase<
           predicates: hydrationQuery.predicates,
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
-          relatedTableName: relatedDefinition.table.tableName,
+          relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
         }))
         continue
       }

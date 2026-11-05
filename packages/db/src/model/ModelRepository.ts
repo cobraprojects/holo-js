@@ -1,3 +1,4 @@
+import { canonicalTableName } from '../query/tableIdentity'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
@@ -1089,7 +1090,7 @@ export class ModelRepository<
         ownerKey: relation.ownerKey,
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       }),
       resultPath,
       selections: Object.freeze([Object.freeze({
@@ -1238,7 +1239,7 @@ export class ModelRepository<
         relatedConnectionName: related.getConnectionName(),
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
-        relatedTableName: related.definition.table.tableName,
+        relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
       })
 
       recordDatabaseQueryObservation(Object.freeze({

@@ -126,6 +126,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -1949,6 +1950,9 @@ export class TableQueryBuilder<
   ): Promise<TRow[]> {
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
+    if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
+      await resolvePlanTableIdentities(this.connection, this.plan)
+    }
     const dependencies = this.plan.lockMode
       || (!cacheConfig && !activeDependencyCollector)
       ? undefined
@@ -3003,6 +3007,9 @@ export class TableQueryBuilder<
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
+    if (hasInvalidationListeners && useReturningRows) {
+      await resolveTableIdentity(this.connection, this.source.tableName)
+    }
     const needsPreviousRows = hasInvalidationListeners && (!useReturningRows || queryCacheInternals.requiresMutationPreviousRows(
       this.connection.getConnectionName(),
       this.source.tableName,
@@ -3350,6 +3357,7 @@ export class TableQueryBuilder<
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
+    await resolveTableIdentity(this.connection, this.source.tableName)
 
     const connectionName = this.connection.getConnectionName()
     await invalidateQueryCacheDependencies(
@@ -3372,6 +3380,7 @@ export class TableQueryBuilder<
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
+    await resolveTableIdentity(this.connection, this.source.tableName)
 
     const primaryKey = resolveInsertIdKey(this.source, this.connection.getConnectionName())
     const mutations = hasInvalidationListeners
@@ -3419,6 +3428,7 @@ export class TableQueryBuilder<
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
     }
+    await resolveTableIdentity(this.connection, this.source.tableName)
 
     const hasValues = Object.keys(values).length > 0
     const invalidation = inferAutomaticQueryCacheInvalidationPlan(

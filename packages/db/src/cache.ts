@@ -9,6 +9,7 @@ import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
+import { canonicalTableName } from './query/tableIdentity'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -436,8 +437,9 @@ function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalida
 function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
   const requirements = getQueryCacheBridgeState().mutationPreviousRowsRequirements
   if (!requirements) return false
+  const canonicalName = canonicalTableName(connectionName, tableName)
   for (const requirement of requirements.values()) {
-    if (requirement(connectionName, tableName, columns)) return true
+    if (requirement(connectionName, canonicalName, columns)) return true
   }
   return false
 }
@@ -1013,7 +1015,7 @@ export function createTableCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}`
+  return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
 function encodeDependencyValue(value: unknown): string {
@@ -1088,14 +1090,14 @@ export function createTableRowCacheDependency(
     return undefined
   }
 
-  return `db:${connectionName}:${tableName}:row:${columnName}:${encodeDependencyValue(value)}`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:${columnName}:${encodeDependencyValue(value)}`
 }
 
 export function createTableRowWildcardCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:row:*`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:*`
 }
 
 export function createTablePredicateCacheDependency(
@@ -1111,7 +1113,7 @@ function createTableMutationCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:mutation`
+  return `${createTableCacheDependency(connectionName, tableName)}:mutation`
 }
 
 function createTableExactPredicateCacheDependency(
@@ -1922,7 +1924,7 @@ function createDatabaseQueryObservationFromPlan(
     connectionName,
     belongsToHydrations: undefined,
     relatedHydrations: undefined,
-    tableName: plan.source.tableName,
+    tableName: canonicalTableName(connectionName, plan.source.tableName),
     dependencies: Object.freeze([...dependencies]),
     groupedAggregate: findGroupedAggregateObservation(plan, groupedAverageStates, groupedAggregateStates),
     limit: plan.limit,
@@ -1984,7 +1986,7 @@ export function createDatabaseMutationEvent(
 ): DatabaseMutationEvent {
   return Object.freeze({
     connectionName,
-    tableName: source.tableName,
+    tableName: canonicalTableName(connectionName, source.tableName),
     kind,
     predicates: collectQueryPredicateObservations(predicates),
     previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
@@ -2299,6 +2301,7 @@ export const queryCacheInternals = {
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,
   createDatabaseQueryObservation,
+  canonicalTableName,
   createDeterministicQueryCacheKey,
   createTablePredicateCacheDependency,
   createTableCacheDependency,
