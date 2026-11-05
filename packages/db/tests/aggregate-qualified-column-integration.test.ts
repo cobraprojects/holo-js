@@ -320,6 +320,10 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
       .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
     await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price as price`, `${ordersName}.price`).orderBy('price')[kind](`${name}.price`))
       .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
+    await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price as price`, `${ordersName}.*`).orderBy('price')[kind](`${name}.price`))
+      .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
+    expect(Number(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price as price`).orderBy('price')[kind](`${ordersName}.price` as never)))
+      .toBe({ max: 300, min: 100, sum: 600, avg: 200 }[kind])
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {

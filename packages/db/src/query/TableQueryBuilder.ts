@@ -1953,7 +1953,7 @@ export class TableQueryBuilder<
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
-    const selections = !modelRow
+    const selections = !modelRow || join
       ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
       : implicitSelections.length > 0
         ? [...implicitSelections, wildcard(source)]
@@ -3730,8 +3730,8 @@ export class TableQueryBuilder<
 
   private modelAggregateSelections(column: string, source: string, key: string, sourceWildcard: string): readonly string[] {
     const orderedNames = new Set(this.plan.orderBy.flatMap(order => order.kind === 'column' && !order.column.includes('.') ? [order.column] : []))
-    const keyOutput = [...this.plan.selections].reverse().find(selection => selectionOutputName(selection) === key)
-    const keyIsSelectedSourceColumn = keyOutput?.kind === 'column' && this.resolveSourceColumnName(keyOutput.column) === key
+    const keyOutput = [...this.plan.selections].reverse().find(selection => [key, '*'].includes(selectionOutputName(selection) ?? ''))
+    const keyIsSelectedSourceColumn = keyOutput?.kind === 'column' && [key, '*'].includes(this.resolveSourceColumnName(keyOutput.column) ?? '')
     if (orderedNames.has(key) && keyOutput && !keyIsSelectedSourceColumn) {
       throw new CompilerError(`Cannot aggregate column "${column}" while ordering by "${key}", which names another selected column. Qualify the order by column.`)
     }
