@@ -138,6 +138,7 @@ it('types pivot attribute writes from the pivot table columns', () => {
       UserFactory.hasAttached(RoleFactory, 'roles', { approved: true })
 
       await user.roles().attach(new Uint8Array([1]))
+      await user.roles().sync(new Uint16Array([1]))
       await user.roles().detach(new Date())
       await user.roles().toggle(new Date())
       // @ts-expect-error unknown pivot column

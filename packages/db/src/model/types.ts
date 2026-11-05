@@ -140,7 +140,7 @@ export type PivotAttributes<TRelation>
           ? Record<string, never>
           : Pick<PivotUpdatePayloadOf<TRelation>, WritablePivotColumn<TRelation>>
 
-export type PivotRelatedKey = string | number | bigint | boolean | Date | Uint8Array
+export type PivotRelatedKey = string | number | bigint | boolean | Date | ArrayBufferView
 
 export type PivotRelatedIds<TRelation>
   = IsUntypedPivotTable<PivotTableOfRelation<TRelation>> extends true
