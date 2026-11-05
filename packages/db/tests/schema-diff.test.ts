@@ -112,6 +112,74 @@ describe('native schema diff', () => {
     expect(diff.tables[0]!.extraForeignKeys).toEqual(['team_id->teams.id'])
   })
 
+  it.each(['postgres', 'mysql'] as const)('compares a table qualified with the default schema on %s', async driver => {
+    const { schema, table } = await openDatabase(driver)
+    const name = table.tableName.split('.').at(-1)!
+
+    const diff = await diffSchema(schema, [table])
+
+    expect(table.tableName).toContain('.')
+    expect(diff.missingTables).toEqual([])
+    expect(diff.extraTables).not.toContain(name)
+    expect(diff.tables).toHaveLength(1)
+    expect(diff.tables[0]).toMatchObject({ table: table.tableName, missingColumns: [], extraColumns: [], mismatchedColumns: [], hasChanges: false })
+  })
+
+  it.each(['postgres', 'mysql'] as const)('compares tables qualified with another schema on %s', async driver => {
+    const { schema, adapter } = await openDatabase(driver)
+    const tenant = `holo_tenant_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const quote = (identifier: string) => driver === 'postgres' ? `"${identifier}"` : `\`${identifier}\``
+    onTestFinished(async () => { await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(tenant)}${driver === 'postgres' ? ' CASCADE' : ''}`) })
+    await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(tenant)}`)
+    await schema.createTable(`${tenant}.orders`, table => {
+      table.id()
+      table.string('reference')
+      table.string('legacy_code')
+      table.index(['reference'])
+    })
+    const orders = defineTable(`${tenant}.orders`, {
+      id: column.id(), reference: column.string(), total: column.integer(),
+    }, { indexes: [{ columns: ['reference'], unique: false }] })
+    const invoices = defineTable(`${tenant}.invoices`, { id: column.id() })
+
+    const diff = await diffSchema(schema, [orders, invoices])
+
+    expect(diff.missingTables).toEqual([`${tenant}.invoices`])
+    expect(diff.extraTables).not.toContain('orders')
+    expect(diff.tables).toHaveLength(1)
+    expect(diff.tables[0]).toMatchObject({
+      table: `${tenant}.orders`,
+      missingColumns: ['total'], extraColumns: ['legacy_code'], mismatchedColumns: [],
+      missingIndexes: [], extraIndexes: [], mismatchedIndexes: [], hasChanges: true,
+    })
+  })
+
+  it('compares tables qualified with the main schema on sqlite', async () => {
+    const { db, schema } = openSQLiteSchema()
+    await createTestTable(db, defineTable('teams', { id: column.id() }))
+    const teams = defineTable('main.teams', { id: column.id(), name: column.string() })
+    const posts = defineTable('main.posts', { id: column.id() })
+
+    const diff = await diffSchema(schema, [teams, posts])
+
+    expect(diff.missingTables).toEqual(['main.posts'])
+    expect(diff.extraTables).toEqual([])
+    expect(diff.tables).toHaveLength(1)
+    expect(diff.tables[0]).toMatchObject({ table: 'main.teams', missingColumns: ['name'], extraColumns: [], hasChanges: true })
+  })
+
+  it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps an unqualified table that shares its name with a table in another schema on %s', async driver => {
+    const { schema, table } = await openDatabase(driver)
+    const name = table.tableName.split('.').at(-1)!
+    const elsewhere = defineTable(`${driver === 'sqlite' ? 'temp' : 'holo_missing_schema'}.${name}`, table.columns)
+
+    const diff = await diffSchema(schema, [elsewhere])
+
+    expect(diff.missingTables).toEqual([elsewhere.tableName])
+    expect(diff.extraTables).toContain(name)
+    expect(diff.tables).toEqual([])
+  })
+
   it.each(['sqlite', 'mysql'] as const)('rejects unsupported vector columns on %s', async driver => {
     const { db, table, schema } = await openDatabase(driver)
     await schema.table(table.tableName, table => { table.blob('embedding').nullable() })

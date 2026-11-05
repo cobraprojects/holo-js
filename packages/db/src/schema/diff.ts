@@ -4,7 +4,7 @@ import type {
   TableDefinition,
   TableIndexDefinition,
 } from './types'
-import type { IntrospectedForeignKey, IntrospectedIndex, SchemaService } from './SchemaService'
+import { readSchemaServiceTableStructure, type IntrospectedForeignKey, type IntrospectedIndex, type SchemaService } from './SchemaService'
 import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 import { SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { createConventionalIndexName, createGeneratedUniqueIndexName } from './generatedNames'
@@ -81,18 +81,38 @@ export async function diffSchema(
   tables: readonly TableDefinition[],
 ): Promise<SchemaDiff> {
   const actualTables = await schema.getTables()
-  const expectedByName = new Map(tables.map(table => [table.tableName, table]))
-  const extraTables = actualTables.filter(name => !expectedByName.has(name))
-  const missingTables = tables
-    .map(table => table.tableName)
-    .filter(name => !actualTables.includes(name))
-
-  const tableDiffs: TableSchemaDiff[] = []
+  const unqualifiedNames = new Set(tables.map(table => table.tableName).filter(name => splitTablePath(name).schema === undefined))
+  const qualifiedLocations: { readonly table: string, readonly schema: string }[] = []
+  const existingTables: TableDefinition[] = []
+  const missingTables: string[] = []
   for (const table of tables) {
-    if (!actualTables.includes(table.tableName)) {
+    const { schema: schemaName, table: tableName } = splitTablePath(table.tableName)
+    if (schemaName === undefined) {
+      if (actualTables.includes(table.tableName)) existingTables.push(table)
+      else missingTables.push(table.tableName)
       continue
     }
 
+    const resolvedSchema = (await readSchemaServiceTableStructure(schema, table.tableName))?.schema
+    if (resolvedSchema === undefined) {
+      missingTables.push(table.tableName)
+      continue
+    }
+
+    qualifiedLocations.push({ table: tableName, schema: resolvedSchema })
+    existingTables.push(table)
+  }
+
+  const extraTables: string[] = []
+  for (const name of actualTables) {
+    if (unqualifiedNames.has(name)) continue
+    const candidates = qualifiedLocations.filter(location => location.table === name)
+    const resolvedSchema = candidates.length > 0 ? (await readSchemaServiceTableStructure(schema, name))?.schema : undefined
+    if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
+  }
+
+  const tableDiffs: TableSchemaDiff[] = []
+  for (const table of existingTables) {
     tableDiffs.push(await diffTable(schema, table))
   }
 

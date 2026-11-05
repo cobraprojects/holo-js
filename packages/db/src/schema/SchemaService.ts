@@ -47,6 +47,12 @@ export interface IntrospectedForeignKey {
   onDelete: string
 }
 
+const schemaServiceConnections = new WeakMap<SchemaService, DatabaseContext>()
+
+export function readSchemaServiceTableStructure(schema: SchemaService, tableName: string): Promise<DatabaseTableStructure | undefined> {
+  return readTableStructure(schemaServiceConnections.get(schema)!, tableName)
+}
+
 export class SchemaService {
   private pinnedRestorePending = false
   private readonly sqlite: SQLiteSchemaOperations
@@ -54,6 +60,7 @@ export class SchemaService {
   private readonly postgresVirtualColumns: PostgresVirtualColumns
 
   constructor(private readonly connection: DatabaseContext) {
+    schemaServiceConnections.set(this, connection)
     this.sqlite = new SQLiteSchemaOperations(connection, callback => this.withoutForeignKeyConstraints(callback))
     this.postgresEnumChecks = new PostgresEnumChecks(connection)
     this.postgresVirtualColumns = new PostgresVirtualColumns(connection)

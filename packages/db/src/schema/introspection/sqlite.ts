@@ -262,6 +262,7 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
       const structure: DatabaseTableStructure = {
         dialect: 'sqlite',
         tableName,
+        schema,
         columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
           name: row.name,
           dataType: row.type,
