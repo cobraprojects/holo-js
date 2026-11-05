@@ -815,6 +815,34 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
   }, 30_000)
 
+  it('resolves import.meta.resolve specifiers from the source module in a child process', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/locate.ts')
+    const packageRoot = join(projectRoot, 'server/node_modules/nested-locator')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: 'nested-locator', exports: { import: './esm.mjs', require: './cjs.cjs' } }))
+    await writeFile(entryPath, "const { resolve } = import.meta\nexport const resolved = [resolve('./helper.ts'), import.meta.resolve('nested-locator')]\nexport function missing() { try { return resolve('missing-locator') } catch (error) { return error.message } }\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const loaded = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(entryPath)})
+console.log(JSON.stringify({ resolved: loaded.resolved, missing: loaded.missing() }))
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const { stdout } = await promisify(execFile)(process.execPath, [childPath], { cwd: projectRoot, env })
+
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { resolved: string[], missing: string }
+    expect(result.resolved).toEqual([
+      pathToFileURL(join(projectRoot, 'server/jobs/helper.ts')).href,
+      pathToFileURL(join(packageRoot, 'esm.mjs')).href,
+    ])
+    expect(result.missing).toBe(`Cannot find package 'missing-locator' imported from ${entryPath}`)
+  }, 30_000)
+
   it('rewrites import.meta.url without colliding with module bindings', async () => {
     const projectRoot = await realpath(await createTempProject())
     const entryPath = join(projectRoot, 'server/jobs/collide.ts')

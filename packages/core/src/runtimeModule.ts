@@ -696,6 +696,15 @@ function sameWidthReplacement(functionName: string, original: string, parenthesi
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
+const sourceModuleResolver = [
+  '(specifier, parentURL, meta) => {',
+  'if (globalThis.Bun) return meta.resolve(specifier, parentURL);',
+  `const request = ${JSON.stringify(importerResolutionRequest)};`,
+  'const hooks = globalThis.process.getBuiltinModule(\'node:module\').registerHooks({ resolve: (next, context, nextResolve) => next === request ? nextResolve(specifier, { ...context, parentURL }) : nextResolve(next, context) });',
+  'try { return meta.resolve(request) } finally { hooks.deregister() }',
+  '}',
+].join(' ')
+
 function createSourceModuleUrlPlugin(): Plugin {
   return {
     name: 'holo-source-module-url',
@@ -803,7 +812,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: specifier => (${sourceModuleResolver})(\`\${specifier}\`, ${sourceValues.url}, import.meta) } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
