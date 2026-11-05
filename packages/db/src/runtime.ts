@@ -217,6 +217,13 @@ export function parseDatabaseDriver(value: string | undefined, fallback: Support
   throw new Error(`Unsupported Holo database driver "${value}". Supported drivers are sqlite, postgres, and mysql.`)
 }
 
+function quoteIdentifierSegments(identifier: string, quote: string): string {
+  return identifier
+    .split('.')
+    .map(part => `${quote}${part}${quote}`)
+    .join('.')
+}
+
 export function createDialect(driver: SupportedDatabaseDriver): Dialect {
   const sqliteLike: DatabaseCapabilities = {
     returning: false,
@@ -250,12 +257,7 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
         schemaQualifiedIdentifiers: true,
         ddlAlterSupport: true,
       },
-      quoteIdentifier(identifier: string) {
-        return identifier
-          .split('.')
-          .map(part => `"${part}"`)
-          .join('.')
-      },
+      quoteIdentifier: (identifier: string) => quoteIdentifierSegments(identifier, '"'),
       createPlaceholder(index: number) {
         return `$${index}`
       },
@@ -274,12 +276,7 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
         schemaQualifiedIdentifiers: true,
         ddlAlterSupport: true,
       },
-      quoteIdentifier(identifier: string) {
-        return identifier
-          .split('.')
-          .map(part => `\`${part}\``)
-          .join('.')
-      },
+      quoteIdentifier: (identifier: string) => quoteIdentifierSegments(identifier, '`'),
       createPlaceholder() {
         return '?'
       },
@@ -288,13 +285,8 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
 
   return {
     name: 'sqlite',
-    capabilities: { ...sqliteLike, returning: true },
-    quoteIdentifier(identifier: string) {
-      return identifier
-        .split('.')
-        .map(part => `"${part}"`)
-        .join('.')
-    },
+    capabilities: { ...sqliteLike, returning: true, schemaQualifiedIdentifiers: true },
+    quoteIdentifier: (identifier: string) => quoteIdentifierSegments(identifier, '"'),
     createPlaceholder() {
       return '?'
     },

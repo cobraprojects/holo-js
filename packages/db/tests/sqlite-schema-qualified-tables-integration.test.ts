@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, column, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 async function openProducts() {
@@ -18,11 +18,6 @@ const readProducts = async (table: string) => (await DB.table(table).orderBy('id
 describe('SQLite schema-qualified table names', () => {
   afterEach(() => {
     resetDB()
-  })
-
-  it('quotes each segment of a qualified identifier', () => {
-    expect(createDialect('sqlite').quoteIdentifier('main.products')).toBe('"main"."products"')
-    expect(createDialect('sqlite').quoteIdentifier('products')).toBe('"products"')
   })
 
   it('selects, inserts, updates, and deletes through a main-qualified table', async () => {
@@ -81,6 +76,24 @@ describe('SQLite schema-qualified table names', () => {
 
     expect((await Product.findOrFail(product.get('id'))).get('price')).toBe(45)
     expect(await Product.where('name', 'modeled').count()).toBe(1)
+
+    await product.delete()
+    expect(await Product.count()).toBe(0)
+  })
+
+  it('persists and queries a model on a table in an attached database', async () => {
+    const { db } = await openProducts()
+    await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS archive`, source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."products" ("id" INTEGER PRIMARY KEY, "name" TEXT, "price" INTEGER)', source: 'schema' })
+    const products = defineGeneratedTable('archive.products', { id: column.id(), name: column.string(), price: column.integer() })
+    const Product = defineModel(products, { fillable: ['name', 'price'], timestamps: false })
+
+    const product = await Product.create({ name: 'archived', price: 50 })
+    product.set('price', 55)
+    await product.save()
+
+    expect((await Product.findOrFail(product.get('id'))).get('price')).toBe(55)
+    expect(await readProducts('main.products')).toEqual([])
 
     await product.delete()
     expect(await Product.count()).toBe(0)

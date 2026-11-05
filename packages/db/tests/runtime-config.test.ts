@@ -119,6 +119,8 @@ describe('runtime config helpers', () => {
     const sqliteDialect = createDialect('sqlite')
     expect(sqliteDialect.name).toBe('sqlite')
     expect(sqliteDialect.quoteIdentifier('users')).toBe('"users"')
+    expect(sqliteDialect.quoteIdentifier('main.users')).toBe('"main"."users"')
+    expect(sqliteDialect.capabilities.schemaQualifiedIdentifiers).toBe(true)
     expect(sqliteDialect.createPlaceholder(1)).toBe('?')
 
     const postgresDialect = createDialect('postgres')
