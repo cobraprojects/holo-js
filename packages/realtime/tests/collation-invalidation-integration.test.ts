@@ -157,7 +157,8 @@ async function createStringIdCountries(driver: Driver, postgresIdType = 'VARCHAR
   })
   const id = driver === 'sqlite' ? 'id TEXT PRIMARY KEY COLLATE NOCASE' : `id ${driver === 'mysql' ? 'VARCHAR(16) COLLATE utf8mb4_0900_ai_ci' : postgresIdType} PRIMARY KEY`
   await adapter.execute(`CREATE TABLE ${tableName} (${id}, label VARCHAR(64) NOT NULL)`)
-  await adapter.execute(`INSERT INTO ${tableName} (id, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
+  const ids = driver === 'postgres' && postgresIdType.endsWith('[]') ? ["'{FR}'", "'{DE}'"] : ["'FR'", "'DE'"]
+  await adapter.execute(`INSERT INTO ${tableName} (id, label) VALUES (${ids[0]}, 'France'), (${ids[1]}, 'Germany')`)
   registerGeneratedTables({ countries: defineGeneratedTable(tableName, { id: column.string().primaryKey(), label: column.string() }) })
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
@@ -343,6 +344,26 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalid
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).where('code', ['fr']).update({ label: 'République' }) }))
 
     expect((snapshots.at(-1) as readonly Readonly<Record<string, unknown>>[]).map(row => row.label)).toEqual(['République'])
+  })
+
+  it('refreshes a subscription by a citext array id after an update matched by a case-differing array', async () => {
+    const setupAdapter = createAdapter('postgres')
+    await setupAdapter.initialize()
+    try {
+      await setupAdapter.execute('CREATE EXTENSION IF NOT EXISTS citext')
+    } catch (error) {
+      if ((await setupAdapter.query(`SELECT 1 FROM pg_extension WHERE extname = 'citext'`)).rows.length === 0) {
+        throw error
+      }
+    } finally {
+      await setupAdapter.disconnect()
+    }
+    const countries = await createStringIdCountries('postgres', 'citext[]')
+    const snapshots = await countries.subscribe(async ({ db }) => await db.table(countries.tableName).where('id', ['FR']).first())
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(countries.tableName).where('id', ['fr']).update({ label: 'République' }) }))
+
+    expect((snapshots.at(-1) as Readonly<Record<string, unknown>> | null)?.label).toBe('République')
   })
 
   for (const [type, setup, exists] of [
