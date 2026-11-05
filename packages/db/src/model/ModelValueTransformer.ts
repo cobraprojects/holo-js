@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarMidnightWriteValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -266,7 +266,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     if (builtInCast) {
       switch (builtInCast.name) {
         case 'boolean':
-          return value == null ? value : Boolean(value)
+          return coerceBoolean(value)
         case 'number':
           return value == null ? value : Number(value)
         case 'string':
@@ -305,7 +305,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     if (builtInCast) {
       switch (builtInCast.name) {
         case 'boolean':
-          return value == null ? value : Boolean(value)
+          return coerceBoolean(value)
         case 'number':
           return value == null ? value : Number(value)
         case 'string':

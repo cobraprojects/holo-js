@@ -43,9 +43,17 @@ function resolveSQLiteFilename(filename: string): string {
 
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
+type HeldTransactionScope = { active: boolean }
+
+const heldTransactionScopes = new AsyncLocalStorage<ReadonlyMap<string | SQLiteAdapter, HeldTransactionScope>>()
+
 function normalizeBinding(value: unknown): unknown {
   if (typeof value === 'boolean') {
-    return Number(value)
+    return BigInt(value)
+  }
+
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return BigInt(value)
   }
 
   return value instanceof Date ? holoRuntimeInternals.formatSQLiteDateTime(value) : value
@@ -93,7 +101,6 @@ export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
   private connected: boolean
   private readonly transactionKey: string | SQLiteAdapter
-  private readonly transactionScope = new AsyncLocalStorage<boolean>()
   private readonly filename: string
   private readonly createDatabaseInstance: (filename: string) => SQLiteDatabaseLike
 
@@ -141,8 +148,17 @@ export class SQLiteAdapter implements DriverAdapter {
     return this.connected
   }
 
+  get [holoRuntimeInternals.driverConnectionKey](): SQLiteAdapter {
+    return this
+  }
+
+  get [holoRuntimeInternals.transactionScopeKey](): string | SQLiteAdapter {
+    return this.transactionKey
+  }
+
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.transactionScope.getStore()) {
+    const held = heldTransactionScopes.getStore()
+    if (held?.get(this.transactionKey)?.active) {
       return callback()
     }
 
@@ -155,9 +171,11 @@ export class SQLiteAdapter implements DriverAdapter {
 
     await previous
 
+    const scope: HeldTransactionScope = { active: true }
     try {
-      return await this.transactionScope.run(true, callback)
+      return await heldTransactionScopes.run(new Map(held).set(this.transactionKey, scope), callback)
     } finally {
+      scope.active = false
       release()
       if (transactionTails.get(this.transactionKey) === current) transactionTails.delete(this.transactionKey)
     }
