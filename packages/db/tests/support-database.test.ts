@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
-import { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
+import { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 import { openDatabase } from './support/database'
 
 afterEach(() => {
@@ -66,6 +66,17 @@ describe('real database test support', () => {
     vi.stubEnv(database, 'holo_scratch')
     vi.stubEnv(flag, undefined)
     expect(() => connection()).toThrow(`${flag}=1`)
+  })
+
+  it.each(['postgresql', 'mysql'] as const)('builds a %s URL that names exactly the scratch database it was given', scheme => {
+    const url = testConnectionUrl(scheme, { host: 'db.test', port: 5433, user: 'te@st', password: 'p#ss/word', database: 'postgres#scratch?x=1' })
+    expect(url.protocol).toBe(`${scheme}:`)
+    expect(url.hash).toBe('')
+    expect(url.search).toBe('')
+    expect(decodeURIComponent(url.pathname.slice(1))).toBe('postgres#scratch?x=1')
+    expect(decodeURIComponent(url.username)).toBe('te@st')
+    expect(decodeURIComponent(url.password)).toBe('p#ss/word')
+    expect(testConnectionUrl(scheme, { host: 'db.test', port: 5433, user: 'tester', database: 'holo_scratch' }).toString()).toBe(`${scheme}://tester@db.test:5433/holo_scratch`)
   })
 
   it('keeps only the drivers whose integration flag is on', () => {

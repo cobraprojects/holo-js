@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { DB, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
-import { mysqlTestConnection } from './support/database'
+import { mysqlTestConnection, testConnectionUrl } from './support/database'
 
 async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>): Promise<T> {
   const previousTimeZone = process.env.TZ
@@ -310,10 +310,8 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
     {
       label: 'dateStrings in the connection URL',
       config: () => {
-        const { host, port, user, password, database } = mysqlTestConnection()
-        const url = new URL(`mysql://${host}:${port}/${database}?dateStrings=true`)
-        url.username = user
-        if (password) url.password = password
+        const url = testConnectionUrl('mysql', mysqlTestConnection())
+        url.searchParams.set('dateStrings', 'true')
         return { uri: url.toString(), connectionLimit: 1 }
       },
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },

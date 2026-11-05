@@ -12,7 +12,7 @@ import {
   resetDB,
   resolveRuntimeConnectionManagerOptions,
 } from '../src'
-import { postgresTestConnection } from './support/database'
+import { postgresTestConnection, testConnectionUrl } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
@@ -22,10 +22,7 @@ function structuredConnection() {
 }
 
 function connectionUrl(searchPath?: string): string {
-  const { host, port, user, password, database } = postgresTestConnection()
-  const url = new URL(`postgresql://${host}:${port}/${database}`)
-  url.username = user
-  if (password) url.password = password
+  const url = testConnectionUrl('postgresql', postgresTestConnection())
   if (searchPath) url.searchParams.set('options', `-c statement_timeout=5000 -c search_path=${searchPath}`)
   return url.toString()
 }

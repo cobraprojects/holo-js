@@ -7,7 +7,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import { defineDatabaseConfig, normalizeDatabaseConfig, registerDatabaseDriverFactory, resolveRuntimeConnectionManagerOptions, type DatabaseLogger } from '../src'
-import { postgresIntegration, postgresTestConnection } from './support/database'
+import { postgresIntegration, postgresTestConnection, testConnectionUrl } from './support/database'
 
 type QuerySuccessLog = Parameters<NonNullable<DatabaseLogger['onQuerySuccess']>>[0]
 
@@ -44,9 +44,7 @@ describe('runtime database budgets', () => {
     const entries: QuerySuccessLog[] = []
     const logger: DatabaseLogger = { onQuerySuccess(entry) { entries.push(entry) } }
     const { host, port, user: username, password, database } = postgresTestConnection()
-    const url = new URL(`postgresql://${host}:${port}/${database}`)
-    url.username = username
-    if (password) url.password = password
+    const url = testConnectionUrl('postgresql', { host, port, user: username, password, database })
     const config = normalizeDatabaseConfig(defineDatabaseConfig({
       connections: {
         main: {

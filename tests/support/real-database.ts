@@ -47,3 +47,10 @@ export function mysqlTestConnection() {
     database,
   }
 }
+
+export function testConnectionUrl(scheme: 'postgresql' | 'mysql', connection: { host: string, port: number, user: string, password?: string, database: string }): URL {
+  const url = new URL(`${scheme}://${connection.host}:${connection.port}/${encodeURIComponent(connection.database)}`)
+  url.username = connection.user
+  if (connection.password) url.password = connection.password
+  return url
+}

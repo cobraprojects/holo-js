@@ -11,7 +11,7 @@ import {
   resolveRuntimeConnectionManagerOptions,
   type DriverAdapter,
 } from '../src'
-import { postgresTestConnection } from './support/database'
+import { postgresTestConnection, testConnectionUrl } from './support/database'
 
 registerDatabaseDriverFactory(postgresDatabaseDriverFactory)
 
@@ -27,10 +27,7 @@ function structuredConnection() {
 }
 
 function connectionUrl(options?: string): string {
-  const { host, port, user, password } = sessionConnection()
-  const url = new URL(`postgresql://${host}:${port}/${database}`)
-  url.username = user
-  if (password) url.password = password
+  const url = testConnectionUrl('postgresql', sessionConnection())
   if (options) url.searchParams.set('options', options)
   return url.toString()
 }

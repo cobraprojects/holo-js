@@ -20,14 +20,10 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
-import { mysqlTestConnection } from '../../../tests/support/real-database'
+import { mysqlTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 
 function liveMySqlUri(database: string) {
-  const { host, port, user, password } = mysqlTestConnection()
-  const url = new URL(`mysql://${host}:${port}/${encodeURIComponent(database)}`)
-  url.username = user
-  if (password) url.password = password
-  return url.toString()
+  return testConnectionUrl('mysql', { ...mysqlTestConnection(), database }).toString()
 }
 
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql', () => {

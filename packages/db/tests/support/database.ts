@@ -7,7 +7,7 @@ import { column, configureDB, createConnectionManager, createDatabase, createDia
 import { mysqlTestConnection, postgresTestConnection, type TestDriver } from '../../../../tests/support/real-database'
 import { defineTable } from './internal'
 
-export { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../../tests/support/real-database'
+export { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection, testConnectionUrl } from '../../../../tests/support/real-database'
 
 type RealConnection = ReturnType<typeof postgresTestConnection> | ReturnType<typeof mysqlTestConnection>
 

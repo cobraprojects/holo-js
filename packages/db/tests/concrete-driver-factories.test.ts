@@ -3,7 +3,7 @@ import { mysqlDatabaseDriverFactory } from '@holo-js/db-mysql'
 import { postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { createDialect } from '../src'
-import { integrationDrivers, mysqlTestConnection, postgresTestConnection } from './support/database'
+import { integrationDrivers, mysqlTestConnection, postgresTestConnection, testConnectionUrl } from './support/database'
 
 const factories = {
   sqlite: sqliteDatabaseDriverFactory,
@@ -15,14 +15,12 @@ function connectionConfig(driver: 'sqlite' | 'postgres' | 'mysql', mode: 'url' |
   if (driver === 'sqlite') {
     return mode === 'url' ? { url: ':memory:' } : { database: ':memory:' }
   }
-  const { host, port, user, password, database } = driver === 'postgres' ? postgresTestConnection() : mysqlTestConnection()
+  const connection = driver === 'postgres' ? postgresTestConnection() : mysqlTestConnection()
   if (mode === 'structured') {
-    return { host, port, username: user, password, database }
+    const { user, ...structured } = connection
+    return { ...structured, username: user }
   }
-  const url = new URL(`${driver === 'postgres' ? 'postgresql' : 'mysql'}://${host}:${port}/${database}`)
-  url.username = user
-  if (password) url.password = password
-  return { url: url.toString() }
+  return { url: testConnectionUrl(driver === 'postgres' ? 'postgresql' : 'mysql', connection).toString() }
 }
 
 const connections = integrationDrivers(['sqlite', 'postgres', 'mysql'])
