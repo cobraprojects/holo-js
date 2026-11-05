@@ -3414,7 +3414,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
-    const amounts = this.resolveArithmeticColumns(requestedAmounts)
+    const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
@@ -3447,20 +3447,23 @@ export class TableQueryBuilder<
     return this.clone(plan).whereIn(primaryKey as never, rows.map(row => row[primaryKey])).update(values)
   }
 
-  private resolveArithmeticColumns(amounts: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
-    const resolved: Record<string, number> = {}
-    for (const [column, amount] of Object.entries(amounts)) {
+  private resolveSourceColumnKeys<TValue>(
+    values: Readonly<Record<string, TValue>>,
+    operation: string,
+  ): Readonly<Record<string, TValue>> {
+    const resolved: Record<string, TValue> = {}
+    for (const [column, value] of Object.entries(values)) {
       const pathStart = column.indexOf('->')
       const root = pathStart === -1 ? column : column.slice(0, pathStart)
       const rootName = this.resolveSourceColumnName(root)
       if (typeof rootName === 'undefined') {
-        throw new CompilerError(`Cannot increment/decrement column "${column}" outside table "${this.source.tableName}".`)
+        throw new CompilerError(`Cannot ${operation} column "${column}" outside table "${this.source.tableName}".`)
       }
       const columnName = rootName + column.slice(root.length)
       if (Object.hasOwn(resolved, columnName)) {
-        throw new CompilerError(`Cannot increment/decrement column "${columnName}" more than once.`)
+        throw new CompilerError(`Cannot ${operation} column "${columnName}" more than once.`)
       }
-      resolved[columnName] = amount
+      resolved[columnName] = value
     }
 
     return resolved
@@ -3609,7 +3612,7 @@ export class TableQueryBuilder<
     return normalizeQueryUpdateValues(
       this.source.table,
       this.connection.getDriver(),
-      values,
+      this.resolveSourceColumnKeys(values, 'update'),
       value => this.parseJsonPath(value, false, 'update'),
     )
   }
