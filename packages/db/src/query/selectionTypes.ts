@@ -18,7 +18,7 @@ type Trim<TValue extends string> = TrimStart<TrimEnd<TValue>>
 
 type TableAlias<TTable extends string> = TTable extends `${string} ${infer TRest}`
   ? TrimStart<TRest> extends `${infer TKeyword} ${infer TAlias}`
-    ? Lowercase<TKeyword> extends 'as' ? Trim<TAlias> : never
+    ? Lowercase<TKeyword> extends 'as' ? Trim<TAlias> extends `${string} ${string}` ? never : Trim<TAlias> : never
     : never
   : never
 

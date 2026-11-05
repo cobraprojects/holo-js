@@ -26,6 +26,8 @@ it('lets a model select every column of an aliased join by its alias', () => {
     Post.query().leftJoin('alias_join_posts AS parent', 'parent.id', '=', 'alias_join_posts.parent_id').select('parent.*')
     Post.query().rightJoin('alias_join_posts as parent', 'parent.id', '=', 'alias_join_posts.parent_id').select('parent.*')
     Post.query().crossJoin('alias_join_posts as parent').select('parent.*')
+    // @ts-expect-error an alias of several words is not an alias
+    Post.query().join('alias_join_posts as bad alias', 'parent.id', '=', 'alias_join_posts.parent_id').select('bad alias.*')
     // @ts-expect-error the joined table is reachable only through its alias
     Post.query().join('alias_join_posts as parent', 'parent.id', '=', 'alias_join_posts.parent_id').select('alias_join_posts as parent.*')
   }

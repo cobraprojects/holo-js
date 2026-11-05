@@ -189,7 +189,7 @@ function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): read
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
 }
 
-function joinedTable(table: TableReference): Pick<QueryJoinClause, 'table' | 'alias' | 'definition'> {
+function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table' | 'alias' | 'definition'> {
   if (typeof table !== 'string') {
     return { table: table.tableName, definition: table }
   }
@@ -197,6 +197,7 @@ function joinedTable(table: TableReference): Pick<QueryJoinClause, 'table' | 'al
   const { tableName, alias } = parseTableReference(table)
   return alias === undefined ? { table: tableName } : { table: tableName, alias }
 }
+
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
@@ -1364,7 +1365,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'inner',
-      ...joinedTable(table),
+      ...resolveJoinTarget(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1391,7 +1392,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'left',
-      ...joinedTable(table),
+      ...resolveJoinTarget(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1418,7 +1419,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'right',
-      ...joinedTable(table),
+      ...resolveJoinTarget(table),
       leftColumn,
       operator,
       rightColumn,
@@ -1507,7 +1508,7 @@ export class TableQueryBuilder<
   crossJoin(table: TableReference): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns & Record<string, unknown>> {
     return this.clone(withJoin(this.plan, {
       type: 'cross',
-      ...joinedTable(table),
+      ...resolveJoinTarget(table),
     }))
   }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, SecurityError, queryCacheInternals, resetDB } from '../src'
+import { DB, SecurityError, defineModel, queryCacheInternals, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 describe('aliased table joins', () => {
@@ -28,6 +28,14 @@ describe('aliased table joins', () => {
       .orderBy('other.id')
       .get()).toEqual([{ otherId: 1 }, { otherId: 2 }, { otherId: 3 }])
     expect(await DB.table(table).crossJoin(`${source} as twin`).count()).toBe(9)
+
+    const twins = await defineModel(table, { timestamps: false }).query()
+      .join(`${source} as twin`, `${source}.name`, '=', 'twin.name')
+      .whereColumn(`${source}.id`, '!=', 'twin.id')
+      .select(`${source}.*`)
+      .orderBy(`${source}.id`)
+      .get()
+    expect(twins.map(model => model.get('id'))).toEqual([1, 2])
 
     const collected = await queryCacheInternals.collectDatabaseQueryDependencies(() => DB.table(table)
       .join(`${source} as twin`, `${source}.id`, '=', 'twin.id')
