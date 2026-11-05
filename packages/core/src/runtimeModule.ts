@@ -844,15 +844,21 @@ function collectBundleSources(
 ): BundleSources {
   const sourcePath = entryPath === undefined ? undefined : projectRelative(projectRoot, entryPath)
   const output = Object.entries(metafile?.outputs ?? {}).find(([outputPath]) => resolve(projectRoot, outputPath) === bundlePath)?.[1]
-  const loadedImports = new Set(output?.imports.filter(dependency => dependency.kind === 'import-statement').map(dependency => dependency.path))
+  const loadedImports = new Set(output?.imports.map(dependency => `${dependency.kind}:${dependency.path}`))
   const importers: Record<string, string> = {}
+  const staticImporters = new Set<string>()
   for (const inputPath of Object.keys(output?.inputs ?? {})) {
     if (namespacedInput.test(inputPath)) continue
     const inputSource = projectRelative(projectRoot, resolve(projectRoot, inputPath))
     for (const dependency of metafile?.inputs[inputPath]?.imports ?? []) {
       const specifier = dependency.original ?? dependency.path
-      if (!dependency.external || dependency.kind !== 'import-statement' || !loadedImports.has(dependency.path) || !bareSpecifier.test(specifier)) continue
-      if (!Object.hasOwn(importers, specifier) || inputSource === sourcePath) importers[specifier] = inputSource
+      if (!dependency.external || !loadedImports.has(`${dependency.kind}:${dependency.path}`) || !bareSpecifier.test(specifier)) continue
+      const isStatic = dependency.kind === 'import-statement'
+      const recordedStatic = staticImporters.has(specifier)
+      if (recordedStatic && !isStatic) continue
+      if (Object.hasOwn(importers, specifier) && recordedStatic === isStatic && inputSource !== sourcePath) continue
+      importers[specifier] = inputSource
+      if (isStatic) staticImporters.add(specifier)
     }
   }
   return { path: bundlePath, ...(sourcePath === undefined ? {} : { sourcePath }), importers }

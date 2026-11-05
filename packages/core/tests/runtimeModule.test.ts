@@ -1132,6 +1132,15 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/eager.ts")
   })
 
+  it('names the file whose top-level dynamic import of a missing package runs while loading', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/slugger.ts': "export const slugger = await import('missing-slugger')\n",
+      'server/models/User.ts': "import { slugger } from '../support/slugger'\nexport default { slugger }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/slugger.ts")
+  })
+
   it('leaves errors thrown by the loaded module unchanged', async () => {
     const projectRoot = await createSourceProject({
       'server/models/User.ts': "throw new Error('model failed')\n",
