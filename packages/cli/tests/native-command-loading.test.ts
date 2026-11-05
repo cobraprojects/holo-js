@@ -75,6 +75,30 @@ it('runs app commands that deep-import packages without exports maps and keeps t
   }
 }, 30000)
 
+it.each(['sync', 'database'] as const)('runs an app command that dispatches a discovered job on the %s queue driver', async driver => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/database.ts', "import { defineDatabaseConfig } from '@holo-js/db'; export default defineDatabaseConfig({ defaultConnection: 'main', connections: { main: { driver: 'sqlite', url: './queue.sqlite' } } })")
+    await write('config/queue.ts', `import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: '${driver}', failed: false, connections: { sync: { driver: 'sync' }, database: { driver: 'database', connection: 'main' } } })`)
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle(payload: { n: number }) { console.log(JSON.stringify({ handled: payload.n })) } })")
+    await write('server/commands/plain/dispatch.ts', `import { defineCommand } from '@holo-js/cli'\nimport Plain from '${driver === 'sync' ? '../../jobs/plain' : '@/server/jobs/plain'}'\nexport default defineCommand({ description: 'Dispatch a plain job', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({ n: 1 }) }); console.log(JSON.stringify({ dispatched: true })) } })`)
+    if (driver === 'database') {
+      await execute(process.execPath, [cli, 'queue:table'], { cwd: root })
+      await execute(process.execPath, [cli, 'migrate'], { cwd: root })
+    }
+    const dispatched = await execute(process.execPath, [cli, 'plain:dispatch'], { cwd: root })
+    const lines = dispatched.stdout.trim().split('\n').map(line => JSON.parse(line))
+    expect(lines).toEqual(driver === 'sync' ? [{ handled: 1 }, { dispatched: true }] : [{ dispatched: true }])
+    if (driver === 'database') {
+      const worker = await execute(process.execPath, [cli, 'queue:work', 'database', '--stop-when-empty'], { cwd: root })
+      expect(worker.stdout).toContain('{"handled":1}')
+      expect(worker.stdout).toContain('[queue] Stopped (empty). processed=1 released=0 failed=0')
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('reports a real compiler error and removes runtime bundles when a discovered model cannot load', async () => {
   const { root, write } = await createProject()
   try {

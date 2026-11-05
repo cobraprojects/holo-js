@@ -701,6 +701,20 @@ async function hashSourceFile(filePath: string): Promise<string | undefined> {
   return contents === undefined ? undefined : createHash('sha256').update(contents).digest('hex')
 }
 
+async function importAppCommandModule(
+  projectRoot: string,
+  registry: GeneratedProjectRegistry,
+  commandPath: string,
+): Promise<unknown> {
+  const definitionPaths = [...registry.jobs, ...registry.events, ...registry.listeners]
+    .map(entry => resolve(projectRoot, entry.sourcePath))
+  if (definitionPaths.length === 0) return importProjectModule(projectRoot, commandPath)
+  const { holoRuntimeInternals: coreRuntimeInternals } = await import('@holo-js/core')
+  const importDefinition = await coreRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, commandPath])
+  coreRuntimeInternals.setProjectDefinitionImporter(projectRoot, importDefinition)
+  return importDefinition(commandPath)
+}
+
 export async function discoverAppCommands(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
@@ -719,7 +733,7 @@ export async function discoverAppCommands(
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.loadFailed ? { loadFailed: entry.loadFailed } : {}),
       async load() {
-        const moduleValue = await importProjectModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+        const moduleValue = await importAppCommandModule(projectRoot, registry, resolve(projectRoot, entry.sourcePath))
         const command = resolveCommandExport(moduleValue)
         if (!command) {
           throw new Error(`Discovered command "${entry.sourcePath}" does not export a Holo command.`)
