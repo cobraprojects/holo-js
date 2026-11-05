@@ -2642,6 +2642,7 @@ class ModelQueryBuilderBase<
 
   private canBindRowsToSerializedResultBase(): boolean {
     return !modelNeedsSerialization(this.repository.definition)
+      && this.repository.readsRowsAsStored()
       && Object.keys(this.queryCasts).length === 0
       && this.relationFilters.length === 0
       && this.aggregateLoads.length === 0
@@ -2707,6 +2708,7 @@ class ModelQueryBuilderBase<
           localKey: relation.localKey,
           orderBy: hydrationQuery.orderBy,
           predicates: hydrationQuery.predicates,
+          primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2774,6 +2776,7 @@ class ModelQueryBuilderBase<
 
   private rowsNeedSerialization(): boolean {
     return modelNeedsSerialization(this.repository.definition)
+      || !this.repository.readsRowsAsStored()
       || Object.keys(this.queryCasts).length > 0
   }
 

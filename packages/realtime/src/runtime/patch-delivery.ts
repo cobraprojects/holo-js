@@ -13,6 +13,7 @@ import {
   updateDelayedPatchedQueryPatchTarget,
   updatePatchedQueryPatchTarget,
 } from './query-patching'
+import { updateQueryPatchTargetCurrentValue } from './query-patch-targets'
 import {
   readMutationValueKeys,
   readPrimaryKey,
@@ -242,8 +243,8 @@ async function deliverPatchedQueryEntry(
         pathKey,
       )
     }
-
     rebindSiblingObservations(entry, data, key => key === pathKey)
+    syncAncestorTargets(entry, data, [firstPatchIndex], [path])
     await deliverPatchedQueryData(
       entry,
       data,
@@ -304,8 +305,8 @@ async function deliverPatchedQueryEntry(
         secondPathKey,
       )
     }
-
     rebindSiblingObservations(entry, data, key => key === firstPathKey || key === secondPathKey)
+    syncAncestorTargets(entry, data, [firstPatchIndex, secondPatch.index], [firstPath, secondPath])
     await deliverPatchedQueryData(
       entry,
       data,
@@ -403,6 +404,12 @@ async function deliverPatchedQueryEntry(
     : replacePatchedQueryDataWithPlan(data, firstPatch, additionalPatches)
   updateDelayedTargets(entry, data, firstDelayedTargetIndex, delayedTargetIndexes)
   rebindSiblingObservations(entry, data, key => patchedPathKeys.has(key))
+  syncAncestorTargets(
+    entry,
+    data,
+    [firstPatchIndex, ...additionalPatches.map(patch => patch.index)],
+    [firstPatch, ...additionalPatches].map(patch => (patch.nextQuery ?? patch.query).resultPath ?? EMPTY_RESULT_PATH),
+  )
 
   await deliverPatchedQueryData(
     entry,
@@ -584,6 +591,34 @@ function candidateCoversSelectedColumn(
   }
 
   return false
+}
+
+function isStrictAncestorPath(ancestor: readonly unknown[], path: readonly unknown[]): boolean {
+  return ancestor.length < path.length && ancestor.every((segment, index) => path[index] === segment)
+}
+
+function syncAncestorTargets(
+  entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
+  data: unknown,
+  patchedIndexes: readonly number[],
+  patchedPaths: readonly (readonly unknown[])[],
+): void {
+  for (let index = 0; index < entry.patchTargets.length; index += 1) {
+    const query = entry.queries[index]
+    const target = entry.patchTargets[index]
+    if (!query || !target || patchedIndexes.includes(index)) continue
+    const path = query.resultPath ?? EMPTY_RESULT_PATH
+    if (!patchedPaths.some(patchedPath => isStrictAncestorPath(path, patchedPath))) continue
+    if (query.resultBound !== true) {
+      entry.patchTargets[index] = updateQueryPatchTargetCurrentValue(target, query, data)
+      continue
+    }
+    const pathKey = readPatchPathKey(query, target)
+    const value = path.length === 0 ? data : getValueAtPath(data, path)
+    const nextQuery = createPatchedQueryObservation(query, value, pathKey)
+    entry.queries[index] = nextQuery
+    entry.patchTargets[index] = updatePatchedQueryPatchTarget(target, nextQuery, value, data, path, pathKey)
+  }
 }
 
 function updateDelayedTargets(

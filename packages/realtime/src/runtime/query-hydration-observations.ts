@@ -1,6 +1,6 @@
 import { queryCacheInternals } from '@holo-js/db'
 import { EMPTY_RESULT_PATH, getValueAtPath, type RealtimePatchPathSegment } from './result-patching'
-import type { DatabaseQueryObservation } from './query-state'
+import type { DatabaseQueryBelongsToManyRelationObservation, DatabaseQueryObservation, DatabaseQueryRelatedHydrationObservation } from './query-state'
 import { createPatchedQueryObservation, readPatchPathKey } from './query-patch-targets'
 import { isRecord, isRecordArray } from './value'
 
@@ -68,4 +68,129 @@ export function rebindBelongsToObservations(
     }
   }
   return next
+}
+
+function relatedHydrationPath(
+  query: DatabaseQueryObservation,
+  owner: DatabaseQueryObservation,
+): boolean {
+  const base = owner.resultPath ?? EMPTY_RESULT_PATH
+  const path = query.resultPath ?? EMPTY_RESULT_PATH
+  if (query === owner || query.relation || path.length !== base.length + 2) return false
+  if (!base.every((segment, index) => path[index] === segment) || typeof path[base.length] !== 'number') return false
+  return owner.relatedHydrations?.some(hydration => hydration.relationKey === path[base.length + 1]) === true
+}
+
+function createRelatedHydrationObservation(
+  hydration: DatabaseQueryRelatedHydrationObservation,
+  localKey: unknown,
+  related: unknown,
+  resultPath: readonly RealtimePatchPathSegment[],
+): DatabaseQueryObservation {
+  const dependency = queryCacheInternals.createTablePredicateCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName, hydration.foreignKey, localKey, true)
+  const tableDependency = queryCacheInternals.createTableCacheDependency(hydration.relatedConnectionName, hydration.relatedTableName)
+  return Object.freeze({
+    connectionName: hydration.relatedConnectionName,
+    dependencies: Object.freeze(dependency ? [tableDependency, dependency] : [tableDependency]),
+    orderBy: hydration.orderBy,
+    patchable: hydration.primaryKey !== undefined,
+    predicates: Object.freeze([...hydration.predicates, Object.freeze({ column: hydration.foreignKey, operator: '=' as const, value: localKey })]),
+    primaryKey: hydration.primaryKey,
+    result: related,
+    resultBound: true,
+    resultPath,
+    selections: [],
+    table: hydration.relatedTable,
+    tableName: hydration.relatedTableName,
+    ...hydration.kind === 'hasOne' ? { emptyRecordValue: null, limit: 1, rowWindowMode: 'single' as const } : {},
+  })
+}
+
+export function rebindRelatedHydrationObservations(
+  queries: readonly DatabaseQueryObservation[],
+  data: unknown,
+): readonly DatabaseQueryObservation[] {
+  const owners = queries.filter(query => {
+    const rows = getValueAtPath(data, query.resultPath ?? EMPTY_RESULT_PATH)
+    return query.relatedHydrations?.length && isRecordArray(rows)
+      && rows.every(row => query.relatedHydrations?.every(hydration => Object.hasOwn(row, hydration.localKey) && Object.hasOwn(row, hydration.relationKey)))
+  })
+  if (owners.length === 0) return queries
+  const next = queries.filter(query => !owners.some(owner => relatedHydrationPath(query, owner)))
+  for (const owner of owners) {
+    const base = owner.resultPath ?? EMPTY_RESULT_PATH
+    const rows = getValueAtPath(data, base)
+    if (!isRecordArray(rows)) continue
+    for (const [index, row] of rows.entries()) {
+      for (const hydration of owner.relatedHydrations ?? []) {
+        const localKey = row[hydration.localKey]
+        const related = row[hydration.relationKey]
+        if (localKey === null || typeof localKey === 'undefined') continue
+        if (hydration.kind === 'hasMany' ? !isRecordArray(related) : related !== null && !isRecord(related)) continue
+        next.push(createRelatedHydrationObservation(hydration, localKey, related, Object.freeze([...base, index, hydration.relationKey])))
+      }
+    }
+  }
+  return next
+}
+
+function isBelongsToManyRelatedSide(query: DatabaseQueryObservation): boolean {
+  return query.relation?.kind === 'belongsToMany'
+    && query.connectionName === query.relation.relatedConnectionName
+    && query.tableName === query.relation.relatedTableName
+}
+
+function sameValues(left: readonly unknown[], right: readonly unknown[]): boolean {
+  return left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
+}
+
+function createBelongsToManyRelatedSideObservation(
+  pivotSide: DatabaseQueryObservation,
+  relation: DatabaseQueryBelongsToManyRelationObservation,
+  values: readonly unknown[],
+): DatabaseQueryObservation {
+  const dependencies = values.flatMap(value => queryCacheInternals.createTablePredicateCacheDependency(relation.relatedConnectionName, relation.relatedTableName, relation.relatedKey, value, true) ?? [])
+  return Object.freeze({
+    connectionName: relation.relatedConnectionName,
+    dependencies: Object.freeze([...new Set([queryCacheInternals.createTableCacheDependency(relation.relatedConnectionName, relation.relatedTableName), ...dependencies])]),
+    orderBy: [],
+    patchable: pivotSide.patchable,
+    ...pivotSide.serialized ? { serialized: true } : {},
+    predicates: Object.freeze([Object.freeze({ column: relation.relatedKey, operator: 'in' as const, value: Object.freeze([...values]) })]),
+    relation,
+    resultPath: pivotSide.resultPath,
+    selections: [],
+    table: relation.relatedTable,
+    tableName: relation.relatedTableName,
+  })
+}
+
+export function rebindBelongsToManyRelatedObservations(
+  queries: readonly DatabaseQueryObservation[],
+  data: unknown,
+): readonly DatabaseQueryObservation[] {
+  let next: DatabaseQueryObservation[] | undefined
+  for (const pivotSide of queries) {
+    const relation = pivotSide.relation
+    if (relation?.kind !== 'belongsToMany' || isBelongsToManyRelatedSide(pivotSide)) continue
+    const path = pivotSide.resultPath ?? EMPTY_RESULT_PATH
+    const rows = getValueAtPath(data, path)
+    if (!isRecordArray(rows) || !rows.every(row => Object.hasOwn(row, relation.relatedKey))) continue
+    const values = rows.map(row => row[relation.relatedKey])
+    const pathKey = readPatchPathKey(pivotSide)
+    const current = next ?? queries
+    const index = current.findIndex(query => isBelongsToManyRelatedSide(query) && readPatchPathKey(query) === pathKey)
+    const existing = index >= 0 ? current[index] : undefined
+    const existingValues = existing?.predicates[0]?.value
+    if (existing ? Array.isArray(existingValues) && sameValues(existingValues, values) : values.length === 0) continue
+    next ??= [...queries]
+    if (values.length === 0) {
+      next.splice(index, 1)
+      continue
+    }
+    const observation = createBelongsToManyRelatedSideObservation(pivotSide, relation, values)
+    if (index >= 0) next[index] = observation
+    else next.push(observation)
+  }
+  return next ?? queries
 }

@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, readsDifferentlyInModels, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -173,6 +173,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     const cast = this.resolveCast(key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
+  }
+
+  readsRowsAsStored(): boolean {
+    return Object.entries(this.definition.table.columns)
+      .every(([key, column]) => !readsDifferentlyInModels(column) && this.resolveCast(key) === undefined)
   }
 
   resolveCast(key: string): ModelCastDefinition | undefined {

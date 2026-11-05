@@ -74,6 +74,7 @@ export type DatabaseQueryRelatedHydrationObservation = {
   readonly localKey: string
   readonly orderBy: readonly DatabaseQueryOrderObservation[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
