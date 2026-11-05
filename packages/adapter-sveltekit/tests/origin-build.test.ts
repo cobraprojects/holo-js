@@ -10,6 +10,8 @@ const execute = promisify(execFile)
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 const require = createRequire(join(workspaceRoot, 'apps/blog-sveltekit/package.json'))
 const vite = join(dirname(require.resolve('vite/package.json')), 'bin/vite.js')
+const buildOrigin = 'http://build.test'
+const inheritedOrigin = 'http://inherited.test'
 
 async function buildOriginResponses(canonicalOrigin?: string, out = 'build'): Promise<number[]> {
   const root = await mkdtemp(join(workspaceRoot, '.holo-origin-'))
@@ -27,7 +29,7 @@ export default { plugins: [sveltekit(withHoloSvelteKit({ adapter: adapter({ out:
 `)
     await execute(process.execPath, [vite, 'build', '--logLevel', 'error'], {
       cwd: root,
-      env: { ...process.env, APP_URL: 'http://build.test' },
+      env: { ...process.env, APP_URL: buildOrigin },
     })
     await access(join(root, out, 'index.js'))
     if (out !== 'build') await expect(access(join(root, 'build'))).rejects.toThrow()
@@ -43,7 +45,7 @@ const { server } = await import(${JSON.stringify('./' + out + '/index.js')})
 const endpoint = 'http://127.0.0.1:' + server.address().port
 const statuses = []
 try {
-  for (const origin of [runtimeOrigin, 'http://build.test', 'https://attacker.example', 'https://canonical.example', null]) {
+  for (const origin of [runtimeOrigin, ${JSON.stringify(buildOrigin)}, 'https://attacker.example', 'https://canonical.example', null]) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -75,7 +77,7 @@ try {
   await new Promise(resolve => server.close(resolve))
 }
 console.log(JSON.stringify(statuses))
-`], { cwd: root, env: { ...process.env, APP_URL: 'http://inherited.test' } })
+`], { cwd: root, env: { ...process.env, APP_URL: inheritedOrigin } })
       return JSON.parse(stdout.trim().split('\n').at(-1) ?? 'null') as number[]
     }))
     return responses.flat()
