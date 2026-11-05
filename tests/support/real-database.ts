@@ -17,7 +17,7 @@ const systemDatabases = new Set(['postgres', 'template0', 'template1', 'mysql', 
 
 function scratchDatabase(flag: string, variable: string): string {
   if (process.env[flag] !== '1') {
-    throw new Error(`Real database tests must be gated on ${flag}=1 before they connect.`)
+    throw new Error(`Real database tests must be gated on ${flag}=1 before they connect; gate the test with integrationDrivers(), postgresIntegration or mysqlIntegration from tests/support/real-database.ts.`)
   }
   const database = process.env[variable]
   if (!database || !/^\w+$/.test(database) || systemDatabases.has(database.toLowerCase())) {

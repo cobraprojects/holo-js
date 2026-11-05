@@ -70,18 +70,14 @@ function findCycles(graph) {
 
 const realDatabaseHelpers = 'postgresTestConnection() or mysqlTestConnection() from tests/support/real-database.ts'
 const realDatabaseConnectionHelpers = 'postgresTestConnection(), mysqlTestConnection() or testConnectionUrl() from tests/support/real-database.ts'
-const realDatabaseGates = 'integrationDrivers(), postgresIntegration or mysqlIntegration from tests/support/real-database.ts'
-const realDatabaseAllowedFiles = new Set(['tests/support/real-database.ts', 'tests/native-library-suite.mjs', 'tests/example-app-matrix.mjs'])
+const realDatabaseAllowedFiles = new Set(['tests/support/real-database.ts', 'packages/db/tests/support-database.test.ts', 'tests/native-library-suite.mjs', 'tests/example-app-matrix.mjs'])
 const skippedTestDirectories = new Set(['node_modules', 'dist', '.output', '.nuxt', '.next', '.svelte-kit'])
-const realDatabaseEnvRead = /process\.env(?:\.|\[\s*['"`])(HOLO_(?:POSTGRES|MYSQL|\$\{[^}]+\})_(?:HOST|PORT|USER|PASSWORD|DATABASE|URL))\b/g
+const realDatabaseSetting = /\b(HOLO_(?:POSTGRES|MYSQL|\$\{[^}]+\})_(?:HOST|PORT|USER|PASSWORD|DATABASE|URL))\b/g
 const systemDatabaseName = /(?:database|DATABASE)[^\n]*?\?\?\s*['"](postgres|mysql)['"]|\bdatabase\s*:\s*['"](postgres|mysql)['"]/g
 const realConnectionConstructor = /\b(createPostgresAdapter|createMySQLAdapter|postgresDatabaseDriverFactory\.create|mysqlDatabaseDriverFactory\.create|new\s+(?:pg\.)?(?:Client|Pool)|createConnection|createPool)\s*\(/g
-const realConnectionSettings = /\b(?:host|port|database|connectionString|url|uri)\s*:|^\(\s*[`'"](?:postgres(?:ql)?|mysql):\/\//
-const sharedConnectionHelper = /\b(?:postgresTestConnection|mysqlTestConnection|testConnectionUrl|openDatabase)\b/
-const realDatabaseCall = /\bopenDatabase\(\s*(?!['"]sqlite['"]|\))|\b(?:postgresTestConnection|mysqlTestConnection)\(/
-const testRegistration = /^(\s*)(?:it|test|describe)((?:\.[A-Za-z]+(?:\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*)\s*\(/
-const driverLoop = /^(\s*)for\s*\(\s*const\s+\w+\s+of\s+(.+)\)\s*\{\s*$/
-const integrationGate = /integrationDrivers|postgresIntegration|mysqlIntegration|INTEGRATION|Integration\b/
+const rawDriverClient = /^(?:new\s+(?:pg\.)?(?:Client|Pool)|createConnection|createPool)$/
+const realConnectionSettings = /\b(?:host|port|user|database|connectionString|url|uri)\s*:|[`'"](?:postgres(?:ql)?|mysql):\/\//
+const sharedConnectionHelper = /\b(?:postgresTestConnection|mysqlTestConnection|testConnectionUrl)\s*\(/
 
 function walkTestFiles(directory) {
   if (!existsSync(directory)) return []
@@ -114,62 +110,34 @@ function lineOf(source, index) {
   return source.slice(0, index).split('\n').length
 }
 
-function gatedIdentifiers(source) {
-  const identifiers = new Set()
-  for (const match of source.matchAll(/\bconst\s+(\w+)\s*=([\s\S]*?)(?:\n\s*\n|$)/g)) {
-    if (integrationGate.test(match[2])) identifiers.add(match[1])
+function declarationOf(source, name) {
+  const identifier = name.replaceAll('$', '\\$')
+  const declaration = new RegExp(`\\b(?:(?:const|let|var)\\s+(?:\\{[^}]*\\b${identifier}\\b[^}]*\\}|\\[[^\\]]*\\b${identifier}\\b[^\\]]*\\]|${identifier}\\b)[^=]*=|(?:async\\s+)?function\\s+${identifier}\\b)`)
+  const match = declaration.exec(source)
+  if (!match) return ''
+  const lineStart = source.lastIndexOf('\n', match.index) + 1
+  const indent = match.index - lineStart - source.slice(lineStart, match.index).trimStart().length
+  const rest = source.slice(match.index).split('\n')
+  const end = rest.findIndex((line, index) => index > 0 && line.trim() !== '' && line.length - line.trimStart().length <= indent && !/^\s*[)}\]]/.test(line))
+  return rest.slice(0, end === -1 ? undefined : end).join('\n')
+}
+
+function resolvedConnectionText(source, text, depth = 2) {
+  if (depth === 0) return text
+  const identifiers = new Set([...text.matchAll(/\b[A-Za-z_$][\w$]*\b/g)].map(match => match[0]))
+  return [text, ...[...identifiers].map(identifier => declarationOf(source, identifier)).filter(Boolean).map(declaration => resolvedConnectionText(source, declaration, depth - 1))].join('\n')
+}
+
+function importedRawDriverClients(source) {
+  const clients = new Set()
+  for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](?:pg|mysql2(?:\/promise)?)['"]/g)) {
+    for (const name of match[1].split(',')) clients.add(name.trim().split(/\s+as\s+/)[0])
   }
-  for (const match of source.matchAll(/\bfunction\s+(\w+)\s*\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)) {
-    if (integrationGate.test(match[2])) identifiers.add(match[1])
+  if (/import\s+(?:\*\s+as\s+)?pg\b|\bpg\s*=\s*(?:await\s+import|require)\(\s*['"]pg['"]/.test(source)) {
+    clients.add('Client')
+    clients.add('Pool')
   }
-  return identifiers
-}
-
-function scopeIsGated(text, gated) {
-  if (integrationGate.test(text)) return true
-  const conditions = [...text.matchAll(/\.(?:runIf|skipIf|each)\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)/g)].map(match => match[1])
-  return conditions.some(condition => [...condition.matchAll(/\b[A-Za-z_]\w*\b/g)].some(identifier => gated.has(identifier[0])))
-}
-
-function scanRealDatabaseScopes(source, gated, gatedFunctions) {
-  const lines = source.split('\n')
-  const declaredFunctions = new Set([...source.matchAll(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm)].map(match => match[1]))
-  const callSites = new Map()
-  const failures = []
-  const stack = []
-  lines.forEach((line, index) => {
-    if (line.trim() === '') return
-    const indent = line.length - line.trimStart().length
-    while (stack.length > 0 && indent <= stack.at(-1).indent) stack.pop()
-    const registration = line.match(testRegistration)
-    const loop = line.match(driverLoop)
-    const declaration = line.match(/^(\s*)(?:export\s+)?(?:async\s+)?function\s+(\w+)/)
-    if (registration) {
-      const blockEnd = lines.findIndex((next, nextIndex) => nextIndex > index && next.trim() !== '' && next.length - next.trimStart().length <= indent)
-      const block = lines.slice(index, blockEnd === -1 ? undefined : blockEnd).join('\n')
-      stack.push({ indent, test: true, gated: scopeIsGated(registration[2], gated), stubsFlags: /vi\.stubEnv\(\s*['"]HOLO_(?:POSTGRES|MYSQL)_INTEGRATION/.test(block) })
-    } else if (loop) {
-      stack.push({ indent, test: true, gated: scopeIsGated(loop[2], gated), stubsFlags: false })
-    } else if (declaration && declaredFunctions.has(declaration[2])) {
-      stack.push({ indent, test: false, gated: gatedFunctions.has(declaration[2]), stubsFlags: false })
-    }
-    const scopeGated = stack.some(scope => scope.gated || scope.stubsFlags)
-    for (const name of declaredFunctions) {
-      if (!declaration?.[2] || declaration[2] !== name) {
-        const call = line.match(new RegExp(`\\b${name}\\(([^)]*)\\)`))
-        if (call) callSites.set(name, [...callSites.get(name) ?? [], scopeGated || /^\s*['"]sqlite['"]\s*$/.test(call[1])])
-      }
-    }
-    if (stack.some(scope => scope.test) && realDatabaseCall.test(line) && !scopeGated) failures.push(index + 1)
-  })
-  return { failures, callSites }
-}
-
-function ungatedRealDatabaseLines(source) {
-  const gated = gatedIdentifiers(source)
-  const { callSites } = scanRealDatabaseScopes(source, gated, new Set())
-  const gatedFunctions = new Set([...callSites].filter(([, sites]) => sites.length > 0 && sites.every(Boolean)).map(([name]) => name))
-  return scanRealDatabaseScopes(source, gated, gatedFunctions).failures
+  return clients
 }
 
 function validateRealDatabaseTests(repoRoot) {
@@ -178,21 +146,22 @@ function validateRealDatabaseTests(repoRoot) {
     const path = relative(repoRoot, file).split('\\').join('/')
     if (realDatabaseAllowedFiles.has(path)) continue
     const source = readFileSync(file, 'utf8')
-    for (const variable of new Set([...source.matchAll(realDatabaseEnvRead)].map(match => match[1]))) {
-      failures.push(`${path} reads ${variable} from process.env; use ${realDatabaseHelpers}.`)
+    for (const variable of new Set([...source.matchAll(realDatabaseSetting)].map(match => match[1]))) {
+      failures.push(`${path} reads ${variable}; use ${realDatabaseHelpers}.`)
     }
     for (const database of new Set([...source.matchAll(systemDatabaseName)].map(match => match[1] ?? match[2]))) {
       failures.push(`${path} names the ${database} system database; use the scratch database from ${realDatabaseHelpers}.`)
     }
-    if (!sharedConnectionHelper.test(source)) {
-      for (const match of source.matchAll(realConnectionConstructor)) {
-        if (realConnectionSettings.test(callArguments(source, match.index + match[0].length - 1))) {
-          failures.push(`${path}:${lineOf(source, match.index)} opens a real database with ${match[1]} without the shared helpers; build its connection with ${realDatabaseConnectionHelpers}.`)
-        }
+    const rawClients = importedRawDriverClients(source)
+    for (const match of source.matchAll(realConnectionConstructor)) {
+      const constructor = match[1].replace(/\s+/g, ' ')
+      if (rawDriverClient.test(constructor) && !rawClients.has(constructor.replace(/^new\s+(?:pg\.)?/, ''))) continue
+      const argumentsText = callArguments(source, match.index + match[0].length - 1)
+      const resolved = resolvedConnectionText(source, argumentsText)
+      if (sharedConnectionHelper.test(resolved)) continue
+      if (realConnectionSettings.test(resolved) || (rawDriverClient.test(constructor) && /^\(\s*\)$/.test(argumentsText))) {
+        failures.push(`${path}:${lineOf(source, match.index)} opens a real database with ${constructor} outside the shared helpers; build its connection with ${realDatabaseConnectionHelpers}.`)
       }
-    }
-    for (const line of ungatedRealDatabaseLines(source)) {
-      failures.push(`${path}:${line} reaches a real database outside an integration gate; gate it with ${realDatabaseGates}.`)
     }
   }
   return failures

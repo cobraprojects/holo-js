@@ -46,113 +46,93 @@ async function writeTestFile(root, path, source) {
   await writeFile(join(root, path), source)
 }
 
-test('architecture validator accepts real-database tests that use the shared gated helpers', async () => {
+test('architecture validator accepts real-database tests that connect through the shared helpers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'holo-architecture-'))
   await createPackage(root, '@holo-js/kernel')
   await writeTestFile(root, 'tests/support/real-database.ts', "export const database = process.env.HOLO_POSTGRES_DATABASE\n")
   await writeTestFile(root, 'tests/native-library-suite.mjs', "const client = new pg.Client({ host: '127.0.0.1', database: 'postgres' })\n")
   await writeTestFile(root, 'tests/example-app-matrix.mjs', "const host = process.env.HOLO_MYSQL_HOST\n")
-  await writeTestFile(root, 'packages/kernel/tests/gated.test.ts', [
-    "import { integrationDrivers, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'",
-    "import { openDatabase } from './support/database'",
+  await writeTestFile(root, 'packages/db/tests/support-database.test.ts', "vi.stubEnv('HOLO_POSTGRES_DATABASE', 'holo_scratch')\n")
+  await writeTestFile(root, 'packages/kernel/tests/local-names.test.ts', [
+    'function createConnection(logger?: Logger) {',
+    "  return createDatabase({ adapter: createSQLiteAdapter({ filename: ':memory:' }) })",
+    '}',
     '',
-    "it.each(integrationDrivers(['sqlite', 'postgres']))('runs on %s', async driver => {",
-    '  await openDatabase(driver)',
+    "it('migrates', () => {",
+    '  createConnection()',
+    '  const client = new Client({ host: \'example.test\' })',
     '})',
     '',
-    "describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('mysql', () => {",
-    "  it('opens mysql', async () => {",
-    "    await openDatabase('mysql')",
-    '  })',
-    '})',
+  ].join('\n'))
+  await writeTestFile(root, 'packages/kernel/tests/helpers.test.ts', [
+    "import { postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'",
     '',
     "it.runIf(postgresIntegration)('connects', async () => {",
     '  createPostgresAdapter({ config: { ...postgresTestConnection(), max: 1 } })',
+    '  const { user, password, ...config } = postgresTestConnection()',
+    '  createPostgresAdapter({ config: { ...config, user, password } })',
+    "  createPostgresAdapter({ connectionString: testConnectionUrl('postgresql', postgresTestConnection()).toString() })",
+    '  const client = new Client(postgresTestConnection())',
+    '  const connect = (database: string) => createMySQLAdapter({ config: { ...mysqlTestConnection(), database } })',
+    "  mysqlDatabaseDriverFactory.create({ url: liveUrl(), ssl: true })",
+    "  createPostgresAdapter({ connectionString: rawPathUrl('holo_x') })",
     '})',
     '',
-    "it('opens sqlite', async () => {",
-    "  await openDatabase('sqlite')",
-    '  await openDatabase()',
+    "it('uses fakes', () => {",
+    '  createPostgresAdapter({ client: fakeClient })',
+    '  createMySQLAdapter({ pool: fakePool })',
+    "  process.env.HOLO_POSTGRES_INTEGRATION = '1'",
     '})',
     '',
-    "it('refuses without the flag', async () => {",
-    "  vi.stubEnv('HOLO_POSTGRES_INTEGRATION', undefined)",
-    '  expect(() => postgresTestConnection()).toThrow()',
-    '})',
     '',
-    "describe.each(['sqlite', 'postgres'] as const)('%s values', driver => {",
-    "  const enabled = driver === 'sqlite' || process.env[`HOLO_${driver.toUpperCase()}_INTEGRATION`] === '1'",
-    '',
-    '  it.runIf(enabled)(\'round trips\', async () => {',
-    '    await openDatabase(driver)',
-    '  })',
-    '})',
-    '',
-    "function registerScenario(driver: 'postgres' | 'mysql') {",
-    "  it('loads rows', async () => {",
-    '    await openDatabase(driver)',
-    '  })',
+    'function liveUrl() {',
+    "  return testConnectionUrl('mysql', mysqlTestConnection()).toString()",
     '}',
     '',
-    "describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('on postgres', () => {",
-    "  registerScenario('postgres')",
-    '})',
-    '',
-    "describe('on sqlite', () => {",
-    "  registerScenario('sqlite')",
-    '})',
+    'function rawPathUrl(database: string) {',
+    "  const url = testConnectionUrl('postgresql', postgresTestConnection())",
+    '  url.pathname = `/${database}`',
+    '  return url.toString()',
+    '}',
     '',
   ].join('\n'))
   assert.deepEqual(validateArchitecture(root), [])
 })
 
-test('architecture validator rejects real-database tests that bypass the shared helpers or their integration gate', async () => {
+test('architecture validator rejects tests that read connection settings or connect around the shared helpers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'holo-architecture-'))
   await createPackage(root, '@holo-js/kernel')
-  await writeTestFile(root, 'packages/kernel/tests/env.test.ts', "const database = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'\nconst port = process.env['HOLO_MYSQL_PORT']\nconst url = process.env[`HOLO_${driver}_URL`]\n")
+  await writeTestFile(root, 'packages/kernel/tests/env.test.ts', [
+    "const database = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'",
+    "const port = process.env['HOLO_MYSQL_PORT']",
+    'const url = process.env[`HOLO_${driver}_URL`]',
+    'const { HOLO_POSTGRES_PASSWORD } = process.env',
+    '',
+  ].join('\n'))
   await writeTestFile(root, 'packages/kernel/tests/system.test.ts', "const config = { database: 'mysql' }\n")
-  await writeTestFile(root, 'packages/kernel/tests/direct.test.ts', "it.runIf(gate)('x', () => {\n  createPostgresAdapter({ config: { host: '127.0.0.1', port: 5432, database: 'holo' } })\n  createMySQLAdapter({ uri: 'mysql://root@127.0.0.1/holo' })\n})\n")
-  await writeTestFile(root, 'packages/kernel/tests/ungated.test.ts', [
-    "import { postgresTestConnection } from '../../../tests/support/real-database'",
+  await writeTestFile(root, 'packages/kernel/tests/direct.test.ts', [
+    "import { Client, Pool } from 'pg'",
     '',
-    "it.each(['sqlite', 'postgres', 'mysql'] as const)('runs on %s', async driver => {",
-    '  await openDatabase(driver)',
-    '})',
-    '',
-    "describe('postgres', () => {",
-    "  it('opens postgres', async () => {",
-    "    await openDatabase('postgres')",
-    '  })',
-    '})',
-    '',
-    "for (const driver of ['postgres', 'mysql'] as const) {",
-    "  it('connects', () => {",
-    '    createPostgresAdapter({ config: postgresTestConnection() })',
-    '  })',
-    '}',
-    '',
-    "function registerScenario(driver: 'postgres' | 'mysql') {",
-    "  it('loads rows', async () => {",
-    '    await openDatabase(driver)',
-    '  })',
-    '}',
-    '',
-    "describe('on mysql', () => {",
-    "  registerScenario('mysql')",
+    "it('x', async () => {",
+    "  await openDatabase('sqlite')",
+    "  createPostgresAdapter({ config: { host: '127.0.0.1', port: 5432, database: 'holo' } })",
+    "  createMySQLAdapter({ uri: 'mysql://root@127.0.0.1/holo' })",
+    "  const client = new Client({ host: 'localhost', user: 'postgres' })",
+    "  const settings = { host: 'localhost', user: 'postgres' }",
+    '  const pool = new Pool(settings)',
+    '  const bare = new Client()',
     '})',
     '',
   ].join('\n'))
   const failures = validateArchitecture(root).join('\n')
-  assert.match(failures, /packages\/kernel\/tests\/env\.test\.ts reads HOLO_POSTGRES_DATABASE from process\.env; use postgresTestConnection\(\) or mysqlTestConnection\(\) from tests\/support\/real-database\.ts/)
-  assert.match(failures, /env\.test\.ts reads HOLO_MYSQL_PORT from process\.env/)
-  assert.match(failures, /env\.test\.ts reads HOLO_\$\{driver\}_URL from process\.env/)
+  assert.match(failures, /packages\/kernel\/tests\/env\.test\.ts reads HOLO_POSTGRES_DATABASE; use postgresTestConnection\(\) or mysqlTestConnection\(\) from tests\/support\/real-database\.ts/)
+  assert.match(failures, /env\.test\.ts reads HOLO_MYSQL_PORT; use/)
+  assert.match(failures, /env\.test\.ts reads HOLO_\$\{driver\}_URL; use/)
+  assert.match(failures, /env\.test\.ts reads HOLO_POSTGRES_PASSWORD; use/)
   assert.match(failures, /env\.test\.ts names the postgres system database/)
   assert.match(failures, /system\.test\.ts names the mysql system database/)
-  assert.match(failures, /direct\.test\.ts:2 opens a real database with createPostgresAdapter without the shared helpers; build its connection with postgresTestConnection\(\), mysqlTestConnection\(\) or testConnectionUrl\(\) from tests\/support\/real-database\.ts/)
-  assert.match(failures, /direct\.test\.ts:3 opens a real database with createMySQLAdapter/)
-  assert.match(failures, /ungated\.test\.ts:4 reaches a real database outside an integration gate; gate it with integrationDrivers\(\), postgresIntegration or mysqlIntegration from tests\/support\/real-database\.ts/)
-  assert.match(failures, /ungated\.test\.ts:9 reaches a real database outside an integration gate/)
-  assert.match(failures, /ungated\.test\.ts:15 reaches a real database outside an integration gate/)
-  assert.match(failures, /ungated\.test\.ts:21 reaches a real database outside an integration gate/)
+  for (const [line, constructor] of [[5, 'createPostgresAdapter'], [6, 'createMySQLAdapter'], [7, 'new Client'], [9, 'new Pool'], [10, 'new Client']]) {
+    assert.match(failures, new RegExp(`direct\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers; build its connection with postgresTestConnection\\(\\), mysqlTestConnection\\(\\) or testConnectionUrl\\(\\) from tests/support/real-database\\.ts`))
+  }
   assert.doesNotMatch(failures, /real-database\.ts reads|native-library-suite|example-app-matrix/)
 })
