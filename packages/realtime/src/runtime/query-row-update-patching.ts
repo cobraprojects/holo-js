@@ -45,6 +45,7 @@ import {
 } from './query-row-identity'
 import {
   mutationCannotReachExactId,
+  rowIdentityIndexMayHold,
 } from './query-row-matching'
 import {
   readMutationRowsContainExactQueryId,
@@ -547,6 +548,10 @@ function tryApplyExactUpdateMutationToRows(
 
   const rowIndex = rowIdentityIndex.get(context.exactMutationId)
   if (typeof rowIndex === 'undefined') {
+    if (rowIdentityIndexMayHold(rowIdentityIndex, context.exactMutationId)) {
+      return undefined
+    }
+
     return context.queryOrderChanged && isFullOrderedLimitedWindow(rows, query)
       ? applyUpdatedMutationRowsToQuery(rows, query, mutation, context, values)
       : UNCHANGED_ROWS_RESULT

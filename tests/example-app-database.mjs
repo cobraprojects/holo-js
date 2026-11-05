@@ -6,6 +6,7 @@ import { assertExampleAppAuthStorageBehavior } from './example-app-auth-storage.
 import { assertExampleAppQueryBehavior } from './example-app-query.mjs'
 import { assertExampleAppHostedAuthBehavior, startExampleAppHostedAuthService } from './example-app-hosted-auth.mjs'
 import { assertExampleAppInsertOnlyBehavior } from './example-app-insert-only.mjs'
+import { exampleAppConnections } from './support/example-app-databases.mjs'
 
 export async function openExampleAppDatabase(projectRoot) {
   const require = createRequire(join(projectRoot, 'package.json'))
@@ -33,7 +34,7 @@ function withNumericIds(rows) {
 export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, projectRoot) {
   const require = createRequire(join(projectRoot, 'package.json'))
   const modelApi = await import(pathToFileURL(require.resolve('@holo-js/db')).href)
-  for (const name of ['sqlite', 'postgres', 'mysql']) {
+  for (const name of exampleAppConnections(process.env.DB_DRIVER || 'sqlite')) {
     const connection = DB.connection(name)
     await assert.rejects(connection.unsafeQuery(DB.raw('SELECT 1')), /unsafe/i)
     const schema = createSchemaService(connection)
