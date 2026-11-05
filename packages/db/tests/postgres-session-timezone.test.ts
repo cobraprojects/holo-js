@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { beforeAll, afterAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
-import type { PoolConfig } from 'pg'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import {
   configureDB,
@@ -52,8 +51,8 @@ async function sessionSettings(db: ReturnType<typeof connectTo>, ...names: strin
   return (await db.queryCompiled({ sql: `SELECT ${columns}`, bindings: names, source: 'query' })).rows[0]
 }
 
-async function sessionTimeZone(config: PoolConfig): Promise<unknown> {
-  const adapter = createPostgresAdapter({ config })
+async function sessionTimeZone(options?: string): Promise<unknown> {
+  const adapter = createPostgresAdapter({ config: { ...sessionConnection(), ...(options ? { options } : {}) } })
   onTestFinished(async () => { await adapter.disconnect() })
   return (await adapter.query('SHOW TimeZone')).rows[0]?.TimeZone
 }
@@ -104,7 +103,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it('uses app.timezone for adapters created from a pg config', async () => {
     useAppTimezone('Asia/Tokyo')
-    expect(await sessionTimeZone(sessionConnection()))
+    expect(await sessionTimeZone())
       .toBe('Asia/Tokyo')
   })
 
@@ -157,7 +156,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL sessi
 
   it('lets a TimeZone in the pg options win over app.timezone', async () => {
     useAppTimezone('UTC')
-    expect(await sessionTimeZone({ ...sessionConnection(), options: '-c TimeZone=America/New_York' }))
+    expect(await sessionTimeZone('-c TimeZone=America/New_York'))
       .toBe('America/New_York')
   })
 

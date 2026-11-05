@@ -70,14 +70,15 @@ function findCycles(graph) {
 
 const realDatabaseHelpers = 'postgresTestConnection() or mysqlTestConnection() from tests/support/real-database.ts'
 const realDatabaseConnectionHelpers = 'postgresTestConnection(), mysqlTestConnection() or testConnectionUrl() from tests/support/real-database.ts'
-const realDatabaseAllowedFiles = new Set(['tests/support/real-database.ts', 'packages/db/tests/support-database.test.ts', 'tests/native-library-suite.mjs', 'tests/example-app-matrix.mjs'])
+const realDatabaseAllowedFiles = new Set(['tests/support/real-database.ts', 'packages/db/tests/support-database.test.ts', 'packages/db/tests/support/database.ts', 'tests/native-library-suite.mjs', 'tests/example-app-matrix.mjs'])
 const skippedTestDirectories = new Set(['node_modules', 'dist', '.output', '.nuxt', '.next', '.svelte-kit'])
 const realDatabaseSetting = /\b(HOLO_(?:POSTGRES|MYSQL|\$\{[^}]+\})_(?:HOST|PORT|USER|PASSWORD|DATABASE|URL))\b/g
-const systemDatabaseName = /(?:database|DATABASE)[^\n]*?\?\?\s*['"](postgres|mysql)['"]|\bdatabase\s*:\s*['"](postgres|mysql)['"]/g
-const realConnectionConstructor = /\b(createPostgresAdapter|createMySQLAdapter|postgresDatabaseDriverFactory\.create|mysqlDatabaseDriverFactory\.create|new\s+(?:pg\.)?(?:Client|Pool)|createConnection|createPool)\s*\(/g
-const rawDriverClient = /^(?:new\s+(?:pg\.)?(?:Client|Pool)|createConnection|createPool)$/
-const realConnectionSettings = /\b(?:host|port|user|database|connectionString|url|uri)\s*:|[`'"](?:postgres(?:ql)?|mysql):\/\//
+const systemDatabaseNames = 'postgres|template0|template1|mysql|information_schema|performance_schema|sys'
+const systemDatabaseName = new RegExp(`(?:database|DATABASE)[^\\n]*?\\?\\?\\s*['"](${systemDatabaseNames})['"]|\\bdatabase\\s*:\\s*['"](${systemDatabaseNames})['"]`, 'gi')
+const adapterConstructor = /\b(createPostgresAdapter|createMySQLAdapter|postgresDatabaseDriverFactory\.create|mysqlDatabaseDriverFactory\.create)\s*\(/g
+const realConnectionSettings = /\b(?:host|port|user|database|config|connectionString|url|uri)\s*:|[{,]\s*(?:host|port|user|database|config|connectionString|url|uri)\s*[,}]|[`'"](?:postgres(?:ql)?|mysql):\/\//
 const sharedConnectionHelper = /\b(?:postgresTestConnection|mysqlTestConnection|testConnectionUrl)\s*\(/
+const injectedDriverFake = /\b(?:Client|client|pool|createPoolInstance)\s*:/
 
 function walkTestFiles(directory) {
   if (!existsSync(directory)) return []
@@ -110,34 +111,47 @@ function lineOf(source, index) {
   return source.slice(0, index).split('\n').length
 }
 
-function declarationOf(source, name) {
-  const identifier = name.replaceAll('$', '\\$')
-  const declaration = new RegExp(`\\b(?:(?:const|let|var)\\s+(?:\\{[^}]*\\b${identifier}\\b[^}]*\\}|\\[[^\\]]*\\b${identifier}\\b[^\\]]*\\]|${identifier}\\b)[^=]*=|(?:async\\s+)?function\\s+${identifier}\\b)`)
-  const match = declaration.exec(source)
-  if (!match) return ''
+function escapeIdentifier(name) {
+  return name.replaceAll('$', '\\$')
+}
+
+function declarationOf(source, name, position) {
+  const identifier = escapeIdentifier(name)
+  const declaration = new RegExp(`\\b(?:(?:const|let|var)\\s+(?:\\{[^}]*\\b${identifier}\\b[^}]*\\}|\\[[^\\]]*\\b${identifier}\\b[^\\]]*\\]|${identifier}\\b)[^=]*=|(?:async\\s+)?function\\s+${identifier}\\b)`, 'g')
+  const matches = [...source.matchAll(declaration)]
+  const match = matches.filter(candidate => candidate.index < position).at(-1) ?? matches[0]
+  if (!match) return undefined
   const lineStart = source.lastIndexOf('\n', match.index) + 1
   const indent = match.index - lineStart - source.slice(lineStart, match.index).trimStart().length
   const rest = source.slice(match.index).split('\n')
   const end = rest.findIndex((line, index) => index > 0 && line.trim() !== '' && line.length - line.trimStart().length <= indent && !/^\s*[)}\]]/.test(line))
-  return rest.slice(0, end === -1 ? undefined : end).join('\n')
+  return { index: match.index, text: rest.slice(0, end === -1 ? undefined : end).join('\n') }
 }
 
-function resolvedConnectionText(source, text, depth = 2) {
+function resolvedConnectionText(source, text, position, depth = 2, seen = new Set()) {
   if (depth === 0) return text
-  const identifiers = new Set([...text.matchAll(/\b[A-Za-z_$][\w$]*\b/g)].map(match => match[0]))
-  return [text, ...[...identifiers].map(identifier => declarationOf(source, identifier)).filter(Boolean).map(declaration => resolvedConnectionText(source, declaration, depth - 1))].join('\n')
+  const identifiers = [...new Set([...text.replaceAll('...', '   ').matchAll(/(?<![\w$.])[A-Za-z_$][\w$]*(?![\w$]|\s*:(?!:))/g)].map(match => match[0]))].filter(identifier => !seen.has(identifier))
+  const resolved = new Set([...seen, ...identifiers])
+  const declarations = identifiers.map(identifier => declarationOf(source, identifier, position)).filter(Boolean)
+  return [text, ...declarations.map(declaration => resolvedConnectionText(source, declaration.text, declaration.index, depth - 1, resolved))].join('\n')
 }
 
-function importedRawDriverClients(source) {
-  const clients = new Set()
+function rawDriverConstructors(source) {
+  const patterns = []
   for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](?:pg|mysql2(?:\/promise)?)['"]/g)) {
-    for (const name of match[1].split(',')) clients.add(name.trim().split(/\s+as\s+/)[0])
+    for (const binding of match[1].split(',')) {
+      const [imported, local = imported] = binding.trim().replace(/^type\s+/, '').split(/\s+as\s+/).map(name => name.trim())
+      if (imported === 'Client' || imported === 'Pool') patterns.push(`new\\s+${escapeIdentifier(local)}`)
+      if (imported === 'createConnection' || imported === 'createPool') patterns.push(escapeIdentifier(local))
+    }
   }
-  if (/import\s+(?:\*\s+as\s+)?pg\b|\bpg\s*=\s*(?:await\s+import|require)\(\s*['"]pg['"]/.test(source)) {
-    clients.add('Client')
-    clients.add('Pool')
+  for (const match of source.matchAll(/import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]pg['"]|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+import|require)\(\s*['"]pg['"]\s*\)/g)) {
+    patterns.push(`new\\s+${escapeIdentifier(match[1] ?? match[2])}\\.(?:Client|Pool)`)
   }
-  return clients
+  for (const match of source.matchAll(/import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]mysql2(?:\/promise)?['"]|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+import|require)\(\s*['"]mysql2(?:\/promise)?['"]\s*\)/g)) {
+    patterns.push(`${escapeIdentifier(match[1] ?? match[2])}\\.(?:createConnection|createPool)`)
+  }
+  return patterns.length > 0 ? new RegExp(`(?<![\\w$.])(${patterns.join('|')})\\s*\\(`, 'g') : undefined
 }
 
 function validateRealDatabaseTests(repoRoot) {
@@ -149,18 +163,19 @@ function validateRealDatabaseTests(repoRoot) {
     for (const variable of new Set([...source.matchAll(realDatabaseSetting)].map(match => match[1]))) {
       failures.push(`${path} reads ${variable}; use ${realDatabaseHelpers}.`)
     }
-    for (const database of new Set([...source.matchAll(systemDatabaseName)].map(match => match[1] ?? match[2]))) {
+    for (const database of new Set([...source.matchAll(systemDatabaseName)].map(match => (match[1] ?? match[2]).toLowerCase()))) {
       failures.push(`${path} names the ${database} system database; use the scratch database from ${realDatabaseHelpers}.`)
     }
-    const rawClients = importedRawDriverClients(source)
-    for (const match of source.matchAll(realConnectionConstructor)) {
-      const constructor = match[1].replace(/\s+/g, ' ')
-      if (rawDriverClient.test(constructor) && !rawClients.has(constructor.replace(/^new\s+(?:pg\.)?/, ''))) continue
+    const calls = [
+      ...[...source.matchAll(adapterConstructor)].map(match => ({ match, raw: false })),
+      ...[...source.matchAll(rawDriverConstructors(source) ?? /$^/g)].map(match => ({ match, raw: true })),
+    ]
+    for (const { match, raw } of calls) {
       const argumentsText = callArguments(source, match.index + match[0].length - 1)
-      const resolved = resolvedConnectionText(source, argumentsText)
-      if (sharedConnectionHelper.test(resolved)) continue
-      if (realConnectionSettings.test(resolved) || (rawDriverClient.test(constructor) && /^\(\s*\)$/.test(argumentsText))) {
-        failures.push(`${path}:${lineOf(source, match.index)} opens a real database with ${constructor} outside the shared helpers; build its connection with ${realDatabaseConnectionHelpers}.`)
+      const resolved = resolvedConnectionText(source, argumentsText, match.index)
+      if (sharedConnectionHelper.test(resolved) || (!raw && injectedDriverFake.test(argumentsText))) continue
+      if (raw || realConnectionSettings.test(resolved)) {
+        failures.push(`${path}:${lineOf(source, match.index)} opens a real database with ${match[1].replace(/\s+/g, ' ')} outside the shared helpers; build its connection with ${realDatabaseConnectionHelpers}.`)
       }
     }
   }

@@ -5,6 +5,12 @@ import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { DB, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { mysqlTestConnection, testConnectionUrl } from './support/database'
 
+function dateStringsUrl() {
+  const url = testConnectionUrl('mysql', mysqlTestConnection())
+  url.searchParams.set('dateStrings', 'true')
+  return url.toString()
+}
+
 async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>): Promise<T> {
   const previousTimeZone = process.env.TZ
   configureConfigRuntime({ app: { timezone: timeZone } } as never)
@@ -304,31 +310,29 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
   it.each([
     {
       label: 'dateStrings: true',
-      config: () => ({ ...mysqlTestConnection(), connectionLimit: 1, dateStrings: true }),
+      options: { dateStrings: true },
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'dateStrings in the connection URL',
-      config: () => {
-        const url = testConnectionUrl('mysql', mysqlTestConnection())
-        url.searchParams.set('dateStrings', 'true')
-        return { uri: url.toString(), connectionLimit: 1 }
-      },
+      viaUrl: true,
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'typeCast: false',
-      config: () => ({ ...mysqlTestConnection(), connectionLimit: 1, typeCast: false }),
+      options: { typeCast: false },
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'dateStrings for DATETIME only',
-      config: () => ({ ...mysqlTestConnection(), connectionLimit: 1, dateStrings: ['DATETIME' as const] }),
+      options: { dateStrings: ['DATETIME' as const] },
       stored: { day: new Date('2024-03-14T15:00:00Z'), at: '2024-03-15 10:00:00', instant: new Date('2024-03-15T01:00:00Z') },
     },
-  ])('returns app.timezone wall-clock values and round-trips them with $label', async ({ config, stored: expected }) => {
+  ])('returns app.timezone wall-clock values and round-trips them with $label', async ({ options, viaUrl, stored: expected }) => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const adapter = createMySQLAdapter({ config: config() })
+      const adapter = createMySQLAdapter({ config: viaUrl
+        ? { uri: dateStringsUrl(), connectionLimit: 1 }
+        : { ...mysqlTestConnection(), connectionLimit: 1, ...options } })
       const db = createDatabase({ adapter, dialect: createDialect('mysql') })
       const table = `holo_opt_${randomUUID().replaceAll('-', '')}`
       try {

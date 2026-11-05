@@ -101,6 +101,10 @@ describe('real database test support', () => {
     expect(() => testConnectionUrl(scheme, { host, port, user: 'tester', database: 'holo_scratch' })).toThrow('must be a plain host name and port')
   })
 
+  it.each(['postgres', 'template0', 'template1', 'mysql', 'information_schema', 'performance_schema', 'sys'])('refuses to build a connection URL for the %s system database', database => {
+    expect(() => testConnectionUrl('postgresql', { host: 'db.test', port: 5432, user: 'tester', database })).toThrow('must not name a system database')
+  })
+
   it('keeps only the drivers whose integration flag is on', () => {
     vi.stubEnv('HOLO_POSTGRES_INTEGRATION', '1')
     vi.stubEnv('HOLO_MYSQL_INTEGRATION', undefined)

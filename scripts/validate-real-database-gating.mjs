@@ -1,12 +1,16 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const testFile = /\.test\.(?:[cm]?[jt]sx?)$/
+const sourceFile = /\.(?:[cm]?[jt]sx?)$/
 const skippedDirectories = new Set(['node_modules', 'dist', '.output', '.nuxt', '.next', '.svelte-kit'])
 const realDatabaseMarker = /support\/database['"]|real-database['"]|@holo-js\/db-(?:postgres|mysql)\b|db-(?:postgres|mysql)\/src\b|from\s*['"](?:pg|mysql2(?:\/promise)?)['"]|\bcreate(?:Postgres|MySQL)Adapter\b|\b(?:postgres|mysql)DatabaseDriverFactory\b/
+const relativeImport = /(?:from\s*|import\s*\(\s*|import\s+)['"](\.{1,2}\/[^'"]+)['"]/g
+const resolvableExtensions = ['', '.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js', '/index.mjs']
+const packageEnvironments = { cli: { HOLO_CLI_INCLUDE_INTEGRATION: '1' } }
 const removedVariables = ['HOLO_POSTGRES_INTEGRATION', 'HOLO_MYSQL_INTEGRATION', 'HOLO_POSTGRES_DATABASE', 'HOLO_MYSQL_DATABASE', 'PGDATABASE']
 const unreachableServer = {
   HOLO_POSTGRES_HOST: '127.0.0.1',
@@ -18,14 +22,36 @@ const unreachableServer = {
 }
 const gatingAdvice = 'Every test that reaches PostgreSQL or MySQL must skip when its integration flag is off. Gate it with integrationDrivers(), postgresIntegration or mysqlIntegration from tests/support/real-database.ts, and connect through postgresTestConnection(), mysqlTestConnection() or testConnectionUrl().'
 
-function walkTestFiles(directory) {
+function walkSourceFiles(directory) {
   if (!existsSync(directory)) return []
   return readdirSync(directory).flatMap((entry) => {
     if (skippedDirectories.has(entry)) return []
     const path = join(directory, entry)
-    if (statSync(path).isDirectory()) return walkTestFiles(path)
-    return testFile.test(entry) ? [path] : []
+    if (statSync(path).isDirectory()) return walkSourceFiles(path)
+    return sourceFile.test(entry) ? [path] : []
   })
+}
+
+function resolveImport(from, specifier) {
+  const base = resolve(dirname(from), specifier)
+  return resolvableExtensions.map(extension => `${base}${extension}`).find(candidate => existsSync(candidate) && statSync(candidate).isFile())
+}
+
+function databaseReachingFiles(files) {
+  const sources = new Map(files.map(file => [file, readFileSync(file, 'utf8')]))
+  const imports = new Map([...sources].map(([file, source]) => [file, [...source.matchAll(relativeImport)].map(match => resolveImport(file, match[1])).filter(Boolean)]))
+  const reaching = new Set([...sources].filter(([, source]) => realDatabaseMarker.test(source)).map(([file]) => file))
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [file, targets] of imports) {
+      if (!reaching.has(file) && targets.some(target => reaching.has(target))) {
+        reaching.add(file)
+        grew = true
+      }
+    }
+  }
+  return reaching
 }
 
 export function realDatabaseGatingTargets(repoRoot) {
@@ -34,11 +60,12 @@ export function realDatabaseGatingTargets(repoRoot) {
   return readdirSync(packagesRoot).sort().flatMap((entry) => {
     const packageRoot = join(packagesRoot, entry)
     if (!existsSync(join(packageRoot, 'package.json'))) return []
-    const files = walkTestFiles(join(packageRoot, 'tests'))
-      .filter(file => realDatabaseMarker.test(readFileSync(file, 'utf8')))
+    const reaching = databaseReachingFiles(walkSourceFiles(join(packageRoot, 'tests')))
+    const files = [...reaching]
+      .filter(file => testFile.test(file))
       .map(file => relative(packageRoot, file).split('\\').join('/'))
       .sort()
-    return files.length > 0 ? [{ packageDirectory: `packages/${entry}`, files }] : []
+    return files.length > 0 ? [{ packageDirectory: `packages/${entry}`, files, environment: packageEnvironments[entry] ?? {} }] : []
   })
 }
 
@@ -52,28 +79,34 @@ function firstLine(message) {
   return String(message ?? '').split('\n')[0].trim()
 }
 
-export function gatingFailures(packageDirectory, report) {
+export function gatingFailures(packageDirectory, report, expectedFiles, exitStatus) {
   if (!report || !Array.isArray(report.testResults)) return [`${packageDirectory}: vitest produced no report`]
+  const ranFiles = new Set()
   const failures = report.testResults.flatMap((file) => {
-    const path = `${packageDirectory}/${file.name.split(`/${packageDirectory}/`).at(-1)}`
+    const relativePath = file.name.split(`/${packageDirectory}/`).at(-1)
+    ranFiles.add(relativePath)
+    const path = `${packageDirectory}/${relativePath}`
     const failedTests = (file.assertionResults ?? []).filter(result => result.status === 'failed')
     if (failedTests.length > 0) return failedTests.map(result => `${path} :: ${result.fullName}: ${firstLine(result.failureMessages?.[0])}`)
     return file.status === 'failed' ? [`${path}: ${firstLine(file.message) || 'a suite or hook failed'}`] : []
   })
-  return failures.length === 0 && report.success === false ? [`${packageDirectory}: vitest reported a failure`] : failures
+  failures.push(...expectedFiles.filter(file => !ranFiles.has(file)).map(file => `${packageDirectory}/${file}: vitest did not run this file`))
+  if (failures.length > 0) return failures
+  if (report.success === false) return [`${packageDirectory}: vitest reported a failure`]
+  return exitStatus === 0 ? [] : [`${packageDirectory}: vitest exited with status ${exitStatus}, for example after an unhandled rejection`]
 }
 
 function runPackage(repoRoot, target) {
   const outputDirectory = mkdtempSync(join(tmpdir(), 'holo-real-database-gating-'))
   const outputFile = join(outputDirectory, 'report.json')
   try {
-    spawnSync(process.execPath, [join(repoRoot, 'node_modules/vitest/vitest.mjs'), 'run', ...target.files, '--reporter=json', `--outputFile=${outputFile}`, '--passWithNoTests'], {
+    const result = spawnSync(process.execPath, [join(repoRoot, 'node_modules/vitest/vitest.mjs'), 'run', ...target.files, '--reporter=json', `--outputFile=${outputFile}`], {
       cwd: join(repoRoot, target.packageDirectory),
-      env: gatingEnvironment(process.env),
+      env: { ...gatingEnvironment(process.env), ...target.environment },
       stdio: ['ignore', 'ignore', 'inherit'],
     })
     const report = existsSync(outputFile) ? JSON.parse(readFileSync(outputFile, 'utf8')) : undefined
-    return gatingFailures(target.packageDirectory, report)
+    return gatingFailures(target.packageDirectory, report, target.files, result.status ?? 1)
   } finally {
     rmSync(outputDirectory, { recursive: true, force: true })
   }

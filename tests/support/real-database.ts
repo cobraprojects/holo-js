@@ -52,6 +52,9 @@ export function testConnectionUrl(scheme: 'postgresql' | 'mysql', connection: { 
   if (!/^[A-Za-z0-9.-]+$/.test(connection.host) || !Number.isInteger(connection.port)) {
     throw new Error(`The test database host ${JSON.stringify(connection.host)} and port ${connection.port} must be a plain host name and port.`)
   }
+  if (systemDatabases.has(connection.database.toLowerCase())) {
+    throw new Error(`The test connection URL must not name a system database, but it names ${connection.database}.`)
+  }
   const url = new URL(`${scheme}://${connection.host}:${connection.port}/${encodeURIComponent(connection.database)}`)
   url.username = encodeURIComponent(connection.user)
   if (connection.password) url.password = encodeURIComponent(connection.password)

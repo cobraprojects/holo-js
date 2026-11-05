@@ -22,11 +22,16 @@ test('real-database gating selects every package test file that can reach Postgr
   await writeRepoFile(root, 'packages/db/node_modules/x/tests/a.test.ts', "import pg from 'pg'\n")
   await writeRepoFile(root, 'packages/realtime/package.json', '{}')
   await writeRepoFile(root, 'packages/realtime/tests/native.test.ts', "import { createMySQLAdapter } from '../../db-mysql/src'\n")
+  await writeRepoFile(root, 'packages/db/tests/barrel.test.ts', "import { seededDatabase } from './support/fixtures'\n")
+  await writeRepoFile(root, 'packages/db/tests/support/fixtures.ts', "export { openDatabase as seededDatabase } from './database'\n")
+  await writeRepoFile(root, 'packages/cli/package.json', '{}')
+  await writeRepoFile(root, 'packages/cli/tests/cli.test.ts', "import { postgresTestConnection } from '../../../tests/support/real-database'\n")
   await writeRepoFile(root, 'packages/kernel/package.json', '{}')
   await writeRepoFile(root, 'packages/kernel/tests/kernel.test.ts', "export {}\n")
   assert.deepEqual(realDatabaseGatingTargets(root), [
-    { packageDirectory: 'packages/db', files: ['tests/adapter.test.ts', 'tests/helpers.test.ts', 'tests/nested/shared.test.ts', 'tests/raw.test.ts'] },
-    { packageDirectory: 'packages/realtime', files: ['tests/native.test.ts'] },
+    { packageDirectory: 'packages/cli', files: ['tests/cli.test.ts'], environment: { HOLO_CLI_INCLUDE_INTEGRATION: '1' } },
+    { packageDirectory: 'packages/db', files: ['tests/adapter.test.ts', 'tests/barrel.test.ts', 'tests/helpers.test.ts', 'tests/nested/shared.test.ts', 'tests/raw.test.ts'], environment: {} },
+    { packageDirectory: 'packages/realtime', files: ['tests/native.test.ts'], environment: {} },
   ])
 })
 
@@ -73,14 +78,17 @@ test('real-database gating reports every test and file that failed without integ
       ] },
     ],
   }
-  assert.deepEqual(gatingFailures('packages/db', report), [
+  const expected = ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts', 'tests/d.test.ts', 'tests/e.test.ts', 'tests/f.test.ts']
+  assert.deepEqual(gatingFailures('packages/db', report, expected, 1), [
     'packages/db/tests/a.test.ts :: suite opens postgres: Error: Real database tests must be gated on HOLO_POSTGRES_INTEGRATION=1 before they connect.',
     'packages/db/tests/b.test.ts: Error: connect ECONNREFUSED 127.0.0.1:1',
     'packages/db/tests/d.test.ts :: hook runs: Error: Real database tests must be gated on HOLO_MYSQL_INTEGRATION=1 before they connect.',
     'packages/db/tests/e.test.ts: Error: Real database tests must be gated on HOLO_MYSQL_INTEGRATION=1 before they connect.',
     'packages/db/tests/f.test.ts: a suite or hook failed',
   ])
-  assert.deepEqual(gatingFailures('packages/db', { success: false, testResults: [] }), ['packages/db: vitest reported a failure'])
-  assert.deepEqual(gatingFailures('packages/db', { testResults: [] }), [])
-  assert.deepEqual(gatingFailures('packages/db', undefined), ['packages/db: vitest produced no report'])
+  assert.deepEqual(gatingFailures('packages/db', { success: false, testResults: [] }, [], 0), ['packages/db: vitest reported a failure'])
+  assert.deepEqual(gatingFailures('packages/db', { success: true, testResults: [] }, [], 0), [])
+  assert.deepEqual(gatingFailures('packages/db', undefined, [], 1), ['packages/db: vitest produced no report'])
+  assert.deepEqual(gatingFailures('packages/db', { success: true, testResults: [] }, [], 1), ['packages/db: vitest exited with status 1, for example after an unhandled rejection'])
+  assert.deepEqual(gatingFailures('packages/db', { success: true, testResults: [{ name: '/repo/packages/db/tests/a.test.ts', status: 'passed', message: '', assertionResults: [] }] }, ['tests/a.test.ts', 'tests/skipped.test.ts'], 0), ['packages/db/tests/skipped.test.ts: vitest did not run this file'])
 })

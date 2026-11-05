@@ -52,6 +52,7 @@ test('architecture validator accepts real-database tests that connect through th
   await writeTestFile(root, 'tests/support/real-database.ts', "export const database = process.env.HOLO_POSTGRES_DATABASE\n")
   await writeTestFile(root, 'tests/native-library-suite.mjs', "const client = new pg.Client({ host: '127.0.0.1', database: 'postgres' })\n")
   await writeTestFile(root, 'tests/example-app-matrix.mjs', "const host = process.env.HOLO_MYSQL_HOST\n")
+  await writeTestFile(root, 'packages/db/tests/support/database.ts', "function createTestAdapter(connection) {\n  return createPostgresAdapter({ config: connection })\n}\n")
   await writeTestFile(root, 'packages/db/tests/support-database.test.ts', "vi.stubEnv('HOLO_POSTGRES_DATABASE', 'holo_scratch')\n")
   await writeTestFile(root, 'packages/kernel/tests/local-names.test.ts', [
     'function createConnection(logger?: Logger) {',
@@ -74,11 +75,15 @@ test('architecture validator accepts real-database tests that connect through th
     "  createPostgresAdapter({ connectionString: testConnectionUrl('postgresql', postgresTestConnection()).toString() })",
     '  const client = new Client(postgresTestConnection())',
     '  const connect = (database: string) => createMySQLAdapter({ config: { ...mysqlTestConnection(), database } })',
+    '  const scratch = mysqlTestConnection()',
+    '  createMySQLAdapter({ config: { ...scratch, connectionLimit: 2 } })',
     "  mysqlDatabaseDriverFactory.create({ url: liveUrl(), ssl: true })",
     "  createPostgresAdapter({ connectionString: rawPathUrl('holo_x') })",
     '})',
     '',
     "it('uses fakes', () => {",
+    "  createPostgresAdapter({ config: { options: '-c statement_timeout=5000', Client: FakeClient as never } })",
+    "  createMySQLAdapter({ config: { host: 'fake.test' }, createPoolInstance: () => fakePool })",
     '  createPostgresAdapter({ client: fakeClient })',
     '  createMySQLAdapter({ pool: fakePool })',
     "  process.env.HOLO_POSTGRES_INTEGRATION = '1'",
@@ -109,7 +114,46 @@ test('architecture validator rejects tests that read connection settings or conn
     'const { HOLO_POSTGRES_PASSWORD } = process.env',
     '',
   ].join('\n'))
-  await writeTestFile(root, 'packages/kernel/tests/system.test.ts', "const config = { database: 'mysql' }\n")
+  await writeTestFile(root, 'packages/kernel/tests/system.test.ts', "const config = { database: 'mysql' }\nconst url = testConnectionUrl('postgresql', { ...postgresTestConnection(), database: 'template1' })\nconst other = { database: 'information_schema' }\n")
+  await writeTestFile(root, 'packages/kernel/tests/scopes.test.ts', [
+    "import { Client as PgClient } from 'pg'",
+    "import { createConnection as connectMySQL } from 'mysql2/promise'",
+    "import pg from 'pg'",
+    '',
+    "it('first', () => {",
+    '  const config = postgresTestConnection()',
+    '  createPostgresAdapter({ config })',
+    '})',
+    '',
+    "it('second', () => {",
+    "  const config = { host: 'localhost', user: 'postgres' }",
+    '  createPostgresAdapter({ config })',
+    '})',
+    '',
+    "it('aliases', async () => {",
+    "  new PgClient({ host: 'localhost', user: 'postgres' })",
+    '  await connectMySQL({})',
+    '  new pg.Pool({})',
+    '})',
+    '',
+    "it('defaults', () => {",
+    "  const user = 'postgres'",
+    '  new PgClient({ user })',
+    '  createMySQLAdapter({ config: {} })',
+    '})',
+    '',
+  ].join('\n'))
+  await writeTestFile(root, 'packages/kernel/tests/keys.test.ts', [
+    "it('helper', () => {",
+    '  const config = postgresTestConnection()',
+    '  createPostgresAdapter({ config })',
+    '})',
+    "it('literal', () => {",
+    "  createPostgresAdapter({ config: { host: 'localhost', database: 'holo' } })",
+    "  createPostgresAdapter({ config: settings.config })",
+    '})',
+    '',
+  ].join('\n'))
   await writeTestFile(root, 'packages/kernel/tests/direct.test.ts', [
     "import { Client, Pool } from 'pg'",
     '',
@@ -131,6 +175,15 @@ test('architecture validator rejects tests that read connection settings or conn
   assert.match(failures, /env\.test\.ts reads HOLO_POSTGRES_PASSWORD; use/)
   assert.match(failures, /env\.test\.ts names the postgres system database/)
   assert.match(failures, /system\.test\.ts names the mysql system database/)
+  assert.match(failures, /system\.test\.ts names the template1 system database/)
+  assert.match(failures, /system\.test\.ts names the information_schema system database/)
+  for (const [line, constructor] of [[12, 'createPostgresAdapter'], [16, 'new PgClient'], [17, 'connectMySQL'], [18, 'new pg.Pool'], [23, 'new PgClient'], [24, 'createMySQLAdapter']]) {
+    assert.match(failures, new RegExp(`scopes\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers`))
+  }
+  assert.doesNotMatch(failures, /scopes\.test\.ts:7 /)
+  assert.match(failures, /keys\.test\.ts:6 opens a real database with createPostgresAdapter outside the shared helpers/)
+  assert.match(failures, /keys\.test\.ts:7 opens a real database with createPostgresAdapter outside the shared helpers/)
+  assert.doesNotMatch(failures, /keys\.test\.ts:3 /)
   for (const [line, constructor] of [[5, 'createPostgresAdapter'], [6, 'createMySQLAdapter'], [7, 'new Client'], [9, 'new Pool'], [10, 'new Client']]) {
     assert.match(failures, new RegExp(`direct\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers; build its connection with postgresTestConnection\\(\\), mysqlTestConnection\\(\\) or testConnectionUrl\\(\\) from tests/support/real-database\\.ts`))
   }
