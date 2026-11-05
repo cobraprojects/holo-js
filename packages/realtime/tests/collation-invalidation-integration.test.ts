@@ -3,6 +3,7 @@ import { belongsTo, clearGeneratedTables, column, defineModel, configureDB, crea
 import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { createSQLiteAdapter } from '../../db-sqlite/src'
+import { mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -15,22 +16,10 @@ function createAdapter(driver: Driver): DriverAdapter {
   }
 
   if (driver === 'postgres') {
-    return createPostgresAdapter({ config: {
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-    } })
+    return createPostgresAdapter({ config: postgresTestConnection() })
   }
 
-  return createMySQLAdapter({ config: {
-    host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-    user: process.env.HOLO_MYSQL_USER ?? 'root',
-    password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-    database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-  } })
+  return createMySQLAdapter({ config: mysqlTestConnection() })
 }
 
 function codeColumnDefinition(driver: Driver, primaryKey: boolean): string {
@@ -325,7 +314,7 @@ describe('realtime invalidation on a NOCASE column on sqlite', () => {
   registerTextNumberScenarios('sqlite')
 })
 
-describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidation on a default _ci column on mysql', () => {
+describe.skipIf(!mysqlIntegration)('realtime invalidation on a default _ci column on mysql', () => {
   registerCaseInsensitiveScenarios('mysql')
   registerStringIdScenarios('mysql')
   registerTextNumberScenarios('mysql')
@@ -340,7 +329,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidati
   })
 })
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalidation on a case-sensitive column on postgres', () => {
+describe.skipIf(!postgresIntegration)('realtime invalidation on a case-sensitive column on postgres', () => {
   registerTextNumberScenarios('postgres')
 
   it('refreshes a subscription filtered by a citext array after an update matched by a case-differing array', async () => {

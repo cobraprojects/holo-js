@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, clearGeneratedTables, column, registerGeneratedTables } from '../src'
 import { defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
 type Driver = 'sqlite' | 'postgres' | 'mysql'
 
@@ -120,7 +120,7 @@ describe('query cache invalidation by a NOCASE key on sqlite', () => {
   registerCaseInsensitiveScenarios('sqlite')
 })
 
-describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('query cache invalidation by a default _ci key on mysql', () => {
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a default _ci key on mysql', () => {
   registerCaseInsensitiveScenarios('mysql')
   registerTextNumberScenarios('mysql')
 
@@ -134,7 +134,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('query cache invalid
   })
 })
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache invalidation by a case-sensitive key on postgres', () => {
+describe.skipIf(!postgresIntegration)('query cache invalidation by a case-sensitive key on postgres', () => {
   registerTextNumberScenarios('postgres')
 
   it('refreshes a cached read by a numeric key as text with an exponent separator after an update matched by the number', async () => {
