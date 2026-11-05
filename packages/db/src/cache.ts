@@ -368,6 +368,7 @@ const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
 const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
+const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', 'oid'])
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
@@ -1369,6 +1370,11 @@ function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionNam
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
 }
 
+function assignsPrimaryKey(column: string, primaryKey: string | undefined): boolean {
+  const name = getColumnName(column).toLowerCase()
+  return primaryKey === undefined || name === primaryKey.toLowerCase() || SQLITE_ROWID_ALIASES.has(name)
+}
+
 function isNumericText(value: unknown): boolean {
   return typeof value === 'string' && NUMERIC_TEXT_PATTERN.test(value)
 }
@@ -1521,7 +1527,7 @@ function createMutationRowDependencies(
 
   const createRowDependency = (value: unknown) => createRowDependencies(connectionName, plan.source.tableName, primaryKey, value, caseInsensitiveColumns)
   const current = createRowDependency(findExactPrimaryKeyValue(plan.predicates, primaryKey))
-  const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
+  const assignedKeys = Object.entries(values).filter(([column]) => assignsPrimaryKey(column, primaryKey))
   if (assignedKeys.length === 0) {
     return current ?? [wildcard]
   }
@@ -2379,7 +2385,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   const primaryKey = resolveRowDependencyKey(source, connectionName)
   const conflictsBeyondPrimaryKey = conflictColumns === 'any'
     || (conflictColumns !== undefined && (primaryKey === undefined || conflictColumns.some(column => getColumnName(column) !== primaryKey)))
-    || updatedColumns.some(column => primaryKey === undefined || getColumnName(column).toLowerCase() === primaryKey.toLowerCase())
+    || updatedColumns.some(column => assignsPrimaryKey(column, primaryKey))
   const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
   const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined

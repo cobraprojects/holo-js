@@ -242,6 +242,40 @@ describe('query cache invalidation by an upsert that changes a key spelled in an
 
     expect(await cachedEmail()).toBeUndefined()
   })
+
+  it('refreshes a cached read by the previous key after an upsert moves the key through the rowid alias', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `users_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onTestFinished(() => {
+      resetDatabaseDependencyInvalidationListeners()
+      resetCacheRuntime()
+    })
+    await adapter.execute(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)`)
+    await adapter.execute(`INSERT INTO ${name} (id, email) VALUES (1, 'a')`)
+    const cachedEmail = async () => (await DB.table(name).where('id', 1).cache(60).first())?.email
+    expect(await cachedEmail()).toBe('a')
+
+    await DB.table(name).upsert({ rowid: 2, email: 'a' }, ['email'], ['rowid'])
+
+    expect(await cachedEmail()).toBeUndefined()
+  })
+
+  it('refreshes a cached read by the new key after an update moves the key through the rowid alias', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `users_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await adapter.execute(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)`)
+    await adapter.execute(`INSERT INTO ${name} (id, email) VALUES (1, 'a')`)
+    const cachedEmail = async () => (await DB.table(name).where('id', 2).cache(60).first())?.email
+    expect(await cachedEmail()).toBeUndefined()
+
+    await DB.table(name).where('id', 1).update({ _rowid_: 2 })
+
+    expect(await cachedEmail()).toBe('a')
+  })
 })
 
 describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
