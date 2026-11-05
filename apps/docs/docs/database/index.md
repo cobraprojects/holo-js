@@ -156,6 +156,12 @@ A `Date` value is written as wall-clock time in `app.timezone`, to the whole sec
 
 Objects you pass to `createMySQLAdapter()` as `client`, `pool`, or `createPool` are used as they are. Holo doesn't convert their dates or set their session time zone, so set their `time_zone` and date options yourself.
 
+### Large integers
+
+A MySQL `bigint` up to `Number.MAX_SAFE_INTEGER` comes back as a number. A larger one comes back as its exact text, such as `'9007199254740993'`, as PostgreSQL and SQLite return it, so raw queries and untyped models never lose digits. Models and table definitions that type the column as `number` throw a `HydrationError` for it instead. `DECIMAL` values come back as text, and JSON values are parsed with `JSON.parse()`, both as before, so a number inside JSON is read as on PostgreSQL and SQLite.
+
+Holo turns on mysql2's `supportBigNumbers` and leaves `bigNumberStrings` off to do this. A `supportBigNumbers` or `bigNumberStrings` parameter in the connection URL replaces both settings, and a `jsonStrings=true` parameter returns JSON as text.
+
 ### Driver detection
 
 If you leave out `driver`, Holo guesses it from `url`:
