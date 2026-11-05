@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { EventEmitter, once } from 'node:events'
@@ -792,4 +792,21 @@ it('replays a folder gained under an existing watch root even when a new outer r
     { path: 'resources/demo/fresh', kind: 'changed' },
   ]))
   expect(changes).toHaveLength(2)
+})
+
+it('replays a file moved into a newly watched root during startup as created', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/demo/Existing.ts')
+  await write(root, 'drafts/Old.ts')
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await rename(join(root, 'drafts/Old.ts'), join(root, 'resources/demo/Added.ts'))
+  emit('drafts/Old.ts')
+  emit('resources/demo/Added.ts')
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo/Added.ts', kind: 'created' }])
 })

@@ -309,7 +309,6 @@ function normalizeContainedWatchedFilePath(
 type WatchedPathSnapshot = {
   readonly modifiedAt: number
   readonly size: number
-  readonly createdAt: number
 }
 
 async function readWatchedPathSnapshot(path: string): Promise<WatchedPathSnapshot | undefined> {
@@ -318,7 +317,7 @@ async function readWatchedPathSnapshot(path: string): Promise<WatchedPathSnapsho
     return undefined
   }
 
-  return Object.freeze({ modifiedAt: pathStats.mtimeMs, size: pathStats.size, createdAt: pathStats.birthtimeMs })
+  return Object.freeze({ modifiedAt: pathStats.mtimeMs, size: pathStats.size })
 }
 
 async function collectWatchedPathSnapshots(
@@ -379,9 +378,26 @@ type WatchPolicyBaseline = {
   readonly pluginWatches: readonly PluginPrepareWatch[]
   readonly snapshots: ReadonlyMap<string, WatchedPathSnapshot>
   readonly directories: ReadonlySet<string>
+  readonly paths: ReadonlySet<string>
 }
 
-const ABSENT_AT_REFRESH: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0, createdAt: 0 })
+const EXISTED_AT_STARTUP: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0 })
+
+async function collectProjectPaths(projectRoot: string): Promise<ReadonlySet<string>> {
+  const paths = new Set<string>()
+  const pending = ['.']
+  while (pending.length > 0) {
+    const directory = pending.pop() as string
+    const entries = await readdir(resolve(projectRoot, directory), { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      const path = directory === '.' ? entry.name : `${directory}/${entry.name}`
+      if (isAlwaysExcludedWatchPath(path)) continue
+      paths.add(path)
+      if (entry.isDirectory()) pending.push(path)
+    }
+  }
+  return paths
+}
 
 type DiscoveryWatchOptions = {
   readonly projectRoot: string
@@ -417,7 +433,6 @@ export async function startDiscoveryWatch({
   writeWarning,
   deferred = false,
 }: DiscoveryWatchOptions): Promise<DiscoveryWatch> {
-  const startedAt = Date.now()
   const canonicalProjectRoot = await realpath(projectRoot)
   let project = initialProject
   let pluginWatches: readonly PluginPrepareWatch[] = []
@@ -470,9 +485,7 @@ export async function startDiscoveryWatch({
     if (!baseline || isDiscoveryRelevantPath(path, baseline.project, baseline.pluginWatches)) {
       return (baseline?.snapshots ?? snapshots).get(path)
     }
-    const current = snapshots.get(path)
-    if (!current) return ABSENT_AT_REFRESH
-    return Math.floor(current.createdAt) <= startedAt ? current : undefined
+    return baseline.paths.has(path) ? EXISTED_AT_STARTUP : undefined
   }
 
   const findGainedDirectories = (baseline: WatchPolicyBaseline, eventPaths: readonly string[]): readonly string[] => {
@@ -497,7 +510,7 @@ export async function startDiscoveryWatch({
   ): Promise<HoloProjectPrepareChange> => {
     if (eventType !== 'rename') return { path, kind: 'changed' }
     const snapshot = await readWatchedPathSnapshot(resolve(projectRoot, path))
-    return classifyWatchedPathChange(path, snapshot, snapshots, previous === ABSENT_AT_REFRESH && snapshot ? undefined : previous)
+    return classifyWatchedPathChange(path, snapshot, snapshots, previous)
   }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
@@ -627,6 +640,8 @@ export async function startDiscoveryWatch({
   signal.addEventListener('abort', close, { once: true })
   try {
     const directories = await updatePolicy(project)
+    const startupPaths = deferred ? await collectProjectPaths(projectRoot) : new Set<string>()
+    signal.throwIfAborted()
     try {
       acquire(projectRoot, true)
       recursive = true
@@ -638,7 +653,7 @@ export async function startDiscoveryWatch({
       acquireDirectories(directories)
       stopProbing()
     }
-    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots, directories: new Set(watchedDirectories) })
+    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots, directories: new Set(watchedDirectories), paths: startupPaths })
     return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {
     close()
