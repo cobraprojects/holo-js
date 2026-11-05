@@ -114,6 +114,7 @@ import type {
   QueryPredicateNode,
   QueryPredicate,
   QuerySelection,
+  QuerySource,
   SelectQueryPlan,
 } from './ast'
 import {
@@ -177,6 +178,13 @@ type KeyedInsert = (
 ) => Promise<number | string | undefined>
 
 let keyedInsert: KeyedInsert
+
+export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
+  const separator = column.lastIndexOf('.')
+  if (separator === -1) return column
+
+  return qualifiesTable(column.slice(0, separator), source.tableName, source.alias) ? column.slice(separator + 1) : undefined
+}
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
@@ -688,10 +696,7 @@ export class TableQueryBuilder<
   }
 
   private resolveSourceColumnName(column: string): string | undefined {
-    const separator = column.lastIndexOf('.')
-    if (separator === -1) return column
-
-    return qualifiesTable(column.slice(0, separator), this.source.tableName, this.source.alias) ? column.slice(separator + 1) : undefined
+    return resolveSourceColumnName(this.source, column)
   }
 
   private assertJsonRootColumn(column: string, methodName: string): void {

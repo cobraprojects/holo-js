@@ -204,3 +204,66 @@ it('re-prepares after a prepare that follows startup writes a watched file, as b
 
   expect(calls).toEqual(['live', 'prepare', 'prepare', 'prepare', 'spawn'])
 })
+
+async function installWatchPlugin(root: string): Promise<void> {
+  await write(root, 'config/app.mjs', "export default {\n  plugins: ['demo-watch-plugin'],\n}\n")
+  await write(root, 'node_modules/demo-watch-plugin/package.json', JSON.stringify({ name: 'demo-watch-plugin', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
+  await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
+}
+
+function createNonRecursiveWatcher() {
+  const createWatcher = ((_path: string, options: { recursive: boolean }) => {
+    if (options.recursive) {
+      throw Object.assign(new Error('recursive watch unavailable'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
+    }
+    return { close() {} } as unknown as WatchHandle
+  }) as unknown as WatchFactory
+  return { createWatcher, emit() {} }
+}
+
+it('re-prepares before launching when a startup edit lands in a plugin watch root the initial prepare created, without recursive watching', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const calls: string[] = []
+
+  await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
+    if (call !== 1) return
+    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', JSON.stringify({ watch: { roots: ['resources/demo'], excludes: [] } }))
+    await writeOwnOutput(root, 'resources/demo/Generated.ts', 'generated')
+    await write(root, 'resources/demo/Edited.ts', 'edited')
+  })
+
+  expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
+})
+
+it('re-prepares before launching when a file is deleted during startup in a folder the initial prepare starts watching', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/existing/Removed.ts')
+  const calls: string[] = []
+
+  await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
+    if (call !== 1) return
+    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', JSON.stringify({ watch: { roots: ['resources/existing'], excludes: [] } }))
+    await rm(join(root, 'resources/existing/Removed.ts'))
+  })
+
+  expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
+})
+
+it('does no extra prepare at startup without recursive watching when the initial prepare keeps the plugin watch roots', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const manifest = JSON.stringify({ watch: { roots: ['resources/demo'], excludes: [] } })
+  await write(root, '.holo-js/generated/.plugins/demo.json', manifest)
+  await write(root, 'resources/demo/Existing.ts')
+  const calls: string[] = []
+
+  await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
+    if (call !== 1) return
+    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', manifest)
+    await writeOwnOutput(root, 'resources/demo/Generated.ts', 'generated')
+  })
+
+  expect(calls).toEqual(['prepare', 'spawn'])
+})
