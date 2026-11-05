@@ -1310,7 +1310,7 @@ function getColumnName(column: string): string {
   return column.split('.').at(-1)!
 }
 
-export function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>, connectionName: string): string | undefined {
+function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>, connectionName: string): string | undefined {
   return source.primaryKey ?? resolveRowDependencyKey(source, connectionName)
 }
 
