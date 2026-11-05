@@ -24,21 +24,35 @@ function columnsOf(dialect: SchemaDialectName, table: TableDefinition | undefine
 
 function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undefined> {
   const tables = new Map([[plan.source.alias ?? plan.source.tableName, plan.source.table]])
-  for (const join of plan.joins) {
-    if (join.table) tables.set(join.alias ?? join.table, join.definition)
+  for (const [index, join] of plan.joins.entries()) {
+    tables.set(join.alias ?? join.table ?? `\0subquery${index}`, join.table ? join.definition : undefined)
   }
   return tables
+}
+
+function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefined>, name: string): AnyColumnDefinition | undefined {
+  const definitions = [...tables.values()]
+  if (definitions.some(table => table === undefined)) return undefined
+  const owners = definitions.filter(table => Object.hasOwn(table!.columns, name))
+  return owners.length === 1 ? owners[0]!.columns[name] : undefined
+}
+
+function unambiguousColumns(dialect: SchemaDialectName, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  const names = new Set([...tables.values()].flatMap(table => Object.keys(table?.columns ?? {})))
+  return [...names].map(name => [name, columnReader(dialect, unambiguousColumn(tables, name))])
 }
 
 function selectedColumns(
   dialect: SchemaDialectName,
   selection: QueryColumnSelection,
   tables: ReadonlyMap<string, TableDefinition | undefined>,
-  unqualifiedTable: TableDefinition | undefined,
 ): SelectedColumn[] {
   const separator = selection.column.lastIndexOf('.')
-  const table = separator < 0 ? unqualifiedTable : tables.get(selection.column.slice(0, separator))
   const name = selection.column.slice(separator + 1)
+  if (separator < 0) {
+    return name === '*' ? unambiguousColumns(dialect, tables) : [[selection.alias ?? name, columnReader(dialect, unambiguousColumn(tables, name))]]
+  }
+  const table = tables.get(selection.column.slice(0, separator))
   if (name === '*') return columnsOf(dialect, table)
   const column = table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined
   return [[selection.alias ?? name, columnReader(dialect, column)]]
@@ -47,12 +61,11 @@ function selectedColumns(
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
-  const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
   const tables = queryTables(plan)
   const selected: readonly SelectedColumn[] = plan.selections.length === 0
-    ? columnsOf(dialect, unqualifiedTable)
+    ? unambiguousColumns(dialect, tables)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(dialect, selection, tables, unqualifiedTable)
+      ? selectedColumns(dialect, selection, tables)
       : 'alias' in selection ? [[selection.alias, undefined]] : [])
   const columns = new Map<string, ColumnReader>()
   for (const [key, reader] of selected) {
