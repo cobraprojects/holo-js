@@ -88,6 +88,21 @@ describe('relation helper keys', () => {
       parentKey: 'id',
       relatedKey: 'id' })
   })
+
+  it('resolves keys qualified with the full or bare name of a schema-qualified table to their column', () => {
+    const db = createDatabase({ connectionName: 'default', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDatabaseDialect('sqlite') })
+    configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+    onTestFinished(() => resetDB())
+    const Author = defineModelFromTable(defineTable('app.authors', { id: column.id() }), {})
+    const Post = defineModelFromTable(defineTable('app.posts', { id: column.id(), author_id: column.integer() }), {
+      relations: {
+        author: belongsTo(() => Author, 'app.posts.author_id', 'authors.id'),
+      },
+    })
+
+    expect(Post.getRepository().getRelationDefinition('author')).toMatchObject({ foreignKey: 'author_id', ownerKey: 'id' })
+    expect(Post.getRepository().getRelationDefinition('author')).toBe(Post.getRepository().getRelationDefinition('author'))
+  })
 })
 
 describe('model relation slice', () => {
