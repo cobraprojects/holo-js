@@ -1,4 +1,4 @@
-import { SecurityError } from '../core/errors'
+import { SecurityError, SerializationError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
@@ -25,6 +25,20 @@ function normalizeDefinitionlessValue(driver: string, value: unknown): unknown {
   return driver === 'sqlite' && value instanceof Date ? formatSQLiteDateTime(value) : value
 }
 
+function normalizeQueryColumnWriteValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+): unknown {
+  const normalized = normalizeQueryWriteValue(table, driver, columnName, value)
+  if (driver === 'sqlite' && typeof normalized === 'object' && normalized !== null && !(normalized instanceof Uint8Array) && !(normalized instanceof NumericAdjustment)) {
+    const kind = Array.isArray(normalized) ? 'an array' : 'an object'
+    throw new SerializationError(`Cannot write ${kind} to column "${columnName}" on SQLite. Add a "json" cast for it or JSON.stringify the value.`)
+  }
+  return normalized
+}
+
 export function normalizeQueryPredicateValue(
   table: TableDefinition | undefined,
   driver: string,
@@ -44,7 +58,7 @@ export function normalizeQueryWriteRecord(
   values: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [key, normalizeQueryWriteValue(table, driver, key, value)]),
+    Object.entries(values).map(([key, value]) => [key, normalizeQueryColumnWriteValue(table, driver, key, value)]),
   )
 }
 
@@ -58,7 +72,7 @@ export function normalizeQueryUpdateValues(
 
   for (const [key, value] of Object.entries(values)) {
     if (!key.includes('->')) {
-      normalized[key] = normalizeQueryWriteValue(table, driver, key, value)
+      normalized[key] = normalizeQueryColumnWriteValue(table, driver, key, value)
       continue
     }
 

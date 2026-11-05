@@ -92,7 +92,7 @@ export default defineModel('posts', {
 
 On PostgreSQL and MySQL, `table.json()` creates a native JSON column. Holo encodes it on write, decodes it on read, and types it as JSON, so it needs no cast.
 
-On SQLite, JSON is stored in a `text` column, as in Laravel, and the database can't tell it apart from other text. Add a `'json'` cast to read and write it as JSON. Without the cast, the attribute is the stored JSON string.
+On SQLite, JSON is stored in a `text` column, as in Laravel, and the database can't tell it apart from other text. Add a `'json'` cast to read and write it as JSON. Without the cast, the attribute is the stored JSON string. Writing an object or array to a SQLite column without the cast raises a `SerializationError` that names the column.
 
 ```ts [server/models/Post.ts]
 import { defineModel } from '@holo-js/db'
