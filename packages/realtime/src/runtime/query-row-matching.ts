@@ -35,6 +35,15 @@ export function exactIdsDiffer(
   return left !== NO_EXACT_ID_PREDICATE && right !== NO_EXACT_ID_PREDICATE && left !== right
 }
 
+export function mutationCannotReachExactId(
+  exactQueryId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  exactMutationId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  values: Readonly<Record<string, unknown>> | undefined,
+  primaryKey: string,
+): boolean {
+  return exactIdsDiffer(exactQueryId, exactMutationId) && !(values && hasRecordKey(values, primaryKey))
+}
+
 export function rowsContainExactId(
   rows: readonly Readonly<Record<string, unknown>>[],
   exactId: unknown | typeof NO_EXACT_ID_PREDICATE,

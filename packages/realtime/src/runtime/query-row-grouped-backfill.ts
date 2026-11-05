@@ -32,7 +32,7 @@ export async function getGroupedExactRowBackfill(
 ): Promise<BackfillRows | undefined> {
   const rowGroups = backfills.rowGroups
   const exactId = readQueryExactIdPredicateValue(query)
-  if (!rowGroups || exactId === NO_EXACT_ID_PREDICATE) {
+  if (!rowGroups || exactId === NO_EXACT_ID_PREDICATE || query.predicates.length !== 1) {
     return undefined
   }
 
@@ -110,6 +110,7 @@ function exactRowBackfillQueriesShareScope(
   candidate: DatabaseQueryObservation,
 ): boolean {
   return readQueryRowWindowMode(candidate) === 'single'
+    && candidate.predicates.length === 1
     && readQueryExactIdPredicateValue(candidate) !== NO_EXACT_ID_PREDICATE
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName

@@ -44,7 +44,7 @@ import {
   rowIdentity,
 } from './query-row-identity'
 import {
-  exactIdsDiffer,
+  mutationCannotReachExactId,
 } from './query-row-matching'
 import {
   readMutationRowsContainExactQueryId,
@@ -111,7 +111,7 @@ export function applyUpdateMutationToRows(
     return applyUpdatedMutationRowsToQuery(rows, query, mutation, context, mutation.values)
   }
 
-  if (exactIdsDiffer(context.exactQueryId, context.exactMutationId)) {
+  if (mutationCannotReachExactId(context.exactQueryId, context.exactMutationId, mutation.values, readPrimaryKey(context))) {
     return UNCHANGED_ROWS_RESULT
   }
 

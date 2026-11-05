@@ -23,7 +23,7 @@ import {
   UNPATCHED_RESULT,
 } from './query-patch-results'
 import {
-  exactIdsDiffer,
+  mutationCannotReachExactId,
   matchesExactRowIdentity,
   mutationRowsContainExactId,
   rowsContainExactId,
@@ -106,7 +106,7 @@ function readScalarMutationValue(
   exactQueryId: unknown,
   column: string,
 ): ScalarMutationValueResult {
-  if (exactIdsDiffer(exactQueryId, readMutationExactIdPredicateValue(mutation, readPrimaryKey(query)))) {
+  if (mutationCannotReachExactId(exactQueryId, readMutationExactIdPredicateValue(mutation, readPrimaryKey(query)), mutation.values, readPrimaryKey(query))) {
     return { patched: false, unchanged: true }
   }
 

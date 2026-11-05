@@ -340,8 +340,53 @@ describe('a Generated-schema table keyed on id', () => {
   })
 })
 
+describe('a Generated-schema table with a numeric key that is not id', () => {
+  beforeEach(async () => {
+    registerGeneratedTables({
+      items: defineGeneratedTable('items', { item_no: column.integer().primaryKey(), status: column.string(), name: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE items (item_no INTEGER PRIMARY KEY, status TEXT NOT NULL, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO items VALUES (1, 'active', 'First'), (2, 'active', 'Second')")
+  })
+
+  it('patches a scalar subscription when an update moves another row onto the subscribed key', async () => {
+    const live = await subscribe(db => db.table('items').where('item_no', 3).value('name'))
+    await mutate(async ({ db }) => {
+      await db.table('items').where('item_no', 2).update({ item_no: 3 })
+    })
+
+    expect(live.snapshots.at(-1)).toBe('Second')
+  })
+
+  it('applies every filter of detail subscriptions refreshed together', async () => {
+    const first = await subscribe(db => db.table('items').select('name').where('item_no', 1).where('status', 'active').first())
+    const second = await subscribe(db => db.table('items').select('name').where('item_no', 2).where('status', 'active').first())
+    await mutate(async ({ db }) => {
+      await db.table('items').where('status', 'active').update({ status: 'archived' })
+    })
+
+    expect([first.snapshots.at(-1), second.snapshots.at(-1)]).toEqual([undefined, undefined])
+  })
+})
+
+describe('a Generated-schema table with a case-insensitive string key', () => {
+  it('removes a row deleted through a differently cased key', async () => {
+    registerGeneratedTables({
+      regions: defineGeneratedTable('regions', { code: column.string().primaryKey(), name: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE regions (code TEXT PRIMARY KEY COLLATE NOCASE, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO regions VALUES ('DE', 'Germany'), ('FR', 'France')")
+    const live = await subscribe(db => db.table('regions').orderBy('code').get())
+    await mutate(async ({ db }) => {
+      await db.table('regions').where('code', 'de').delete()
+    })
+
+    expect(live.snapshots.at(-1)).toEqual([{ code: 'FR', name: 'France' }])
+  })
+})
+
 describe('a MySQL table whose key the database generates without auto-increment', () => {
-  it('re-runs a list subscription when an inserted row arrives without its key', async () => {
+  it.runIf(process.env.HOLO_MYSQL_INTEGRATION === '1')('re-runs a list subscription when an inserted row arrives without its key', async () => {
     const name = `regions_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     const mysql = createMySQLAdapter({ config: {
       host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',

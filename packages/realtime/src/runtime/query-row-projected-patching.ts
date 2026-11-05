@@ -15,6 +15,7 @@ import {
 } from './query-row-array'
 import {
   exactIdsDiffer,
+  mutationCannotReachExactId,
 } from './query-row-matching'
 import {
   UNCHANGED_ROWS_RESULT,
@@ -217,7 +218,7 @@ function tryApplyProjectedExactMutationValues(
     return undefined
   }
 
-  if (exactIdsDiffer(context.exactQueryId, context.exactMutationId)) {
+  if (mutationCannotReachExactId(context.exactQueryId, context.exactMutationId, mutation.values, readPrimaryKey(context))) {
     return UNCHANGED_ROWS_RESULT
   }
 
