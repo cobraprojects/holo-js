@@ -1,3 +1,4 @@
+import { assertQueryTablePath } from '../query/validator'
 import { createSchemaReader } from './introspection'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
@@ -39,6 +40,7 @@ async function readColumnListing(connection: DatabaseContext, tableName: string)
 }
 
 export function loadColumnListing(connection: DatabaseContext, tableName: string): Promise<ReadonlySet<string>> {
+  assertQueryTablePath(tableName)
   const tables = connectionListings(connection)
   const cached = currentEntry(tables, tableName)
   if (cached) {

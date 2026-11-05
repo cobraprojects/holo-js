@@ -73,7 +73,8 @@ async function getAvailablePort() {
     })
   })
 }
-const broadcastPort = await getAvailablePort()
+let broadcastPort = await getAvailablePort()
+while (broadcastPort === port) broadcastPort = await getAvailablePort()
 const originalConfig = await readFile(configPath, 'utf8')
 const mirrorCapturedOutput = process.env.MAIL_LOG_VERBOSE === 'true'
   || process.argv.includes('--mail-log-verbose')

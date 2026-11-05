@@ -73,7 +73,8 @@ async function getAvailablePort() {
     })
   })
 }
-const broadcastPort = await getAvailablePort()
+let broadcastPort = await getAvailablePort()
+while (broadcastPort === port) broadcastPort = await getAvailablePort()
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 const require = createRequire(import.meta.url)

@@ -1,7 +1,7 @@
 export * from './adapter'
 export { report } from './report'
 export { atomicFileInternals } from './atomicFile'
-export { bundleSourceInternals, packageSubpathResolutionInternals } from './runtimeModule'
+export { bundleSourceInternals, packageSubpathResolutionInternals, sourceModuleUrlInternals } from './runtimeModule'
 export type { BundleSources } from './runtimeModule'
 export { projectTsconfigInternals } from './projectTsconfig'
 export { storageRuntimeInternals } from './storageRuntime'

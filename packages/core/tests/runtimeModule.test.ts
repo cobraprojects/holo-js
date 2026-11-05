@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
-import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
+import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const postModule = "export const Post = { title: 'post' }\n"
@@ -194,11 +194,11 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(source).toContain('/packages/media/')
   })
 
-  it('fails loudly when app code imports a holo package the runtime cannot resolve', async () => {
+  it('fails loudly when app code imports a holo package that is installed nowhere', async () => {
     const projectRoot = await createTempProject()
     await writeFile(join(projectRoot, 'model.ts'), "export { nothing } from '@holo-js/not-installed-anywhere'\n")
 
-    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/alongside the Holo runtime/)
+    await expect(importBundledRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/Cannot find package '@holo-js\/not-installed-anywhere'/)
   })
 
   it('binds each runtime copy to the instances that copy registered', async () => {
@@ -645,7 +645,7 @@ console.log(JSON.stringify({ shared: loaded[0].first === direct.first, lazy }))
     await mkdir(jobsRoot, { recursive: true })
     await writeFile(join(jobsRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
     const definitionPath = join(jobsRoot, 'job.mjs')
-    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\n")
+    await writeFile(definitionPath, "export { defineAppConfig } from '@holo-js/config'\nexport const source = import.meta.url\nexport const evaluatedFrom = new Error().stack\n")
     const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
     const runtimeConfigUrl = pathToFileURL(resolve(import.meta.dirname, '../node_modules/@holo-js/config/dist/index.mjs')).href
     const childPath = join(projectRoot, 'child.mjs')
@@ -654,16 +654,17 @@ const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
 const runtimeConfig = await import(${JSON.stringify(runtimeConfigUrl)})
 const importDefinition = await runtimeModule.loadProjectDefinitionRuntimeModules(${JSON.stringify(projectRoot)}, [${JSON.stringify(definitionPath)}])
 const definition = await importDefinition(${JSON.stringify(definitionPath)})
-console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source }))
+console.log(JSON.stringify({ bridged: definition.defineAppConfig === runtimeConfig.defineAppConfig, source: definition.source, evaluatedFrom: definition.evaluatedFrom }))
 `)
     const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
     const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
     const childEnv: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', NODE_PRESERVE_SYMLINKS: '', ESBUILD_BINARY_PATH: esbuildBinary, ...env }
     const { stdout } = await promisify(execFile)(process.execPath, [...args, '--experimental-strip-types', childPath], { cwd: projectRoot, env: childEnv })
-    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string }
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { bridged: boolean, source: string, evaluatedFrom: string }
 
     expect(result.bridged).toBe(true)
-    expect(result.source.endsWith('/job.mjs')).toBe(!bundled)
+    expect(result.source).toBe(pathToFileURL(realpathSync(definitionPath)).href)
+    expect(result.evaluatedFrom.includes('/.holo-js/runtime/')).toBe(bundled)
   }, 30_000)
 
   it('does not import package export targets pruned from a production artifact', async () => {
@@ -788,6 +789,227 @@ try { ability.manageTenants({ id: 7 }) } catch (error) { console.log(JSON.string
       .flatMap(([url, entry]) => entry.data.sources.map(source => new URL(source, url).pathname))
     expect(mappedSources).toContain(abilityPath)
   }, 30_000)
+
+  it('keeps source positions when bundled modules read import.meta.url', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const abilityPath = join(projectRoot, 'server/abilities/locate.ts')
+    await mkdir(dirname(abilityPath), { recursive: true })
+    const source = "type Tenant = { id: number }\nexport const origin = import.meta\n  .url\nexport function locate(tenant: Tenant): never {\n  const { url: where } = import.meta; throw new Error(`denied ${tenant.id} ${where === origin}`)\n}\n"
+    await writeFile(abilityPath, source)
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const ability = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(abilityPath)})
+try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ origin: ability.origin, message: error.message, stack: error.stack })) }
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const { stdout } = await promisify(execFile)(process.execPath, ['--enable-source-maps', childPath], { cwd: projectRoot, env })
+
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { origin: string, message: string, stack: string }
+    const throwLine = source.split('\n')[4]!
+    expect(result.origin).toBe(pathToFileURL(abilityPath).href)
+    expect(result.message).toBe('denied 7 true')
+    expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
+  }, 30_000)
+
+  it('rewrites import.meta.url without colliding with module bindings', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/collide.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "const __holoMetaUrl = 'binding'\nconst __holoUrl0000 = 'other'\nexport const url = import.meta.url\nexport function read(__holoUrl0001: string) { return [__holoUrl0001, import.meta.url] }\nexport const bindings = [__holoMetaUrl, __holoUrl0000]\n")
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { url: string, read(value: string): string[], bindings: string[] }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.url).toBe(sourceUrl)
+    expect(loaded.read('parameter')).toEqual(['parameter', sourceUrl])
+    expect(loaded.bindings).toEqual(['binding', 'other'])
+  })
+
+  it('loads Holo packages installed only in the application from the application', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-fixture')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-fixture', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(packageRoot, 'index.mjs'), "export const origin = 'application'\n")
+    const entryPath = join(projectRoot, 'server/jobs/app-only.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { origin } from '@holo-js/app-only-fixture'\nexport default { origin }\n")
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { default: { origin: string } }
+    expect(loaded.default).toEqual({ origin: 'application' })
+  })
+
+  it('fails loudly when a Holo package installed only in the application brings its own copy of a runtime package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-split')
+    const nestedDbRoot = join(packageRoot, 'node_modules/@holo-js/db')
+    await mkdir(nestedDbRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-split', type: 'module', exports: { '.': './index.mjs' }, dependencies: { '@holo-js/db': '*' } }))
+    await writeFile(join(packageRoot, 'index.mjs'), "import { Entity } from '@holo-js/db'\nexport class PluginEntity extends Entity {}\n")
+    await writeFile(join(nestedDbRoot, 'package.json'), JSON.stringify({ name: '@holo-js/db', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(nestedDbRoot, 'index.mjs'), 'export class Entity {}\n')
+    const entryPath = join(projectRoot, 'server/models/plugin.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { PluginEntity } from '@holo-js/app-only-split'\nexport default PluginEntity\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@holo-js/app-only-split" uses its own copy of "@holo-js/db"')
+  })
+
+  it('fails loudly when a subpath-only application Holo package brings its own copy of a runtime package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-subpath')
+    const nestedDbRoot = join(packageRoot, 'node_modules/@holo-js/db')
+    await mkdir(nestedDbRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-subpath', type: 'module', exports: { './job': './job.mjs' }, dependencies: { '@holo-js/db': '*' } }))
+    await writeFile(join(packageRoot, 'job.mjs'), "import { Entity } from '@holo-js/db/entity'\nexport class PluginEntity extends Entity {}\n")
+    await writeFile(join(nestedDbRoot, 'package.json'), JSON.stringify({ name: '@holo-js/db', type: 'module', exports: { './entity': './entity.mjs' } }))
+    await writeFile(join(nestedDbRoot, 'entity.mjs'), 'export class Entity {}\n')
+    const entryPath = join(projectRoot, 'server/models/subpath-plugin.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { PluginEntity } from '@holo-js/app-only-subpath/job'\nexport default PluginEntity\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, entryPath)).rejects.toThrow('"@holo-js/app-only-subpath" uses its own copy of "@holo-js/db"')
+  })
+
+  it('reports the resolution error instead of loading another copy when the importer cannot import an application Holo package', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const outerRoot = join(projectRoot, 'node_modules/@holo-js/app-only-blocked')
+    const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const nestedRoot = join(dependencyRoot, 'node_modules/@holo-js/app-only-blocked')
+    await mkdir(outerRoot, { recursive: true })
+    await mkdir(nestedRoot, { recursive: true })
+    await writeFile(join(outerRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-blocked', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(outerRoot, 'index.mjs'), "export const origin = 'outer'\n")
+    await writeFile(join(nestedRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-blocked', type: 'module', exports: { './job': './job.mjs' } }))
+    await writeFile(join(nestedRoot, 'job.mjs'), "export const origin = 'nested'\n")
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    await writeFile(join(dependencyRoot, 'job.mjs'), "export { origin } from '@holo-js/app-only-blocked'\n")
+
+    await expect(importBundledRuntimeModule(projectRoot, join(dependencyRoot, 'job.mjs'))).rejects.toThrow(/not exported|No "exports" main/)
+  })
+
+  it('loads an application-only Holo package from the dependency that imports it', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const nestedRoot = join(dependencyRoot, 'node_modules/@holo-js/app-only-nested')
+    await mkdir(nestedRoot, { recursive: true })
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    await writeFile(join(dependencyRoot, 'job.mjs'), "export { origin } from '@holo-js/app-only-nested'\n")
+    await writeFile(join(nestedRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-nested', type: 'module', exports: { '.': { types: './index.d.ts', import: './index.mjs' } } }))
+    await writeFile(join(nestedRoot, 'index.mjs'), "export const origin = 'nested'\n")
+
+    const loaded = await importBundledRuntimeModule(projectRoot, join(dependencyRoot, 'job.mjs')) as { origin: string }
+    expect(loaded.origin).toBe('nested')
+  })
+
+  it.each([
+    { label: 'the most specific wildcard export', manifest: { exports: { './*': './generic/*.mjs', './jobs/*': './jobs/*.mjs' } }, files: { 'generic/jobs/foo.mjs': "export const origin = 'generic'\n", 'jobs/foo.mjs': "export const origin = 'specific'\n" }, specifier: '@holo-js/app-only-exports/jobs/foo', origin: 'specific' },
+    { label: 'a legacy main directory', manifest: { main: './lib' }, files: { 'lib/index.js': "export const origin = 'legacy main'\n" }, specifier: '@holo-js/app-only-exports', origin: 'legacy main' },
+    { label: 'a null exports field', manifest: { exports: null, main: './entry.mjs' }, files: { 'entry.mjs': "export const origin = 'null exports'\n", 'deep.mjs': "export const origin = 'null exports subpath'\n" }, specifier: '@holo-js/app-only-exports/deep.mjs', origin: 'null exports subpath' },
+    { label: 'a blocked condition', manifest: { exports: { '.': { node: null, default: './browser.mjs' } } }, files: { 'browser.mjs': "export const origin = 'browser'\n" }, specifier: '@holo-js/app-only-exports', origin: undefined },
+  ])('resolves an application-only Holo package through $label as Node does', async ({ manifest, files, specifier, origin }) => {
+    const projectRoot = await realpath(await createTempProject())
+    const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const packageRoot = join(dependencyRoot, 'node_modules/@holo-js/app-only-exports')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    await writeFile(join(dependencyRoot, 'job.mjs'), `export { origin } from ${JSON.stringify(specifier)}\n`)
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-exports', type: 'module', ...manifest }))
+    for (const [file, contents] of Object.entries(files)) {
+      await mkdir(dirname(join(packageRoot, file)), { recursive: true })
+      await writeFile(join(packageRoot, file), contents)
+    }
+
+    const loading = importBundledRuntimeModule(projectRoot, join(dependencyRoot, 'job.mjs')) as Promise<{ origin: string }>
+    if (origin === undefined) await expect(loading).rejects.toThrow()
+    else expect((await loading).origin).toBe(origin)
+  })
+
+  it('accepts an application-only Holo package that uses the runtime package copy the runtime registered from the project', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const configRoot = join(projectRoot, 'node_modules/@holo-js/config')
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-config')
+    await mkdir(configRoot, { recursive: true })
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(configRoot, 'package.json'), JSON.stringify({ name: '@holo-js/config', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(configRoot, 'index.mjs'), "export const copy = 'project'\n")
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-config', type: 'module', exports: { '.': './index.mjs' }, dependencies: { '@holo-js/config': '*' } }))
+    await writeFile(join(packageRoot, 'index.mjs'), "export { copy } from '@holo-js/config'\n")
+    const entryPath = join(projectRoot, 'server/jobs/config-copy.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "export { copy } from '@holo-js/app-only-config'\n")
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+await runtimeModule.importOptionalRuntimeModule('@holo-js/config', { projectRoot: ${JSON.stringify(projectRoot)} })
+const loaded = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(entryPath)})
+console.log(JSON.stringify({ copy: loaded.copy }))
+`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const { stdout } = await promisify(execFile)(process.execPath, [childPath], { cwd: projectRoot, env })
+
+    expect(JSON.parse(stdout.trim().split('\n').at(-1) ?? '')).toEqual({ copy: 'project' })
+  }, 30_000)
+
+  it('leaves modules that never read import.meta to the bundler', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const metadataPath = join(projectRoot, 'server/support/metadata.ts')
+    const metaPath = join(projectRoot, 'server/support/meta.ts')
+    await mkdir(dirname(metadataPath), { recursive: true })
+    await writeFile(metadataPath, "export const metadata = { metafile: true }\n")
+    await writeFile(metaPath, 'export const url = import.meta.url\n')
+    const onLoad: Array<(args: { path: string }) => Promise<{ contents: string } | undefined>> = []
+    sourceModuleUrlInternals.createSourceModuleUrlPlugin().setup({ onLoad: (_options: unknown, callback: (args: { path: string }) => Promise<{ contents: string } | undefined>) => onLoad.push(callback) } as never)
+
+    await expect(onLoad[0]!({ path: metadataPath })).resolves.toBeUndefined()
+    expect((await onLoad[0]!({ path: metaPath }))?.contents).toContain(JSON.stringify(pathToFileURL(metaPath).href))
+    const commentHeavyPath = join(projectRoot, 'server/support/comment-heavy.ts')
+    await writeFile(commentHeavyPath, `import ${'/* x */ '.repeat(64)}{ readFile } from 'node:fs'\n// ${'/'.repeat(64)}\nexport { readFile }\n`)
+    await expect(onLoad[0]!({ path: commentHeavyPath })).resolves.toBeUndefined()
+    for (const [name, expression] of [['block', 'import /* a */ . /* b */ meta.url'], ['line', 'import // a\n.meta.url'], ['starred', 'import /** a **/ . /*/ b */ meta.url']]) {
+      const commentedPath = join(projectRoot, `server/support/commented-${name}.ts`)
+      await writeFile(commentedPath, `export const url = ${expression}\n`)
+      expect((await onLoad[0]!({ path: commentedPath }))?.contents).toContain(JSON.stringify(pathToFileURL(commentedPath).href))
+    }
+  })
+
+  it('rewrites every import.meta url read and leaves assignment targets alone', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/meta-forms.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, [
+      'const __holoMeta\\u0055rl = (value: string) => value',
+      "export const escaped = __holoMeta\\u0055rl('escaped')",
+      "export const element = import.meta['url']",
+      'const { url: destructured } = import.meta',
+      'export { destructured }',
+      'const { url: asserted } = <ImportMeta>import.meta',
+      'export { asserted }',
+      'export const directory = import.meta.dirname',
+      "export const file = import.meta['filename']",
+      'const { dirname: destructuredDirectory, filename: destructuredFile } = import.meta',
+      'export { destructuredDirectory, destructuredFile }',
+      'export function assign(value: string) { try { import.meta.url = value } catch { return \'rejected\' } return import.meta.url }',
+      'export const dotted = import.meta.url',
+      '',
+    ].join('\n'))
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { escaped: string, element: string, destructured: string, asserted: string, dotted: string, directory: string, file: string, destructuredDirectory: string, destructuredFile: string, assign(value: string): string }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.escaped).toBe('escaped')
+    expect(loaded.element).toBe(sourceUrl)
+    expect(loaded.destructured).toBe(sourceUrl)
+    expect(loaded.asserted).toBe(sourceUrl)
+    expect(loaded.directory).toBe(dirname(entryPath))
+    expect(loaded.file).toBe(entryPath)
+    expect(loaded.destructuredDirectory).toBe(dirname(entryPath))
+    expect(loaded.destructuredFile).toBe(entryPath)
+    expect(loaded.dotted).toBe(sourceUrl)
+    expect(typeof loaded.assign('file:///elsewhere')).toBe('string')
+  })
 
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()

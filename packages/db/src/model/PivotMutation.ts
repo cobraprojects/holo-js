@@ -1,6 +1,7 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { assertQueryTablePath } from '../query/validator'
 import { normalizeDialectWriteValue, parseStoredDate } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
@@ -32,7 +33,9 @@ function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
 }
 
 export class PivotMutation {
-  constructor(private readonly context: Context, private readonly connection: DatabaseContext) {}
+  constructor(private readonly context: Context, private readonly connection: DatabaseContext) {
+    assertQueryTablePath(typeof context.table === 'string' ? context.table : context.table.tableName)
+  }
 
   async attach(ids: unknown, attributes: Attributes): Promise<void> {
     await this.mutate('attach', ids, attributes)

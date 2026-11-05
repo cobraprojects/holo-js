@@ -5,8 +5,8 @@ import * as nodeModule from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { BuildOptions, BuildResult, Metafile, OnResolveArgs, OnResolveResult, Plugin } from 'esbuild'
-import type { Diagnostic, ExtendedConfigCacheEntry } from 'typescript'
+import type { BuildOptions, BuildResult, Loader, Metafile, OnResolveArgs, OnResolveResult, Plugin } from 'esbuild'
+import type { Diagnostic, ExtendedConfigCacheEntry, Node as TypeScriptNode } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
 import * as holoKernelModule from '@holo-js/kernel'
@@ -167,7 +167,7 @@ export async function importOptionalRuntimeModule<TModule>(
 
   try {
     const loaded = await importModule<TModule>(resolvedSpecifier)
-    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>)
+    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>, resolvedSpecifier === specifier ? undefined : resolvedSpecifier)
     return loaded
   } catch (error) {
     if (isMissingOptionalModule(error, specifier, resolvedSpecifier)) {
@@ -486,8 +486,17 @@ function runtimeModuleInstances(): RuntimeModuleInstances {
   return registry[slot]
 }
 
-function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
+function runtimeModuleLocations(): Map<string, string> {
+  const registry = globalThis as typeof globalThis & Record<symbol, Map<string, string> | undefined>
+  const slot = Symbol.for(`${runtimeModuleInstancesSlot()}.locations`)
+  registry[slot] ??= new Map()
+  return registry[slot]
+}
+
+function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>, location?: string): void {
   runtimeModuleInstances().set(specifier, instance)
+  if (location) runtimeModuleLocations().set(specifier, location)
+  else runtimeModuleLocations().delete(specifier)
 }
 
 function runtimeInstanceModuleSource(specifier: string, instance: Record<string, unknown>): string {
@@ -500,16 +509,107 @@ function runtimeInstanceModuleSource(specifier: string, instance: Record<string,
   return lines.join('\n')
 }
 
-function resolveHoloPackageFromRuntime(specifier: string): string {
+function holoPackageName(specifier: string): string {
+  return specifier.split('/').slice(0, 2).join('/')
+}
+
+function readPackageManifest(packageRoot: string): Record<string, unknown> | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as unknown
+    return isRecord(manifest) ? manifest : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const importerResolutionRequest = 'holo-js-importer-resolution:'
+
+function resolveFromImporter(specifier: string, importerPath: string): string {
+  if (isBunRuntime()) return pathToFileURL((globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(specifier, dirname(importerPath))).href
+  const parentURL = pathToFileURL(importerPath).href
+  const hooks = nodeModule.registerHooks({
+    resolve(request, context, nextResolve) {
+      return request === importerResolutionRequest
+        ? nextResolve(specifier, { ...context, parentURL })
+        : nextResolve(request, context)
+    },
+  })
+  try {
+    return import.meta.resolve(importerResolutionRequest)
+  } finally {
+    hooks.deregister()
+  }
+}
+
+function packageRootContaining(filePath: string, packageName: string): string | undefined {
+  let directory = dirname(filePath)
+  while (true) {
+    if (readPackageManifest(directory)?.name === packageName) return realpathSync(directory)
+    const parent = dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
+  }
+}
+
+function packageRootFromUrl(url: string, packageName: string): string | undefined {
+  return url.startsWith('file:') ? packageRootContaining(fileURLToPath(url), packageName) : undefined
+}
+
+function runtimePackageRoot(packageName: string): string | undefined {
+  try {
+    return packageRootFromUrl(runtimeModuleLocations().get(packageName) ?? import.meta.resolve(packageName), packageName)
+  } catch {
+    return undefined
+  }
+}
+
+function installedPackageRoot(packageName: string, importerPath: string): string | undefined {
+  try {
+    const manifestPath = isBunRuntime()
+      ? (globalThis as typeof globalThis & { Bun: BunResolver }).Bun.resolveSync(`${packageName}/package.json`, dirname(importerPath))
+      : nodeModule.findPackageJSON(packageName, pathToFileURL(importerPath).href)
+    return manifestPath ? realpathSync(dirname(manifestPath)) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function assertApplicationHoloPackageSharesRuntime(specifier: string, applicationRoot: string): void {
+  const visited = new Set<string>()
+  const check = (packageRoot: string): void => {
+    if (visited.has(packageRoot)) return
+    visited.add(packageRoot)
+    const manifest = readPackageManifest(packageRoot)
+    const packageImporter = join(packageRoot, 'package.json')
+    const dependencyNames = ['dependencies', 'peerDependencies', 'optionalDependencies']
+      .flatMap(field => isRecord(manifest?.[field]) ? Object.keys(manifest[field]) : [])
+      .filter(name => name.startsWith('@holo-js/'))
+    for (const dependencyName of new Set(dependencyNames)) {
+      const dependencyRoot = installedPackageRoot(dependencyName, packageImporter)
+      if (!dependencyRoot) continue
+      const runtimeRoot = runtimePackageRoot(dependencyName)
+      if (!runtimeRoot) {
+        check(dependencyRoot)
+        continue
+      }
+      if (dependencyRoot !== runtimeRoot) {
+        throw new Error(`[@holo-js/core] "${holoPackageName(specifier)}" uses its own copy of "${dependencyName}", so it cannot share the Holo runtime's instances. Install "${holoPackageName(specifier)}" in the same node_modules as @holo-js/core.`)
+      }
+    }
+  }
+  check(applicationRoot)
+}
+
+function resolveHoloPackageFromRuntime(specifier: string, importerPath: string): string {
   try {
     return import.meta.resolve(specifier)
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`, { cause: error })
-    }
-
-    throw error
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND')) throw error
   }
+  const entryUrl = resolveFromImporter(specifier, importerPath)
+  const applicationRoot = packageRootFromUrl(entryUrl, holoPackageName(specifier))
+  if (applicationRoot) assertApplicationHoloPackageSharesRuntime(specifier, applicationRoot)
+  return entryUrl
 }
 
 function bridgeRuntimeModuleInstances(): Plugin {
@@ -519,7 +619,7 @@ function bridgeRuntimeModuleInstances(): Plugin {
       build.onResolve({ filter: /^@holo-js\// }, args => (
         runtimeModuleInstances().has(args.path)
           ? { path: args.path, namespace: runtimeInstanceNamespace }
-          : { path: resolveHoloPackageFromRuntime(args.path), external: true }
+          : { path: resolveHoloPackageFromRuntime(args.path, args.importer || join(args.resolveDir, 'index.js')), external: true }
       ))
       build.onLoad({ filter: /.*/, namespace: runtimeInstanceNamespace }, args => ({
         contents: runtimeInstanceModuleSource(args.path, runtimeModuleInstances().get(args.path) ?? {}),
@@ -570,6 +670,155 @@ function createPackageSubpathResolutionPlugin(): Plugin {
   }
 }
 
+const sourceModuleLoaders: Readonly<Record<string, Loader>> = {
+  '.ts': 'ts',
+  '.mts': 'ts',
+  '.cts': 'ts',
+  '.tsx': 'tsx',
+  '.jsx': 'jsx',
+}
+
+function unusedHelperName(preferred: string, prefix: string, width: number, contents: string, identifiers: ReadonlySet<string>): string {
+  const isUnused = (name: string) => !contents.includes(name) && !identifiers.has(name)
+  if (isUnused(preferred)) return preferred
+  for (let index = 0; ; index += 1) {
+    const name = `${prefix}${index.toString(36).padStart(width - prefix.length, '0')}`
+    if (isUnused(name)) return name
+  }
+}
+
+function sameWidthReplacement(functionName: string, original: string): string {
+  const call = `${functionName}()`
+  const lines = original.split(/(\r\n|\n|\r|\u2028|\u2029)/)
+  if (lines.length === 1) return call.padEnd(original.length, ' ')
+  const lastLine = lines.at(-1)!
+  const breaks = lines.filter((_, index) => index % 2 === 1).join('')
+  return `${call}${breaks}${' '.repeat(lastLine.length)}`
+}
+
+function createSourceModuleUrlPlugin(): Plugin {
+  return {
+    name: 'holo-source-module-url',
+    setup(buildContext) {
+      buildContext.onLoad({ filter: /\.(?:[cm]?[jt]s|[jt]sx)$/, namespace: 'file' }, async ({ path }) => {
+        const contents = await readFile(path, 'utf8')
+        const loader = sourceModuleLoaders[extname(path)] ?? 'js'
+        if (!contents.includes('meta') || !contents.includes('import')) return undefined
+
+        const ts = await import('typescript')
+        const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true)
+        const identifiers = new Set<string>()
+        const collectIdentifiers = (node: TypeScriptNode): void => {
+          if (ts.isIdentifier(node)) identifiers.add(node.text)
+          ts.forEachChild(node, collectIdentifiers)
+        }
+        collectIdentifiers(source)
+        const sourceValues = {
+          url: JSON.stringify(pathToFileURL(path).href),
+          dirname: JSON.stringify(dirname(path)),
+          filename: JSON.stringify(path),
+        }
+        type SourceProperty = keyof typeof sourceValues
+        const propertyFunctions: Record<SourceProperty, string> = {
+          url: unusedHelperName('__holoMetaUrl', '__holoUrl', 13, contents, identifiers),
+          dirname: unusedHelperName('__holoMetaDir', '__holoDir', 13, contents, identifiers),
+          filename: unusedHelperName('__holoMetaFil', '__holoFil', 13, contents, identifiers),
+        }
+        const metaFunction = unusedHelperName('__hMeta00', '__hMeta', 9, contents, identifiers)
+        const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
+        const asSourceProperty = (name: string): SourceProperty | undefined => Object.hasOwn(sourceValues, name) ? name as SourceProperty : undefined
+        const sourcePropertyRead = (node: TypeScriptNode): SourceProperty | undefined => {
+          if (ts.isPropertyAccessExpression(node) && isImportMeta(node.expression)) return asSourceProperty(node.name.text)
+          if (ts.isElementAccessExpression(node)
+            && isImportMeta(node.expression)
+            && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))) {
+            return asSourceProperty(node.argumentExpression.text)
+          }
+          return undefined
+        }
+        const isAssignmentTarget = (node: TypeScriptNode): boolean => {
+          let current = node
+          let parent = current.parent
+          while (parent) {
+            if (ts.isParenthesizedExpression(parent) || ts.isArrayLiteralExpression(parent) || ts.isSpreadElement(parent)
+              || ts.isObjectLiteralExpression(parent) || ts.isShorthandPropertyAssignment(parent)
+              || ts.isSpreadAssignment(parent) || (ts.isPropertyAssignment(parent) && parent.initializer === current)
+              || ts.isAsExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)
+              || ts.isTypeAssertionExpression(parent)) {
+              current = parent
+              parent = current.parent
+              continue
+            }
+            if (ts.isBinaryExpression(parent)) {
+              return parent.left === current
+                && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+                && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+            }
+            if (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) {
+              return parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken
+            }
+            if (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) return parent.initializer === current
+            return false
+          }
+          return false
+        }
+        const isDestructuredImportMeta = (node: TypeScriptNode): boolean => {
+          if (!isImportMeta(node)) return false
+          let current = node
+          let parent = current.parent
+          while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent) || ts.isTypeAssertionExpression(parent))) {
+            current = parent
+            parent = current.parent
+          }
+          if (!parent) return false
+          if (ts.isVariableDeclaration(parent)) return parent.initializer === current && ts.isObjectBindingPattern(parent.name)
+          if (ts.isBinaryExpression(parent) && parent.right === current && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            let target: TypeScriptNode = parent.left
+            while (ts.isParenthesizedExpression(target)) target = target.expression
+            return ts.isObjectLiteralExpression(target)
+          }
+          return false
+        }
+        const fragments: string[] = []
+        let cursor = 0
+        const usedProperties = new Set<SourceProperty>()
+        let usesMetaFunction = false
+        const replace = (node: TypeScriptNode, functionName: string) => {
+          const start = node.getStart(source)
+          fragments.push(contents.slice(cursor, start), sameWidthReplacement(functionName, contents.slice(start, node.end)))
+          cursor = node.end
+        }
+
+        function visit(node: TypeScriptNode): void {
+          const property = sourcePropertyRead(node)
+          if (property && !isAssignmentTarget(node)) {
+            replace(node, propertyFunctions[property])
+            usedProperties.add(property)
+            return
+          }
+          if (isDestructuredImportMeta(node)) {
+            replace(node, metaFunction)
+            usesMetaFunction = true
+            return
+          }
+          ts.forEachChild(node, visit)
+        }
+
+        visit(source)
+        if (cursor === 0) return { contents, loader }
+        fragments.push(contents.slice(cursor))
+        for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
+        return { contents: fragments.join(''), loader }
+      })
+    },
+  }
+}
+
+export const sourceModuleUrlInternals = {
+  createSourceModuleUrlPlugin,
+}
+
 export const packageSubpathResolutionInternals = {
   createPackageSubpathResolutionPlugin,
 }
@@ -582,10 +831,6 @@ export type BundleSources = {
 
 const namespacedInput = /^[a-z][\w-]*:/i
 const bareSpecifier = /^(?![./]|[a-z][\w+.-]*:|#)/i
-
-function packageName(specifier: string): string {
-  return specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
-}
 
 function projectRelative(projectRoot: string, path: string): string {
   return relative(projectRoot, path).split(sep).join('/')
@@ -620,8 +865,8 @@ function loadErrorSource(message: string, sources: BundleSources): string | unde
   const importers = Object.entries(sources.importers)
   const mentions = [
     (specifier: string) => `'${specifier}'`,
-    (specifier: string) => `'${packageName(specifier)}'`,
-    (specifier: string) => `/node_modules/${packageName(specifier)}/`,
+    (specifier: string) => `'${packageNameOf(specifier)}'`,
+    (specifier: string) => `/node_modules/${packageNameOf(specifier)}/`,
   ]
   for (const mention of mentions) {
     const importer = importers.find(([specifier]) => message.includes(mention(specifier)))
@@ -688,7 +933,7 @@ async function bundleRuntimeModule(
       logLevel: 'silent',
       packages: 'external',
       platform: 'node',
-      plugins: [bridgeRuntimeModuleInstances(), createPackageSubpathResolutionPlugin()],
+      plugins: [createSourceModuleUrlPlugin(), bridgeRuntimeModuleInstances(), createPackageSubpathResolutionPlugin()],
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: 'inline',

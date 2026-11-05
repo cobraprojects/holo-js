@@ -1,5 +1,5 @@
 import { SchemaError } from '../core/errors'
-import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
 import { inferConstrainedTableName } from './pluralize'
 import { isUnsafeSqlStatement } from '../core/unsafe'
 import type { UnsafeStatement } from '../core/types'
@@ -130,7 +130,7 @@ export class ColumnBuilder<
   }
 
   on(table: string): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
-    assertValidIdentifierPath(table, 'Foreign key table')
+    assertValidTablePath(table, 'Foreign key table')
 
     return this.clone({
       referenceTable: table,
@@ -151,7 +151,7 @@ export class ColumnBuilder<
     columnName = 'id',
   ): ColumnBuilder<TType, TNullable, THasDefault, TGenerated, TPrimaryKey, TComputed> {
     if (table) {
-      assertValidIdentifierPath(table, 'Foreign key table')
+      assertValidTablePath(table, 'Foreign key table')
     }
     assertValidIdentifierSegment(columnName, 'Foreign key column')
 
