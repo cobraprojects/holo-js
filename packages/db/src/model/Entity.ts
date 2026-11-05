@@ -2,7 +2,7 @@ import { markDatabaseQueryObservationsSerialized } from '../cache'
 import { HydrationError } from '../core/errors'
 import { assertAttributeNameAllowed, exposeUntypedEntityAttributes, initializeEntityModelProperties, snapshotAttributes, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWritableAttributeKey, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelInsertPayload, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, ModelWritableAttributeKey, PivotAttributesOfRelation, PivotRelatedIdsOfRelation, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
@@ -473,20 +473,20 @@ class EntityBase<
       relationDef.kind === 'morphedByMany'
     ) {
       return {
-        attach: async (ids: unknown | readonly unknown[], attributes?: Record<string, unknown>) => {
-          await this.attach(name, ids, attributes ?? {})
+        attach: async (ids: unknown, attributes?: Record<string, unknown>) => {
+          await this.#attachPivot(name, ids, attributes ?? {})
         },
         detach: async (ids?: unknown | readonly unknown[]) => {
           return this.detach(name, ids)
         },
         sync: async (ids: unknown) => {
-          return this.sync(name, ids)
+          return this.#syncPivot(name, ids, true)
         },
         toggle: async (ids: unknown) => {
-          return this.toggle(name, ids)
+          return this.#togglePivot(name, ids)
         },
         updateExistingPivot: async (id: unknown, attributes: Record<string, unknown>) => {
-          return this.updateExistingPivot(name, id, attributes)
+          return this.#updatePivot(name, id, attributes)
         },
         create: async (values: Record<string, unknown>) => {
           return this.createRelated(name, values)
@@ -889,18 +889,12 @@ class EntityBase<
     return repo.createManyRelatedEntitiesQuietly(this, relation, values) as Promise<Entity<TableDefinition>[]>
   }
 
-  async attach(
-    relation: string,
-    ids: unknown,
-    attributes: Record<string, unknown> = {},
+  async attach<TName extends string>(
+    relation: TName,
+    ids: PivotRelatedIdsOfRelation<TRelations, TName>,
+    attributes?: PivotAttributesOfRelation<TRelations, TName>,
   ): Promise<void> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.attachRelation !== 'function') {
-      throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
-    }
-
-    await repo.attachRelation(this, relation, ids, attributes)
-    this.forgetRelation(relation)
+    await this.#attachPivot(relation, ids, attributes ?? {})
   }
 
   async detach(relation: string, ids?: unknown): Promise<number> {
@@ -914,36 +908,51 @@ class EntityBase<
     return detached
   }
 
-  async sync(relation: string, ids: unknown): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.syncRelation !== 'function') {
-      throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
-    }
-
-    const result = await repo.syncRelation(this, relation, ids, true)
-    this.forgetRelation(relation)
-    return result
+  async sync<TName extends string>(relation: TName, ids: PivotRelatedIdsOfRelation<TRelations, TName>): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }> {
+    return this.#syncPivot(relation, ids, true)
   }
 
-  async syncWithoutDetaching(
-    relation: string,
-    ids: unknown,
+  async syncWithoutDetaching<TName extends string>(
+    relation: TName,
+    ids: PivotRelatedIdsOfRelation<TRelations, TName>,
   ): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }> {
+    return this.#syncPivot(relation, ids, false)
+  }
+
+  async updateExistingPivot<TName extends string>(
+    relation: TName,
+    id: unknown,
+    attributes: PivotAttributesOfRelation<TRelations, TName>,
+  ): Promise<number> {
+    return this.#updatePivot(relation, id, attributes)
+  }
+
+  async toggle<TName extends string>(relation: TName, ids: PivotRelatedIdsOfRelation<TRelations, TName>): Promise<{ attached: unknown[], detached: unknown[] }> {
+    return this.#togglePivot(relation, ids)
+  }
+
+  async #attachPivot(relation: string, ids: unknown, attributes: Record<string, unknown>): Promise<void> {
+    const repo = this.getRepositoryRuntime()
+    if (typeof repo.attachRelation !== 'function') {
+      throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
+    }
+
+    await repo.attachRelation(this, relation, ids, attributes)
+    this.forgetRelation(relation)
+  }
+
+  async #syncPivot(relation: string, ids: unknown, detaching: boolean): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }> {
     const repo = this.getRepositoryRuntime()
     if (typeof repo.syncRelation !== 'function') {
       throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
     }
 
-    const result = await repo.syncRelation(this, relation, ids, false)
+    const result = await repo.syncRelation(this, relation, ids, detaching)
     this.forgetRelation(relation)
     return result
   }
 
-  async updateExistingPivot(
-    relation: string,
-    id: unknown,
-    attributes: Record<string, unknown>,
-  ): Promise<number> {
+  async #updatePivot(relation: string, id: unknown, attributes: Record<string, unknown>): Promise<number> {
     const repo = this.getRepositoryRuntime()
     if (typeof repo.updateExistingPivot !== 'function') {
       throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
@@ -954,7 +963,7 @@ class EntityBase<
     return updated
   }
 
-  async toggle(relation: string, ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }> {
+  async #togglePivot(relation: string, ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }> {
     const repo = this.getRepositoryRuntime()
     if (typeof repo.toggleRelation !== 'function') {
       throw new HydrationError('The bound repository cannot mutate many-to-many relations.')
@@ -964,7 +973,6 @@ class EntityBase<
     this.forgetRelation(relation)
     return result
   }
-
 }
 
 export type ModelRelationMethods<TRelations extends RelationMap>

@@ -13,6 +13,7 @@ import {
   renderSecurityFrameworkFiles,
 } from './scaffold/framework-renderers'
 import { writeTextFile } from './atomic-file'
+import { trackOutputWrites } from '../written-outputs'
 
 type SvelteManagedFeatures = {
   readonly securityEnabled: boolean
@@ -486,7 +487,7 @@ async function readFileIfPresent(path: string): Promise<string | undefined> {
 }
 
 async function unlinkIfPresent(path: string): Promise<void> {
-  await rm(path, { force: true })
+  await trackOutputWrites([path], () => rm(path, { force: true }))
 }
 
 async function pathExists(path: string): Promise<boolean> {

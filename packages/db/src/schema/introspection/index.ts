@@ -5,12 +5,14 @@ import { createPostgresSchemaReader } from './postgres'
 import { createSQLiteSchemaReader } from './sqlite'
 import type { DatabaseContext } from '../../core/DatabaseContext'
 import type { TableDefinition } from '../types'
-import type { DatabaseTableStructure, DialectSchemaReader } from './types'
+import type { DatabaseTableStructure, DialectSchemaReader, TableLocation } from './types'
 
 export type * from './types'
 
 export interface SchemaReader {
   listTables(): Promise<string[]>
+  locateTable(tableName: string): Promise<TableLocation | undefined>
+  resolveReferencedTableSchema(tableName: string, ownerSchema: string): Promise<string | undefined>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
   readTable(tableName: string): Promise<TableDefinition | undefined>
   readGeneratedSchema(): Promise<TableDefinition[]>
@@ -35,6 +37,8 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 
   return {
     listTables: () => reader.listTables(),
+    locateTable: tableName => reader.locateTable(tableName),
+    resolveReferencedTableSchema: (tableName, ownerSchema) => reader.resolveReferencedTableSchema(tableName, ownerSchema),
     readTableStructure: tableName => reader.readTableStructure(tableName),
     readTable,
     async readGeneratedSchema() {
@@ -52,4 +56,14 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
 export function readTableStructure(connection: DatabaseContext, tableName: string): Promise<DatabaseTableStructure | undefined> {
   assertValidIdentifierPath(tableName, 'Table name')
   return createSchemaReader(connection).readTableStructure(tableName)
+}
+
+export function locateTable(connection: DatabaseContext, tableName: string): Promise<TableLocation | undefined> {
+  assertValidIdentifierPath(tableName, 'Table name')
+  return createSchemaReader(connection).locateTable(tableName)
+}
+
+export function resolveReferencedTableSchema(connection: DatabaseContext, tableName: string, ownerSchema: string): Promise<string | undefined> {
+  assertValidIdentifierPath(tableName, 'Table name')
+  return createSchemaReader(connection).resolveReferencedTableSchema(tableName, ownerSchema)
 }

@@ -2,7 +2,7 @@ import { HydrationError, SecurityError } from '../core/errors'
 import { withoutModelGuards } from '../model/eventState'
 import type { Entity } from '../model/Entity'
 import type { ModelRepository } from '../model/ModelRepository'
-import type { RelationDefinition } from '../model/types'
+import type { PivotAttributesOfRelation, RelatedRelationsOfDefinition, RelationDefinition } from '../model/types'
 import type { TableDefinition } from '../schema/types'
 import type {
   FactoryAttributes,
@@ -135,10 +135,10 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     })
   }
 
-  hasAttached(
+  hasAttached<TName extends string>(
     source: AttachedRelationSource,
-    relation: string,
-    pivotAttributes: Record<string, unknown> = {},
+    relation: TName,
+    pivotAttributes?: PivotAttributesOfRelation<RelatedRelationsOfDefinition<TModel>, TName>,
   ): Factory<TModel> {
     return this.clone({
       attachedRelations: [...this.attachedRelations, {

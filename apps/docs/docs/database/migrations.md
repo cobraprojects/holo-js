@@ -299,7 +299,7 @@ await schema.renameTable('posts', 'articles')
 
 ### hasTable()
 
-Returns `true` when the table exists on the connection.
+Returns `true` when the table exists on the connection. A schema-qualified name, such as `tenant.orders` on PostgreSQL or `other_database.orders` on MySQL, is looked up in that schema, as in Laravel. Views don't count as tables.
 
 ```ts
 if (!(await schema.hasTable('settings'))) {
