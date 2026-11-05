@@ -35,6 +35,7 @@ import {
   recordDatabaseQueryObservation,
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
+  writesTextLiterals,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -99,6 +100,8 @@ import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schem
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
+import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -1993,6 +1996,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
+          textMatchesAnyNumber(this.connection),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -3532,6 +3536,7 @@ export class TableQueryBuilder<
       dependencyRows,
       lastInsertId,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns(rows),
     )
 
     await invalidateQueryCacheDependencies(
@@ -3540,6 +3545,19 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private async resolveCaseInsensitiveColumns(
+    records: readonly Readonly<Record<string, unknown>>[],
+    predicates: readonly QueryPredicateNode[] = [],
+  ): Promise<CaseInsensitiveColumns> {
+    if (!isPostgresConnection(this.connection)) {
+      return 'all'
+    }
+
+    return writesTextLiterals(predicates, records)
+      ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      : new Set<string>()
   }
 
   private async invalidateMutationQueries(
@@ -3564,6 +3582,7 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       hasUnreadDecimals ? this.withoutDecimalColumns(values) : values,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns([values], this.plan.predicates),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)

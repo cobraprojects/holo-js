@@ -16,6 +16,22 @@ import {
 } from './state'
 import type { RealtimeQueryDefinitionMetadata } from '../contracts'
 
+const PREDICATE_WILDCARD_VALUE = '*'
+
+function isBroadTablePredicates(tablePredicates: ReadonlyMap<string, ReadonlySet<string>>): boolean {
+  if (tablePredicates.size === 0) {
+    return true
+  }
+
+  for (const values of tablePredicates.values()) {
+    if (values.has(PREDICATE_WILDCARD_VALUE)) {
+      return true
+    }
+  }
+
+  return false
+}
+
 export function addQueryEntryDependencies(entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>): void {
   const state = getRuntimeState()
   for (const dependency of entry.dependencies) {
@@ -29,7 +45,7 @@ export function addQueryEntryInvalidationIndexes(entry: ActiveQueryEntry<Realtim
   const state = getRuntimeState()
   for (const tableKey of entry.tableDependencies) {
     const tablePredicates = entry.predicateDependencies.get(tableKey)
-    if (!tablePredicates || tablePredicates.size === 0) {
+    if (!tablePredicates || isBroadTablePredicates(tablePredicates)) {
       const broadEntries = state.tableBroadSubscribers.get(tableKey) ?? new Set<string>()
       broadEntries.add(entry.refreshKey)
       state.tableBroadSubscribers.set(tableKey, broadEntries)
@@ -75,7 +91,7 @@ export function removeQueryEntryInvalidationIndexes(entry: ActiveQueryEntry<Real
   const state = getRuntimeState()
   for (const tableKey of entry.tableDependencies) {
     const tablePredicates = entry.predicateDependencies.get(tableKey)
-    if (!tablePredicates || tablePredicates.size === 0) {
+    if (!tablePredicates || isBroadTablePredicates(tablePredicates)) {
       const broadEntries = state.tableBroadSubscribers.get(tableKey)
       broadEntries?.delete(entry.refreshKey)
       if (broadEntries?.size === 0) {
@@ -369,7 +385,7 @@ function isQueryEntryDependencyContradictedByInvalidation(
         continue
       }
 
-      let hasMatchingValue = false
+      let hasMatchingValue = values.has(PREDICATE_WILDCARD_VALUE)
       for (const value of values) {
         if (invalidatedValues?.has(value) || exactInvalidatedValues.has(value)) {
           hasMatchingValue = true
