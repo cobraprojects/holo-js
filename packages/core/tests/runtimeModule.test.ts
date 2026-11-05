@@ -815,6 +815,18 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
   }, 30_000)
 
+  it('rewrites import.meta.url without colliding with module bindings', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/collide.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "const __holoMetaUrl = 'binding'\nconst __holoUrl0000 = 'other'\nexport const url = import.meta.url\nexport function read(__holoUrl0001: string) { return [__holoUrl0001, import.meta.url] }\nexport const bindings = [__holoMetaUrl, __holoUrl0000]\n")
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { url: string, read(value: string): string[], bindings: string[] }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.url).toBe(sourceUrl)
+    expect(loaded.read('parameter')).toEqual(['parameter', sourceUrl])
+    expect(loaded.bindings).toEqual(['binding', 'other'])
+  })
+
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')

@@ -578,10 +578,16 @@ const sourceModuleLoaders: Readonly<Record<string, Loader>> = {
   '.jsx': 'jsx',
 }
 
-const sourceModuleUrlFunction = '__holoMetaUrl'
+function sourceModuleUrlFunctionName(contents: string): string {
+  if (!contents.includes('__holoMetaUrl')) return '__holoMetaUrl'
+  for (let index = 0; ; index += 1) {
+    const name = `__holoUrl${index.toString(36).padStart(4, '0')}`
+    if (!contents.includes(name)) return name
+  }
+}
 
-function sourceModuleUrlReplacement(original: string): string {
-  const call = `${sourceModuleUrlFunction}()`
+function sourceModuleUrlReplacement(functionName: string, original: string): string {
+  const call = `${functionName}()`
   const lines = original.split(/(\r\n|\n|\r|\u2028|\u2029)/)
   if (lines.length === 1) return call.padEnd(original.length, ' ')
   const lastLine = lines.at(-1)!
@@ -600,6 +606,7 @@ function createSourceModuleUrlPlugin(): Plugin {
 
         const ts = await import('typescript')
         const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest)
+        const functionName = sourceModuleUrlFunctionName(contents)
         const fragments: string[] = []
         let cursor = 0
 
@@ -609,7 +616,7 @@ function createSourceModuleUrlPlugin(): Plugin {
             && ts.isMetaProperty(node.expression)
             && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
             const start = node.getStart(source)
-            fragments.push(contents.slice(cursor, start), sourceModuleUrlReplacement(contents.slice(start, node.end)))
+            fragments.push(contents.slice(cursor, start), sourceModuleUrlReplacement(functionName, contents.slice(start, node.end)))
             cursor = node.end
             return
           }
@@ -618,7 +625,7 @@ function createSourceModuleUrlPlugin(): Plugin {
 
         visit(source)
         if (cursor === 0) return { contents, loader }
-        fragments.push(contents.slice(cursor), `\nfunction ${sourceModuleUrlFunction}() { return ${JSON.stringify(pathToFileURL(path).href)} }\n`)
+        fragments.push(contents.slice(cursor), `\nfunction ${functionName}() { return ${JSON.stringify(pathToFileURL(path).href)} }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
