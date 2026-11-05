@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, column, defineGeneratedTable, defineModel, queryCacheInternals, resetDB, type DatabaseDependencyInvalidationEvent } from '../src'
+import type { DatabaseMutationEvent } from '../src/cache'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -62,5 +63,22 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(await DB.table(prices).orderBy('id').pluck('amount')).toEqual(['12.34', '12.30'])
     expect(await DB.table(prices).select('amount as price').where('label', 'padded').first()).toEqual({ price: '12.30' })
     expect(await DB.table(prices).where('label', 'padded').first()).toMatchObject({ amount: '12.30', discount: null })
+  })
+
+  it('publishes mutation rows with the decimal text that queries read', async () => {
+    const prices = await openPrices(driver)
+    const mutations: DatabaseMutationEvent[] = []
+    const unsubscribe = queryCacheInternals.onDatabaseDependencyInvalidated((event: DatabaseDependencyInvalidationEvent & { mutations?: readonly DatabaseMutationEvent[] }) => {
+      mutations.push(...event.mutations ?? [])
+    })
+    onTestFinished(unsubscribe)
+
+    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
+    await DB.table(prices).where('label', 'padded').update({ discount: '0.50' })
+    await DB.table(prices).where('label', 'padded').delete()
+
+    const snapshots = mutations.flatMap(mutation => [...mutation.rows ?? [], ...mutation.previousRows ?? []])
+    expect(snapshots.length).toBeGreaterThan(0)
+    expect(snapshots.map(row => row.amount)).toEqual(snapshots.map(() => '12.30'))
   })
 })

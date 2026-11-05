@@ -3045,14 +3045,9 @@ export class TableQueryBuilder<
       return undefined
     }
 
-    const previousRows = Object.freeze(result.rows.map(row => Object.freeze({ ...row })))
-    const rows = Object.freeze(previousRows.map(row => Object.freeze(
-      this.applyCapturedUpdateValues(row, values),
-    )))
-
     return Object.freeze({
-      previousRows,
-      rows,
+      previousRows: this.freezeMutationRows(result.rows),
+      rows: this.freezeMutationRows(result.rows.map(row => this.applyCapturedUpdateValues(row, values))),
     })
   }
 
@@ -3067,7 +3062,7 @@ export class TableQueryBuilder<
     }
 
     return Object.freeze({
-      rows: Object.freeze(result.rows.map(row => Object.freeze({ ...row }))),
+      rows: this.freezeMutationRows(result.rows),
     })
   }
 
@@ -3213,7 +3208,8 @@ export class TableQueryBuilder<
   private freezeMutationRows(
     rows: readonly Readonly<Record<string, unknown>>[],
   ): readonly Readonly<Record<string, unknown>>[] {
-    return Object.freeze(rows.map(row => Object.freeze({ ...row })))
+    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, createSelectQueryPlan(this.source))
+    return Object.freeze(rows.map(row => Object.freeze(readConvertedResultColumns(row, convertedColumns))))
   }
 
   private resolveSinglePrimaryKeyColumn(): string | undefined {
