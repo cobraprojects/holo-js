@@ -31,9 +31,9 @@ async function createPostsTable(driver: typeof drivers[number]) {
   })
 }
 
-function useTokyoAppAt(now: Date): void {
+function useTokyoAppAt(now: Date, timezone = 'Asia/Tokyo'): void {
   const previousTimeZone = process.env.TZ
-  configureConfigRuntime({ app: { timezone: 'Asia/Tokyo' } } as never)
+  configureConfigRuntime({ app: { timezone } } as never)
   process.env.TZ = 'America/New_York'
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(now)
@@ -189,6 +189,20 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
       expect(post.created_at).toEqual(wallClockMidnight)
       expect(post.created_at).toEqual((await fresh()).created_at)
     }
+  })
+
+  it('resolves a repeated midnight the way a DATE read does', async () => {
+    useTokyoAppAt(new Date('2026-11-01T12:00:00.000Z'), 'America/Havana')
+    const Post = defineModel(await createDatePostsTable(driver), { fillable: ['title'], softDeletes: true })
+
+    const post = await Post.create({ title: 'Draft' })
+    await post.delete()
+
+    const fresh = await Post.withTrashed().findOrFail(post.id)
+    expect(post.created_at).toEqual(fresh.created_at)
+    expect(post.updated_at).toEqual(fresh.updated_at)
+    expect(post.deleted_at).toEqual(fresh.deleted_at)
+    expect(post.created_at).toEqual(new Date('2026-11-01T05:00:00.000Z'))
   })
 
   it('leaves an impossible calendar date for the database to judge', async () => {

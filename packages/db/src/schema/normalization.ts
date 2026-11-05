@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { SERVER_WALL_CLOCK_AMBIGUITY, formatWithOffset, parseCalendarDate, parseWallClockTimestamp, startOfDayInTimezone } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -215,8 +215,8 @@ export function calendarMidnightWriteValue(dialect: SchemaDialectName, value: un
   const instant = value instanceof Date ? value
     : typeof value !== 'string' ? undefined
       : OFFSET_FREE_WALL_CLOCK.test(value) ? wallClockInstant(dialect, value, timeZone) : parseIsoInstantText(value)?.instant
-  if (!instant || Number.isNaN(instant.getTime())) return value
-  return dateLikeWriteValue(dialect, startOfDayInTimezone(instant, timeZone))
+  const midnight = instant && !Number.isNaN(instant.getTime()) ? parseCalendarDate(formatCalendarDate(instant, timeZone), timeZone) : undefined
+  return midnight ? dateLikeWriteValue(dialect, midnight) : value
 }
 
 export function wholeSecondInstant(instant: Date): Date {
