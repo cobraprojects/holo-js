@@ -2189,7 +2189,7 @@ export class ModelRepository<
         await this.loadBelongsToRelation(entities, relationName, relation, constraint)
         return
       case 'morphTo':
-        await this.loadMorphToRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphToRelation(entities, relationName, relation, constraint))
         return
       case 'hasMany':
         await this.loadHasManyRelation(entities, relationName, relation, constraint)
@@ -2201,13 +2201,13 @@ export class ModelRepository<
         await this.loadHasOneOfManyRelation(entities, relationName, relation, constraint)
         return
       case 'morphOne':
-        await this.loadMorphOneRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphOneRelation(entities, relationName, relation, constraint))
         return
       case 'morphMany':
-        await this.loadMorphManyRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphManyRelation(entities, relationName, relation, constraint))
         return
       case 'morphOneOfMany':
-        await this.loadMorphOneOfManyRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphOneOfManyRelation(entities, relationName, relation, constraint))
         return
       case 'hasOneThrough':
         await this.loadHasOneThroughRelation(entities, relationName, relation, constraint)
@@ -2219,12 +2219,18 @@ export class ModelRepository<
         await this.loadBelongsToManyRelation(entities, relationName, relation, constraint)
         return
       case 'morphToMany':
-        await this.loadMorphToManyRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphToManyRelation(entities, relationName, relation, constraint))
         return
       case 'morphedByMany':
-        await this.loadMorphedByManyRelation(entities, relationName, relation, constraint)
+        await this.loadWithoutQueryObservations(() => this.loadMorphedByManyRelation(entities, relationName, relation, constraint))
         return
     }
+  }
+
+  private async loadWithoutQueryObservations(load: () => Promise<void>): Promise<void> {
+    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
+    await load()
+    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
   }
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
