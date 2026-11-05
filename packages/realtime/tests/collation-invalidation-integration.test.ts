@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners, type DriverAdapter } from '@holo-js/db'
+import { belongsTo, clearGeneratedTables, column, defineModel, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, registerGeneratedTables, resetDB, resetDatabaseDependencyInvalidationListeners, type DriverAdapter } from '@holo-js/db'
 import { createMySQLAdapter } from '../../db-mysql/src'
 import { createPostgresAdapter } from '../../db-postgres/src'
 import { createSQLiteAdapter } from '../../db-sqlite/src'
@@ -286,6 +286,38 @@ function registerStringIdScenarios(driver: Exclude<Driver, 'postgres'>) {
     expect(snapshots.at(-1)).toEqual([{ id: 'DE', label: 'Germany' }, { id: 'FR', label: 'République' }])
   })
 }
+
+it('keeps refreshing an eager-loaded relation keyed by numeric text after the parent rows are patched', async () => {
+  const adapter = createAdapter('sqlite')
+  const db = createDatabase({ adapter, dialect: createDialect('sqlite'), connectionName: 'main' })
+  await adapter.initialize()
+  onTestFinished(async () => {
+    resetRealtimeRuntime()
+    resetDatabaseDependencyInvalidationListeners()
+    clearGeneratedTables()
+    resetDB()
+    await adapter.disconnect()
+  })
+  await adapter.execute('CREATE TABLE authors (code TEXT PRIMARY KEY, name TEXT NOT NULL)')
+  await adapter.execute('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_code TEXT NOT NULL)')
+  await adapter.execute(`INSERT INTO authors VALUES ('5', 'Ada')`)
+  await adapter.execute(`INSERT INTO posts VALUES (1, 'First', '5')`)
+  configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  const Author = defineModel(defineGeneratedTable('authors', { code: column.string().primaryKey(), name: column.string() }), { timestamps: false })
+  const Post = defineModel(defineGeneratedTable('posts', { id: column.id(), title: column.string(), author_code: column.string() }), {
+    timestamps: false,
+    relations: { author: belongsTo(() => Author, 'author_code', 'code') },
+  })
+  const snapshots: unknown[] = []
+  await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ db }) => await db.model(Post).query().with('author').orderBy('id').get() }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
+  const mutate = (handler: Parameters<typeof defineRealtimeMutation>[0]['handler']) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+
+  await mutate(({ db }) => db.table('posts').where('id', 1).update({ title: 'Renamed' }))
+  await mutate(({ db }) => db.table('authors').where('code', '5').update({ name: 'Grace' }))
+
+  expect(snapshots.at(-1)).toEqual([{ id: 1, title: 'Renamed', author_code: '5', author: { code: '5', name: 'Grace' } }])
+})
 
 describe('realtime invalidation on a NOCASE column on sqlite', () => {
   registerCaseInsensitiveScenarios('sqlite')

@@ -146,6 +146,41 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache inva
     expect(await tickets.cachedLabel('5e0_0')).toBe('renamed')
   })
 
+  it('finishes concurrent text writes in a transaction and its savepoint on a table without a cached column lookup', async () => {
+    const { db, adapter } = await openDatabase('postgres')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadlock = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('transaction did not finish')), 5000)
+    })
+
+    try {
+      await Promise.race([
+        db.transaction(async transaction => {
+          await Promise.all([
+            transaction.table(name).where('code', 'FR').update({ label: 'République' }),
+            transaction.transaction(async savepoint => await savepoint.table(name).where('code', 'DE').update({ label: 'Deutschland' })),
+          ])
+        }),
+        deadlock,
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+
+    expect((await adapter.query<{ code: string, label: string }>(`SELECT code, label FROM ${name} ORDER BY code`)).rows).toEqual([
+      { code: 'DE', label: 'Deutschland' },
+      { code: 'FR', label: 'République' },
+    ])
+  })
+
   it('commits a write in a transaction when reading its case-insensitive columns fails', async () => {
     const { db, adapter } = await openDatabase('postgres', {
       wrapAdapter: inner => new Proxy(inner, {

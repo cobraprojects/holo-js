@@ -8,6 +8,7 @@ export type CaseInsensitiveColumns = ReadonlySet<string> | 'all'
 type CaseInsensitiveColumnsEntry = {
   readonly generation: number
   readonly columns: Promise<CaseInsensitiveColumns>
+  readonly resolved?: CaseInsensitiveColumns
 }
 
 const CASE_INSENSITIVE_COLUMNS_SQL = `SELECT a.attname AS name
@@ -57,8 +58,20 @@ async function readCaseInsensitiveColumns(connection: DatabaseContext, tableName
   }
 }
 
+function storeResolved(
+  entries: Map<string, CaseInsensitiveColumnsEntry>,
+  tableName: string,
+  generation: number,
+  columns: CaseInsensitiveColumns,
+): void {
+  if (columns !== 'all') {
+    entries.set(tableName, { generation, columns: Promise.resolve(columns), resolved: columns })
+  }
+}
+
 export async function resolveCaseInsensitiveColumns(connection: DatabaseContext, tableName: string): Promise<CaseInsensitiveColumns> {
-  if (currentRootTransaction(connection)?.schemaChanged) {
+  const transaction = currentRootTransaction(connection)
+  if (transaction?.schemaChanged) {
     return await readCaseInsensitiveColumns(connection, tableName)
   }
 
@@ -66,16 +79,32 @@ export async function resolveCaseInsensitiveColumns(connection: DatabaseContext,
   const generation = currentSchemaGeneration()
   const entries = entriesByConnection.get(root) ?? new Map<string, CaseInsensitiveColumnsEntry>()
   entriesByConnection.set(root, entries)
-  const cached = entries.get(tableName)
-  if (cached && cached.generation === generation) {
+  const cached = entries.get(tableName)?.generation === generation ? entries.get(tableName) : undefined
+  if (cached?.resolved) {
+    return cached.resolved
+  }
+
+  if (transaction || connection.getScope().kind !== 'root') {
+    const columns = await readCaseInsensitiveColumns(connection, tableName)
+    if (currentSchemaGeneration() === generation) {
+      storeResolved(entries, tableName, generation, columns)
+    }
+    return columns
+  }
+
+  if (cached) {
     return await cached.columns
   }
 
   const columns = readCaseInsensitiveColumns(connection, tableName)
   entries.set(tableName, { generation, columns })
   const resolved = await columns
-  if (resolved === 'all' && entries.get(tableName)?.columns === columns) {
-    entries.delete(tableName)
+  if (entries.get(tableName)?.columns === columns) {
+    if (resolved === 'all') {
+      entries.delete(tableName)
+    } else {
+      storeResolved(entries, tableName, generation, resolved)
+    }
   }
   return resolved
 }
