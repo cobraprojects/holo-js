@@ -157,9 +157,15 @@ function rawDriverConstructors(source) {
     if (imported === 'Client' || imported === 'Pool') patterns.push(`new\\s+${escapeIdentifier(local)}`)
     if (imported === 'createConnection' || imported === 'createPool') patterns.push(escapeIdentifier(local))
   }
+  const namespaces = []
   const addNamespace = (local, module) => {
     const [prefix, member] = namespaceMethods[module.startsWith('pg') ? 'pg' : 'mysql2']
     patterns.push(`${prefix}${escapeIdentifier(local)}${member}`)
+    namespaces.push({ local, module })
+  }
+  const addBinding = (imported, local, module) => {
+    if (imported === 'default') addNamespace(local, module)
+    else addNamed(imported, local)
   }
   const importStatement = new RegExp(`import\\s+(?!type\\b)([^'";]*?)\\s+from\\s*${rawDriverModule}`, 'g')
   for (const match of source.matchAll(importStatement)) {
@@ -177,7 +183,15 @@ function rawDriverConstructors(source) {
   for (const match of source.matchAll(new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${loader}`, 'g'))) {
     for (const binding of match[1].split(',')) {
       const [imported, local = imported] = binding.trim().split(/\s*:\s*/).map(name => name.trim())
-      if (imported) addNamed(imported, local)
+      if (imported) addBinding(imported, local, match[2])
+    }
+  }
+  for (const { local, module } of [...namespaces]) {
+    for (const match of source.matchAll(new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${escapeIdentifier(local)}\\b(?!\\s*[.(\\[])`, 'g'))) {
+      for (const binding of match[1].split(',')) {
+        const [imported, alias = imported] = binding.trim().split(/\s*:\s*/).map(name => name.trim())
+        if (imported) addBinding(imported, alias, module)
+      }
     }
   }
   return patterns.length > 0 ? new RegExp(`(?<![\\w$.])(${patterns.join('|')})\\s*\\(`, 'g') : undefined

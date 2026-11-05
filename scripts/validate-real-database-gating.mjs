@@ -1,13 +1,13 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const testFile = /\.test\.(?:[cm]?[jt]sx?)$/
 const sourceFile = /\.(?:[cm]?[jt]sx?)$/
 const skippedDirectories = new Set(['node_modules', 'dist', '.output', '.nuxt', '.next', '.svelte-kit'])
-const realDatabaseMarker = /support\/database['"]|real-database['"]|@holo-js\/db-(?:postgres|mysql)\b|db-(?:postgres|mysql)\/src\b|from\s*['"](?:pg|mysql2(?:\/promise)?)['"]|\bcreate(?:Postgres|MySQL)Adapter\b|\b(?:postgres|mysql)DatabaseDriverFactory\b/
+const realDatabaseMarker = /support\/database['"]|real-database['"]|@holo-js\/db-(?:postgres|mysql)\b|db-(?:postgres|mysql)\/src\b|(?:from\s*|import\s*\(\s*|require\(\s*)['"](?:pg|mysql2(?:\/promise)?)['"]|\bcreate(?:Postgres|MySQL)Adapter\b|\b(?:postgres|mysql)DatabaseDriverFactory\b/
 const relativeImport = /(?:from\s*|import\s*\(\s*|import\s+)['"](\.{1,2}\/[^'"]+)['"]/g
 const resolvableExtensions = ['', '.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js', '/index.mjs']
 const packageEnvironments = { cli: { HOLO_CLI_INCLUDE_INTEGRATION: '1' } }
@@ -38,21 +38,18 @@ function resolveImport(from, specifier) {
   return [...resolvableExtensions.map(extension => `${base}${extension}`), sourceBase, `${sourceBase}x`].find(candidate => existsSync(candidate) && statSync(candidate).isFile())
 }
 
-function databaseReachingFiles(files) {
-  const sources = new Map(files.map(file => [file, readFileSync(file, 'utf8')]))
-  const imports = new Map([...sources].map(([file, source]) => [file, [...source.matchAll(relativeImport)].map(match => resolveImport(file, match[1])).filter(Boolean)]))
-  const reaching = new Set([...sources].filter(([, source]) => realDatabaseMarker.test(source)).map(([file]) => file))
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const [file, targets] of imports) {
-      if (!reaching.has(file) && targets.some(target => reaching.has(target))) {
-        reaching.add(file)
-        grew = true
-      }
-    }
-  }
-  return reaching
+function reachesRealDatabase(file, cache, visiting = new Set()) {
+  if (cache.has(file)) return cache.get(file)
+  if (visiting.has(file) || file.split(sep).some(part => skippedDirectories.has(part))) return false
+  visiting.add(file)
+  const source = readFileSync(file, 'utf8')
+  const reaches = realDatabaseMarker.test(source) || [...source.matchAll(relativeImport)]
+    .map(match => resolveImport(file, match[1]))
+    .filter(target => target && target.split(sep).includes('tests'))
+    .some(target => reachesRealDatabase(target, cache, visiting))
+  visiting.delete(file)
+  cache.set(file, reaches)
+  return reaches
 }
 
 export function realDatabaseGatingTargets(repoRoot) {
@@ -61,9 +58,9 @@ export function realDatabaseGatingTargets(repoRoot) {
   return readdirSync(packagesRoot).sort().flatMap((entry) => {
     const packageRoot = join(packagesRoot, entry)
     if (!existsSync(join(packageRoot, 'package.json'))) return []
-    const reaching = databaseReachingFiles(walkSourceFiles(join(packageRoot, 'tests')))
-    const files = [...reaching]
-      .filter(file => testFile.test(file))
+    const cache = new Map()
+    const files = walkSourceFiles(join(packageRoot, 'tests'))
+      .filter(file => testFile.test(file) && reachesRealDatabase(file, cache))
       .map(file => relative(packageRoot, file).split('\\').join('/'))
       .sort()
     return files.length > 0 ? [{ packageDirectory: `packages/${entry}`, files, environment: packageEnvironments[entry] ?? {} }] : []

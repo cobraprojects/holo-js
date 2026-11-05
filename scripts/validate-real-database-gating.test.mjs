@@ -27,13 +27,16 @@ test('real-database gating selects every package test file that can reach Postgr
   await writeRepoFile(root, 'packages/db/tests/esm.test.ts', "import { seed } from './support/seeding.js'\n")
   await writeRepoFile(root, 'packages/db/tests/support/seeding.ts', "export { openDatabase as seed } from './database.js'\n")
   await writeRepoFile(root, 'packages/db/tests/support/database.ts', "import { createMySQLAdapter } from '@holo-js/db-mysql'\n")
+  await writeRepoFile(root, 'packages/db/tests/shared-seed.test.ts', "import { seedShared } from '../../../tests/support/seeding'\n")
+  await writeRepoFile(root, 'tests/support/seeding.ts', "export { openDatabase as seedShared } from '../../packages/db/tests/support/database'\n")
+  await writeRepoFile(root, 'packages/db/tests/dynamic.test.ts', "const { default: mysql } = await import('mysql2/promise')\n")
   await writeRepoFile(root, 'packages/cli/package.json', '{}')
   await writeRepoFile(root, 'packages/cli/tests/cli.test.ts', "import { postgresTestConnection } from '../../../tests/support/real-database'\n")
   await writeRepoFile(root, 'packages/kernel/package.json', '{}')
   await writeRepoFile(root, 'packages/kernel/tests/kernel.test.ts', "export {}\n")
   assert.deepEqual(realDatabaseGatingTargets(root), [
     { packageDirectory: 'packages/cli', files: ['tests/cli.test.ts'], environment: { HOLO_CLI_INCLUDE_INTEGRATION: '1' } },
-    { packageDirectory: 'packages/db', files: ['tests/adapter.test.ts', 'tests/barrel.test.ts', 'tests/esm.test.ts', 'tests/helpers.test.ts', 'tests/nested/shared.test.ts', 'tests/raw.test.ts'], environment: {} },
+    { packageDirectory: 'packages/db', files: ['tests/adapter.test.ts', 'tests/barrel.test.ts', 'tests/dynamic.test.ts', 'tests/esm.test.ts', 'tests/helpers.test.ts', 'tests/nested/shared.test.ts', 'tests/raw.test.ts', 'tests/shared-seed.test.ts'], environment: {} },
     { packageDirectory: 'packages/realtime', files: ['tests/native.test.ts'], environment: {} },
   ])
 })

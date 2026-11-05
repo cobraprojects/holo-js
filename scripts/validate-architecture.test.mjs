@@ -169,6 +169,11 @@ test('architecture validator rejects tests that read connection settings or conn
     '  new Dynamic({})',
     "  const { createConnection } = require('mysql2')",
     '  createConnection({})',
+    "  const { default: dynamicMysql } = await import('mysql2/promise')",
+    '  await dynamicMysql.createConnection({})',
+    "  const pgModule = await import('pg')",
+    '  const { Pool: StagedPool } = pgModule',
+    '  new StagedPool({})',
     '})',
     '',
   ].join('\n'))
@@ -215,7 +220,7 @@ test('architecture validator rejects tests that read connection settings or conn
   assert.doesNotMatch(failures, /keys\.test\.ts:3 /)
   assert.match(failures, /hoisting\.test\.ts:9 opens a real database with createPostgresAdapter outside the shared helpers/)
   assert.doesNotMatch(failures, /hoisting\.test\.ts:5 /)
-  for (const [line, constructor] of [[5, 'new Client'], [6, 'new pg.Pool'], [7, 'pool'], [8, 'mysql.createConnection'], [10, 'new Dynamic'], [12, 'createConnection']]) {
+  for (const [line, constructor] of [[5, 'new Client'], [6, 'new pg.Pool'], [7, 'pool'], [8, 'mysql.createConnection'], [10, 'new Dynamic'], [12, 'createConnection'], [14, 'dynamicMysql.createConnection'], [17, 'new StagedPool']]) {
     assert.match(failures, new RegExp(`combined\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers`))
   }
   for (const [line, constructor] of [[5, 'createPostgresAdapter'], [6, 'createMySQLAdapter'], [7, 'new Client'], [9, 'new Pool'], [10, 'new Client']]) {
