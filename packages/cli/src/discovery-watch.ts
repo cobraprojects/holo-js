@@ -356,7 +356,7 @@ type WatchPolicyBaseline = {
   readonly directories: ReadonlySet<string>
 }
 
-const DELETED_BEFORE_REFRESH: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0, createdAt: 0 })
+const ABSENT_AT_REFRESH: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0, createdAt: 0 })
 
 type DiscoveryWatchOptions = {
   readonly projectRoot: string
@@ -446,7 +446,7 @@ export async function startDiscoveryWatch({
       return (baseline?.snapshots ?? snapshots).get(path)
     }
     const current = snapshots.get(path)
-    if (!current) return DELETED_BEFORE_REFRESH
+    if (!current) return ABSENT_AT_REFRESH
     return Math.floor(current.createdAt) <= startedAt ? current : undefined
   }
 
@@ -462,9 +462,11 @@ export async function startDiscoveryWatch({
     path: string,
     eventType: WatchEventType,
     previous: WatchedPathSnapshot | undefined,
-  ): Promise<HoloProjectPrepareChange> => eventType === 'rename'
-    ? classifyWatchedPathChange(path, await readWatchedPathSnapshot(resolve(projectRoot, path)), snapshots, previous)
-    : { path, kind: 'changed' }
+  ): Promise<HoloProjectPrepareChange> => {
+    if (eventType !== 'rename') return { path, kind: 'changed' }
+    const snapshot = await readWatchedPathSnapshot(resolve(projectRoot, path))
+    return classifyWatchedPathChange(path, snapshot, snapshots, previous === ABSENT_AT_REFRESH && snapshot ? undefined : previous)
+  }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
     if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return

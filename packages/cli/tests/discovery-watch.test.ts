@@ -696,3 +696,18 @@ it('replays a folder the non-recursive watcher could not watch at startup once i
   await settled()
   expect(changes).toEqual([{ path: 'server/models', kind: 'changed' }])
 })
+
+it('replays a file created in a newly watched root after the refresh snapshots it as created', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  await write(root, 'resources/demo/Late.ts')
+  emit('resources/demo/Late.ts')
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo/Late.ts', kind: 'created' }])
+})
