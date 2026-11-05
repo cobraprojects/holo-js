@@ -844,13 +844,14 @@ function collectBundleSources(
 ): BundleSources {
   const sourcePath = entryPath === undefined ? undefined : projectRelative(projectRoot, entryPath)
   const output = Object.entries(metafile?.outputs ?? {}).find(([outputPath]) => resolve(projectRoot, outputPath) === bundlePath)?.[1]
+  const loadedImports = new Set(output?.imports.filter(dependency => dependency.kind === 'import-statement').map(dependency => dependency.path))
   const importers: Record<string, string> = {}
   for (const inputPath of Object.keys(output?.inputs ?? {})) {
     if (namespacedInput.test(inputPath)) continue
     const inputSource = projectRelative(projectRoot, resolve(projectRoot, inputPath))
     for (const dependency of metafile?.inputs[inputPath]?.imports ?? []) {
       const specifier = dependency.original ?? dependency.path
-      if (!dependency.external || !bareSpecifier.test(specifier)) continue
+      if (!dependency.external || dependency.kind !== 'import-statement' || !loadedImports.has(dependency.path) || !bareSpecifier.test(specifier)) continue
       if (!Object.hasOwn(importers, specifier) || inputSource === sourcePath) importers[specifier] = inputSource
     }
   }

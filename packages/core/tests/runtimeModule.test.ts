@@ -1122,6 +1122,16 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     }
   })
 
+  it('names the file whose static import of a missing package survives in the bundle', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/lazy.ts': "globalThis.lazyLoaded = true\nexport function unused() { return import('missing-slugger') }\n",
+      'server/support/eager.ts': "import { slug } from 'missing-slugger'\nexport const eager = slug\n",
+      'server/models/User.ts': "import '../support/lazy'\nimport { eager } from '../support/eager'\nexport default { eager }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/eager.ts")
+  })
+
   it('leaves errors thrown by the loaded module unchanged', async () => {
     const projectRoot = await createSourceProject({
       'server/models/User.ts': "throw new Error('model failed')\n",
