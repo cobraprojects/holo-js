@@ -24,7 +24,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { TableQueryBuilder, resolveAggregateSource, selectAggregateColumn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, resolveAggregateSource } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -2468,10 +2468,10 @@ class ModelQueryBuilderBase<
   } {
     if (!column.split('->', 1)[0]!.includes('.')) return { query: this, column }
 
-    const { key, source, joined } = this.tableQuery[resolveAggregateSource](column)
+    const { key, joined, selections } = this.tableQuery[resolveAggregateSource](column, true)
     if (this.tableQuery.getPlan().joins.length === 0) return { query: this, column: key }
     if (joined) return { query: this.getTableQueryBuilder(), column }
-    return { query: this.clone(this.tableQuery[selectAggregateColumn](`${source}.${key}`)), column: key }
+    return { query: this.clone(this.tableQuery.addSelect(...selections as never[]) as TableQueryBuilder<TTable, Record<string, unknown>>), column: key }
   }
 
   private extractNumericValues(

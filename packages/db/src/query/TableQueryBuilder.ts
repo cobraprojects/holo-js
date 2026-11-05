@@ -167,7 +167,6 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
-export const selectAggregateColumn = Symbol('selectAggregateColumn')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -1900,15 +1899,7 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
-  [selectAggregateColumn](selection: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    const implicitSelections = this.plan.selections.length > 0
-      ? []
-      : [...this.plan.joins.map(join => join.alias ?? join.table!), this.source.alias ?? this.source.tableName]
-          .map(table => `${table.slice(table.lastIndexOf('.') + 1)}.*`)
-    return this.clone(appendSelections(this.plan, [...implicitSelections, selection]))
-  }
-
-  [resolveAggregateSource](column: string): { readonly key: string, readonly source: string, readonly joined: boolean } {
+  [resolveAggregateSource](column: string, modelRow = false): { readonly key: string, readonly joined: boolean, readonly selections: readonly string[] } {
     const root = column.split('->', 1)[0]!
     const qualifier = root.slice(0, root.lastIndexOf('.'))
     const join = typeof this.resolveSourceColumnName(root) === 'undefined'
@@ -1917,9 +1908,18 @@ export class TableQueryBuilder<
     if (this.plan.joins.length > 0 && this.plan.unions.length > 0) {
       throw new CompilerError(`Cannot aggregate column "${column}" on a joined query with a union.`)
     }
-    return join
-      ? { key: column.slice(qualifier.length + 1), source: join.alias ?? join.table!, joined: true }
-      : { key: Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!, source: this.source.alias ?? this.source.tableName, joined: false }
+    const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
+    const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
+    const wildcard = (table: string) => `${table.slice(table.lastIndexOf('.') + 1)}.*`
+    const implicitSelections = this.plan.selections.length > 0
+      ? []
+      : [...this.plan.joins.map(join => join.alias ?? join.table!), this.source.alias ?? this.source.tableName].map(wildcard)
+    const selections = !modelRow
+      ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
+      : implicitSelections.length > 0
+        ? implicitSelections
+        : !this.plan.distinct && this.plan.groupBy.length === 0 ? [wildcard(source)] : [`${source}.${key}`]
+    return { key, joined: !!join, selections }
   }
 
   cache(
@@ -3628,11 +3628,11 @@ export class TableQueryBuilder<
   } {
     if (!column.split('->', 1)[0]!.includes('.')) return { query: this, key: column, column }
 
-    const { key, source, joined } = this[resolveAggregateSource](column)
+    const { key, joined, selections } = this[resolveAggregateSource](column)
     if (this.plan.joins.length === 0) return { query: this, key, column: key }
 
     return {
-      query: this[selectAggregateColumn](`${source}.${key} as ${aggregateValueKey}`),
+      query: this.clone(appendSelections(this.plan, selections)),
       key: aggregateValueKey,
       column: joined ? column : key,
     }
