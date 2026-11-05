@@ -79,7 +79,7 @@ describe('@holo-js/realtime relation query patching', () => {
     })
   })
 
-  it('keeps duplicate ordered belongs-to-many inserts unchanged', async () => {
+  it('falls back for ordered belongs-to-many inserts of a pair the relation already holds', async () => {
     const query = createBelongsToManyQuery()
     const rows = Object.freeze([
       createRelatedRow(1, 'First', 10),
@@ -98,7 +98,7 @@ describe('@holo-js/realtime relation query patching', () => {
           { id: 2, name: 'Second' },
         ]),
       ]),
-    )).resolves.toBe(UNCHANGED_QUERY_RESULT)
+    )).resolves.toBe(UNPATCHED_RESULT)
   })
 
   it('falls back for unordered belongs-to-many inserts and missing returned rows', async () => {
