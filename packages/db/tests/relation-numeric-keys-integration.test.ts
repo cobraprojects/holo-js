@@ -22,7 +22,7 @@ async function openKeyFixtures(driver: 'sqlite' | 'postgres' | 'mysql', kind: Ke
   const keyColumn = (table: Parameters<Parameters<typeof schema.createTable>[1]>[0], name: string) => kind === 'decimal' ? table.decimal(name) : table.string(name)
   const keyDefinition = () => kind === 'decimal' ? column.decimal() : column.string()
   await schema.createTable(names.owners, (table) => {
-    table.integer('id').primaryKey()
+    table.bigInteger('id').primaryKey()
     table.string('name')
   })
   onTestFinished(() => schema.dropTable(names.owners))
@@ -43,7 +43,7 @@ async function openKeyFixtures(driver: 'sqlite' | 'postgres' | 'mysql', kind: Ke
   })
   onTestFinished(() => schema.dropTable(names.pivot))
 
-  const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), name: column.string() })
+  const owners = defineGeneratedTable(names.owners, { id: column.bigInteger().primaryKey(), name: column.string() })
   const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: keyDefinition() })
   const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey(), name: column.string() })
   const pivot = defineGeneratedTable(names.pivot, { id: column.integer().primaryKey(), owner_id: keyDefinition(), tag_id: keyDefinition() })
@@ -101,7 +101,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('tex
 })
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('relation keys across numeric column kinds on %s', (driver) => {
-  describe.each(['decimal', 'text'] as const)('with a %s foreign key to an integer id', (kind) => {
+  describe.each(['decimal', 'text'] as const)('with a %s foreign key to a bigint id', (kind) => {
     it('eager loads hasMany and hasOne', async () => {
       const { Owner } = await openKeyFixtures(driver, kind)
 
@@ -152,5 +152,84 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       expect(ids(relation(second, 'tags'))).toEqual([2])
       expect(relation(empty, 'tags')).toEqual([])
     })
+  })
+})
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('decimal relation keys referenced by integer columns on %s', (driver) => {
+  async function openDecimalOwnerFixtures() {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `dk_owners_${suffix}`, items: `dk_items_${suffix}`, tags: `dk_tags_${suffix}`, pivot: `dk_owner_tags_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+      table.decimal('code')
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_code')
+    })
+    onTestFinished(() => schema.dropTable(names.items))
+    await schema.createTable(names.tags, (table) => {
+      table.integer('id').primaryKey()
+      table.decimal('code')
+    })
+    onTestFinished(() => schema.dropTable(names.tags))
+    await schema.createTable(names.pivot, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_code')
+      table.integer('tag_code')
+    })
+    onTestFinished(() => schema.dropTable(names.pivot))
+
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), code: column.decimal() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_code: column.integer() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey(), code: column.decimal() })
+    const pivot = defineGeneratedTable(names.pivot, { id: column.integer().primaryKey(), owner_code: column.integer(), tag_code: column.integer() })
+    await DB.table(owners).insert([{ id: 1, code: '5.00' }, { id: 2, code: '6.00' }, { id: 3, code: '5.50' }])
+    await DB.table(items).insert([{ id: 10, owner_code: 5 }, { id: 11, owner_code: 5 }, { id: 20, owner_code: 6 }])
+    await DB.table(tags).insert([{ id: 1, code: '7.00' }, { id: 2, code: '8.00' }])
+    await DB.table(pivot).insert([{ id: 1, owner_code: 5, tag_code: 7 }, { id: 2, owner_code: 5, tag_code: 8 }, { id: 3, owner_code: 6, tag_code: 8 }])
+
+    const Tag = defineModel(tags, { timestamps: false })
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, {
+      timestamps: false,
+      relations: {
+        items: hasMany(() => Item, 'owner_code', 'code'),
+        tags: belongsToMany(() => Tag, pivot, 'owner_code', 'tag_code', 'code', 'code'),
+      },
+    })
+    const ItemWithOwner = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_code', 'code') } })
+    return { Owner, Item: ItemWithOwner }
+  }
+
+  it('eager loads hasMany from a decimal local key', async () => {
+    const { Owner } = await openDecimalOwnerFixtures()
+
+    const [first, second, fractional] = await Owner.with('items').orderBy('id').get()
+
+    expect(ids(relation(first, 'items'))).toEqual([10, 11])
+    expect(ids(relation(second, 'items'))).toEqual([20])
+    expect(relation(fractional, 'items')).toEqual([])
+  })
+
+  it('eager loads belongsTo to a decimal owner key', async () => {
+    const { Item } = await openDecimalOwnerFixtures()
+
+    const items = await Item.with('owner').orderBy('id').get()
+
+    expect(items.map(item => relation<Entity<TableDefinition> | null>(item, 'owner')?.get('id' as never))).toEqual([1, 1, 2])
+  })
+
+  it('eager loads belongsToMany through integer pivot columns from decimal keys', async () => {
+    const { Owner } = await openDecimalOwnerFixtures()
+
+    const [first, second, fractional] = await Owner.with('tags').orderBy('id').get()
+
+    expect(ids(relation(first, 'tags'))).toEqual([1, 2])
+    expect(ids(relation(second, 'tags'))).toEqual([2])
+    expect(relation(fractional, 'tags')).toEqual([])
   })
 })

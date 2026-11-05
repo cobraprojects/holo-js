@@ -114,17 +114,26 @@ export async function loadRelationKeyChunks<TRow>(
   return rows
 }
 
-function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
-  if (!definition || !readsAsInteger(definition)) return [...keys]
-  return distinctStoredKeys(keys.filter(key => !isFractionalDecimalText(key)).map(readIntegralDecimalKey))
-}
-
 export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
   return definition !== undefined && readsAsInteger(definition) && isFractionalDecimalText(value)
 }
 
-export function relationKeyOptions(...definitions: readonly (AnyColumnDefinition | undefined)[]): StoredKeyOptions {
-  return { numeric: definitions.some(definition => definition !== undefined && (definition.kind === 'decimal' || readsAsInteger(definition))) }
+function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
+  if (!definition || !readsAsInteger(definition)) return [...keys]
+  return distinctStoredKeys(keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey))
+}
+
+function columnDefinition(query: TableQueryBuilder<string | TableDefinition>, column: string): AnyColumnDefinition | undefined {
+  const table = query.getPlan().source.table
+  return table ? ownEntry(table.columns, column) : undefined
+}
+
+function isNumericKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
+  return definition !== undefined && (definition.kind === 'decimal' || readsAsInteger(definition))
+}
+
+export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, relatedKey: AnyColumnDefinition | undefined): StoredKeyOptions {
+  return { numeric: isNumericKeyColumn(parentKey) || isNumericKeyColumn(relatedKey) }
 }
 
 export async function retrieveRelation(
@@ -138,11 +147,9 @@ export async function retrieveRelation(
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
-  const probePlan = probe.getTableQueryBuilder().getPlan()
-  const table = probePlan.source.table
-  const columnKeys = keysForColumn(keys, table ? ownEntry(table.columns, column) : undefined)
+  const columnKeys = keysForColumn(keys, columnDefinition(probe.getTableQueryBuilder(), column))
   const paginated = isPaginatedRelationQuery(probe)
-  if (typeof observationCount === 'number') plan = probePlan
+  if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
@@ -175,13 +182,19 @@ export async function retrievePivotRelation(
   relatedKey: string,
   pivotSelection: readonly string[],
   readPivotRows: (rows: readonly Record<string, unknown>[]) => Record<string, unknown>[],
+  keyDefinitions: { readonly parentKey?: AnyColumnDefinition, readonly relatedKey?: AnyColumnDefinition } = {},
 ): Promise<{ rows: Record<string, unknown>[], related: StoredKeyMap<Entity> }> {
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
-  const rows = await loadRelationKeyChunks(parentKeys, false, async chunk => readPivotRows(await createPivotQuery()
+  const pivotQuery = createPivotQuery()
+  const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
+  const pivotKeys = pivotParentKey || keyDefinitions.parentKey?.kind !== 'decimal'
+    ? keysForColumn(parentKeys, pivotParentKey)
+    : distinctStoredKeys(parentKeys.map(readIntegralDecimalKey))
+  const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)
     .get<Record<string, unknown>>()))
   const keys = distinctStoredKeys(rows.map(row => row[relatedColumn]).filter(value => value != null))
   const { entities } = await retrieveRelation(keys, createRelatedQuery, relatedKey)
-  return { rows, related: indexRelation(entities, relatedKey) }
+  return { rows, related: indexRelation(entities, relatedKey, relationKeyOptions(keyDefinitions.relatedKey, columnDefinition(pivotQuery, relatedColumn))) }
 }

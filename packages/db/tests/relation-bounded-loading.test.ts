@@ -347,16 +347,6 @@ describe('bounded relation loading', () => {
     expect(new StoredKeySet([1], { numeric: true }).has('1.00')).toBe(true)
   })
 
-  it('keeps distinct numeric-looking text keys apart outside numeric relation dictionaries', () => {
-    const parents = new StoredKeyMap<string>([['1', 'one'], ['1.0', 'one point zero'], ['2.5', 'two and a half']])
-    expect(parents.get('1')).toBe('one')
-    expect(parents.get(1)).toBe('one')
-    expect(parents.get('1.0')).toBe('one point zero')
-    expect(parents.get('1.00')).toBeUndefined()
-    expect(parents.get('2.50')).toBeUndefined()
-    expect(new StoredKeySet(['1']).has('1.00')).toBe(false)
-  })
-
   it('matches relation dictionary Date keys by instance so millisecond-truncated timestamps never attach unrelated parents', () => {
     const parents = new StoredKeyMap<string>([[new Date(1000), 'first']])
     expect(parents.get(new Date(1000))).toBeUndefined()

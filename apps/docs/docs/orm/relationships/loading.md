@@ -41,6 +41,10 @@ const json = await Post.with('author').firstJson()
 json?.author?.name
 ```
 
+### Matching keys
+
+Eager loading attaches each related row to the model whose key holds the same value. When either key column is an integer or `decimal()` column, keys match by numeric value: a `decimal()` foreign key read as `'1.00'`, or a text foreign key holding `'1'`, matches an integer `id` of `1`, and `'1.50'` matches nothing. Keys of two text columns match only when the text is equal, so `'1'` and `'1.0'` stay different keys. This applies to `hasOne`, `hasMany`, one-of-many, `belongsTo` and `belongsToMany`, and to counting them on loaded models.
+
 ## Nested eager loading
 
 Use dots to load relations of relations. Every segment is checked against the model it belongs to:

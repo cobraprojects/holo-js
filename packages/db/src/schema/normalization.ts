@@ -361,7 +361,7 @@ export function readIntegralDecimalKey(value: unknown): unknown {
   return integer === undefined ? value : readIntegerKey(integer === '-0' ? '0' : integer)
 }
 
-const FRACTIONAL_DECIMAL_TEXT = /^-?\d+\.\d*[1-9]\d*$/
+const FRACTIONAL_DECIMAL_TEXT = /^-?(?:0|[1-9]\d*)\.\d*[1-9]\d*$/
 
 export function isFractionalDecimalText(value: unknown): boolean {
   return typeof value === 'string' && FRACTIONAL_DECIMAL_TEXT.test(value)

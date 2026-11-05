@@ -2283,7 +2283,7 @@ export class ModelRepository<
       relation.ownerKey,
       true,
     )
-    const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.relationKeyOptions(related, relation.foreignKey, relation.ownerKey))
+    const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
 
     for (const entity of entities) {
       const foreignKey = entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>]
@@ -2316,7 +2316,7 @@ export class ModelRepository<
       relation.foreignKey,
       true,
     )
-    const grouped = groupRelation(relatedEntities, relation.foreignKey, this.relationKeyOptions(related, relation.localKey, relation.foreignKey))
+    const grouped = groupRelation(relatedEntities, relation.foreignKey, this.keyOptionsFor(related, relation.localKey, relation.foreignKey))
 
     for (const entity of entities) {
       const localKey = entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>]
@@ -2809,7 +2809,7 @@ export class ModelRepository<
     return `${this.definition.table.tableName}.${column}`
   }
 
-  private relationKeyOptions(related: ModelRepository, parentColumn: string, relatedColumn: string): StoredKeyOptions {
+  private keyOptionsFor(related: ModelRepository, parentColumn: string, relatedColumn: string): StoredKeyOptions {
     return relationKeyOptions(ownEntry(this.definition.table.columns, parentColumn), ownEntry(related.definition.table.columns, relatedColumn))
   }
 
@@ -2969,7 +2969,7 @@ export class ModelRepository<
       relation.ownerKey,
     )
 
-    return new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.relationKeyOptions(related, relation.foreignKey, relation.ownerKey))
+    return new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
   }
 
   private async getBelongsToMatchCounts(
@@ -2989,7 +2989,7 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
     )
-    const matching = new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.relationKeyOptions(related, relation.foreignKey, relation.ownerKey))
+    const matching = new StoredKeySet(relatedEntities.map(entity => entity.get(relation.ownerKey as never)), this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
     const counts = new StoredKeyMap<number>()
 
     for (const entity of entities) {
@@ -3019,7 +3019,7 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
     )
-    const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.relationKeyOptions(related, relation.foreignKey, relation.ownerKey))
+    const relatedMap = indexRelation(relatedEntities, relation.ownerKey, this.keyOptionsFor(related, relation.foreignKey, relation.ownerKey))
     const grouped = new StoredKeyMap<Entity[]>()
 
     for (const entity of entities) {
@@ -3159,7 +3159,7 @@ export class ModelRepository<
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
     )
-    return groupRelation(relatedEntities, relation.foreignKey, this.relationKeyOptions(related, relation.localKey, relation.foreignKey))
+    return groupRelation(relatedEntities, relation.foreignKey, this.keyOptionsFor(related, relation.localKey, relation.foreignKey))
   }
 
   private async getMorphManyEntitiesByParentKey(
@@ -3320,7 +3320,7 @@ export class ModelRepository<
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
     const latestEntities = await loadRelationKeyChunks(parentKeys, paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
-    const options = this.relationKeyOptions(related, relation.localKey, parentColumn)
+    const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
@@ -3551,6 +3551,10 @@ export class ModelRepository<
         [relation.foreignPivotKey, this.definition.table, relation.parentKey],
         [relation.relatedPivotKey, this.resolveRelatedRepository(relation.related).definition.table, relation.relatedKey],
       ]),
+      {
+        parentKey: ownEntry(this.definition.table.columns, relation.parentKey),
+        relatedKey: ownEntry(this.resolveRelatedRepository(relation.related).definition.table.columns, relation.relatedKey),
+      },
     )
   }
 
@@ -3559,7 +3563,7 @@ export class ModelRepository<
     related: StoredKeyMap<Entity>,
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
   ): StoredKeyMap<Entity[]> {
-    const grouped = new StoredKeyMap<Entity[]>()
+    const grouped = new StoredKeyMap<Entity[]>([], relationKeyOptions(ownEntry(this.definition.table.columns, relation.parentKey), undefined))
     for (const row of rows) {
       const entity = related.get(row[relation.relatedPivotKey])
       if (!entity) continue
