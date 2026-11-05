@@ -7,6 +7,7 @@ import { watch } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureProjectConfig } from './project'
+import { startRecordingWrittenOutputs } from './written-outputs'
 import { runProjectPrepare } from './project-prepare'
 import type {
   IoStreams,
@@ -211,7 +212,8 @@ export async function runProjectDevServer(
 
     await discoveryWatch.ready
     session.signal.throwIfAborted()
-    const initialArgs = await prepareDiscovery(true)
+    const stopRecordingWrittenOutputs = startRecordingWrittenOutputs()
+    const initialArgs = await prepareDiscovery(true).finally(stopRecordingWrittenOutputs)
     restart = createFrameworkRestart({
       session,
       initialArgs,

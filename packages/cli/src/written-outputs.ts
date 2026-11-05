@@ -21,14 +21,27 @@ type LedgerEntry = {
 type WrittenOutputLedger = {
   readonly entries: Map<string, LedgerEntry>
   readonly pendingWrites: Map<string, Promise<void>>
+  recordings: number
 }
 
 const WRITTEN_OUTPUT_LEDGER = Symbol.for('holo-js.cli.written-outputs')
 
-const { entries, pendingWrites } = ((globalThis as typeof globalThis & { [WRITTEN_OUTPUT_LEDGER]?: WrittenOutputLedger })[WRITTEN_OUTPUT_LEDGER] ??= {
+const ledger = (globalThis as typeof globalThis & { [WRITTEN_OUTPUT_LEDGER]?: WrittenOutputLedger })[WRITTEN_OUTPUT_LEDGER] ??= {
   entries: new Map(),
   pendingWrites: new Map(),
-})
+  recordings: 0,
+}
+const { entries, pendingWrites } = ledger
+
+export function startRecordingWrittenOutputs(): () => void {
+  ledger.recordings++
+  let stopped = false
+  return () => {
+    if (stopped) return
+    stopped = true
+    ledger.recordings--
+  }
+}
 
 function resolvePackageManifestPaths(projectRoot: string): string[] {
   return [...PACKAGE_MANIFEST_DISCOVERY_PATHS].map(manifest => resolve(join(projectRoot, manifest)))
@@ -102,6 +115,7 @@ async function trackWrites<TResult>(
   ancestorPaths: readonly string[] = paths,
   ownsContentChanges = true,
 ): Promise<TResult> {
+  if (ledger.recordings === 0) return await write()
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
   const keys: string[] = []
@@ -170,6 +184,7 @@ export async function writeOutputFile(path: string, contents: string): Promise<v
 }
 
 export async function recordPackageManifestBaseline(projectRoot: string): Promise<void> {
+  if (ledger.recordings === 0) return
   await Promise.all(resolvePackageManifestPaths(projectRoot).map(async (path) => {
     const key = await resolveTrackedPath(path)
     const { identity } = await readFingerprint(key)

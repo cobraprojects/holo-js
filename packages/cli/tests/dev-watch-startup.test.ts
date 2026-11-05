@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -7,8 +7,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import type { WatchFactory, WatchHandle } from '../src/cli-types'
 import { runProjectDevServer } from '../src/dev'
 import { DISCOVERY_WATCH_PROBE_PATH } from '../src/discovery-watch'
-import { isUnchangedWrittenOutput, writeOutputFile } from '../src/written-outputs'
-import { runProjectPrepare } from '../src/project-prepare'
+import { writeOutputFile } from '../src/written-outputs'
 
 type WatchListener = (eventType: string, fileName: string) => void
 
@@ -188,14 +187,20 @@ it('re-prepares once when the user edits a dependency manifest the initial prepa
   expect(calls).toEqual(['live', 'prepare', 'prepare', 'spawn'])
 })
 
-it('keeps a dependency manifest edit for a full prepare when an incremental prepare runs first', async () => {
+it('re-prepares after a prepare that follows startup writes a watched file, as before', async () => {
   const root = await createProject()
-  const manifest = join(root, 'package.json')
-  await rm(join(root, 'server/models/User.ts'))
-  await runProjectPrepare(root, undefined, { command: 'dev' })
-  await writeFile(manifest, JSON.stringify({ ...JSON.parse(await readFile(manifest, 'utf8')), private: true }, null, 2))
-  await runProjectPrepare(root, undefined, { command: 'dev', changes: [{ path: 'config/app.mjs', kind: 'changed' }] })
-  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
-  await runProjectPrepare(root, undefined, { command: 'dev', reason: 'dependencies-changed' })
-  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
-}, 60_000)
+  const calls: string[] = []
+  const watcher = createFakeWatcher(calls)
+
+  await runDev(root, watcher, calls, async (call) => {
+    if (call === 1) {
+      watcher.emit('change', 'server/models/User.ts')
+      return
+    }
+    if (call !== 2) return
+    await writeOwnOutput(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","private":true}')
+    watcher.emit('change', 'package.json')
+  })
+
+  expect(calls).toEqual(['live', 'prepare', 'prepare', 'prepare', 'spawn'])
+})

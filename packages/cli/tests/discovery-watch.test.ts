@@ -4,13 +4,17 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { EventEmitter, once } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { expect, it, onTestFinished, vi } from 'vitest'
+import { beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
 import { writeTextFile } from '../src/project/atomic-file'
-import { isUnchangedWrittenOutput, recordPackageManifestBaseline, trackOutputWrites, trackPackageManifestRestores, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
+import { isUnchangedWrittenOutput, recordPackageManifestBaseline, startRecordingWrittenOutputs, trackOutputWrites, trackPackageManifestRestores, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
+
+beforeEach(() => {
+  onTestFinished(startRecordingWrittenOutputs())
+})
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
   await mkdir(dirname(join(root, path)), { recursive: true })
