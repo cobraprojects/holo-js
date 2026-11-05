@@ -15,7 +15,7 @@ const MAX_LEDGER_ENTRIES = 10_000
 const MAX_SYMBOLIC_LINK_HOPS = 40
 
 type LedgerEntry = {
-  readonly hash?: string | null
+  readonly fingerprint?: string | null
 }
 
 type WrittenOutputLedger = {
@@ -42,14 +42,23 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
 }
 
-async function readContentHash(path: string): Promise<string | null> {
-  try {
-    return hashContents(await readFile(path))
-  } catch (error) {
-    if (!hasErrorCode(error, 'EISDIR')) return null
-    const stats = await stat(path).catch(() => undefined)
-    return stats ? `directory:${stats.dev}:${stats.ino}:${stats.birthtimeMs}` : null
+type Fingerprint = {
+  readonly content: string | null
+  readonly identity: string | null
+}
+
+async function readFingerprint(path: string, writtenContents?: string): Promise<Fingerprint> {
+  const stats = await stat(path).catch(() => undefined)
+  if (!stats) return { content: null, identity: null }
+  if (stats.isDirectory()) {
+    const identity = `directory:${stats.dev}:${stats.ino}:${stats.birthtimeMs}`
+    return { content: identity, identity }
   }
+  const content = writtenContents === undefined
+    ? await readFile(path).then(hashContents, (error: unknown) => hasErrorCode(error, 'ENOENT') ? null : '')
+    : hashContents(writtenContents)
+  if (content === null) return { content: null, identity: null }
+  return { content, identity: `file:${content}:${stats.dev}:${stats.ino}:${stats.mtimeMs}:${stats.ctimeMs}` }
 }
 
 async function resolveTrackedPath(path: string, hops = 0): Promise<string> {
@@ -94,18 +103,18 @@ async function trackWrites<TResult>(
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
   const keys: string[] = []
-  const previousHashes = new Map<string, string | null | undefined>()
+  const previousFingerprints = new Map<string, string | null | undefined>()
   const markPending = (key: string): void => {
     if (keys.includes(key)) return
     keys.push(key)
-    previousHashes.set(key, entries.get(key)?.hash)
+    previousFingerprints.set(key, entries.get(key)?.fingerprint)
     pendingWrites.set(key, pending)
-    setEntry(key, { hash: entries.get(key)?.hash })
+    setEntry(key, { fingerprint: entries.get(key)?.fingerprint })
   }
   const requested = paths.map(path => resolve(path))
   requested.forEach(markPending)
   const recorded: string[] = []
-  const hashesBefore = new Map<string, string | null>()
+  const fingerprintsBefore = new Map<string, Fingerprint>()
   try {
     const targets = await Promise.all(requested.map(path => resolveTrackedPath(path)))
     targets.forEach(markPending)
@@ -114,22 +123,21 @@ async function trackWrites<TResult>(
     ancestors.forEach(markPending)
     recorded.push(...ancestors)
     await Promise.all(recorded.map(async (key) => {
-      if (writtenContents?.(key) === undefined) hashesBefore.set(key, await readContentHash(key))
+      if (writtenContents?.(key) === undefined) fingerprintsBefore.set(key, await readFingerprint(key))
     }))
     return await write()
   } finally {
-    const hashes = await Promise.all(recorded.map(async (key) => {
-      const contents = writtenContents?.(key)
-      return contents === undefined ? await readContentHash(key) : hashContents(contents)
-    }))
+    const fingerprints = await Promise.all(recorded.map(key => readFingerprint(key, writtenContents?.(key))))
     recorded.forEach((key, index) => {
-      const hash = hashes[index] ?? null
-      const unchanged = hashesBefore.has(key) && hashesBefore.get(key) === hash
-      setEntry(key, { hash: unchanged ? previousHashes.get(key) : hash })
+      const after = fingerprints[index] ?? { content: null, identity: null }
+      const before = fingerprintsBefore.get(key)
+      const previous = previousFingerprints.get(key)
+      const keepPrevious = before !== undefined && before.content === after.content && before.identity !== previous
+      setEntry(key, { fingerprint: keepPrevious ? previous : after.identity })
     })
     for (const key of keys) {
       if (pendingWrites.get(key) === pending) pendingWrites.delete(key)
-      if (entries.get(key)?.hash === undefined) entries.delete(key)
+      if (entries.get(key)?.fingerprint === undefined) entries.delete(key)
     }
     trimEntries()
     release()
@@ -151,8 +159,8 @@ export async function writeOutputFile(path: string, contents: string): Promise<v
 export async function recordPackageManifestBaseline(projectRoot: string): Promise<void> {
   await Promise.all(resolvePackageManifestPaths(projectRoot).map(async (path) => {
     const key = await resolveTrackedPath(path)
-    const hash = await readContentHash(key)
-    if (!pendingWrites.has(key)) setEntry(key, { hash })
+    const { identity } = await readFingerprint(key)
+    if (!pendingWrites.has(key)) setEntry(key, { fingerprint: identity })
   }))
 }
 
@@ -170,10 +178,10 @@ export async function isUnchangedWrittenOutput(path: string): Promise<boolean> {
       continue
     }
     const entry = entries.get(key)
-    if (entry?.hash === undefined) return false
-    const current = await readContentHash(key)
+    if (entry?.fingerprint === undefined) return false
+    const { identity } = await readFingerprint(key)
     if (pendingWrites.has(key) || entries.get(key) !== entry) continue
-    if (current === entry.hash) return true
+    if (identity === entry.fingerprint) return true
     entries.delete(key)
     return false
   }

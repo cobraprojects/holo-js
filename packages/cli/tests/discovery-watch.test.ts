@@ -450,3 +450,14 @@ it('treats a manifest a tracked command rewrites and restores as unchanged since
   await write(root, 'package.json', '{"name":"watch-fixture","type":"module","private":true}')
   await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
 })
+
+it('observes a manifest the user changes and restores after the prepare took its baseline', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  const original = '{"name":"watch-fixture","type":"module"}'
+  await write(root, 'package.json', original)
+  await recordPackageManifestBaseline(root)
+  await writeFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
+  await writeFile(manifest, original)
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
+})
