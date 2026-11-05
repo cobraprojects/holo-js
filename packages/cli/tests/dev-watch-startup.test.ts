@@ -211,11 +211,6 @@ async function installWatchPlugin(root: string): Promise<void> {
   await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
 }
 
-async function waitForNextSecond(): Promise<void> {
-  const nextSecond = Math.floor(Date.now() / 1_000) * 1_000 + 1_000
-  while (Date.now() < nextSecond) await delay(nextSecond - Date.now())
-}
-
 function createNonRecursiveWatcher() {
   const createWatcher = ((_path: string, options: { recursive: boolean }) => {
     if (options.recursive) {
@@ -241,16 +236,32 @@ it('re-prepares before launching when a startup edit lands in a plugin watch roo
   expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
 })
 
-it('does no extra prepare at startup without recursive watching when the initial prepare only writes its own files in a new plugin watch root', async () => {
+it('re-prepares before launching when a file is deleted during startup in a folder the initial prepare starts watching', async () => {
   const root = await createProject()
   await installWatchPlugin(root)
-  await write(root, 'resources/existing/Untouched.ts')
-  await waitForNextSecond()
+  await write(root, 'resources/existing/Removed.ts')
   const calls: string[] = []
 
   await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
     if (call !== 1) return
-    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', JSON.stringify({ watch: { roots: ['resources/demo', 'resources/existing'], excludes: [] } }))
+    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', JSON.stringify({ watch: { roots: ['resources/existing'], excludes: [] } }))
+    await rm(join(root, 'resources/existing/Removed.ts'))
+  })
+
+  expect(calls).toEqual(['prepare', 'prepare', 'spawn'])
+})
+
+it('does no extra prepare at startup without recursive watching when the initial prepare keeps the plugin watch roots', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const manifest = JSON.stringify({ watch: { roots: ['resources/demo'], excludes: [] } })
+  await write(root, '.holo-js/generated/.plugins/demo.json', manifest)
+  await write(root, 'resources/demo/Existing.ts')
+  const calls: string[] = []
+
+  await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
+    if (call !== 1) return
+    await writeOwnOutput(root, '.holo-js/generated/.plugins/demo.json', manifest)
     await writeOwnOutput(root, 'resources/demo/Generated.ts', 'generated')
   })
 

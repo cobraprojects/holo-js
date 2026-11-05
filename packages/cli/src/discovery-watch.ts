@@ -195,6 +195,16 @@ function isDiscoveryRelevantPath(
   })
 }
 
+function collectWatchPolicyRoots(
+  project: LoadedProjectConfig,
+  pluginWatches: readonly PluginPrepareWatch[],
+): readonly string[] {
+  return [
+    ...resolveConfiguredDiscoveryRoots(project).map(root => normalizeArtifactPath(toPosixSlashes(root), true)),
+    ...pluginWatches.flatMap(watch => watch.roots),
+  ]
+}
+
 async function collectDirectoryTree(
   rootPath: string,
   directories: Set<string>,
@@ -390,7 +400,6 @@ export async function startDiscoveryWatch({
   deferred = false,
 }: DiscoveryWatchOptions): Promise<DiscoveryWatch> {
   const startedAt = Date.now()
-  const startedAtSecond = Math.floor(startedAt / 1000) * 1000
   const canonicalProjectRoot = await realpath(projectRoot)
   let project = initialProject
   let pluginWatches: readonly PluginPrepareWatch[] = []
@@ -400,7 +409,6 @@ export async function startDiscoveryWatch({
   let closed = false
   let generation = 0
   const handles: WatchHandle[] = []
-  let watchedDirectories = new Set<string>()
   let startupBaseline: WatchPolicyBaseline | undefined
   const warnedPlugins = new Set<string>()
   let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
@@ -445,6 +453,12 @@ export async function startDiscoveryWatch({
     }
     const current = snapshots.get(path)
     return current && Math.floor(current.createdAt) <= startedAt ? current : undefined
+  }
+
+  const findGainedWatchRoots = (baseline: WatchPolicyBaseline): readonly string[] => {
+    const startupRoots = collectWatchPolicyRoots(baseline.project, baseline.pluginWatches)
+    return [...new Set(collectWatchPolicyRoots(project, pluginWatches))]
+      .filter(root => !startupRoots.some(startupRoot => pathIsWithin(root, startupRoot)))
   }
 
   const classify = async (
@@ -512,7 +526,6 @@ export async function startDiscoveryWatch({
 
   const acquireDirectories = (directories: readonly string[]): void => {
     releaseHandles()
-    watchedDirectories = new Set(directories)
     try {
       for (const directory of directories) {
         if (closed || signal.aborted) return
@@ -528,30 +541,9 @@ export async function startDiscoveryWatch({
     }
   }
 
-  const deferStartupEdits = async (directories: readonly string[]): Promise<void> => {
-    const events = deferredEvents
-    if (!events) return
-    const editedPaths = await Promise.all(directories.map(async (directory) => {
-      const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
-      return await Promise.all(entries.filter(entry => entry.isFile()).map(async (entry) => {
-        const entryStats = await stat(join(directory, entry.name)).catch(() => undefined)
-        return entryStats && Math.max(entryStats.mtimeMs, entryStats.ctimeMs) >= startedAtSecond
-          ? normalizeWatchedFilePath(projectRoot, directory, entry.name)
-          : undefined
-      }))
-    }))
-    if (closed || deferredEvents !== events) return
-    for (const path of editedPaths.flat()) {
-      if (path) defer(events, path, 'rename')
-    }
-  }
-
   const refresh = async (nextProject: LoadedProjectConfig): Promise<void> => {
     const directories = await updatePolicy(nextProject)
-    if (recursive !== false || closed) return
-    const addedDirectories = directories.filter(directory => !watchedDirectories.has(directory))
-    acquireDirectories(directories)
-    await deferStartupEdits(addedDirectories)
+    if (recursive === false && !closed) acquireDirectories(directories)
   }
 
   const resume = (): void => {
@@ -560,16 +552,20 @@ export async function startDiscoveryWatch({
     deferredEvents = undefined
     startupBaseline = undefined
     if (!events || closed || signal.aborted) return
+    const gainedRoots = baseline ? findGainedWatchRoots(baseline) : []
     const relevant = [...events]
-      .filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+      .filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches) && !gainedRoots.includes(path))
       .map(([path, eventType]) => ({ path, eventType, previous: findStartupSnapshot(path, baseline) }))
-    if (relevant.length === 0) return
+    if (relevant.length === 0 && gainedRoots.length === 0) return
     observe(async () => {
       const changes = await Promise.all(relevant.map(async ({ path, eventType, previous }) => {
         const change = await classify(path, eventType, previous)
         return await isUnchangedWrittenOutput(resolve(projectRoot, path)) ? undefined : change
       }))
-      return changes.filter(change => change !== undefined)
+      return [
+        ...gainedRoots.map(path => ({ path, kind: 'changed' as const })),
+        ...changes.filter(change => change !== undefined),
+      ]
     })
   }
 

@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { EventEmitter, once } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { setTimeout as delay } from 'node:timers/promises'
 import { beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
@@ -173,8 +172,9 @@ it('defers observed edits until it is resumed and judges them by the policy in e
   expect(captured.changes).toEqual([])
   watcher.resume()
   emit('config/app.ts')
-  await vi.waitFor(() => expect(captured.changes).toHaveLength(2))
+  await vi.waitFor(() => expect(captured.changes).toHaveLength(3))
   expect(captured.changes).toEqual(expect.arrayContaining([
+    { path: 'src/models', kind: 'changed' },
     { path: 'src/models/User.ts', kind: 'changed' },
     { path: 'config/app.ts', kind: 'changed' },
   ]))
@@ -485,11 +485,6 @@ it('keeps a user manifest edit made while a framework sync that restores manifes
   await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
 })
 
-async function waitForNextSecond(): Promise<void> {
-  const nextSecond = Math.floor(Date.now() / 1_000) * 1_000 + 1_000
-  while (Date.now() < nextSecond) await delay(nextSecond - Date.now())
-}
-
 type DeferredWatchListener = (eventType: string, fileName: string) => void
 
 async function installWatchPlugin(root: string): Promise<void> {
@@ -549,10 +544,11 @@ it('replays a file created during startup as created when the watch policy chang
   watcher.resume()
   await settled()
   expect(changes).toEqual(expect.arrayContaining([
+    { path: 'resources/demo', kind: 'changed' },
     { path: 'server/models/New.ts', kind: 'created' },
     { path: 'resources/demo/Added.ts', kind: 'created' },
   ]))
-  expect(changes).toHaveLength(2)
+  expect(changes).toHaveLength(3)
 })
 
 it('replays a startup edit to a file that existed before startup as changed when the watch policy changes', async () => {
@@ -568,7 +564,7 @@ it('replays a startup edit to a file that existed before startup as changed when
   await watcher.refresh({ config })
   watcher.resume()
   await settled()
-  expect(changes).toEqual([{ path: 'server/models/User.ts', kind: 'changed' }])
+  expect(changes).toEqual([{ path: 'resources/demo', kind: 'changed' }, { path: 'server/models/User.ts', kind: 'changed' }])
 })
 
 it('replays a startup edit to a file that existed before startup in a newly watched root as changed', async () => {
@@ -583,21 +579,40 @@ it('replays a startup edit to a file that existed before startup in a newly watc
   await watcher.refresh({ config })
   watcher.resume()
   await settled()
-  expect(changes).toEqual([{ path: 'resources/demo/Existing.ts', kind: 'changed' }])
+  expect(changes).toEqual([{ path: 'resources/demo', kind: 'changed' }, { path: 'resources/demo/Existing.ts', kind: 'changed' }])
 })
 
-it('catches up on startup edits in a watch root created during startup when only the non-recursive watcher is available', async () => {
+it('replays each watch root gained during startup as changed when only the non-recursive watcher is available', async () => {
   const root = await createProject()
   await installWatchPlugin(root)
-  await write(root, 'resources/legacy/Untouched.ts')
-  await waitForNextSecond()
+  await write(root, 'resources/legacy/Removed.ts')
   const config = defaultProjectConfig()
   const { watcher, changes, settled } = await startDeferredWatch(root, false)
   await writeOutputFile(join(root, 'resources/demo/Generated.ts'), 'generated')
   await write(root, 'resources/demo/nested/Edited.ts')
+  await rm(join(root, 'resources/legacy/Removed.ts'))
   await declarePluginWatchRoots(root, ['resources/demo', 'resources/legacy'])
   await watcher.refresh({ config })
   watcher.resume()
   await settled()
-  expect(changes).toEqual([{ path: 'resources/demo/nested/Edited.ts', kind: 'created' }])
+  expect(changes).toEqual(expect.arrayContaining([
+    { path: 'resources/demo', kind: 'changed' },
+    { path: 'resources/legacy', kind: 'changed' },
+  ]))
+  expect(changes).toHaveLength(2)
+})
+
+it('replays no change at resume when the watch policy kept its roots during startup', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await writeOutputFile(join(root, 'resources/demo/Generated.ts'), 'generated')
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([])
 })
