@@ -7,8 +7,9 @@ import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
 import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
-async function waitForTimerScheduledAfter(previousCount: number): Promise<void> {
+async function waitForTimerScheduledAfter(previousCount: number, signal: AbortSignal): Promise<void> {
   while (vi.getTimerCount() <= previousCount) {
+    signal.throwIfAborted()
     await new Promise(resolve => setImmediate(resolve))
   }
 }
@@ -311,7 +312,7 @@ it('does not let a refresh that started before a reset hand its slot to the repl
   expect(countGated(replacementNames)).toBe(5)
 }, 30_000)
 
-it('cancels a subscription\'s deferred remote refresh when it unsubscribes', async () => {
+it('cancels a subscription\'s deferred remote refresh when it unsubscribes', async ({ signal }) => {
   const { db } = await openRealtimeDatabase()
   let runs = 0
   const scheduled = query({
@@ -329,14 +330,14 @@ it('cancels a subscription\'s deferred remote refresh when it unsubscribes', asy
 
   const timersBeforeFirst = vi.getTimerCount()
   const firstReceived = bridge.receive(remoteInvalidation(['db:main:records']))
-  await waitForTimerScheduledAfter(timersBeforeFirst)
+  await waitForTimerScheduledAfter(timersBeforeFirst, signal)
   vi.advanceTimersByTime(10)
   await firstReceived
   expect(runs).toBe(2)
 
   const timersBeforeSecond = vi.getTimerCount()
   const secondReceived = bridge.receive(remoteInvalidation(['db:main:records']))
-  await waitForTimerScheduledAfter(timersBeforeSecond)
+  await waitForTimerScheduledAfter(timersBeforeSecond, signal)
   vi.advanceTimersByTime(10)
   await secondReceived
   expect(vi.getTimerCount()).toBe(1)
@@ -468,7 +469,7 @@ it('still refreshes a live query and reports the error when a local write fails 
   expect(reports.map(report => (report.error as Error).message)).toContain('dependency index unavailable')
 }, 30_000)
 
-it('does not run a remote refresh that a reset overtakes before the refresh resumes', async () => {
+it('does not run a remote refresh that a reset overtakes before the refresh resumes', async ({ signal }) => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   try {
     const { db } = await openRealtimeDatabase()
@@ -487,7 +488,7 @@ it('does not run a remote refresh that a reset overtakes before the refresh resu
     const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
     const timersBefore = vi.getTimerCount()
     void bridge.receive(remoteInvalidation(['db:main:records']))
-    await waitForTimerScheduledAfter(timersBefore)
+    await waitForTimerScheduledAfter(timersBefore, signal)
 
     vi.advanceTimersByTime(10)
     resetRemoteRefreshSchedule()
