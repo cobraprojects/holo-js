@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { NO_EXACT_ID_PREDICATE } from '../src/runtime/predicate-matching'
-import { matchesExactRowIdentity, matchesPatchedExactRowIdentity, rowsContainExactId } from '../src/runtime/query-row-matching'
+import { exactIdsDiffer, matchesExactRowIdentity, matchesPatchedExactRowIdentity, rowIdentityIndexMayHold, rowsContainExactId } from '../src/runtime/query-row-matching'
 
 describe('@holo-js/realtime row key matching', () => {
   it('matches equal keys and leaves differently spelled string keys undecided', () => {
@@ -12,5 +12,12 @@ describe('@holo-js/realtime row key matching', () => {
     expect(matchesPatchedExactRowIdentity({ code: 'DE' }, { name: 'Deutschland' }, 'DE', 'code')).toBe(true)
     expect(rowsContainExactId([{ code: 'FR' }, { code: 'de' }], 'DE', 'code')).toBeUndefined()
     expect(rowsContainExactId([{ code: 'DE' }], NO_EXACT_ID_PREDICATE, 'code')).toBeUndefined()
+  })
+
+  it('treats a boolean key as possibly the one or zero a database stores for it', () => {
+    expect(exactIdsDiffer(true, 1)).toBe(false)
+    expect(exactIdsDiffer(false, '0')).toBe(false)
+    expect(rowIdentityIndexMayHold(new Map([[true, 0]]), 1)).toBe(true)
+    expect(rowIdentityIndexMayHold(new Map([[false, 0]]), '0')).toBe(true)
   })
 })
