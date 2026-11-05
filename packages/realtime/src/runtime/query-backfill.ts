@@ -31,7 +31,7 @@ export function readBackfilledRows(
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
 ): Readonly<Record<string, unknown>>[] {
-  return rows.map(row => queryCacheInternals.readObservedRow(table, row, selections))
+  return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
 }
 
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {
@@ -39,7 +39,7 @@ export function observedTableKey(query: { readonly tableName: string, readonly t
 }
 
 export function readBackfilledValue(table: TableDefinition | undefined, column: string, value: unknown): unknown {
-  return queryCacheInternals.readObservedRow(table, { [column]: value })[column]
+  return queryCacheInternals.readFetchedRow(table, { [column]: value })[column]
 }
 
 function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, TableDefinition> {
@@ -59,14 +59,14 @@ function readRows(
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
   if (!rows) return rows
-  const read = readBackfilledRows(table, rows)
+  const read = rows.map(row => queryCacheInternals.readMutationRow(table, row))
   return read.every((row, index) => row === rows[index]) ? rows : Object.freeze(read)
 }
 
 function readMutation(table: TableDefinition, mutation: DatabaseMutationEvent): DatabaseMutationEvent {
   const rows = readRows(table, mutation.rows)
   const previousRows = readRows(table, mutation.previousRows)
-  const values = mutation.values ? queryCacheInternals.readObservedRow(table, mutation.values) : mutation.values
+  const values = mutation.values ? queryCacheInternals.readMutationRow(table, mutation.values) : mutation.values
   if (rows === mutation.rows && previousRows === mutation.previousRows && values === mutation.values) return mutation
   return Object.freeze({ ...mutation, rows, previousRows, values })
 }

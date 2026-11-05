@@ -152,6 +152,49 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
 })
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('realtime boolean aggregates on %s', (driver) => {
+  it('keeps a numeric aggregate next to a boolean one on the same table equal to a fresh read', async () => {
+    const statements: string[] = []
+    const { db, schema } = await openDatabase(driver, {
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          const query = target.query.bind(target)
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return async (...args: Parameters<typeof query>) => {
+            statements.push(String(args[0]))
+            return await query(...args)
+          }
+        },
+      }),
+    })
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_live_scores_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.boolean('enabled')
+      table.integer('amount').nullable()
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const scores = defineGeneratedTable(name, { id: column.id(), enabled: column.boolean(), amount: column.integer().nullable() })
+    await db.table(scores).insert([{ id: 1, enabled: true, amount: 5 }, { id: 2, enabled: false, amount: 7 }])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const queries: Record<string, () => Promise<unknown>> = {
+      flags: () => db.table(scores).sum('enabled'),
+      amounts: () => db.table(scores).sum('amount'),
+      lowest: () => db.table(scores).min('amount'),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).insert({ id: 3, enabled: true, amount: null }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).where('id', 1).delete() }))
+
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(await Promise.all(Object.values(queries).map(handler => handler())))
+    expect(statements.filter(statement => /(?:sum|avg|min|max)\([^)]*enabled/i.test(statement))).toEqual([])
+  })
+
   it('keeps aggregate subscriptions over a boolean column equal to fresh reads', async () => {
     const { db, flags, schema } = await openFlags(driver)
     const groupsName = `holo_live_flag_totals_${randomUUID().replaceAll('-', '').slice(0, 12)}`
@@ -210,5 +253,16 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rea
     await expectCurrent()
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 1, enabled: true }) }))
     await expectCurrent()
+  })
+
+  it.runIf(driver !== 'postgres')('reads a value other than one or zero that a window backfill loads the way a fresh read does', async () => {
+    const { db, flags } = await openFlags(driver)
+    await db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 2 })
+    const handler = () => db.table(flags).orderBy('id').limit(2).get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
   })
 })

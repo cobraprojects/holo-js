@@ -38,7 +38,7 @@ export function createAggregateColumnsByScope(
   const columns = new Map<string, string[]>()
   for (const entry of entries) {
     for (const query of entry.queries) {
-      if (!query.aggregate?.column) {
+      if (!query.patchable || !query.aggregate?.column) {
         continue
       }
 

@@ -2007,7 +2007,7 @@ export function createDatabaseMutationEvent(
     previousRows: previousRows ? readMutationRows(table, previousRows) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? readMutationRows(table, rows) : undefined,
-    values: values ? readObservedRow(table, values) : values,
+    values: values ? readMutationRow(table, values) : values,
     ...convertedColumns.length > 0 ? { convertedColumns } : {},
   })
 }
@@ -2034,25 +2034,41 @@ function holdsUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Re
   return table !== undefined && Object.keys(row).some(key => readsBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
-function readObservedRow(
+function readBooleanColumns(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[] = [],
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
 ): Readonly<Record<string, unknown>> {
   if (!table) return row
   const booleanKeys = Object.keys(row).filter((key) => {
     const selection = selections.find(candidate => candidate.resultKey === key)
-    return isStoredBoolean(row[key]) && readsBooleanColumn(table, selection ? selection.column : key)
+    return reads(row[key]) && readsBooleanColumn(table, selection ? selection.column : key)
   })
   if (booleanKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
+}
+
+function readMutationRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readBooleanColumns(table, row, [], isStoredBoolean)
+}
+
+function readFetchedRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): Readonly<Record<string, unknown>> {
+  return readBooleanColumns(table, row, selections, isDriverScalar)
 }
 
 function readMutationRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
-  return Object.freeze(rows.map(row => readObservedRow(table, row)))
+  return Object.freeze(rows.map(row => readMutationRow(table, row)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
@@ -2355,7 +2371,8 @@ export async function invalidateQueryCacheDependencies(
 export const queryCacheInternals = {
   getRootDatabaseContext,
   holdsUnreadBoolean,
-  readObservedRow,
+  readFetchedRow,
+  readMutationRow,
   setMutationPreviousRowsRequirement,
   requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,
