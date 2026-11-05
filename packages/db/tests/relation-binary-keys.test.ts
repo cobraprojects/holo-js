@@ -335,6 +335,9 @@ describe('relation loading over binary keys', () => {
 
     await db.table(ownerSlot).insert([{ ownerId: 1, startsAt: 'never' }, { ownerId: 1, startsAt: 'someday' }])
     expect(await owner.sync('slots', [first, 'never'])).toEqual({ attached: [], detached: ['someday'], updated: [] })
+
+    await db.table(ownerSlot).insert([{ ownerId: 1, startsAt: '2026-01-02 03:04:05' }, { ownerId: 1, startsAt: '2026-01-02 03:04:05.000' }])
+    expect(await owner.sync('slots', ['2026-01-02 03:04:05'])).toEqual({ attached: [], detached: [first, 'never', '2026-01-02 03:04:05.000'], updated: [] })
   })
 
   it('matches unsafe big integer pivot ids on an untyped pivot table', async () => {
