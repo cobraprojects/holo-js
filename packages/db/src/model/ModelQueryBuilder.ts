@@ -1,4 +1,5 @@
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
   createDatabaseQueryObservation,
@@ -2497,11 +2498,12 @@ class ModelQueryBuilderBase<
     return entities.flatMap((entity) => {
       const value = entity.get(column as never)
       if (value === null) return []
-      if (typeof value !== 'number' || Number.isNaN(value)) {
+      const numericValue = readNumericValue(value)
+      if (numericValue === undefined) {
         throw new HydrationError(`Model aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return [value]
+      return [numericValue]
     })
   }
 
@@ -2619,7 +2621,7 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (modelNeedsSerialization(relatedDefinition)) {
+        if (!this.repository.relatedRowsArePatchable(relation.related)) {
           return undefined
         }
 
@@ -2642,7 +2644,7 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (modelNeedsSerialization(relatedDefinition)) {
+        if (!this.repository.relatedRowsArePatchable(relation.related)) {
           return undefined
         }
 

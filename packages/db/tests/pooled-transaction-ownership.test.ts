@@ -5,6 +5,7 @@ import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { describe, expect, it } from 'vitest'
 import { createDatabase, createDialect, unsafeSql, type DriverAdapter } from '../src'
+import { mysqlTestConnection, postgresTestConnection } from './support/database'
 
 type ClientState = {
   id: number
@@ -224,18 +225,8 @@ describe.each(['postgres', 'mysql'] as const)('%s native transaction ownership',
   it.runIf(enabled)('keeps overlapping direct-client transactions isolated', async () => {
     const tableName = `holo_direct_${randomUUID().replaceAll('-', '')}`
     const client = driver === 'postgres'
-      ? new Client({
-          host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-          port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-          user: 'postgres',
-          database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-        })
-      : await createConnection({
-          host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-          port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-          user: 'root',
-          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-        })
+      ? new Client(postgresTestConnection())
+      : await createConnection(mysqlTestConnection())
     if (client instanceof Client) await client.connect()
     const adapter = client instanceof Client
       ? createPostgresAdapter({ client })
@@ -276,20 +267,8 @@ describe.each(['postgres', 'mysql'] as const)('%s native transaction ownership',
   it.runIf(enabled)('isolates overlapping transactions and rolls back nested and failed callbacks', async () => {
     const tableName = `holo_leases_${randomUUID().replaceAll('-', '')}`
     const adapter = driver === 'postgres'
-      ? createPostgresAdapter({ config: {
-          host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-          port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-          user: 'postgres',
-          database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-          max: 2,
-        } })
-      : createMySQLAdapter({ config: {
-          host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-          port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-          user: 'root',
-          database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
-          connectionLimit: 2,
-        } })
+      ? createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
+      : createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
     const db = createDatabase({ adapter, dialect: createDialect(driver), security: { allowUnsafeRawSql: true } })
     let resume!: () => void
     let ready!: () => void

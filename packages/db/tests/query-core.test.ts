@@ -27,7 +27,7 @@ import {
   validateQueryPlan,
  } from '../src'
 import { defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 import { createUpsertQueryPlan, withJoin, withLockMode, withOneOfManyAggregateMarker, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 function createTestAdapter(): ReturnType<typeof createSQLiteAdapter> {
@@ -737,7 +737,7 @@ describe('query core slice', () => {
       updateColumns: ['meta'] } as never)).toThrow('must be present in every row')
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('preserves every concurrent increment and decrement across matching rows on %s', async (driver) => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('preserves every concurrent increment and decrement across matching rows on %s', async (driver) => {
     let writes = 0
     const { db, table, schema } = await openDatabase(driver, {
       logger: { onQuerySuccess: entry => { if (entry.kind === 'execute') writes += 1 } },
@@ -772,7 +772,7 @@ describe('query core slice', () => {
     expect(await DB.table(counters).orderBy('id').pluck('score')).toEqual([10, 25, 30])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('adjusts bigint budgets through declared and named tables in transactions on %s', async (driver) => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('adjusts bigint budgets through declared and named tables in transactions on %s', async (driver) => {
     const { db, table, schema } = await openDatabase(driver)
     await schema.table(table.tableName, table => { table.bigInteger('reserved_micros').default(0) })
     const budgets = defineTable(table.tableName, { ...table.columns, reserved_micros: column.bigInteger() })
@@ -1213,7 +1213,7 @@ describe('query core slice', () => {
     expect(await DB.table('registered_records').whereJson('settings->active', false).where('enabled', false).pluck('id')).toEqual([id])
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('compares complete JSON arrays and sets on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('compares complete JSON arrays and sets on %s', async driver => {
     const { db, table } = await openDatabase(driver)
     await db.table(table).insert([
       { id: 1, name: 'First', settings: ['native', 'one'] },

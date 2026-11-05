@@ -8,18 +8,20 @@ import {
   type Entity, type TableDefinition,
 } from '@holo-js/db'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '../src'
+import { postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 
-const livePostgresConfig = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: 'postgres',
-  database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
+function rawPathUrl(database: string, user?: string) {
+  const connection = postgresTestConnection()
+  const url = testConnectionUrl('postgresql', user ? { ...connection, password: undefined } : connection)
+  if (user) url.username = user
+  url.pathname = `/${database}`
+  return url.toString()
 }
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres', () => {
   it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
     const adapter = createPostgresAdapter({ config: {
-      ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500, idleTimeoutMillis: 30_000,
+      ...postgresTestConnection(), max: 4, connectionTimeoutMillis: 500, idleTimeoutMillis: 30_000,
     } })
     const db = createDatabase({
       adapter, dialect: createDialect('postgres'),
@@ -58,7 +60,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   }, 10_000)
 
   it('applies shared admission backpressure to transactions and releases capacity after rollback', async () => {
-    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 4, connectionTimeoutMillis: 500 } })
+    const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 4, connectionTimeoutMillis: 500 } })
     const db = createDatabase({
       adapter, dialect: createDialect('postgres'),
       concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
@@ -92,10 +94,10 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   })
 
   it('connects to the selected integration database', async () => {
-    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
     try {
       const result = await adapter.query<{ database: string }>('SELECT current_database() AS database')
-      expect(result.rows).toEqual([{ database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres' }])
+      expect(result.rows).toEqual([{ database: postgresTestConnection().database }])
     } finally {
       await adapter.disconnect()
     }
@@ -103,10 +105,10 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it.each(['config', 'url'] as const)('creates and reopens a quoted database name through %s configuration', async mode => {
     const database = `holo_quoted_${randomUUID().replaceAll('-', '')}"tenant`
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = createPostgresAdapter(mode === 'config'
-      ? { config: { ...livePostgresConfig, database } }
-      : { connectionString: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${encodeURIComponent(database)}` })
+      ? { config: { ...postgresTestConnection(), database } }
+      : { connectionString: testConnectionUrl('postgresql', { ...postgresTestConnection(), database }).toString() })
     try {
       await adapter.ensureDatabaseExists()
       await adapter.ensureDatabaseExists()
@@ -124,9 +126,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   it('creates and connects to the URL database when the database setting names another one', async () => {
     const urlDatabase = `holo_url_${randomUUID().replaceAll('-', '')}`
     const optionDatabase = `holo_option_${randomUUID().replaceAll('-', '')}`
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = postgresDatabaseDriverFactory.create({
-      url: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${urlDatabase}`,
+      url: rawPathUrl(urlDatabase),
       database: optionDatabase,
     })
     try {
@@ -143,9 +145,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('creates the database the URL connects to when its path keeps a reserved escape', async () => {
     const database = `holo_escape_${randomUUID().replaceAll('-', '')}%2Ftenant`
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = createPostgresAdapter({
-      connectionString: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+      connectionString: rawPathUrl(database),
     })
     try {
       await adapter.ensureDatabaseExists()
@@ -160,9 +162,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('creates the database the URL connects to when its path has a literal percent sign', async () => {
     const database = `holo_percent_${randomUUID().replaceAll('-', '')}%prod`
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = postgresDatabaseDriverFactory.create({
-      url: `postgresql://${livePostgresConfig.user}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+      url: rawPathUrl(database),
       database,
     })
     try {
@@ -180,9 +182,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const suffix = randomUUID().replaceAll('-', '')
     const role = `holo_role_${suffix}%2Fapp`
     const database = `holo_role_db_${suffix}%prod`
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
     const adapter = postgresDatabaseDriverFactory.create({
-      url: `postgresql://${role}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+      url: rawPathUrl(database, role),
     })
     try {
       await admin.execute(`CREATE ROLE "${role}" LOGIN CREATEDB`)
@@ -199,8 +201,8 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   it('reports real database creation permission failures', async () => {
     const role = `holo_denied_${randomUUID().replaceAll('-', '')}`
     const password = randomUUID()
-    const admin = createPostgresAdapter({ config: livePostgresConfig })
-    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, user: role, password, database: role } })
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
+    const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), user: role, password, database: role } })
     try {
       await admin.execute(`CREATE ROLE ${role} LOGIN NOCREATEDB PASSWORD '${password}'`)
       await expect(adapter.ensureDatabaseExists()).rejects.toThrow(`Postgres database "${role}" could not be found or created`)
@@ -212,7 +214,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   }, 30_000)
 
   it('uses a real injected client for bound writes, commit, and rollback', async () => {
-    const client = new Client(livePostgresConfig)
+    const client = new Client(postgresTestConnection())
     await client.connect()
     const adapter = createPostgresAdapter({ client })
     try {
@@ -233,7 +235,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   }, 30_000)
 
   it('returns the final statement result from real multi-statement execution and queries', async () => {
-    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
     try {
       expect(await adapter.execute('SELECT 1; SELECT 2;')).toEqual({ affectedRows: 1, lastInsertId: 2 })
       expect(await adapter.query('SELECT 1 AS value; SELECT 2 AS value;')).toEqual({ rows: [{ value: 2 }], rowCount: 1 })
@@ -246,7 +248,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
   it('hydrates numeric schema columns without losing integer precision', async () => {
     const tableName = `holo_numeric_${randomUUID().replaceAll('-', '_')}`
-    const adapter = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = createPostgresAdapter({ config: postgresTestConnection() })
     const Item = defineModel(defineGeneratedTable(tableName, {
       id: column.id(),
       quantity: column.bigInteger(),
@@ -272,7 +274,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   it('chunks grouped projections without selecting the primary key', async () => {
     const tableName = `holo_grouped_chunks_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const Item = defineModel(defineGeneratedTable(tableName, { id: column.id(), active: column.boolean() }), { timestamps: false })
     configureDB(createConnectionManager({
@@ -299,7 +301,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const usersTable = `holo_one_of_many_lock_users_${suffix}`
     const postsTable = `holo_one_of_many_lock_posts_${suffix}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const Post = defineModel(defineGeneratedTable(postsTable, {
       id: column.id(),
@@ -339,9 +341,9 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const usersTable = `holo_one_of_many_scope_users_${suffix}`
     const postsTable = `holo_one_of_many_scope_posts_${suffix}`
     const adapter = createPostgresAdapter({
-      config: { ...livePostgresConfig, max: 1, options: '-c lock_timeout=300' },
+      config: { ...postgresTestConnection(), max: 1, options: '-c lock_timeout=300' },
     })
-    const holder = new Client(livePostgresConfig)
+    const holder = new Client(postgresTestConnection())
     const Post = defineModel(defineGeneratedTable(postsTable, {
       id: column.id(),
       user_id: column.integer(),
@@ -392,7 +394,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const usersTable = `holo_one_of_many_scope_removal_users_${suffix}`
     const postsTable = `holo_one_of_many_scope_removal_posts_${suffix}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const Post = defineModel(defineGeneratedTable(postsTable, {
       id: column.id(),
@@ -436,7 +438,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const usersTable = `holo_one_of_many_fresh_users_${suffix}`
     const postsTable = `holo_one_of_many_fresh_posts_${suffix}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const Post = defineModel(defineGeneratedTable(postsTable, {
       id: column.id(),
@@ -477,7 +479,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   ]))('chunks $operation model results selecting $selection in ascending ID order', async ({ operation, selection, attribute }) => {
     const tableName = `holo_union_chunks_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const Item = defineModel(defineGeneratedTable(tableName, { id: column.id() }), { timestamps: false })
     configureDB(createConnectionManager({
@@ -503,7 +505,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   it('runs queries against a local Postgres server through the public adapter', async () => {
     const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
 
     try {
@@ -529,11 +531,11 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     const databaseName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createPostgresAdapter({
-      config: livePostgresConfig,
+      config: postgresTestConnection(),
     })
     const adapter = createPostgresAdapter({
       config: {
-        ...livePostgresConfig,
+        ...postgresTestConnection(),
         database: databaseName,
       },
     })
@@ -567,7 +569,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
   ])('reads and writes date columns by calendar day regardless of the process time zone with $label', async ({ types }) => {
     const previousTimeZone = process.env.TZ
     process.env.TZ = 'America/New_York'
-    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2, types } })
+    const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2, types } })
     const db = createDatabase({ adapter, dialect: createDialect('postgres') })
     const tableName = `holo_date_${randomUUID().replaceAll('-', '')}`
     try {
@@ -590,7 +592,7 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres full date formats', () => {
   it('round-trips BC dates, five-digit years, and infinite dates without shifting', async () => {
-    const adapter = createPostgresAdapter({ config: { ...livePostgresConfig, max: 2 } })
+    const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), max: 2 } })
     const db = createDatabase({ adapter, dialect: createDialect('postgres') })
     const source = `holo_full_date_${randomUUID().replaceAll('-', '')}`
     const copy = `${source}_copy`

@@ -4,7 +4,7 @@ import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { column, createDatabase, createDialect, diffSchema, createSchemaService, SchemaError } from '../src'
 import { defineTable } from './support/internal'
 import { createTestTable } from './support/schema'
-import { openDatabase } from './support/database'
+import { integrationDrivers, mysqlIntegration, mysqlTestConnection, openDatabase, postgresIntegration, postgresTestConnection } from './support/database'
 
 function openSQLiteSchema() {
   const adapter = createSQLiteAdapter({ filename: ':memory:' })
@@ -14,7 +14,7 @@ function openSQLiteSchema() {
 }
 
 describe('native schema diff', () => {
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('reports matching columns and indexes on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('reports matching columns and indexes on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const expected = defineTable(table.tableName.split('.').at(-1)!, table.columns)
     const diff = await diffSchema(schema, [expected])
@@ -27,7 +27,7 @@ describe('native schema diff', () => {
     })
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('reports no changes for unique columns with conventional and shortened names on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('reports no changes for unique columns with conventional and shortened names on %s', async driver => {
     const { schema } = await openDatabase(driver)
     const name = `holo_diff_unique_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`
     onTestFinished(() => schema.dropTable(name))
@@ -113,7 +113,7 @@ describe('native schema diff', () => {
     expect(diff.tables[0]!.extraForeignKeys).toEqual(['team_id->teams.id'])
   })
 
-  it.each(['postgres', 'mysql'] as const)('compares a table qualified with the default schema on %s', async driver => {
+  it.each(integrationDrivers(['postgres', 'mysql']))('compares a table qualified with the default schema on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const name = table.tableName.split('.').at(-1)!
 
@@ -126,7 +126,7 @@ describe('native schema diff', () => {
     expect(diff.tables[0]).toMatchObject({ table: table.tableName, missingColumns: [], extraColumns: [], mismatchedColumns: [], hasChanges: false })
   })
 
-  it.each(['postgres', 'mysql'] as const)('compares tables qualified with another schema on %s', async driver => {
+  it.each(integrationDrivers(['postgres', 'mysql']))('compares tables qualified with another schema on %s', async driver => {
     const { schema, adapter } = await openDatabase(driver)
     const tenant = `holo_tenant_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
     const quote = (identifier: string) => driver === 'postgres' ? `"${identifier}"` : `\`${identifier}\``
@@ -155,7 +155,7 @@ describe('native schema diff', () => {
     })
   })
 
-  it.each(['postgres', 'mysql'] as const)('compares foreign keys of a qualified table by the schema they reference on %s', async driver => {
+  it.each(integrationDrivers(['postgres', 'mysql']))('compares foreign keys of a qualified table by the schema they reference on %s', async driver => {
     const { schema, adapter, table } = await openDatabase(driver)
     const qualifiedHome = table.tableName
     const home = qualifiedHome.split('.').at(-1)!
@@ -184,7 +184,7 @@ describe('native schema diff', () => {
     })
   })
 
-  it('reports an unqualified reference that the search path cannot resolve on postgres', async () => {
+  it.runIf(postgresIntegration)('reports an unqualified reference that the search path cannot resolve on postgres', async () => {
     const { schema, adapter } = await openDatabase('postgres')
     const tenant = `holo_tenant_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
     onTestFinished(async () => { await adapter.execute(`DROP SCHEMA IF EXISTS "${tenant}" CASCADE`) })
@@ -205,19 +205,12 @@ describe('native schema diff', () => {
     })
   })
 
-  it('resolves an unqualified foreign key reference through the whole search path on postgres', async () => {
+  it.runIf(postgresIntegration)('resolves an unqualified foreign key reference through the whole search path on postgres', async () => {
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
     const first = `holo_first_${suffix}`
     const billing = `holo_billing_${suffix}`
     const users = `holo_users_${suffix}`
-    const adapter = createPostgresAdapter({ config: {
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-      options: `-c search_path=${first},public`,
-    } })
+    const adapter = createPostgresAdapter({ config: { ...postgresTestConnection(), options: `-c search_path=${first},public` } })
     const db = createDatabase({ adapter, dialect: createDialect('postgres') })
     const schema = createSchemaService(db)
     onTestFinished(async () => {
@@ -243,7 +236,7 @@ describe('native schema diff', () => {
     expect(diff.tables[0]).toMatchObject({ missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [] })
   })
 
-  it('reports a schema-qualified view as a missing table on mysql', async () => {
+  it.runIf(mysqlIntegration)('reports a schema-qualified view as a missing table on mysql', async () => {
     const { schema, adapter, table } = await openDatabase('mysql')
     const view = `${table.tableName}_view`
     const quote = (path: string) => path.split('.').map(part => `\`${part}\``).join('.')
@@ -314,11 +307,11 @@ describe('native schema diff', () => {
     expect(diff.missingTables).toEqual(['missing.orders'])
   })
 
-  it('matches qualified tables and references case-insensitively when mysql folds names', async ({ skip }) => {
+  it.runIf(mysqlIntegration)('matches qualified tables and references case-insensitively when mysql folds names', async ({ skip }) => {
     const { schema, adapter, db } = await openDatabase('mysql')
     const folding = await db.queryCompiled<{ folding: number | string }>({ sql: 'SELECT @@lower_case_table_names AS folding', bindings: [], source: 'test' })
     if (Number(folding.rows[0]!.folding) === 0) skip()
-    const database = (process.env.HOLO_MYSQL_DATABASE ?? 'mysql').toUpperCase()
+    const database = mysqlTestConnection().database.toUpperCase()
     const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
     const parents = `holo_parents_${suffix}`
     const children = `holo_children_${suffix}`
@@ -340,7 +333,7 @@ describe('native schema diff', () => {
     expect(diff.tables[0]).toMatchObject({ missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [] })
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('keeps an unqualified table that shares its name with a table in another schema on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('keeps an unqualified table that shares its name with a table in another schema on %s', async driver => {
     const { schema, table } = await openDatabase(driver)
     const name = table.tableName.split('.').at(-1)!
     const elsewhere = defineTable(`${driver === 'sqlite' ? 'temp' : 'holo_missing_schema'}.${name}`, table.columns)
@@ -352,7 +345,7 @@ describe('native schema diff', () => {
     expect(diff.tables).toEqual([])
   })
 
-  it.each(['sqlite', 'mysql'] as const)('rejects unsupported vector columns on %s', async driver => {
+  it.each(integrationDrivers(['sqlite', 'mysql']))('rejects unsupported vector columns on %s', async driver => {
     const { db, table, schema } = await openDatabase(driver)
     await schema.table(table.tableName, table => { table.blob('embedding').nullable() })
     const vectors = defineTable(table.tableName.split('.').at(-1)!, { ...table.columns, embedding: column.vector({ dimensions: 3 }).nullable() })

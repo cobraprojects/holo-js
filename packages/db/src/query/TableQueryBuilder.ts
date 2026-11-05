@@ -47,7 +47,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readInsertedKey, readIntegerResultColumns, resolveIntegerResultColumns } from './integerResultColumns'
+import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -1981,6 +1981,7 @@ export class TableQueryBuilder<
     statement: CompiledStatement,
     collectObservation = true,
     scopeCacheKey = false,
+    convertColumns = true,
   ): Promise<TRow[]> {
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
@@ -2001,7 +2002,7 @@ export class TableQueryBuilder<
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired) {
-      const rows = await this.queryRows<TRow>(statement)
+      const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -2022,7 +2023,7 @@ export class TableQueryBuilder<
 
     const flexible = cacheConfig.flexible
     if (flexible) {
-      const rows = await runQueryCacheOperation(runSource => bridge.flexible(
+      const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
         flexible,
         () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2030,7 +2031,7 @@ export class TableQueryBuilder<
           driver: cacheConfig.driver,
           dependencies,
         },
-      ))
+      )))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -2045,7 +2046,7 @@ export class TableQueryBuilder<
     }
 
     const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
-    const rows = await runQueryCacheOperation(runSource => bridge.flexible(
+    const rows = this.convertRows(convertColumns, await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
       ttl,
       () => runSource(() => this.queryRows<TRow>(statement)),
@@ -2053,7 +2054,7 @@ export class TableQueryBuilder<
         driver: cacheConfig.driver,
         dependencies,
       },
-    ))
+    )))
     await this.recordCollectedQueryObservation(
       activeDependencyCollector && collectObservation,
       observationDependencies,
@@ -2063,13 +2064,19 @@ export class TableQueryBuilder<
     return rows
   }
 
+  private convertRows<TRow extends Record<string, unknown>>(convertColumns: boolean, rows: TRow[]): TRow[] {
+    if (!convertColumns) return rows
+    const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
+    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
+    return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+  }
+
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const integerColumns = resolveIntegerResultColumns(this.plan)
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
-    if (aggregates.length === 0 && integerColumns.size === 0) return rows
+    if (aggregates.length === 0) return rows
     return rows.map(row => {
-      const values: Record<string, unknown> = readIntegerResultColumns(row, integerColumns)
+      const values: Record<string, unknown> = { ...row }
       for (const selection of aggregates) {
         const value = row[selection.alias]
         if (value == null) continue
@@ -2081,6 +2088,25 @@ export class TableQueryBuilder<
       }
       return values as TRow
     })
+  }
+
+  private observesSQLiteDecimalColumn(): boolean {
+    if (this.connection.getDriver() !== 'sqlite') return false
+    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
+    for (const join of this.plan.joins) {
+      if (join.table) tables.set(join.alias ?? join.table, join.definition ?? getConnectionGeneratedTableDefinition(join.table, this.connection.getConnectionName()))
+    }
+    const readsDecimal = (column: string): boolean => {
+      const separator = column.lastIndexOf('.')
+      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tableForQualifier(tables, column.slice(0, separator))
+      const name = column.slice(separator + 1)
+      const columns = Object.entries(table?.columns ?? {})
+      return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')
+    }
+    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsDecimal(`${table}.*`)))
+      || this.plan.selections.some(selection => selection.kind === 'column' && readsDecimal(selection.column))
+      || this.plan.groupBy.some(readsDecimal)
+      || this.plan.orderBy.some(order => order.kind === 'column' && readsDecimal(order.column))
   }
 
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
@@ -2100,6 +2126,11 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
+    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
+      recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
+      return
+    }
+
     const groupedAggregate = observation?.groupedAggregate
     if (
       !observation?.patchable
@@ -2386,7 +2417,7 @@ export class TableQueryBuilder<
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
     const offset = (page - 1) * perPage
-    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true)
+    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true, false)
     const total = Number(counts[0]?.__holo_count)
     if (!Number.isSafeInteger(total) || total < 0) throw new CompilerError('Pagination count must be a non-negative safe integer.')
     const pageQuery = this.limit(perPage).offset(offset === 0 ? undefined : offset)
@@ -2611,7 +2642,7 @@ export class TableQueryBuilder<
   }
 
   async count(): Promise<number> {
-    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true)
+    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true, false)
     const result = Number(rows[0]?.__holo_count)
     if (!Number.isSafeInteger(result) || result < 0) throw new CompilerError('Query count must be a non-negative safe integer.')
     if (hasActiveDatabaseDependencyCollector()) {
@@ -2622,7 +2653,7 @@ export class TableQueryBuilder<
 
   async exists(): Promise<boolean> {
     if (!hasActiveDatabaseDependencyCollector()) {
-      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true)
+      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true, false)
       return rows[0]?.__holo_exists === true || rows[0]?.__holo_exists === 1
     }
     const count = await this.count()

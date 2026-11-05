@@ -2,17 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { ConnectionManager, DB, DatabaseContext, column, configureDB, createDialect, defineGeneratedTable, resetDB } from '@holo-js/db'
 import { createPostgresAdapter } from '../../db-postgres/src'
+import { postgresTestConnection } from '../../../tests/support/real-database'
 import { defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
 it.runIf(process.env.HOLO_POSTGRES_INTEGRATION === '1')('allows typed inserts with INSERT-only privileges while realtime is subscribed and keeps private reads denied', async () => {
   const name = `insert_only_${randomUUID().replaceAll('-', '')}`
-  const config = {
-    host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-    database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-  }
-  const owner = new DatabaseContext({ driver: 'postgres', dialect: createDialect('postgres'), adapter: createPostgresAdapter({ config: { ...config, user: 'postgres' } }), connectionName: 'main' })
+  const { user, password, ...config } = postgresTestConnection()
+  const owner = new DatabaseContext({ driver: 'postgres', dialect: createDialect('postgres'), adapter: createPostgresAdapter({ config: { ...config, user, password } }), connectionName: 'main' })
   const table = defineGeneratedTable(name, { tenant_id: column.string().primaryKey(), secret: column.string() })
   let subscription: { unsubscribe(): void } | undefined
   try {

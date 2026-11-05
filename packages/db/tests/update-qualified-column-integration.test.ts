@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { column, DB, resetDB } from '../src'
-import { openDatabase } from './support/database'
+import { mysqlTestConnection, openDatabase } from './support/database'
 import { defineModelFromTable, defineTable } from './support/internal'
 
 const drivers = [
@@ -74,7 +74,7 @@ describe.each(drivers)('writes with a table-qualified column or alias on %s', (d
 
   it.skipIf(driver === 'sqlite')('writes a column qualified with the bare name of a schema-qualified table', async () => {
     const { name, read } = await createProducts(driver)
-    const schemaName = driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const schemaName = driver === 'postgres' ? 'public' : mysqlTestConnection().database
 
     await DB.table(`${schemaName}.${name}`).where('id', 1).update({ [`${name}.price`]: 11 })
     await DB.table(`${schemaName}.${name}`).where('id', 2).update({ [`${schemaName}.${name}.price`]: 22 })
