@@ -17,6 +17,8 @@ const DIALECT_DISPLAY_NAME: Readonly<Record<SchemaDialectName, string>> = Object
   mysql: 'MySQL',
 })
 
+const NUMERIC_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/
+
 export function coerceBoolean(value: unknown): boolean | null | undefined {
   if (value == null) {
     return value as null | undefined
@@ -38,6 +40,10 @@ export function coerceBoolean(value: unknown): boolean | null | undefined {
 
     if (normalized === '0' || normalized === 'false' || normalized === 'f') {
       return false
+    }
+
+    if (NUMERIC_TEXT.test(normalized)) {
+      return Number(normalized) !== 0
     }
   }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { clearGeneratedTables, defineModel, holoRuntimeInternals, registerGeneratedTables, resetDB } from '../src'
+import { DB, clearGeneratedTables, defineModel, holoRuntimeInternals, registerGeneratedTables, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
@@ -70,5 +70,15 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('%s boolean casts', dial
       expect(readZero.get(column), column).toBe(false)
       expect(readOne.get(column), column).toBe(true)
     }
+  })
+
+  it.runIf(dialect === 'sqlite')('reads false from a text column holding the 0.0 that earlier releases wrote', async () => {
+    const Flags = await openFlagsModel(dialect)
+    await DB.table(Flags.getTableName()).insert([{ id: 1, as_text: '0.0', as_string: '0.00' }, { id: 2, as_text: '1.0', as_string: '1.00' }])
+
+    expect((await Flags.findOrFail(1)).get('as_text')).toBe(false)
+    expect((await Flags.findOrFail(1)).get('as_string')).toBe(false)
+    expect((await Flags.findOrFail(2)).get('as_text')).toBe(true)
+    expect((await Flags.findOrFail(2)).get('as_string')).toBe(true)
   })
 })
