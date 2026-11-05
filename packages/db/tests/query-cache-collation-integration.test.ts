@@ -68,12 +68,12 @@ function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
   })
 }
 
-async function createTickets(driver: Driver) {
+async function createTickets(driver: Driver, idType: 'INTEGER' | 'NUMERIC' = 'INTEGER') {
   const { adapter } = await openDatabase(driver)
   const name = `tickets_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
-  registerGeneratedTables({ tickets: defineTable(name, { id: column.integer().primaryKey(), label: column.string() }) })
-  await adapter.execute(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
+  registerGeneratedTables({ tickets: defineTable(name, { id: (idType === 'INTEGER' ? column.integer() : column.decimal()).primaryKey(), label: column.string() }) })
+  await adapter.execute(`CREATE TABLE ${name} (id ${idType} PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
   onTestFinished(async () => {
     clearGeneratedTables()
     resetCacheRuntime()
@@ -136,6 +136,43 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('query cache invalid
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache invalidation by a case-sensitive key on postgres', () => {
   registerTextNumberScenarios('postgres')
+
+  it('refreshes a cached read by a numeric key as text with an exponent separator after an update matched by the number', async () => {
+    const tickets = await createTickets('postgres', 'NUMERIC')
+    expect(await tickets.cachedLabel('5e0_0')).toBe('first')
+
+    await tickets.update(5, 'renamed')
+
+    expect(await tickets.cachedLabel('5e0_0')).toBe('renamed')
+  })
+
+  it('commits a write in a transaction when reading its case-insensitive columns fails', async () => {
+    const { db, adapter } = await openDatabase('postgres', {
+      wrapAdapter: inner => new Proxy(inner, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          if ((property === 'query' || property === 'introspect') && typeof value === 'function') {
+            return (sql: string, ...rest: unknown[]) => sql.includes('FROM pg_catalog.pg_attribute')
+              ? target.query('SELECT 1 / 0', [])
+              : Reflect.apply(value, target, [sql, ...rest])
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }),
+    })
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France')`)
+
+    await db.transaction(async transaction => await transaction.table(name).where('code', 'FR').update({ label: 'République' }))
+
+    expect((await adapter.query<{ label: string }>(`SELECT label FROM ${name} WHERE code = 'FR'`)).rows[0]?.label).toBe('République')
+  })
 
   it('refreshes a cached read by a citext key after an update matched by a case-differing key', async () => {
     await ensureCitext()

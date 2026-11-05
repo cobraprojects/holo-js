@@ -41,13 +41,16 @@ async function readCaseInsensitiveColumns(connection: DatabaseContext, tableName
     return 'all'
   }
 
+  const dialect = connection.getDialect()
+  const read = (reader: DatabaseContext) => reader.introspectCompiled<{ name: string }>({
+    sql: CASE_INSENSITIVE_COLUMNS_SQL,
+    bindings: [parts.map(part => dialect.quoteIdentifier(part)).join('.')],
+    source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
+  })
   try {
-    const dialect = connection.getDialect()
-    const result = await connection.introspectCompiled<{ name: string }>({
-      sql: CASE_INSENSITIVE_COLUMNS_SQL,
-      bindings: [parts.map(part => dialect.quoteIdentifier(part)).join('.')],
-      source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
-    })
+    const result = connection.getScope().kind !== 'root' || currentRootTransaction(connection)
+      ? await connection.transaction(read)
+      : await read(connection)
     return new Set(result.rows.map(row => row.name))
   } catch {
     return 'all'
