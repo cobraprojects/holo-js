@@ -1844,10 +1844,9 @@ export class ModelRepository<
   }
 
   assertUpsertUpdateColumns(columns: readonly string[]): void {
-    const unguarded: readonly (string | undefined)[] = [this.definition.primaryKey, this.definition.updatedAtColumn]
     for (const column of columns) {
       const { columnName } = findWriteColumn(this.definition, column, 'computed')
-      if (!unguarded.includes(columnName)) {
+      if (columnName !== this.definition.updatedAtColumn) {
         this.assertWritableColumn(columnName, column)
       }
     }

@@ -220,3 +220,45 @@ describe.each(drivers)('model upsert with a qualified updated_at update column o
     ])
   })
 })
+
+describe.each(drivers)('model upsert keeps protected columns out on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('rejects a guarded primary key or a protected column named as an update column, qualified or not, before any SQL runs', async () => {
+    const statements: string[] = []
+    const { schema } = await openDatabase(driver, { logger: { onQueryStart: (entry) => { statements.push(entry.sql) } } })
+    const name = `posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('slug').unique()
+      table.string('title')
+      table.timestamps()
+    })
+    const past = new Date('2020-01-01T00:00:00.000Z')
+    await DB.table(name).insert({ id: 1, slug: 'own', title: 'Own', created_at: past, updated_at: past })
+    const posts = defineTable(name, {
+      id: column.id(),
+      slug: column.string().unique(),
+      title: column.string(),
+      created_at: column.timestamp(),
+      updated_at: column.timestamp(),
+    })
+    const Post = defineModelFromTable(posts, { fillable: ['slug', 'title'] })
+    const notWritable = (column: string) => `Column "${column}" is not writable on model "${Post.definition.name}".`
+
+    statements.length = 0
+    await expect(Post.query().upsert([{ id: 99, slug: 'own', title: 'Taken' }], ['slug'], ['id'])).rejects.toThrow(notWritable('id'))
+    await expect(Post.query().upsert([{ slug: 'own', title: 'Taken' }], ['slug'], [`${name}.created_at`])).rejects.toThrow(notWritable('created_at'))
+    await expect(Post.query().from(`${name} as p`).upsert([{ slug: 'own', title: 'Taken' }], ['slug'], ['p.created_at' as never])).rejects.toThrow(notWritable('created_at'))
+    await expect(Post.query().upsert([{ slug: 'own', title: 'Taken', [`${name}.created_at`]: past } as never], ['slug'], ['title'])).rejects.toThrow(notWritable('created_at'))
+    expect(statements).toEqual([])
+
+    const rows = await DB.table(name).get()
+    expect(rows.map(row => [Number(row.id), row.title])).toEqual([[1, 'Own']])
+  })
+})

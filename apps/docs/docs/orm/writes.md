@@ -419,7 +419,7 @@ Inside the callback, mass assignment rules are off for every model, not only `Us
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
 :::
 
-A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted when it isn't fillable, because it's the column upserts usually match on, and `updated_at` may always be an update column. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
+A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted in the rows when it isn't fillable, because it's the column upserts usually match on. Among the update columns only `updated_at` is exempt, so a conflict can't rewrite a protected primary key. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
 
 ## Method reference
 
