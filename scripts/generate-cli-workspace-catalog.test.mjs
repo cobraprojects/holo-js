@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { generateCliWorkspaceCatalog } from './generate-cli-workspace-catalog.mjs'
+import {
+  generateCliWorkspaceCatalog,
+  renderCliWorkspaceCatalog,
+  workspaceCatalogPath,
+} from './generate-cli-workspace-catalog.mjs'
 
 let repoRoot
 
@@ -30,4 +34,14 @@ test('workspace catalog generator creates the generated directory', async () => 
     'utf8',
   )
   assert.match(output, /"eslint"\s*:/)
+})
+
+test('committed workspace catalog matches the root package.json catalog', async () => {
+  const committed = await readFile(workspaceCatalogPath(), 'utf8')
+
+  assert.equal(
+    committed,
+    await renderCliWorkspaceCatalog(),
+    'packages/cli/src/generated/workspaceCatalog.ts is stale. Run node scripts/generate-cli-workspace-catalog.mjs.',
+  )
 })
