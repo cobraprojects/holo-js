@@ -7,6 +7,7 @@ import {
   registerDatabaseDriverFactory,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
+  type DriverAdapter,
 } from '../src'
 import { postgresIntegration, postgresTestConnection } from './support/database'
 
@@ -73,7 +74,7 @@ async function readWhileDropCommits<T>(tableName: string, read: () => Promise<T>
 }
 
 describe.skipIf(!postgresIntegration)('PostgreSQL schema introspection of a concurrently dropped table', () => {
-  let admin: ReturnType<typeof createPostgresAdapter>
+  let admin: DriverAdapter
 
   beforeAll(async () => {
     admin = createPostgresAdapter({ config: postgresTestConnection() })
