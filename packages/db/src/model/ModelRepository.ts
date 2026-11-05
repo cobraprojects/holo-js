@@ -894,7 +894,7 @@ export class ModelRepository<
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       const primaryKey = resolveModelRowKey(related.definition)
@@ -954,7 +954,7 @@ export class ModelRepository<
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
@@ -1022,7 +1022,7 @@ export class ModelRepository<
       )
       const dependencies = Object.freeze([
         createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-        predicateDependency!,
+        ...(predicateDependency ? [predicateDependency] : []),
       ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
@@ -1062,7 +1062,7 @@ export class ModelRepository<
     )
     const dependencies = Object.freeze([
       createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName),
-      predicateDependency!,
+      ...(predicateDependency ? [predicateDependency] : []),
     ])
     const related = this.resolveRelatedRepository(relation.related)
 

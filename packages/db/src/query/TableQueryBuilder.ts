@@ -100,6 +100,7 @@ import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimary
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import { isPostgresConnection } from '../schema/connectionDialect'
+import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from './caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -3340,7 +3341,7 @@ export class TableQueryBuilder<
       rows,
       lastInsertId,
       hasInvalidationListeners,
-      !isPostgresConnection(this.connection),
+      await this.resolveCaseInsensitiveColumns(rows),
     )
 
     await invalidateQueryCacheDependencies(
@@ -3349,6 +3350,21 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private async resolveCaseInsensitiveColumns(
+    records: readonly Readonly<Record<string, unknown>>[],
+    predicates: readonly QueryPredicateNode[] = [],
+  ): Promise<CaseInsensitiveColumns> {
+    if (!isPostgresConnection(this.connection)) {
+      return 'all'
+    }
+
+    const writesText = records.some(record => Object.values(record).some(value => typeof value === 'string'))
+      || predicatesCompareText(predicates)
+    return writesText
+      ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      : new Set<string>()
   }
 
   private async invalidateMutationQueries(
@@ -3366,7 +3382,7 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       values,
       hasInvalidationListeners,
-      !isPostgresConnection(this.connection),
+      await this.resolveCaseInsensitiveColumns([values], this.plan.predicates),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
@@ -3705,4 +3721,11 @@ function valuesDiffer(left: unknown, right: unknown): boolean {
   return left !== right
     && typeof left === typeof right
     && (typeof left === 'number' || typeof left === 'bigint' || typeof left === 'boolean')
+}
+
+function predicatesCompareText(predicates: readonly QueryPredicateNode[]): boolean {
+  return predicates.some(predicate => predicate.kind === 'group'
+    ? predicatesCompareText(predicate.predicates)
+    : predicate.kind === 'comparison'
+      && (typeof predicate.value === 'string' || (Array.isArray(predicate.value) && predicate.value.some(value => typeof value === 'string'))))
 }

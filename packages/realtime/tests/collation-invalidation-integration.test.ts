@@ -142,7 +142,7 @@ function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
   })
 }
 
-async function createStringIdCountries(driver: Driver) {
+async function createStringIdCountries(driver: Driver, postgresIdType = 'VARCHAR(16) COLLATE "C"') {
   const adapter = createAdapter(driver)
   const tableName = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main' })
@@ -155,7 +155,7 @@ async function createStringIdCountries(driver: Driver) {
     await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
     await adapter.disconnect()
   })
-  const id = driver === 'sqlite' ? 'id TEXT PRIMARY KEY COLLATE NOCASE' : `id VARCHAR(16) COLLATE ${driver === 'mysql' ? 'utf8mb4_0900_ai_ci' : '"C"'} PRIMARY KEY`
+  const id = driver === 'sqlite' ? 'id TEXT PRIMARY KEY COLLATE NOCASE' : `id ${driver === 'mysql' ? 'VARCHAR(16) COLLATE utf8mb4_0900_ai_ci' : postgresIdType} PRIMARY KEY`
   await adapter.execute(`CREATE TABLE ${tableName} (${id}, label VARCHAR(64) NOT NULL)`)
   await adapter.execute(`INSERT INTO ${tableName} (id, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
   registerGeneratedTables({ countries: defineGeneratedTable(tableName, { id: column.string().primaryKey(), label: column.string() }) })
@@ -190,24 +190,60 @@ async function createNumericIdCountries(driver: Driver) {
     await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
     await adapter.disconnect()
   })
-  await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
-  await adapter.execute(`INSERT INTO ${tableName} (id, label) VALUES (5, 'France'), (6, 'Germany')`)
-  registerGeneratedTables({ countries: defineGeneratedTable(tableName, { id: column.integer().primaryKey(), label: column.string() }) })
+  await adapter.execute(`CREATE TABLE ${tableName} (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL, rank_no INTEGER NOT NULL)`)
+  await adapter.execute(`INSERT INTO ${tableName} (id, label, rank_no) VALUES (5, 'France', 1), (6, 'Germany', 2)`)
+  registerGeneratedTables({ countries: defineGeneratedTable(tableName, { id: column.integer().primaryKey(), label: column.string(), rank_no: column.integer() }) })
   configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  const snapshots: unknown[] = []
-  await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ db }) => await db.table(tableName).where('id', 5).first() }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
-  const updateByText = (value: string, label: string) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).where('id', value).update({ label }) }))
-  return { snapshots, updateByText }
+  const subscribe = async (handler: Parameters<typeof defineRealtimeQuery>[0]['handler']) => {
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
+    return snapshots
+  }
+  const mutate = (handler: Parameters<typeof defineRealtimeMutation>[0]['handler']) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+  return {
+    subscribeById: (value: number | string) => subscribe(async ({ db }) => await db.table(tableName).where('id', value).first()),
+    subscribeByRank: (value: number | string) => subscribe(async ({ db }) => (await db.table(tableName).where('rank_no', value).get()).map(row => row.label).sort()),
+    update: (value: number | string, label: string) => mutate(({ db }) => db.table(tableName).where('id', value).update({ label })),
+    insert: (id: number, label: string, rank: number | string) => mutate(({ db }) => db.table(tableName).insert({ id, label, rank_no: rank })),
+  }
 }
 
-function registerTextNumberIdScenario(driver: Exclude<Driver, 'postgres'>) {
+function registerTextNumberScenarios(driver: Driver) {
   it('refreshes a subscription by a numeric id after an update matched by the same id as text', async () => {
     const countries = await createNumericIdCountries(driver)
+    const snapshots = await countries.subscribeById(5)
 
-    await countries.updateByText('5', 'République')
+    await countries.update('5', 'République')
 
-    expect(countries.snapshots.at(-1)).toEqual({ id: 5, label: 'République' })
+    expect(snapshots.at(-1)).toEqual({ id: 5, label: 'République', rank_no: 1 })
+  })
+
+  it('refreshes a subscription by an id as text after an update matched by the numeric id', async () => {
+    const countries = await createNumericIdCountries(driver)
+    const snapshots = await countries.subscribeById('5')
+
+    await countries.update(5, 'République')
+
+    expect(snapshots.at(-1)).toEqual({ id: 5, label: 'République', rank_no: 1 })
+  })
+
+  it('refreshes a subscription filtered by a number as text after an insert of the number', async () => {
+    const countries = await createNumericIdCountries(driver)
+    const snapshots = await countries.subscribeByRank('2')
+
+    await countries.insert(7, 'Italy', 2)
+
+    expect(snapshots.at(-1)).toEqual(['Germany', 'Italy'])
+  })
+
+  it('refreshes a subscription filtered by a number after an insert of the number as text', async () => {
+    const countries = await createNumericIdCountries(driver)
+    const snapshots = await countries.subscribeByRank(2)
+
+    await countries.insert(7, 'Italy', '2')
+
+    expect(snapshots.at(-1)).toEqual(['Germany', 'Italy'])
   })
 }
 
@@ -253,16 +289,36 @@ function registerStringIdScenarios(driver: Exclude<Driver, 'postgres'>) {
 describe('realtime invalidation on a NOCASE column on sqlite', () => {
   registerCaseInsensitiveScenarios('sqlite')
   registerStringIdScenarios('sqlite')
-  registerTextNumberIdScenario('sqlite')
+  registerTextNumberScenarios('sqlite')
 })
 
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidation on a default _ci column on mysql', () => {
   registerCaseInsensitiveScenarios('mysql')
   registerStringIdScenarios('mysql')
-  registerTextNumberIdScenario('mysql')
+  registerTextNumberScenarios('mysql')
 })
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalidation on a case-sensitive column on postgres', () => {
+  registerTextNumberScenarios('postgres')
+
+  for (const [type, setup] of [
+    ['citext', 'CREATE EXTENSION IF NOT EXISTS citext'],
+    ['VARCHAR(16) COLLATE holo_case_insensitive', `CREATE COLLATION IF NOT EXISTS holo_case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`],
+  ] as const) {
+    it(`refreshes a subscription by a ${type} id after an update matched by a case-differing id`, async () => {
+      const setupAdapter = createAdapter('postgres')
+      await setupAdapter.initialize()
+      await setupAdapter.execute(setup)
+      await setupAdapter.disconnect()
+      const countries = await createStringIdCountries('postgres', type)
+      const snapshots = await countries.subscribe(async ({ db }) => await db.table(countries.tableName).where('id', 'FR').first())
+
+      await countries.update('fr', 'République')
+
+      expect(snapshots.at(-1)).toEqual({ id: 'FR', label: 'République' })
+    })
+  }
+
   for (const keyedByCode of [true, false]) {
     const shape = keyedByCode ? 'keyed by the string column' : 'filtered by a non-key string column'
 

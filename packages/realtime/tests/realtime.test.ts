@@ -4189,6 +4189,7 @@ describe('@holo-js/realtime', () => {
       `SELECT * FROM "${tableName}" ORDER BY "created_at" DESC LIMIT 100`,
       "SELECT has_table_privilege(current_user, $1, 'SELECT') AND NOT row_security_active($1) AS allowed",
       `INSERT INTO "${tableName}" ("title") VALUES ($1) RETURNING *`,
+      expect.stringContaining('FROM pg_catalog.pg_attribute'),
     ])
     expect(snapshots).toEqual([
       [1, 2],
