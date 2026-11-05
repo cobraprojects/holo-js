@@ -4,8 +4,6 @@ import { createQueryCompiler } from './queryCompilerFactory'
 import { splitTablePath } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
 import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
-
-export { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { SelectQueryPlan, QueryPredicateNode } from './ast'
 
@@ -94,10 +92,20 @@ function collectPlanTables(plan: SelectQueryPlan, tables: Set<string>, seen: Set
   for (const predicate of plan.predicates) collectPredicateTables(predicate, tables, seen)
 }
 
-export async function resolvePlanTableIdentities(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
+function planTables(plan: SelectQueryPlan): Set<string> {
   const tables = new Set<string>()
   collectPlanTables(plan, tables, new Set())
-  for (const tableName of tables) {
+  return tables
+}
+
+export async function resolvePlanTableIdentities(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
+  for (const tableName of planTables(plan)) {
     await resolveTableIdentity(connection, tableName)
+  }
+}
+
+export async function resolvePlanGeneratedTableIdentities(connection: DatabaseContext, plan: SelectQueryPlan): Promise<void> {
+  for (const tableName of planTables(plan)) {
+    await resolveGeneratedTableIdentity(connection, tableName)
   }
 }

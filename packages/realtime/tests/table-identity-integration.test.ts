@@ -1,15 +1,8 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { integrationDrivers, mysqlTestConnection, openDatabase } from '../../db/tests/support/database'
+import { integrationDrivers, openDatabase, tableSpellings } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
-
-type Driver = 'sqlite' | 'postgres' | 'mysql'
-
-function tableSpellings(driver: Driver, tableName: string) {
-  const bare = tableName.split('.').at(-1)!
-  const schema = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
-  return { bare, qualified: `${schema}.${bare}` }
-}
+import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
 async function openLiveTable(driver: Driver) {
   const { db, table } = await openDatabase(driver)

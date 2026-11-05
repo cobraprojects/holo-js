@@ -1,4 +1,3 @@
-import { canonicalTableName } from '../query/tableIdentity'
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
@@ -48,6 +47,7 @@ import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueId
 import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AnyModelDefinition,
   ModelDefinitionLike,

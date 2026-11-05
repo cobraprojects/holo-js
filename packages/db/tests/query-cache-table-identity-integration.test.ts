@@ -1,15 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { DB } from '../src'
-import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
-
-type Driver = 'sqlite' | 'postgres' | 'mysql'
-
-function tableSpellings(driver: Driver, tableName: string) {
-  const bare = tableName.split('.').at(-1)!
-  const schema = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
-  return { bare, qualified: `${schema}.${bare}` }
-}
+import { DB, queryCacheInternals } from '../src'
+import { integrationDrivers, openDatabase, tableSpellings } from './support/database'
+import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
 async function openCachedTable(driver: Driver) {
   const opened = await openDatabase(driver)
@@ -89,5 +83,25 @@ describe('sqlite query cache table identity across temp and attached schemas', (
     await DB.table(qualified).insert({ id: 2, name: 'second', active: false })
     expect(await cachedNames(qualified)).toEqual(['first', 'second'])
     expect(await cachedNames(bare)).toEqual(['temporary', 'scratch'])
+  })
+})
+
+const collectedDependencies = async (tableName: string) => (await queryCacheInternals.collectDatabaseQueryDependencies(() => DB.table(tableName).get())).dependencies
+
+describe.each(integrationDrivers(['postgres'] as const))('%s query cache table identity across schemas', (driver) => {
+  it('keys a table on a non-public search_path by its bare name and keeps a same-named public table apart', async () => {
+    const schemaName = 'holo_t575_app'
+    const { schema } = await openDatabase(driver, { schemaName })
+    const name = `holo_identity_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, table => table.integer('id').primaryKey())
+    await schema.createTable(`public.${name}`, table => table.integer('id').primaryKey())
+    try {
+      expect(await collectedDependencies(`${schemaName}.${name}`)).toEqual(await collectedDependencies(name))
+      expect(await collectedDependencies(`public.${name}`)).toEqual([`db:default:public.${name}`])
+      expect(await collectedDependencies(name)).toEqual([`db:default:${name}`])
+    } finally {
+      await schema.dropTable(`${schemaName}.${name}`)
+      await schema.dropTable(`public.${name}`)
+    }
   })
 })

@@ -1,4 +1,3 @@
-import { canonicalTableName } from '../query/tableIdentity'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -47,6 +46,7 @@ import type {
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
 import type { EmptyScopeMap, ModelScopeMethods, ModelScopesDefinition } from './types'
+import { canonicalTableName } from '../schema/tableIdentityRegistry'
 import type {
   AggregateRelationConstraintMap,
   AggregateRelatedColumnNameOfKeys,

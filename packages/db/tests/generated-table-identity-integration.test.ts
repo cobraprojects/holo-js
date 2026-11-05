@@ -1,8 +1,7 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DB, clearGeneratedTables, column, defineGeneratedTable, registerGeneratedTables } from '../src'
-import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
-
-type Driver = 'sqlite' | 'postgres' | 'mysql'
+import { integrationDrivers, openDatabase, tableSpellings } from './support/database'
+import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
 const itemColumns = {
   id: column.integer().primaryKey(),
@@ -13,12 +12,6 @@ const itemColumns = {
 }
 
 const storedJson = (value: unknown) => typeof value === 'string' ? JSON.parse(value) : value
-
-function tableSpellings(driver: Driver, tableName: string) {
-  const bare = tableName.split('.').at(-1)!
-  const schema = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
-  return { bare, qualified: `${schema}.${bare}` }
-}
 
 async function openRegisteredItems(driver: Driver, register: 'bare' | 'qualified') {
   const { table, schema } = await openDatabase(driver)

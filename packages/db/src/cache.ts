@@ -10,7 +10,7 @@ import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
-import { canonicalTableName } from './query/tableIdentity'
+import { canonicalTableName } from './schema/tableIdentityRegistry'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -2501,7 +2501,6 @@ export const queryCacheInternals = {
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,
   createDatabaseQueryObservation,
-  canonicalTableName,
   createDeterministicQueryCacheKey,
   createTablePredicateCacheDependency,
   createTableCacheDependency,
