@@ -1,12 +1,12 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
-import { readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
+import { isCanonicalIntegerText, isDecimalKeyText, readFractionalDecimalKey, readIntegralDecimalKey, readsAsInteger } from '../schema/normalization'
 import { canonicalStoredKey, ownEntry } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
-import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
+import type { QueryKeyCast, QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 
@@ -119,9 +119,25 @@ export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, 
 }
 
 export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
+  if (isTextKeyColumn(definition)) return distinctStoredKeys(keys.map(key => typeof key === 'number' || typeof key === 'bigint' ? String(key) : key))
   if (!definition || !isNumericKeyColumn(definition)) return [...keys]
-  const columnKeys = readsAsInteger(definition) ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey) : keys
+  const columnKeys = readsAsInteger(definition)
+    ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey).filter(key => fitsIntegerColumn(definition, key))
+    : keys.filter(isDecimalKey)
   return [...new StoredKeySet(columnKeys, { numeric: true })]
+}
+
+const INTEGER_COLUMN_RANGE = { min: -(2n ** 31n), max: 2n ** 31n - 1n }
+const BIG_INTEGER_COLUMN_RANGE = { min: -(2n ** 63n), max: 2n ** 63n - 1n }
+
+function fitsIntegerColumn(definition: AnyColumnDefinition, key: unknown): boolean {
+  const integer = typeof key === 'number' && Number.isSafeInteger(key) ? BigInt(key) : typeof key === 'bigint' ? key : isCanonicalIntegerText(key) ? BigInt(key) : undefined
+  const range = definition.kind === 'integer' ? INTEGER_COLUMN_RANGE : BIG_INTEGER_COLUMN_RANGE
+  return integer !== undefined && integer >= range.min && integer <= range.max
+}
+
+function isDecimalKey(key: unknown): boolean {
+  return (typeof key === 'number' && Number.isFinite(key)) || typeof key === 'bigint' || isDecimalKeyText(key)
 }
 
 function columnDefinition(query: TableQueryBuilder<string | TableDefinition>, column: string): AnyColumnDefinition | undefined {
@@ -135,6 +151,16 @@ function isNumericKeyColumn(definition: AnyColumnDefinition | undefined): boolea
 
 export function relationKeyOptions(parentKey: AnyColumnDefinition | undefined, relatedKey: AnyColumnDefinition | undefined): StoredKeyOptions {
   return { numeric: isNumericKeyColumn(parentKey) || isNumericKeyColumn(relatedKey) }
+}
+
+export function sourceKeyCast(source: AnyColumnDefinition | undefined, lookedUp: AnyColumnDefinition | undefined): QueryKeyCast | undefined {
+  if (source && readsAsInteger(source) && isTextKeyColumn(lookedUp)) return 'text'
+  if (isTextKeyColumn(source) && lookedUp && readsAsInteger(lookedUp)) return 'integer'
+  return undefined
+}
+
+function isTextKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
+  return definition?.kind === 'string' || definition?.kind === 'text'
 }
 
 export async function retrieveRelation(

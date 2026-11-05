@@ -112,6 +112,7 @@ import type {
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
   QueryDatePart,
   QueryOperator,
   QueryPredicateNode,
@@ -175,6 +176,13 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
+export const whereKeyColumn = Symbol('whereKeyColumn')
+export const joinOnKeyColumns = Symbol('joinOnKeyColumns')
+
+export interface KeyCasts {
+  readonly left?: QueryKeyCast
+  readonly right?: QueryKeyCast
+}
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -883,6 +891,7 @@ export class TableQueryBuilder<
     column: string,
     operatorOrCompareTo: string,
     compareTo?: string,
+    casts?: KeyCasts,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const comparedColumn = compareTo ?? operatorOrCompareTo
     const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
@@ -893,6 +902,7 @@ export class TableQueryBuilder<
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
       ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
+      ...(casts?.left || casts?.right ? { keyCasts: { column: casts.left, compareTo: casts.right } } : {}),
     }))
   }
 
@@ -1935,6 +1945,21 @@ export class TableQueryBuilder<
 
   [hasQueryCache](): boolean {
     return this.queryCacheConfig !== undefined
+  }
+
+  [whereKeyColumn](column: string, compareTo: string, casts: KeyCasts): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    return this.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+  }
+
+  [joinOnKeyColumns](table: TableReference, leftColumn: string, rightColumn: string, casts: KeyCasts): TableQueryBuilder<TTableOrName, Record<string, unknown>, Record<string, unknown>> {
+    return this.clone(withJoin(this.plan, {
+      type: 'inner',
+      ...resolveJoinTarget(table),
+      leftColumn,
+      operator: '=',
+      rightColumn,
+      ...(casts.left || casts.right ? { keyCasts: casts } : {}),
+    }))
   }
 
   [resolveAggregateSource](column: string, modelRow = false): {

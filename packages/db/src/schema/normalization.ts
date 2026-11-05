@@ -367,6 +367,10 @@ function readDecimalKeyText(value: unknown): { readonly integer: string, readonl
   return { integer: integer === '0' && fraction === '' ? integer : `${sign}${integer}`, fraction }
 }
 
+export function isDecimalKeyText(value: unknown): boolean {
+  return readDecimalKeyText(value) !== undefined
+}
+
 export function readIntegralDecimalKey(value: unknown): unknown {
   const text = readDecimalKeyText(value)
   return text === undefined || text.fraction !== '' ? value : readIntegerKey(text.integer)

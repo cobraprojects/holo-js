@@ -60,6 +60,8 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
 
+export type QueryKeyCast = 'text' | 'integer'
+
 export interface QueryJoinClause {
   readonly type: QueryJoinType
   readonly table?: string
@@ -70,6 +72,7 @@ export interface QueryJoinClause {
   readonly leftColumn?: string
   readonly operator?: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly rightColumn?: string
+  readonly keyCasts?: { readonly left?: QueryKeyCast, readonly right?: QueryKeyCast }
 }
 
 export interface QueryUnionClause {
@@ -110,6 +113,7 @@ export interface QueryColumnPredicate {
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly compareTo: string
   readonly dateOperands?: { readonly column: boolean, readonly compareTo: boolean }
+  readonly keyCasts?: { readonly column?: QueryKeyCast, readonly compareTo?: QueryKeyCast }
 }
 
 export interface QueryNullPredicate {

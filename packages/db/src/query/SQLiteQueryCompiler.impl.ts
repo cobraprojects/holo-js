@@ -233,6 +233,14 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
   }
 
+  protected override compileIntegerKey(expression: string): string {
+    const point = `instr(${expression}, '.')`
+    const integer = `CASE WHEN ${point} > 0 THEN substr(${expression}, 1, ${point} - 1) ELSE ${expression} END`
+    const digits = `CASE WHEN ${integer} GLOB '-*' THEN substr(${integer}, 2) ELSE ${integer} END`
+    const fraction = `substr(${expression}, ${point} + 1)`
+    return `CASE WHEN ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0]*')) THEN CAST(${integer} AS NUMERIC) END`
+  }
+
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {
     if (!predicate.dateOperands) return super.compileColumnComparison(predicate)
 

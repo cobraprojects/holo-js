@@ -22,6 +22,14 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
     return `JSON_UNQUOTE(JSON_EXTRACT(${column}, ${this.createJsonPathLiteral(path)}))`
   }
 
+  protected override compileTextKey(expression: string): string {
+    return `CONCAT(${expression})`
+  }
+
+  protected override compileIntegerKey(expression: string): string {
+    return `CASE WHEN ${expression} REGEXP '^-?(0|[1-9][0-9]{0,63})([.]0+)?$' THEN CAST(SUBSTRING_INDEX(${expression}, '.', 1) AS DECIMAL(65, 0)) END`
+  }
+
   protected override createSqlStringLiteral(value: string): string {
     return compileMySQLStringLiteral(value)
   }
