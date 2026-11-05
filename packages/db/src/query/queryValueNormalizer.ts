@@ -32,11 +32,17 @@ function normalizeQueryColumnWriteValue(
   value: unknown,
 ): unknown {
   const normalized = normalizeQueryWriteValue(table, driver, columnName, value)
-  if (driver === 'sqlite' && typeof normalized === 'object' && normalized !== null && !(normalized instanceof Uint8Array) && !(normalized instanceof NumericAdjustment)) {
+  if (driver === 'sqlite' && (Array.isArray(normalized) || isPlainObject(normalized))) {
     const kind = Array.isArray(normalized) ? 'an array' : 'an object'
-    throw new SerializationError(`Cannot write ${kind} to column "${columnName}" on SQLite. Add a "json" cast for it or JSON.stringify the value.`)
+    throw new SerializationError(`Cannot write ${kind} to column "${columnName}" on SQLite. Add a 'json' cast for it or JSON.stringify the value.`)
   }
   return normalized
+}
+
+function isPlainObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 export function normalizeQueryPredicateValue(

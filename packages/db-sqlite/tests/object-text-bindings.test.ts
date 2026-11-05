@@ -16,7 +16,9 @@ import {
 } from '@holo-js/db'
 import { createSQLiteAdapter } from '../src'
 
-const fix = 'Add a "json" cast for it or JSON.stringify the value.'
+const fix = 'Add a \'json\' cast for it or JSON.stringify the value.'
+const objectMessage = `Cannot write an object to column "meta" on SQLite. ${fix}`
+const arrayMessage = `Cannot write an array to column "meta" on SQLite. ${fix}`
 
 describe('SQLite writes of objects into a column without a json cast', () => {
   let directory: string
@@ -32,6 +34,7 @@ describe('SQLite writes of objects into a column without a json cast', () => {
       table.text('meta').nullable()
       table.json('settings').nullable()
       table.blob('payload').nullable()
+      table.integer('stamp').nullable()
     })
     configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: database, app: database } }))
   })
@@ -44,16 +47,14 @@ describe('SQLite writes of objects into a column without a json cast', () => {
 
   it('names the column and the fix when a query writes an object or array to a text column', async () => {
     const posts = database.table('posts')
-    const message = `Cannot write an object to column "meta" on SQLite. ${fix}`
-    const arrayMessage = `Cannot write an array to column "meta" on SQLite. ${fix}`
 
-    await expect(posts.insert({ id: 1, meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(message))
+    await expect(posts.insert({ id: 1, meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(objectMessage))
     await expect(posts.insert({ id: 1, meta: ['dark'] })).rejects.toThrow(new SerializationError(arrayMessage))
-    await expect(posts.upsert([{ id: 1, meta: { theme: 'dark' } }], ['id'], ['meta'])).rejects.toThrow(new SerializationError(message))
+    await expect(posts.upsert([{ id: 1, meta: { theme: 'dark' } }], ['id'], ['meta'])).rejects.toThrow(new SerializationError(objectMessage))
     await posts.insert({ id: 1, meta: 'plain' })
-    await expect(posts.where('id', 1).update({ meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(message))
+    await expect(posts.where('id', 1).update({ meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(objectMessage))
     await expect(posts.where('id', 1).update({ meta: ['dark'] })).rejects.toThrow(new SerializationError(arrayMessage))
-    expect(await posts.get()).toEqual([{ id: 1, meta: 'plain', settings: null, payload: null }])
+    expect(await posts.get()).toEqual([{ id: 1, meta: 'plain', settings: null, payload: null, stamp: null }])
   })
 
   it('names the column when the table definition declares a text column', async () => {
@@ -62,18 +63,22 @@ describe('SQLite writes of objects into a column without a json cast', () => {
       meta: column.text().nullable(),
       settings: column.json().nullable(),
       payload: column.blob().nullable(),
+      stamp: column.integer().nullable(),
     }))
 
-    await expect(posts.insert({ id: 1, meta: { theme: 'dark' } as never })).rejects.toThrow(new SerializationError(`Cannot write an object to column "meta" on SQLite. ${fix}`))
+    await expect(posts.insert({ id: 1, meta: { theme: 'dark' } as never })).rejects.toThrow(new SerializationError(objectMessage))
     await posts.insert({ id: 1, settings: { theme: 'dark' }, payload: new Uint8Array([1, 2]) })
     expect(await posts.value('settings')).toBe('{"theme":"dark"}')
+    await posts.insert({ id: 2, stamp: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)) as never, payload: new Float32Array([1.5]) as never })
+    expect(await posts.where('id', 2).value('stamp')).toBe('2026-01-02 03:04:05')
+    expect(await posts.where('id', 2).value('payload')).toEqual(Buffer.from(new Float32Array([1.5]).buffer))
   })
 
-  it('names the attribute when a model without a json cast saves an object', async () => {
+  it('names the column when a model without a json cast saves an object', async () => {
     const Post = defineModel('posts', { connectionName: 'app', fillable: ['id', 'meta', 'settings'], timestamps: false })
     const CastPost = defineModel('posts', { connectionName: 'app', fillable: ['id', 'meta'], casts: { meta: 'json' }, timestamps: false })
 
-    await expect(Post.create({ id: 1, meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(`Cannot write an object to column "meta" on SQLite. ${fix}`))
+    await expect(Post.create({ id: 1, meta: { theme: 'dark' } })).rejects.toThrow(new SerializationError(objectMessage))
     await CastPost.create({ id: 2, meta: { theme: 'dark' } })
     expect((await CastPost.findOrFail(2)).get('meta')).toEqual({ theme: 'dark' })
     expect(await database.table('posts').where('id', 2).value('meta')).toBe('{"theme":"dark"}')
@@ -84,10 +89,13 @@ describe('SQLite writes of objects into a column without a json cast', () => {
 
     await posts.insert({ id: 1, meta: null, payload: Buffer.from([7]) })
     await posts.insert({ id: 2, meta: 'text', settings: '{"a":1}', payload: new Uint8Array([8]) })
+    await posts.insert({ id: 3, payload: new Float32Array([2.5]) })
+    expect(await posts.where('id', 3).value('payload')).toEqual(Buffer.from(new Float32Array([2.5]).buffer))
+    await posts.where('id', 3).delete()
 
     expect(await posts.orderBy('id').get()).toEqual([
-      { id: 1, meta: null, settings: null, payload: Buffer.from([7]) },
-      { id: 2, meta: 'text', settings: '{"a":1}', payload: Buffer.from([8]) },
+      { id: 1, meta: null, settings: null, payload: Buffer.from([7]), stamp: null },
+      { id: 2, meta: 'text', settings: '{"a":1}', payload: Buffer.from([8]), stamp: null },
     ])
   })
 })
