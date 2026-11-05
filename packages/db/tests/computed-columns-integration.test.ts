@@ -235,6 +235,16 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     ])
   })
 
+  it('keeps the auto-increment id out of upsert rows unless the model lists it as fillable', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+
+    await expect(Product.query().upsert([{ id, price: 5, quantity: 3, name: 'Ink' }], ['id'], ['price'])).rejects.toThrow(`Column "id" is not writable on model "${Product.definition.name}".`)
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price])).toEqual([[id, 2]])
+  })
+
   it('rejects a computed column in the upsert rows before any SQL runs', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))

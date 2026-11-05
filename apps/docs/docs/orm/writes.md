@@ -210,9 +210,7 @@ await Product.query().upsert(
 )
 ```
 
-A computed column made with `storedAs()` or `virtualAs()` can't appear in the rows: it is a type error, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs.
-
-The update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
+The rows and the update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes
 
