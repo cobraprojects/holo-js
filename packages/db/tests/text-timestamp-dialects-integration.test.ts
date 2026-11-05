@@ -129,6 +129,11 @@ describe.each(drivers)('timestamps stored in TEXT columns on %s', (driver) => {
     expect(await owner.syncWithoutDetaching('slots', [new Date(startsAt.getTime())])).toEqual({ attached: [], detached: [], updated: [] })
     expect(await owner.toggle('slots', [startsAt])).toEqual({ attached: [], detached: [startsAt] })
     expect(await DB.table(names.ownerSlot).count()).toBe(0)
+
+    const microseconds = ['2026-01-02T03:04:05.000001Z', '2026-01-02T03:04:05.000002Z']
+    const bound = driver === 'postgres' ? microseconds : microseconds.slice(1)
+    expect(await owner.sync('slots', microseconds)).toEqual({ attached: bound, detached: [], updated: [] })
+    expect(await DB.table(names.ownerSlot).count()).toBe(bound.length)
   })
 
   it('keeps distinct text pivot keys of an untyped pivot table apart', async () => {

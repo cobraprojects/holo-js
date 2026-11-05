@@ -175,8 +175,12 @@ export class PivotMutation {
   }
 
   private incomingKeyIdentity(value: unknown): unknown {
+    return this.keyIdentity(this.readKey(this.writeKey(value)))
+  }
+
+  private writeKey(value: unknown): unknown {
     const column = this.dateKeyColumn()
-    return this.keyIdentity(column ? this.readKey(normalizeDialectWriteValue(this.context.dialect, column, value)) : value)
+    return column ? normalizeDialectWriteValue(this.context.dialect, column, value) : value
   }
 
   private keyIdentity(key: unknown): unknown {
@@ -195,7 +199,7 @@ export class PivotMutation {
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {
-    return [...new Map(entries.map(entry => [this.incomingKeyIdentity(entry.id), entry])).values()]
+    return [...new Map(entries.map(entry => [this.keyIdentity(this.writeKey(entry.id)), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {
