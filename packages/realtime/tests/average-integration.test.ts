@@ -15,13 +15,13 @@ async function openScores(driver: Driver) {
   const name = `holo_live_scores_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   await schema.createTable(name, (table) => {
     table.id()
-    table.integer('group_id')
+    table.integer('group_id').nullable()
     table.integer('points')
     table.decimal('amount')
     table.decimal('bonus').nullable()
   })
   onTestFinished(() => schema.dropTable(name))
-  const scores = defineGeneratedTable(name, { id: column.id(), group_id: column.integer(), points: column.integer(), amount: column.decimal(), bonus: column.decimal().nullable() })
+  const scores = defineGeneratedTable(name, { id: column.id(), group_id: column.integer().nullable(), points: column.integer(), amount: column.decimal(), bonus: column.decimal().nullable() })
   await db.table(scores).insert([
     { id: 1, group_id: 1, points: 1, amount: '1.00' },
     { id: 2, group_id: 1, points: 2, amount: '2.00' },
@@ -80,5 +80,20 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
     await mutate(() => db.table(scores).where('id', 6).delete())
     expect(subscription.current.data).toEqual(await handler())
     expect(subscription.current.data).toBeCloseTo(1.505)
+  })
+  it('keeps a grouped average with a null group equal to a fresh query', async () => {
+    const { db, scores } = await openScores(driver)
+    await db.table(scores).insert({ id: 6, group_id: null, points: 2, amount: '2.00' })
+    const handler = () => db.table(scores).select('group_id').addSelectAvg('average', 'points').groupBy('group_id').orderBy('group_id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+    const mutate = (mutation: () => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: mutation }))
+
+    await mutate(() => db.table(scores).insert({ id: 7, group_id: null, points: 5, amount: '5.00' }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).where('id', 1).update({ group_id: null }))
+    expect(subscription.current.data).toEqual(await handler())
+    await mutate(() => db.table(scores).where('id', 6).delete())
+    expect(subscription.current.data).toEqual(await handler())
+    expect(subscription.current.data).toContainEqual(expect.objectContaining({ group_id: null }))
   })
 })
