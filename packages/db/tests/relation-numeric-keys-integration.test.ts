@@ -334,4 +334,30 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(ids(relation(loaded[0], 'items'))).toEqual([10])
     expect(ids(relation(loaded[257], 'items'))).toEqual([10])
   })
+
+  it('picks the latest row across text keys holding one number', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `lt_owners_${suffix}`, items: `lt_items_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.string('owner_id')
+    })
+    onTestFinished(() => schema.dropTable(names.items))
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.string() })
+    await DB.table(owners).insert([{ id: 1 }])
+    await DB.table(items).insert([{ id: 10, owner_id: '1' }, { id: 20, owner_id: '1.00' }])
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { items: hasMany(() => Item, 'owner_id'), latestItem: latestOfMany(() => Item, 'owner_id') } })
+
+    const [owner] = await Owner.with('items', 'latestItem').get()
+
+    expect(relation<Entity<TableDefinition>>(owner, 'latestItem').get('id' as never)).toBe(Math.max(...ids(relation(owner, 'items'))))
+  })
 })

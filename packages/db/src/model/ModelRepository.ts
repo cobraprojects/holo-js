@@ -21,6 +21,7 @@ import { normalizeDialectReadValue, storesJson, storesText } from '../schema/nor
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
+import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
@@ -3341,8 +3342,10 @@ export class ModelRepository<
     const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
+    const compare = relation.aggregate === 'max' ? compareChunkValuesDescending : compareChunkValuesAscending
+    const decimal = ownEntry(related.definition.table.columns, relation.aggregateColumn)?.kind === 'decimal'
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
-      grouped.set(key, [bucket[0]!])
+      grouped.set(key, [bucket.reduce((winner, entity) => compare(entity.get(relation.aggregateColumn as never), winner.get(relation.aggregateColumn as never), decimal) < 0 ? entity : winner)])
     }
 
     return grouped
