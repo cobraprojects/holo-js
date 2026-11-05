@@ -153,6 +153,26 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(subscription.current.data).toEqual(await handler())
   })
 
+  it.runIf(driver === 'mysql')('reads back rows keyed by distinct binary values that are not valid text', async () => {
+    const { db } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_norm_codes_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`code\` VARBINARY(16) PRIMARY KEY, \`group_id\` BIGINT NOT NULL, \`rate\` DECIMAL(10, 2) NOT NULL)`, source: 'schema' })
+    onTestFinished(() => db.executeCompiled({ sql: `DROP TABLE IF EXISTS \`${name}\``, source: 'schema' }).then(() => undefined))
+    const codes = defineGeneratedTable(name, { code: column.blob().primaryKey(), group_id: column.bigInteger(), rate: column.decimal() })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = () => db.table(codes).orderBy('group_id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await mutate(() => db.table(codes).insert([
+      { code: Uint8Array.from([0xff]), group_id: 1, rate: '1.5' },
+      { code: Uint8Array.from([0xfe]), group_id: 2, rate: '2.5' },
+    ]))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"rate":"2.50"')
+  })
+
   it('keeps integer columns written in other representations equal to a fresh query', async () => {
     const { db, rates, Group } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
