@@ -35,6 +35,7 @@ import {
   recordDatabaseQueryObservation,
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
+  writesTextLiterals,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -100,6 +101,8 @@ import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimary
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, tableWildcard } from './modelRowProjection'
 import { storesJson } from '../schema/normalization'
+import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -1985,6 +1988,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
+          textMatchesAnyNumber(this.connection),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -2133,7 +2137,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn
+    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() !== 'mysql'
       ? await this.readGroupedAverageStates(groupedAggregate)
       : undefined
     const aggregateStates = (
@@ -3433,6 +3437,7 @@ export class TableQueryBuilder<
       rows,
       lastInsertId,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns(rows),
     )
 
     await invalidateQueryCacheDependencies(
@@ -3441,6 +3446,19 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private async resolveCaseInsensitiveColumns(
+    records: readonly Readonly<Record<string, unknown>>[],
+    predicates: readonly QueryPredicateNode[] = [],
+  ): Promise<CaseInsensitiveColumns> {
+    if (!isPostgresConnection(this.connection)) {
+      return 'all'
+    }
+
+    return writesTextLiterals(predicates, records)
+      ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      : new Set<string>()
   }
 
   private async invalidateMutationQueries(
@@ -3458,6 +3476,7 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       values,
       hasInvalidationListeners,
+      await this.resolveCaseInsensitiveColumns([values], this.plan.predicates),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
