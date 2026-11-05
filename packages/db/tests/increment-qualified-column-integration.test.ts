@@ -85,6 +85,37 @@ describe.each(drivers)('increment and decrement on a table-qualified column on %
     ])
   })
 
+  it('adjusts the column through the static model incrementEach and decrementEach', async () => {
+    const { name, Product, read } = await createProducts(driver)
+
+    await Product.incrementEach({ [`${name}.price`]: 2 })
+    await Product.decrementEach({ [`${name}.stock`]: 1 })
+
+    expect(await read()).toEqual([
+      { price: 12, stock: 4, label: 'first' },
+      { price: 22, stock: 6, label: 'second' },
+    ])
+  })
+
+  it.skipIf(driver === 'sqlite')('adjusts a column qualified with the bare name of a schema-qualified table', async () => {
+    const { name, read } = await createProducts(driver)
+    const schemaName = driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+
+    await DB.table(`${schemaName}.${name}`).where('id', 1).increment(`${name}.price`, 6)
+    await DB.table(`${schemaName}.${name}`).where('id', 2).decrementEach({ [`${schemaName}.${name}.stock`]: 2 })
+
+    expect(await read()).toEqual([
+      { price: 16, stock: 5, label: 'first' },
+      { price: 20, stock: 5, label: 'second' },
+    ])
+  })
+
+  it('keeps rejecting a JSON path target as an invalid column reference', async () => {
+    const { name } = await createProducts(driver)
+
+    await expect(DB.table(name).increment('label->a.b')).rejects.toThrow('Column reference "label->a.b" is not')
+  })
+
   it('adjusts a column qualified with the query table alias', async () => {
     const { name, read } = await createProducts(driver)
 
