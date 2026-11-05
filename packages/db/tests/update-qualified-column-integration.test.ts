@@ -400,6 +400,24 @@ describe.each(drivers)('model upsert accepts a non-fillable key only on an unsco
     expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
   })
 
+  it('rejects a non-fillable key on a query restricted to trashed rows, before any SQL runs', async () => {
+    const { statements, accounts, read } = await createAccounts()
+    const Trashable = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false, softDeletes: true })
+    const TrashedOnly = defineModelFromTable(accounts, {
+      fillable: ['tenant_id', 'slug', 'status'],
+      timestamps: false,
+      softDeletes: true,
+      globalScopes: { trashed: query => query.onlyTrashed() },
+    })
+    const notWritable = `Column "id" is not writable on model "${Trashable.definition.name}".`
+
+    statements.length = 0
+    await expect(Trashable.onlyTrashed().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
+    await expect(TrashedOnly.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
+    expect(statements).toEqual([])
+    expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
+  })
+
   it('upserts with a non-fillable key on an unscoped and a soft-deleting model', async () => {
     const { accounts, read } = await createAccounts()
     const Account = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false })
@@ -407,7 +425,8 @@ describe.each(drivers)('model upsert accepts a non-fillable key only on an unsco
 
     await Account.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'active' }], ['id'], ['status'])
     await Trashable.query().upsert([{ id: 1, tenant_id: 1, slug: 'own', status: 'active' }], ['id'], ['status'])
+    await Trashable.withTrashed().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'archived' }], ['id'], ['status'])
 
-    expect(await read()).toEqual([[1, 1, 'active'], [2, 2, 'active']])
+    expect(await read()).toEqual([[1, 1, 'active'], [2, 2, 'archived']])
   })
 })

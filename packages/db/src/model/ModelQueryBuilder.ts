@@ -1981,6 +1981,7 @@ class ModelQueryBuilderBase<
     this.repository.assertUpsertUpdateColumns(updateColumns)
     const plan = this.tableQuery.getPlan()
     const acceptsPrimaryKey = this.scopePredicates.length === 0
+      && this.softDeleteMode !== 'only'
       && plan.predicates.length === 0
       && plan.joins.length === 0
       && plan.having.length === 0
