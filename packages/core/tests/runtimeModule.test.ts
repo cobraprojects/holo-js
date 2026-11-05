@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
-import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
+import { bundleSourceInternals, importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const postModule = "export const Post = { title: 'post' }\n"
@@ -1062,6 +1062,15 @@ describe('bundled module load errors', () => {
     })
     const error = await loadError(projectRoot, 'server/models/User.ts')
     expect(error.message).toMatch(/^Cannot find package '@scope\/missing-columns(?:\/helpers)?' imported from server\/support\/columns\.ts$/)
+  })
+
+  it('keeps dollar signs in the source path when rewriting a formatted stack', () => {
+    const bundlePath = join(tmpdir(), 'bundle-dollar', 'User.mjs')
+    const error = new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`)
+    expect(error.stack).toContain(bundlePath)
+    bundleSourceInternals.withBundleSources(error, { path: bundlePath, sourcePath: 'server/$&lib/User.ts', importers: {} })
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/$&lib/User.ts")
+    expect(error.stack?.split('\n')[0]).toBe(`Error: ${error.message}`)
   })
 
   it('leaves errors thrown by the loaded module unchanged', async () => {

@@ -885,7 +885,7 @@ function withBundleSources(error: unknown, sources: BundleSources): unknown {
   const attributed = message.replace(bundleLocation, () => source)
   if (error instanceof Error) {
     error.message = attributed
-    if (typeof error.stack === 'string') error.stack = error.stack.replace(message, attributed)
+    if (typeof error.stack === 'string') error.stack = error.stack.replace(message, () => attributed)
     return error
   }
   const code = (error as { code?: unknown }).code
