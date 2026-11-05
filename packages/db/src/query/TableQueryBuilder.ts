@@ -3435,7 +3435,7 @@ export class TableQueryBuilder<
     if (rows.length === 0) return { affectedRows: 0, lastInsertId: undefined }
 
     const adjustments = Object.fromEntries(Object.entries(amounts).map(([column, amount]) => [column, new NumericAdjustment(amount)]))
-    const values = { ...extraValues, ...adjustments }
+    const values = { ...this.resolveSourceColumnKeys(extraValues, 'update'), ...adjustments }
     if (typeof this.plan.limit === 'undefined' && typeof this.plan.offset === 'undefined') {
       return this.update(values)
     }
@@ -3449,7 +3449,7 @@ export class TableQueryBuilder<
 
   private resolveSourceColumnKeys<TValue>(
     values: Readonly<Record<string, TValue>>,
-    operation: string,
+    operation: 'update' | 'increment/decrement',
   ): Readonly<Record<string, TValue>> {
     const resolved: Record<string, TValue> = {}
     for (const [column, value] of Object.entries(values)) {

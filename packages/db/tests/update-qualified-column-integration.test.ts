@@ -84,6 +84,18 @@ describe.each(drivers)('update with a table-qualified column on %s', (driver) =>
     ])
   })
 
+  it('treats a qualified increment extra value the same as its bare name', async () => {
+    const { name, read } = await createProducts(driver)
+
+    await DB.table(name).where('id', 1).increment('price', 1, { price: 100, [`${name}.label`]: 'bare' })
+    await DB.table(name).where('id', 2).increment('price', 1, { [`${name}.price`]: 100, [`${name}.label`]: 'qualified' })
+
+    expect(await read()).toEqual([
+      { price: 11, label: 'bare', color: 'red' },
+      { price: 21, label: 'qualified', color: 'blue' },
+    ])
+  })
+
   it('rejects a column qualified with another table and leaves the rows unchanged', async () => {
     const { name, read } = await createProducts(driver)
 
