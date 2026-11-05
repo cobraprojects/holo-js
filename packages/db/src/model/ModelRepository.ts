@@ -2532,12 +2532,12 @@ export class ModelRepository<
     relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
     constraint?: RelationConstraint,
   ): Promise<void> {
-    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-    const { rows, related } = await this.retrievePivotRows(entities, relation, constraint)
-    if (typeof observationCount === 'number') {
-      if (constraint || relation.constraint) requireDatabaseQueryObservationRefreshFrom(observationCount)
-      else truncateDatabaseQueryObservations(observationCount)
-    }
+    const constrained = Boolean(constraint || relation.constraint)
+    const observationCount = !constrained && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
+    const { rows, related } = constrained
+      ? await runRequiringDatabaseQueryRefresh(() => this.retrievePivotRows(entities, relation, constraint))
+      : await this.retrievePivotRows(entities, relation, constraint)
+    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
     const grouped = this.groupPivotRows(rows, related, relation)
     for (const entity of entities) {
       const parentKey = entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>]

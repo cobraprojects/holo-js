@@ -271,6 +271,27 @@ describe('@holo-js/realtime relation query patching', () => {
     }
   })
 
+  it('falls back for belongs-to-many pivot updates with unknown changed columns and for pivot upserts', async () => {
+    const query = createBelongsToManyQuery()
+    const rows = Object.freeze([
+      createRelatedRow(1, 'First', 10),
+      createRelatedRow(2, 'Second', 20),
+    ])
+
+    await expect(tryPatchQueryRelation(
+      query,
+      rows,
+      [{ ...createPivotMutation('update', [{ post_id: 3, tag_id: 2, position: 20 }]), values: undefined }],
+      createBackfills(),
+    )).resolves.toBe(UNPATCHED_RESULT)
+    await expect(tryPatchQueryRelation(
+      query,
+      rows,
+      [createPivotMutation('upsert', [{ post_id: 3, tag_id: 2, position: 20 }])],
+      createBackfills(),
+    )).resolves.toBe(UNPATCHED_RESULT)
+  })
+
   it('updates unordered belongs-to-many pivot rows without reordering', async () => {
     const query = createBelongsToManyQuery({
       pivotOrderBy: Object.freeze([]),
@@ -1048,6 +1069,7 @@ function createPivotMutation(
     predicates: Object.freeze([]),
     rows: Object.freeze(rows),
     tableName: 'post_tags',
+    ...(kind === 'update' ? { values: Object.freeze({ position: 0 }) } : {}),
   }
 }
 

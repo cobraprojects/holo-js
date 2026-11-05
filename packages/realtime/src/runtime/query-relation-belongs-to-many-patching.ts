@@ -43,16 +43,13 @@ export async function tryPatchBelongsToManyRelation(
       return UNPATCHED_RESULT
     }
 
-    if (
-      mutation.kind === 'update'
-      && !isRelatedRelationMutation(mutation, relation)
-      && mutationChangesColumns(mutation, [relation.foreignPivotKey, relation.relatedPivotKey])
-    ) {
+    const relatedMutation = isRelatedRelationMutation(mutation, relation)
+    if (!relatedMutation && pivotMutationMayMoveRows(mutation, relation)) {
       return UNPATCHED_RESULT
     }
 
     for (const pivotRow of mutation.rows) {
-      if (isRelatedRelationMutation(mutation, relation)) {
+      if (relatedMutation) {
         const nextRows = patchRelatedBelongsToManyRelationRow(rows, pivotRow, relation, mutation.kind)
         if (!nextRows) {
           return UNPATCHED_RESULT
@@ -133,6 +130,18 @@ export async function tryPatchBelongsToManyRelation(
         value: rows,
       })
     : UNCHANGED_QUERY_RESULT
+}
+
+function pivotMutationMayMoveRows(
+  mutation: DatabaseMutationEvent,
+  relation: DatabaseQueryBelongsToManyRelationObservation,
+): boolean {
+  if (mutation.kind === 'upsert') {
+    return true
+  }
+
+  return mutation.kind === 'update'
+    && (!mutation.values || mutationChangesColumns(mutation, [relation.foreignPivotKey, relation.relatedPivotKey]))
 }
 
 function isRelatedRelationMutation(
