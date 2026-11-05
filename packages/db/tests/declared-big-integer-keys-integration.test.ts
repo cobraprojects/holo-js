@@ -52,4 +52,24 @@ describe.each(drivers)('id() keys beyond the safe integer range on %s', (driver)
       await schema.dropTable(name)
     }
   })
+
+  it('throws HydrationError for an unqualified column of a joined table definition', async () => {
+    const { schema, name, counted } = await openUnsafeKeyTable(driver)
+    const labels = `${name}_labels`
+    await schema.createTable(labels, (table) => {
+      table.string('title')
+      table.bigInteger('owner_id')
+    })
+    try {
+      const labelled = defineGeneratedTable(labels, { title: column.string(), owner_id: column.bigInteger() })
+      await DB.table(labels).insert({ title: 'a', owner_id: UNSAFE_KEY })
+      const joined = () => DB.table(counted).join(labelled, `${name}.id`, '=', `${labels}.owner_id`)
+
+      await expect(joined().select('id').first()).rejects.toThrow(HydrationError)
+      await expect(joined().first()).rejects.toThrow(HydrationError)
+    } finally {
+      await schema.dropTable(labels)
+      await schema.dropTable(name)
+    }
+  })
 })
