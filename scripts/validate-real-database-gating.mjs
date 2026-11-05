@@ -34,7 +34,8 @@ function walkSourceFiles(directory) {
 
 function resolveImport(from, specifier) {
   const base = resolve(dirname(from), specifier)
-  return resolvableExtensions.map(extension => `${base}${extension}`).find(candidate => existsSync(candidate) && statSync(candidate).isFile())
+  const sourceBase = base.replace(/\.([cm]?)js$/, '.$1ts')
+  return [...resolvableExtensions.map(extension => `${base}${extension}`), sourceBase, `${sourceBase}x`].find(candidate => existsSync(candidate) && statSync(candidate).isFile())
 }
 
 function databaseReachingFiles(files) {

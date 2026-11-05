@@ -115,14 +115,26 @@ function escapeIdentifier(name) {
   return name.replaceAll('$', '\\$')
 }
 
+function indentAt(source, index) {
+  const lineStart = source.lastIndexOf('\n', index) + 1
+  const line = source.slice(lineStart, source.indexOf('\n', lineStart) === -1 ? undefined : source.indexOf('\n', lineStart))
+  return line.length - line.trimStart().length
+}
+
+function declarationEnclosesPosition(source, declarationIndex, position) {
+  const indent = indentAt(source, declarationIndex)
+  const between = source.slice(source.indexOf('\n', declarationIndex) + 1, source.lastIndexOf('\n', position) + 1).split('\n')
+  return between.every(line => line.trim() === '' || line.length - line.trimStart().length >= indent)
+}
+
 function declarationOf(source, name, position) {
   const identifier = escapeIdentifier(name)
   const declaration = new RegExp(`\\b(?:(?:const|let|var)\\s+(?:\\{[^}]*\\b${identifier}\\b[^}]*\\}|\\[[^\\]]*\\b${identifier}\\b[^\\]]*\\]|${identifier}\\b)[^=]*=|(?:async\\s+)?function\\s+${identifier}\\b)`, 'g')
   const matches = [...source.matchAll(declaration)]
-  const match = matches.filter(candidate => candidate.index < position).at(-1) ?? matches[0]
+  const match = matches.filter(candidate => candidate.index < position && declarationEnclosesPosition(source, candidate.index, position)).at(-1)
+    ?? matches.find(candidate => /^\s*(?:export\s+)?(?:async\s+)?function\b/.test(source.slice(source.lastIndexOf('\n', candidate.index) + 1)) && indentAt(source, candidate.index) === 0)
   if (!match) return undefined
-  const lineStart = source.lastIndexOf('\n', match.index) + 1
-  const indent = match.index - lineStart - source.slice(lineStart, match.index).trimStart().length
+  const indent = indentAt(source, match.index)
   const rest = source.slice(match.index).split('\n')
   const end = rest.findIndex((line, index) => index > 0 && line.trim() !== '' && line.length - line.trimStart().length <= indent && !/^\s*[)}\]]/.test(line))
   return { index: match.index, text: rest.slice(0, end === -1 ? undefined : end).join('\n') }
@@ -136,20 +148,37 @@ function resolvedConnectionText(source, text, position, depth = 2, seen = new Se
   return [text, ...declarations.map(declaration => resolvedConnectionText(source, declaration.text, declaration.index, depth - 1, resolved))].join('\n')
 }
 
+const rawDriverModule = `['"](pg|mysql2(?:\\/promise)?)['"]`
+const namespaceMethods = { pg: ['new\\s+', '\\.(?:Client|Pool)'], mysql2: ['', '\\.(?:createConnection|createPool)'] }
+
 function rawDriverConstructors(source) {
   const patterns = []
-  for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](?:pg|mysql2(?:\/promise)?)['"]/g)) {
-    for (const binding of match[1].split(',')) {
+  const addNamed = (imported, local) => {
+    if (imported === 'Client' || imported === 'Pool') patterns.push(`new\\s+${escapeIdentifier(local)}`)
+    if (imported === 'createConnection' || imported === 'createPool') patterns.push(escapeIdentifier(local))
+  }
+  const addNamespace = (local, module) => {
+    const [prefix, member] = namespaceMethods[module.startsWith('pg') ? 'pg' : 'mysql2']
+    patterns.push(`${prefix}${escapeIdentifier(local)}${member}`)
+  }
+  const importStatement = new RegExp(`import\\s+(?!type\\b)([^'";]*?)\\s+from\\s*${rawDriverModule}`, 'g')
+  for (const match of source.matchAll(importStatement)) {
+    const clause = match[1]
+    const named = clause.match(/\{([^}]*)\}/)
+    for (const binding of named?.[1].split(',') ?? []) {
       const [imported, local = imported] = binding.trim().replace(/^type\s+/, '').split(/\s+as\s+/).map(name => name.trim())
-      if (imported === 'Client' || imported === 'Pool') patterns.push(`new\\s+${escapeIdentifier(local)}`)
-      if (imported === 'createConnection' || imported === 'createPool') patterns.push(escapeIdentifier(local))
+      if (imported) addNamed(imported, local)
     }
+    const defaultOrNamespace = clause.replace(/\{[^}]*\}/, '').split(',').map(part => part.trim().replace(/^\*\s+as\s+/, '')).filter(Boolean)
+    for (const local of defaultOrNamespace) addNamespace(local, match[2])
   }
-  for (const match of source.matchAll(/import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]pg['"]|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+import|require)\(\s*['"]pg['"]\s*\)/g)) {
-    patterns.push(`new\\s+${escapeIdentifier(match[1] ?? match[2])}\\.(?:Client|Pool)`)
-  }
-  for (const match of source.matchAll(/import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]mysql2(?:\/promise)?['"]|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+import|require)\(\s*['"]mysql2(?:\/promise)?['"]\s*\)/g)) {
-    patterns.push(`${escapeIdentifier(match[1] ?? match[2])}\\.(?:createConnection|createPool)`)
+  const loader = `(?:await\\s+import|require)\\(\\s*${rawDriverModule}\\s*\\)`
+  for (const match of source.matchAll(new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${loader}`, 'g'))) addNamespace(match[1], match[2])
+  for (const match of source.matchAll(new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${loader}`, 'g'))) {
+    for (const binding of match[1].split(',')) {
+      const [imported, local = imported] = binding.trim().split(/\s*:\s*/).map(name => name.trim())
+      if (imported) addNamed(imported, local)
+    }
   }
   return patterns.length > 0 ? new RegExp(`(?<![\\w$.])(${patterns.join('|')})\\s*\\(`, 'g') : undefined
 }

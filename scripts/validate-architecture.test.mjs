@@ -143,6 +143,35 @@ test('architecture validator rejects tests that read connection settings or conn
     '})',
     '',
   ].join('\n'))
+  await writeTestFile(root, 'packages/kernel/tests/hoisting.test.ts', [
+    "const config = { host: 'localhost', user: 'postgres' }",
+    '',
+    "it('local', () => {",
+    '  const config = postgresTestConnection()',
+    '  createPostgresAdapter({ config })',
+    '})',
+    '',
+    "it('top level', () => {",
+    '  createPostgresAdapter({ config })',
+    '})',
+    '',
+  ].join('\n'))
+  await writeTestFile(root, 'packages/kernel/tests/combined.test.ts', [
+    "import pg, { Client } from 'pg'",
+    "import mysql, { createPool as pool } from 'mysql2/promise'",
+    '',
+    "it('combined', async () => {",
+    '  new Client({})',
+    '  new pg.Pool({})',
+    '  pool({})',
+    '  mysql.createConnection({})',
+    "  const { Client: Dynamic } = await import('pg')",
+    '  new Dynamic({})',
+    "  const { createConnection } = require('mysql2')",
+    '  createConnection({})',
+    '})',
+    '',
+  ].join('\n'))
   await writeTestFile(root, 'packages/kernel/tests/keys.test.ts', [
     "it('helper', () => {",
     '  const config = postgresTestConnection()',
@@ -184,6 +213,11 @@ test('architecture validator rejects tests that read connection settings or conn
   assert.match(failures, /keys\.test\.ts:6 opens a real database with createPostgresAdapter outside the shared helpers/)
   assert.match(failures, /keys\.test\.ts:7 opens a real database with createPostgresAdapter outside the shared helpers/)
   assert.doesNotMatch(failures, /keys\.test\.ts:3 /)
+  assert.match(failures, /hoisting\.test\.ts:9 opens a real database with createPostgresAdapter outside the shared helpers/)
+  assert.doesNotMatch(failures, /hoisting\.test\.ts:5 /)
+  for (const [line, constructor] of [[5, 'new Client'], [6, 'new pg.Pool'], [7, 'pool'], [8, 'mysql.createConnection'], [10, 'new Dynamic'], [12, 'createConnection']]) {
+    assert.match(failures, new RegExp(`combined\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers`))
+  }
   for (const [line, constructor] of [[5, 'createPostgresAdapter'], [6, 'createMySQLAdapter'], [7, 'new Client'], [9, 'new Pool'], [10, 'new Client']]) {
     assert.match(failures, new RegExp(`direct\\.test\\.ts:${line} opens a real database with ${constructor} outside the shared helpers; build its connection with postgresTestConnection\\(\\), mysqlTestConnection\\(\\) or testConnectionUrl\\(\\) from tests/support/real-database\\.ts`))
   }
