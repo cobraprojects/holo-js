@@ -133,6 +133,10 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
 
     expect(mixed.map(row => Number(row.enabled)).sort((left, right) => left - right)).toEqual([0, 1, 42])
     expect(flagsOnly.map(row => row.enabled).sort()).toEqual([false, true])
+    const nested = await DB.table(flags).select('enabled').where('label', 'on')
+      .unionAll(DB.table(flags).select('enabled').where('label', 'off').unionAll(DB.table(counts).select('enabled')))
+      .get()
+    expect(nested.map(row => Number(row.enabled)).sort((left, right) => left - right)).toEqual([0, 1, 42])
   })
 
   it.runIf(driver !== 'postgres')('reads union columns by position, whatever each branch names them', async () => {

@@ -112,13 +112,17 @@ function knowsEveryPosition(columns: readonly SelectedColumn[]): boolean {
   return columns.every(([key]) => key !== UNKNOWN_COLUMNS)
 }
 
+function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
+  return plan.unions.flatMap(union => [union.query, ...unionBranches(union.query)])
+}
+
 function unionBranchesRead(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
   const selected = selectedResultColumns(plan)
-  const branches = plan.unions.map(union => selectedResultColumns(union.query))
+  const branches = unionBranches(plan).map(selectedResultColumns)
   if (!knowsEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !knowsEveryPosition(branch))) {
     return () => false
   }

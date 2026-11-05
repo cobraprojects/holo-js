@@ -52,17 +52,19 @@ import type {
   PatchableQueryPatchTarget,
 } from './query-state'
 import type { BackfillCache } from './state'
+import { readMutationsForQuery } from './query-backfill'
 
 export async function tryPatchObservedQuery(
   target: PatchableQueryPatchTarget,
-  mutations: readonly DatabaseMutationEvent[],
+  observedMutations: readonly DatabaseMutationEvent[],
   backfills: BackfillCache,
 ): Promise<PatchQueryResult> {
-  if (mutations.length === 0) {
+  if (observedMutations.length === 0) {
     return UNPATCHED_RESULT
   }
 
   const { aggregatePatchMode, currentValue, query } = target
+  const mutations = readMutationsForQuery(query, observedMutations, backfills)
 
   if (readsConvertedColumnsAsDriverValues(query, mutations)) {
     return UNPATCHED_RESULT

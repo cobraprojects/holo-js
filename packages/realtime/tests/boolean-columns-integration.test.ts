@@ -75,6 +75,19 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(subscriptions[0]!.current.data).toEqual([{ id: 2, enabled: true }, { id: 3, enabled: true }])
   })
 
+  it('patches a typed subscription to equal a fresh read after name-only writes', async () => {
+    const { db, flags } = await openFlags(driver)
+    const { expectPatched } = await subscribeCounted({
+      rows: () => db.table(flags).orderBy('id').get(),
+      enabledRows: () => db.table(flags).where('enabled', true).orderBy('id').get(),
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).where('id', 1).update({ enabled: 0 }) }))
+    await expectPatched()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 1 }) }))
+    await expectPatched()
+  })
+
   it('re-runs a name-only subscription over a boolean column, which reads the values the driver returns', async () => {
     const { db, flags } = await openFlags(driver)
     registerGeneratedTables({ [flags.tableName]: flags })
