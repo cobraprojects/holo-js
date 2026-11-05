@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import type { CompiledStatement, DatabaseContext } from '@holo-js/db'
 import {
   readQueryRowWindowMode,
 } from './query-metadata'
@@ -11,6 +11,7 @@ import {
   isQueryObservationContradictedByExactPredicates,
 } from './predicate-dependency-matching'
 import {
+  createBackfillQuery,
   createBackfillSelection,
   getBackfillDatabaseConnection,
 } from './query-backfill'
@@ -185,7 +186,7 @@ async function fetchGroupedExactRowBackfill(
   }
 
   const primaryKey = readPrimaryKey(query)
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
+  let builder = createBackfillQuery(query, connection)
   const selections = query.selections ?? []
   const usesHiddenIdentity = selections.length > 0
   if (usesHiddenIdentity) {

@@ -174,6 +174,30 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(JSON.stringify(subscription.current.data)).toContain('"rate":"2.50"')
   })
 
+  it('backfills limited windows and paginated pages with the integer values a fresh query reads', async () => {
+    const { db, rates } = await openFixture(driver)
+    await db.table(rates).insert([{ id: 2, group_id: 2, tag_id: 2, rate: '2.00' }, { id: 3, group_id: 3, tag_id: 3, rate: '3.00' }])
+    const queries: Record<string, () => Promise<unknown>> = {
+      window: () => db.table(rates).select('id', 'group_id', 'tag_id').orderBy('id').limit(2).get(),
+      exact: () => db.table(rates).select('id', 'group_id').where('id', '2').first(),
+      page: () => db.table(rates).select('id', 'group_id').orderBy('id').paginate(2, 1).then(page => page.toJSON()),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectFresh = async () => {
+      const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    }
+
+    await mutate(() => db.table(rates).where('id', 1).delete())
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', 2).update({ tag_id: 5 }))
+    await expectFresh()
+  })
+
   it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {
     const { db, rates } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {
@@ -198,6 +222,29 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await mutate(() => db.table(rates).where('id', '1').update({ group_id: '2' }))
     await expectFresh()
     expect(subscriptions[0]!.current.data).toBe(3)
+  })
+
+  it('refreshes a subscription on a schema-qualified table filtering by a short-qualified integer column as text', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_norm_scores_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const qualified = driver === 'postgres' ? `public.${name}` : driver === 'mysql' ? `${mysqlTestConnection().database}.${name}` : name
+    await schema.createTable(qualified, (table) => {
+      table.id()
+      table.bigInteger('score')
+    })
+    onTestFinished(() => schema.dropTable(qualified))
+    const scores = defineGeneratedTable(qualified, { id: column.id(), score: column.bigInteger() })
+    await db.table(scores).insert({ id: 1, score: 2 })
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const handler = () => db.table(scores).where(`${name}.score`, '2').count()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await mutate(() => db.table(scores).insert({ id: 2, score: '2' }))
+    await mutate(() => db.table(scores).insert({ id: 3, score: 2 }))
+
+    expect(subscription.current.data).toBe(await handler())
+    expect(subscription.current.data).toBe(3)
   })
 
   it.runIf(driver === 'mysql')('keeps an insert by a user that cannot read the written decimal back and re-runs its subscriptions', async () => {

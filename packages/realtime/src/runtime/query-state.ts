@@ -5,6 +5,7 @@ import type {
 } from './predicate-matching'
 import type { RealtimePatchPathSegment } from './result-patching'
 import type { DatabaseMutationEvent, MutationIndex, PredicateDependencyIndex } from './dependencies'
+import type { TableDefinition } from '@holo-js/db'
 
 export type DatabaseQueryObservation = {
   readonly aggregate?: DatabaseQueryAggregateObservation
@@ -53,6 +54,7 @@ export type DatabaseQueryObservation = {
   readonly selections?: readonly DatabaseQuerySelectionObservation[]
   readonly serialized?: boolean
   readonly tableName: string
+  readonly table?: TableDefinition
 }
 
 export type DatabaseQueryBelongsToHydrationObservation = {

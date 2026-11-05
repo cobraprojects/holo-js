@@ -6,11 +6,11 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
+import type { TableDefinition } from './schema/types'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
-import { readIntegerPredicates } from './query/resultColumns'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -250,6 +250,7 @@ export interface DatabaseQueryObservation {
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
   readonly selections: readonly DatabaseQuerySelectionObservation[]
   readonly serialized?: boolean
+  readonly table?: TableDefinition
 }
 
 export interface DatabaseQueryBelongsToHydrationObservation {
@@ -609,6 +610,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
+      table: query.table,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -632,6 +634,7 @@ export function rebindDatabaseQueryObservationPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
+      table: query.table,
     }))
     return
   }
@@ -681,6 +684,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
+      table: query.table,
     })
     state.queries.push(Object.freeze({
       aggregate: undefined,
@@ -704,6 +708,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       scalarListRows: undefined,
       selections: query.selections,
       serialized: query.serialized,
+      table: query.table,
     }))
     return
   }
@@ -746,6 +751,7 @@ export function disableDatabaseQueryObservationPatching(
       scalarListRows: query.scalarListRows,
       selections: query.selections,
       serialized: options.serialized || query.serialized,
+      table: query.table,
     })
     return
   }
@@ -835,6 +841,7 @@ function rebindDatabaseQueryObservation(
       scalarListRows,
       selections: query.selections,
       serialized: query.serialized,
+      table: query.table,
     })
     return
   }
@@ -1331,20 +1338,6 @@ function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): 
 
 function getColumnName(column: string): string {
   return column.split('.').at(-1)!
-}
-
-function readSourcePredicates(
-  source: Pick<QuerySource, 'tableName' | 'table' | 'alias'>,
-  connectionName: string,
-  predicates: readonly QueryPredicateNode[],
-): readonly QueryPredicateNode[] {
-  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
-  return readIntegerPredicates(table, [source.alias ?? source.tableName, source.tableName], predicates)
-}
-
-function readObservedPlan(plan: SelectQueryPlan, connectionName: string): SelectQueryPlan {
-  const predicates = readSourcePredicates(plan.source, connectionName, plan.predicates)
-  return predicates === plan.predicates ? plan : { ...plan, predicates }
 }
 
 function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>, connectionName: string): string | undefined {
@@ -2106,7 +2099,7 @@ export function inferDatabaseQueryObservationDependencies(
 }
 
 function createDatabaseQueryObservationFromPlan(
-  observedPlan: SelectQueryPlan,
+  plan: SelectQueryPlan,
   connectionName: string,
   dependencies: readonly string[],
   result?: unknown,
@@ -2114,7 +2107,6 @@ function createDatabaseQueryObservationFromPlan(
   groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
-  const plan = readObservedPlan(observedPlan, connectionName)
   const primaryKey = resolveObservedRowKey(plan.source, connectionName)
   return Object.freeze({
     connectionName,
@@ -2132,6 +2124,7 @@ function createDatabaseQueryObservationFromPlan(
     primaryKey,
     result,
     selections: collectQuerySelectionObservations(plan),
+    table: plan.source.table,
   })
 }
 
@@ -2184,7 +2177,7 @@ export function createDatabaseMutationEvent(
     connectionName,
     tableName: source.tableName,
     kind,
-    predicates: collectQueryPredicateObservations(readSourcePredicates(source, connectionName, predicates)),
+    predicates: collectQueryPredicateObservations(predicates),
     previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? Object.freeze([...rows]) : undefined,
@@ -2209,11 +2202,10 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 }
 
 export function inferAutomaticQueryCacheDependencies(
-  observedPlan: SelectQueryPlan,
+  plan: SelectQueryPlan,
   connectionName: string,
   textMatchesAnyNumber = false,
 ): readonly string[] | undefined {
-  const plan = readObservedPlan(observedPlan, connectionName)
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
@@ -2263,13 +2255,12 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
 }
 
 export function inferAutomaticQueryCacheInvalidationPlan(
-  mutationPlan: SelectQueryPlan,
+  plan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
   includeMetadata = false,
   caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
 ): DatabaseDependencyInvalidationPlan {
-  const plan = readObservedPlan(mutationPlan, connectionName)
   const tableKey = createTableCacheDependency(connectionName, plan.source.tableName)
   const dependencies = [tableKey]
   if (hasDisjunctivePredicate(plan.predicates)) {

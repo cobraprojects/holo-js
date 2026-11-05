@@ -1,11 +1,10 @@
-import { TableQueryBuilder } from '@holo-js/db'
 import type { DatabaseMutationEvent } from './dependencies'
 import {
   matchesGroupedCountHaving,
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { getBackfillDatabaseConnection } from './query-backfill'
+import { createBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
@@ -190,7 +189,7 @@ async function fetchGroupedAggregateValues(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
+  let builder = createBackfillQuery(query, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -370,7 +369,7 @@ async function fetchGroupedAggregateValueCounts(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
+  let builder = createBackfillQuery(query, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
