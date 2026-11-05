@@ -7,6 +7,12 @@ import { resetRemoteRefreshSchedule } from '../src/runtime/invalidation'
 import { configureRealtimeRuntime, realtimeServerInternals, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
 
+async function untilTimerScheduled(): Promise<void> {
+  while (vi.getTimerCount() === 0) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+}
+
 function remoteInvalidation(dependencies: readonly string[]) {
   return { id: randomUUID(), connectionName: 'main', dependencies }
 }
@@ -318,14 +324,19 @@ it('cancels a subscription\'s deferred remote refresh when it unsubscribes', asy
   })
   const subscription = await subscribeRealtimeQuery(scheduled)
   const bridge = realtimeServerInternals.createRealtimeDatabaseInvalidationBridge()
-  await bridge.receive(remoteInvalidation(['db:main:records']))
-  expect(runs).toBe(2)
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
   onTestFinished(() => { vi.useRealTimers() })
 
-  void bridge.receive(remoteInvalidation(['db:main:records']))
-  await new Promise(resolve => setImmediate(resolve))
+  const firstReceived = bridge.receive(remoteInvalidation(['db:main:records']))
+  await untilTimerScheduled()
   vi.advanceTimersByTime(10)
+  await firstReceived
+  expect(runs).toBe(2)
+
+  const secondReceived = bridge.receive(remoteInvalidation(['db:main:records']))
+  await untilTimerScheduled()
+  vi.advanceTimersByTime(10)
+  await secondReceived
   expect(vi.getTimerCount()).toBe(1)
   expect(runs).toBe(2)
 
