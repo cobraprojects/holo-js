@@ -2,7 +2,8 @@ import { column, defineGeneratedTable } from '@holo-js/db'
 import { describe, expect, it } from 'vitest'
 import type { DatabaseMutationEvent } from '../src/runtime/dependencies'
 import { readMutationsForQuery } from '../src/runtime/query-backfill'
-import type { BackfillCache, DatabaseQueryObservation } from '../src/runtime/query-state'
+import type { DatabaseQueryObservation } from '../src/runtime/query-state'
+import type { BackfillCache } from '../src/runtime/state'
 
 describe('@holo-js/realtime mutation reads', () => {
   it('reads each mutation through the definition of its own connection when two connections share a table name', () => {
