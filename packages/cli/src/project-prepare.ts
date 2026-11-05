@@ -16,7 +16,7 @@ import {
 import type { FrameworkDescriptor } from './project/frameworks'
 import { resolveFrameworkPreparation } from './project/framework-preparation'
 import { runPluginProjectPreparers } from './project/plugin-prepare/coordinator'
-import { recordPackageManifestBaseline, trackPackageManifestWrites } from './written-outputs'
+import { recordPackageManifestBaseline, trackPackageManifestRestores } from './written-outputs'
 
 type ProjectPrepareOptions = {
   readonly prepareSchema?: boolean
@@ -117,7 +117,7 @@ async function runFrameworkSync(
   const manager = await resolveProjectPackageManager(projectRoot)
   signal?.throwIfAborted()
   const invocation = resolvePackageManagerSpawn({ command: sync.commands[manager][0], args: sync.commands[manager].slice(1) })
-  await trackPackageManifestWrites(projectRoot, () => new Promise<void>((resolvePromise, reject) => {
+  await trackPackageManifestRestores(projectRoot, () => new Promise<void>((resolvePromise, reject) => {
     const child = spawn(invocation.command, [...invocation.args], {
       cwd: projectRoot,
       stdio: 'inherit',

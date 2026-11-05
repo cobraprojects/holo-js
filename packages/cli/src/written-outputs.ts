@@ -100,6 +100,7 @@ async function trackWrites<TResult>(
   write: () => Promise<TResult>,
   writtenContents?: (key: string) => string | Uint8Array | undefined,
   ancestorPaths: readonly string[] = paths,
+  ownsContentChanges = true,
 ): Promise<TResult> {
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
@@ -134,7 +135,9 @@ async function trackWrites<TResult>(
       const after = fingerprints[index] ?? { content: null, identity: null }
       const before = fingerprintsBefore.get(key)
       const previous = previousFingerprints.get(key)
-      const keepPrevious = before !== undefined && before.content === after.content && before.identity !== previous
+      const keepPrevious = before !== undefined && (before.content === after.content
+        ? before.identity !== previous
+        : !ownsContentChanges)
       setEntry(key, { fingerprint: keepPrevious ? previous : after.identity })
     })
     for (const key of keys) {
@@ -172,6 +175,11 @@ export async function recordPackageManifestBaseline(projectRoot: string): Promis
     const { identity } = await readFingerprint(key)
     if (!pendingWrites.has(key)) setEntry(key, { fingerprint: identity })
   }))
+}
+
+export async function trackPackageManifestRestores<TResult>(projectRoot: string, write: () => Promise<TResult>): Promise<TResult> {
+  const paths = resolvePackageManifestPaths(projectRoot)
+  return await trackWrites(paths, write, undefined, paths, false)
 }
 
 export async function trackPackageManifestWrites<TResult>(projectRoot: string, write: () => Promise<TResult>): Promise<TResult> {

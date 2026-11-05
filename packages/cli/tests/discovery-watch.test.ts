@@ -9,7 +9,7 @@ import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
 import { writeTextFile } from '../src/project/atomic-file'
-import { isUnchangedWrittenOutput, recordPackageManifestBaseline, trackOutputWrites, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
+import { isUnchangedWrittenOutput, recordPackageManifestBaseline, trackOutputWrites, trackPackageManifestRestores, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
@@ -460,4 +460,22 @@ it('observes a manifest the user changes and restores after the prepare took its
   await writeFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
   await writeFile(manifest, original)
   await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
+})
+
+it('keeps a user manifest edit made while a framework sync that restores manifests runs', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  const original = '{"name":"watch-fixture","type":"module"}'
+  await write(root, 'package.json', original)
+  await recordPackageManifestBaseline(root)
+  await trackPackageManifestRestores(root, async () => {
+    await writeFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
+  })
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
+  await recordPackageManifestBaseline(root)
+  await trackPackageManifestRestores(root, async () => {
+    await writeFile(manifest, '{"name":"watch-fixture","type":"module","overlay":true}')
+    await writeFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
+  })
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
 })
