@@ -126,6 +126,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -2989,6 +2990,7 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
+    validateQueryPlan(createTruncateQueryPlan(this.source))
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
     await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
@@ -2997,6 +2999,7 @@ export class TableQueryBuilder<
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
+    assertQueryTablePath(this.source.tableName)
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
@@ -3245,6 +3248,7 @@ export class TableQueryBuilder<
 
   private async shouldCaptureInsertReturningRows(): Promise<boolean> {
     if (!this.shouldUseReturningMutationRows(hasDatabaseDependencyInvalidationListeners())) return false
+    assertQueryTablePath(this.source.tableName)
     await this.connection.initialize()
     const statement = this.connection.getAdapter().getMutationReturningPermissionQuery?.(this.source.tableName)
     if (!statement) return true
