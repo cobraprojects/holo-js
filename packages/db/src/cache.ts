@@ -6,13 +6,13 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean, isStoredBoolean } from './schema/normalization'
+import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
 import { NumericAdjustment } from './query/NumericAdjustment'
-import { readColumnResult } from './query/resultColumns'
+import { readColumnResult, readIntegerResult } from './query/resultColumns'
 import type { SchemaDialectName } from './schema/typeMapping'
 
 export type QueryCacheTtlInput = number | Date
@@ -1015,11 +1015,11 @@ export function createDeterministicQueryCacheKey(
   statement: CompiledStatement,
   connectionName: string,
 ): string {
-  const digest = createHash('sha256').update(JSON.stringify({
+  const digest = createHash('sha256').update(serializeWithIntegers({
     connectionName,
     sql: statement.sql,
     bindings: statement.bindings ?? [],
-  })).digest('hex')
+  })!).digest('hex')
 
   return `db:query:${digest}`
 }
@@ -1039,8 +1039,36 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${tableName}`
 }
 
+function serializeWithIntegers(value: unknown): string | undefined {
+  if (typeof value === 'bigint') {
+    return value.toString()
+  }
+
+  if (!value || typeof value !== 'object' || value instanceof Number || value instanceof String || value instanceof Boolean) {
+    return JSON.stringify(value)
+  }
+
+  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+    return serializeWithIntegers((value as { toJSON: () => unknown }).toJSON())
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(element => serializeWithIntegers(element) ?? 'null').join(',')}]`
+  }
+
+  const entries: string[] = []
+  for (const [key, element] of Object.entries(value)) {
+    const serialized = serializeWithIntegers(element)
+    if (serialized !== undefined) {
+      entries.push(`${JSON.stringify(key)}:${serialized}`)
+    }
+  }
+
+  return `{${entries.join(',')}}`
+}
+
 function encodeDependencyValue(value: unknown): string {
-  return encodeURIComponent(JSON.stringify(value))
+  return encodeURIComponent(serializeWithIntegers(value)!)
 }
 
 function createPredicateMetadata(
@@ -2224,6 +2252,20 @@ function readMutationRow(
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
+function readTypedMutationRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const read = readMutationRow(table, row)
+  if (!table) return read
+  const integers = Object.keys(read).flatMap((key) => {
+    if (!Object.hasOwn(table.columns, key) || !readsAsInteger(table.columns[key]!)) return []
+    const value = readIntegerResult(read[key])
+    return value === read[key] ? [] : [[key, value] as const]
+  })
+  return integers.length === 0 ? read : Object.freeze({ ...read, ...Object.fromEntries(integers) })
+}
+
 function readFetchedRow(
   connection: DatabaseContext,
   table: TableDefinition | undefined,
@@ -2568,7 +2610,7 @@ export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
   readFetchedRow,
-  readMutationRow,
+  readTypedMutationRow,
   setMutationPreviousRowsRequirement,
   requiresMutationPreviousRows,
   collectDatabaseQueryDependencies: collectDatabaseQueryDependenciesInternal,

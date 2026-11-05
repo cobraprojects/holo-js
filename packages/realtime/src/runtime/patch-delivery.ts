@@ -54,7 +54,7 @@ export async function tryPatchQueryEntry(
     return false
   }
 
-  if (!entry.current) {
+  if (!entry.current || entry.refreshFailed) {
     return false
   }
 

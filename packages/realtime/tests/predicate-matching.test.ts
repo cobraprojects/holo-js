@@ -20,6 +20,20 @@ import {
 } from '../src/runtime/predicate-matching'
 
 describe('@holo-js/realtime predicate matching', () => {
+  it('compares numbers with BigInt values by exact integer value', () => {
+    expect(compareValues(0, 0n)).toBe(0)
+    expect(compareValues(1n, 2)).toBe(-1)
+    expect(compareValues(3n, 2n)).toBe(1)
+    expect(compareValues(9007199254740992, 9007199254740993n)).toBe(-1)
+    expect(matchesPredicateValue(0, { column: 'n', operator: '=', value: 0n })).toBe(true)
+    expect(matchesPredicateValue(1, { column: 'n', operator: '=', value: 0n })).toBe(false)
+    expect(matchesPredicateValue(2, { column: 'n', operator: '!=', value: 2n })).toBe(false)
+    expect(matchesPredicateValue(2, { column: 'n', operator: 'in', value: [1n, 2n] })).toBe(true)
+    expect(matchesPredicateValue(3, { column: 'n', operator: 'in', value: [1n, 2n] })).toBe(false)
+    expect(matchesPredicateValue(3, { column: 'n', operator: '>', value: 2n })).toBe(true)
+    expect(matchesPredicateValue(9007199254740992, { column: 'n', operator: '=', value: 9007199254740993n })).toBe(false)
+  })
+
   it('compares typed values without assuming database string collation', () => {
     expect(compareValues(1, 2)).toBe(-1)
     expect(compareValues(2, 2)).toBe(0)

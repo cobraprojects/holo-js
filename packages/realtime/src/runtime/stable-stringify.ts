@@ -3,6 +3,10 @@ export function stableStringify(value: unknown): string {
 }
 
 function stableStringifyValue(value: unknown, ancestors: WeakSet<object>): string {
+  if (typeof value === 'bigint') {
+    return value.toString()
+  }
+
   if (!value || typeof value !== 'object') {
     return JSON.stringify(value)
   }

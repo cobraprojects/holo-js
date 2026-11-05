@@ -78,14 +78,14 @@ function readRows(
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
   if (!rows) return rows
-  const read = rows.map(row => queryCacheInternals.readMutationRow(table, row))
+  const read = rows.map(row => queryCacheInternals.readTypedMutationRow(table, row))
   return read.every((row, index) => row === rows[index]) ? rows : Object.freeze(read)
 }
 
 function readMutation(table: TableDefinition, mutation: DatabaseMutationEvent): DatabaseMutationEvent {
   const rows = readRows(table, mutation.rows)
   const previousRows = readRows(table, mutation.previousRows)
-  const values = mutation.values ? queryCacheInternals.readMutationRow(table, mutation.values) : mutation.values
+  const values = mutation.values ? queryCacheInternals.readTypedMutationRow(table, mutation.values) : mutation.values
   if (rows === mutation.rows && previousRows === mutation.previousRows && values === mutation.values) return mutation
   return Object.freeze({ ...mutation, rows, previousRows, values })
 }

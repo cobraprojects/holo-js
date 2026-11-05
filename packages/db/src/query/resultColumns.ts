@@ -20,7 +20,7 @@ function holdsInteger(value: unknown): boolean {
   return typeof value === 'number' || readsIntegerText(value)
 }
 
-function readIntegerResult(value: unknown): unknown {
+export function readIntegerResult(value: unknown): unknown {
   return holdsInteger(value) ? parseInteger(value) : value
 }
 

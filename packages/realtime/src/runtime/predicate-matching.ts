@@ -72,6 +72,12 @@ export function compareValues(left: unknown, right: unknown): number | undefined
     return left === right ? 0 : left < right ? -1 : 1
   }
 
+  if (isNumberLike(left) && isNumberLike(right)) {
+    const leftNumber = left as number | bigint
+    const rightNumber = right as number | bigint
+    return leftNumber < rightNumber ? -1 : leftNumber > rightNumber ? 1 : 0
+  }
+
   if (left instanceof Date && right instanceof Date) {
     const leftTime = left.getTime()
     const rightTime = right.getTime()
@@ -94,6 +100,7 @@ export function equalValues(left: unknown, right: unknown): boolean | undefined 
   if (left === right) return true
   if (Array.isArray(left) || Array.isArray(right)) return undefined
   if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
+  if (isNumberLike(left) && isNumberLike(right)) return compareValues(left, right) === 0
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }

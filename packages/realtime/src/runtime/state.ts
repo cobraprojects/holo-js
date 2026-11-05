@@ -125,6 +125,7 @@ export type ActiveQueryEntry<TDefinition extends RealtimeQueryDefinitionMetadata
   tableDependencies: readonly string[]
   version: number
   current?: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
+  refreshFailed?: boolean
 }
 
 export type BackfillCache = QueryBackfillCache<ActiveQueryEntry<RealtimeQueryDefinitionMetadata>>
