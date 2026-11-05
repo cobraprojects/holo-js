@@ -2593,6 +2593,10 @@ class ModelQueryBuilderBase<
       && this.aggregateLoads.length === 0
   }
 
+  canPatchLoadedRows(): boolean {
+    return this.canBindRowsToSerializedResult()
+  }
+
   private canBindRowsToSerializedResult(): boolean {
     return this.canBindRowsToSerializedResultBase()
       && this.eagerLoads.length === 0

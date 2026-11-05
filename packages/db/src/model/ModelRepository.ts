@@ -1151,11 +1151,14 @@ export class ModelRepository<
     related: ModelRepository,
     constrainedPlan: SelectQueryPlan,
     parentKey: unknown,
+    rowsPatchable: boolean,
   ): void {
-    const observation = this.createHasManyRelationObservation(relation, related, constrainedPlan, parentKey)
-    if (!observation) {
+    const created = this.createHasManyRelationObservation(relation, related, constrainedPlan, parentKey)
+    if (!created) {
       return
     }
+
+    const observation = rowsPatchable ? created : Object.freeze({ ...created, patchable: false })
 
     const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
     observations.set(relationName, observation)
@@ -1169,11 +1172,14 @@ export class ModelRepository<
     related: ModelRepository,
     constrainedPlan: SelectQueryPlan,
     ownerKey: unknown,
+    rowsPatchable: boolean,
   ): void {
-    const observation = this.createBelongsToRelationObservation(relation, related, constrainedPlan, ownerKey)
-    if (!observation) {
+    const created = this.createBelongsToRelationObservation(relation, related, constrainedPlan, ownerKey)
+    if (!created) {
       return
     }
+
+    const observation = rowsPatchable ? created : Object.freeze({ ...created, patchable: false })
 
     const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
     observations.set(relationName, observation)
@@ -2311,7 +2317,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+    const { entities: relatedEntities, plan: constrainedPlan, rowsPatchable } = await retrieveRelation(
       foreignKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
@@ -2323,7 +2329,7 @@ export class ModelRepository<
       const foreignKey = entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, relatedMap.get(foreignKey) ?? null)
       if (constrainedPlan) {
-        this.rememberBelongsToRelationObservation(entity, relationName, relation, related, constrainedPlan, foreignKey)
+        this.rememberBelongsToRelationObservation(entity, relationName, relation, related, constrainedPlan, foreignKey, rowsPatchable !== false)
       }
     }
   }
@@ -2344,7 +2350,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+    const { entities: relatedEntities, plan: constrainedPlan, rowsPatchable } = await retrieveRelation(
       localKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
@@ -2356,7 +2362,7 @@ export class ModelRepository<
       const localKey = entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(localKey) ?? [])
       if (constrainedPlan) {
-        this.rememberHasManyRelationObservation(entity, relationName, relation, related, constrainedPlan, localKey)
+        this.rememberHasManyRelationObservation(entity, relationName, relation, related, constrainedPlan, localKey, rowsPatchable !== false)
       }
     }
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable, defineModel, hasOne, latestOfMany, oldestOfMany } from '@holo-js/db'
+import { belongsTo, column, defineGeneratedTable, defineModel, hasOne, latestOfMany, oldestOfMany } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -141,6 +141,24 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
 
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).not.toContain('"second"')
+  })
+
+  it.each([
+    ['a nested eager load', 'post.author'],
+    ['a constrained nested eager load', 'constrained'],
+  ] as const)('keeps %s on the next hasOne row', async (_name, load) => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const AuthoredPost = defineModel(posts, { timestamps: false, relations: { author: belongsTo(() => Author, 'author_id') } })
+    const NestedAuthor = defineModel(Author.definition.table, { timestamps: false, relations: { post: hasOne(() => AuthoredPost, 'author_id') } })
+    const handler = () => (load === 'constrained'
+      ? db.model(NestedAuthor).query().with({ post: query => query.orderBy('id').with('author') })
+      : db.model(NestedAuthor).query().with(load)).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"second"')
   })
 
   it('patches the relation to null when the last matching row is deleted', async () => {

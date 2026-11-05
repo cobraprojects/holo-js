@@ -118,7 +118,7 @@ export async function retrieveRelation(
   createQuery: () => ModelQueryBuilder,
   column: string,
   observe = false,
-): Promise<{ entities: Entity[], plan?: SelectQueryPlan }> {
+): Promise<{ entities: Entity[], plan?: SelectQueryPlan, rowsPatchable?: boolean }> {
   if (keys.length === 0) return { entities: [] }
   const observationCount = observe && hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
   let plan: SelectQueryPlan | undefined
@@ -126,12 +126,13 @@ export async function retrieveRelation(
   const probe = createQuery()
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
+  const rowsPatchable = probe.canPatchLoadedRows()
   for (const [index, chunk] of chunkRelationKeys(keys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
   if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
-  return { entities, plan }
+  return { entities, plan, rowsPatchable }
 }
 
 export function indexRelation(entities: readonly Entity[], column: string): StoredKeyMap<Entity> {
