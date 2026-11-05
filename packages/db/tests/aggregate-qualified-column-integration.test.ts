@@ -250,6 +250,9 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     const expectedWithId = { max: 90, min: 10, sum: 140, avg: 140 / 3 }[kind]
     expect(await query[kind](`${name}.price`)).toBe(expectedWithId)
     expect(await query.select(`${name}.*`, `${ordersName}.*`)[kind](`${name}.price`)).toBe(expectedWithId)
+    const explicit = query.select(`${name}.id`, `${name}.price`, `${ordersName}.id`, `${ordersName}.price`)
+    expect(await explicit.distinct()[kind](`${name}.price`)).toBe(expectedWithId)
+    expect(await explicit.groupBy(`${name}.id`, `${ordersName}.id`)[kind](`${name}.price`)).toBe(expectedWithId)
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {

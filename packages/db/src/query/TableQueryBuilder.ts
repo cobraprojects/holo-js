@@ -1918,7 +1918,9 @@ export class TableQueryBuilder<
       ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
       : implicitSelections.length > 0
         ? [...implicitSelections, wildcard(source)]
-        : !this.plan.distinct && this.plan.groupBy.length === 0 ? [wildcard(source)] : [`${source}.${key}`]
+        : !this.plan.distinct && this.plan.groupBy.length === 0
+            ? [wildcard(source)]
+            : [...this.selectedSourceColumnNames().map(name => name === '*' ? wildcard(source) : `${source}.${name}`), `${source}.${key}`]
     return { key, joined: !!join, selections }
   }
 
@@ -3619,6 +3621,14 @@ export class TableQueryBuilder<
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ column, kind }))
     }
     return result
+  }
+
+  private selectedSourceColumnNames(): readonly string[] {
+    return this.plan.selections.flatMap((selection) => {
+      if (selection.kind !== 'column' || selection.alias || !selection.column.includes('.')) return []
+      const name = this.resolveSourceColumnName(selection.column)
+      return typeof name === 'undefined' ? [] : [name]
+    })
   }
 
   private resolveAggregateColumn(column: string): {
