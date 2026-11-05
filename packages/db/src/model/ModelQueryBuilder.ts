@@ -1,4 +1,4 @@
-import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
@@ -27,6 +27,7 @@ import {
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
 import { projectModelRows, resolveAggregateSource, resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { selectionOutputName } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -208,11 +209,21 @@ class ModelQueryBuilderBase<
     readonly cursorColumns: readonly string[]
   } {
     const plan = this.tableQuery.getPlan()
+    const aliasedColumns = new Set(plan.selections.flatMap(selection => selection.kind === 'column' && selection.alias ? [selection.column] : []))
     const joinedOrders = plan.joins.length === 0
       ? []
-      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' ? [order.column] : [])
+      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) ? [order.column] : [])
     if (joinedOrders.length === 0) return { query: this, cursorColumns: [] }
-    const cursorColumns = joinedOrders.map((_, index) => `__holo_cursor_${index}`)
+    if (plan.unions.length > 0) {
+      throw new CompilerError(`Cannot cursor paginate a union of joined "${plan.source.tableName}" model queries by "${joinedOrders[0]}". Select it under an alias in each query and order by that alias.`)
+    }
+    const taken = new Set([...Object.keys(plan.source.table?.columns ?? {}), ...plan.selections.flatMap(selection => selectionOutputName(selection) ?? [])])
+    const freeAlias = (index: number): string => taken.has(`__holo_cursor_${index}`) ? freeAlias(index + 1) : `__holo_cursor_${index}`
+    const cursorColumns = joinedOrders.map(() => {
+      const alias = freeAlias(0)
+      taken.add(alias)
+      return alias
+    })
     const selected = plan.selections.length === 0 ? this.select('*' as never) : this
     return {
       query: selected.addSelect(...joinedOrders.map((column, index) => `${column} as ${cursorColumns[index]}`) as never[]) as ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>,

@@ -245,6 +245,13 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     }
     expect(await pages(joined())).toEqual([[[1, 1]], [[2, 2]]])
     expect(await pages(joined().orderBy(`${orders}.id`))).toEqual([[[2, 2]], [[1, 1]]])
+    const taken = await joined().select(`${products}.*`, `${orders}.product_id as __holo_cursor_0` as never).orderBy(`${orders}.id`).cursorPaginate(2)
+    expect(taken.data.map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).__holo_cursor_0)])).toEqual([[2, 2], [1, 1]])
+    const aliased = () => joined().select(`${products}.*`, `${orders}.id as order_id` as never)
+    const union = aliased().where(`${orders}.id`, 101).union(aliased().where(`${orders}.id`, 102)).orderBy('order_id' as never)
+    if (driver === 'sqlite') expect(attributes((await union.cursorPaginate(1)).data).map(row => row.id)).toEqual([2])
+    const unaliased = joined().select(`${products}.*`).where(`${orders}.id`, 101).union(joined().select(`${products}.*`).where(`${orders}.id`, 102)).orderBy(`${orders}.id`)
+    await expect(unaliased.cursorPaginate(1)).rejects.toThrow(`Cannot cursor paginate a union of joined "${products}" model queries by "${orders}.id". Select it under an alias in each query and order by that alias.`)
     expect(await pages(joined().select(`${orders}.id as order_id` as never, `${orders}.product_id` as never, `${products}.*`).orderBy(`${orders}.id`, 'desc'))).toEqual([[[1, 1]], [[2, 2]]])
   })
 
