@@ -1317,6 +1317,13 @@ export function resolveRowDependencyKey(source: Pick<QuerySource, 'tableName' | 
   return otherPrimaryKeys.length === 0 ? primaryKey : undefined
 }
 
+export function resolveInsertIdKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string): string | undefined {
+  const primaryKey = resolveRowDependencyKey(source, connectionName)
+  return primaryKey === 'id' || (primaryKey !== undefined && hasAutoIncrementKey(source, connectionName, primaryKey))
+    ? primaryKey
+    : undefined
+}
+
 function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, connectionName: string, primaryKey: string): boolean {
   const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
