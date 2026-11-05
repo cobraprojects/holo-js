@@ -294,3 +294,73 @@ describe.each(drivers)('model upsert keeps protected columns out on %s', (driver
     expect(rows.map(row => [Number(row.id), row.slug, row.title])).toEqual([[1, 'own', 'Own']])
   })
 })
+
+describe.each(drivers)('model upsert accepts a non-fillable key only on an unscoped query on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  async function createAccounts() {
+    const statements: string[] = []
+    const { schema } = await openDatabase(driver, { logger: { onQueryStart: (entry) => { statements.push(entry.sql) } } })
+    const name = `accounts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.integer('tenant_id')
+      table.string('slug').unique()
+      table.string('status')
+      table.timestamp('deleted_at').nullable()
+    })
+    await DB.table(name).insert([
+      { id: 1, tenant_id: 1, slug: 'own', status: 'pending', deleted_at: null },
+      { id: 2, tenant_id: 2, slug: 'foreign', status: 'pending', deleted_at: null },
+    ])
+    const accounts = defineTable(name, {
+      id: column.id(),
+      tenant_id: column.integer(),
+      slug: column.string().unique(),
+      status: column.string(),
+      deleted_at: column.timestamp().nullable(),
+    })
+    const read = async () => (await DB.table(name).orderBy('id').get()).map(row => [Number(row.id), Number(row.tenant_id), row.status])
+    return { statements, accounts, read }
+  }
+
+  it('rejects a non-fillable key on a tenant-scoped model before any SQL runs', async () => {
+    const { statements, accounts, read } = await createAccounts()
+    const Account = defineModelFromTable(accounts, {
+      fillable: ['tenant_id', 'slug', 'status'],
+      timestamps: false,
+      globalScopes: { tenant: query => query.where('tenant_id', 1) },
+    })
+
+    statements.length = 0
+    await expect(Account.query().upsert([{ id: 2, tenant_id: 1, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(`Column "id" is not writable on model "${Account.definition.name}".`)
+    expect(statements).toEqual([])
+    expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
+  })
+
+  it('rejects a non-fillable key on a where-constrained query before any SQL runs', async () => {
+    const { statements, accounts, read } = await createAccounts()
+    const Account = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false })
+
+    statements.length = 0
+    await expect(Account.where('tenant_id', 1).upsert([{ id: 2, tenant_id: 1, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(`Column "id" is not writable on model "${Account.definition.name}".`)
+    expect(statements).toEqual([])
+    expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
+  })
+
+  it('upserts with a non-fillable key on an unscoped and a soft-deleting model', async () => {
+    const { accounts, read } = await createAccounts()
+    const Account = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false })
+    const Trashable = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false, softDeletes: true })
+
+    await Account.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'active' }], ['id'], ['status'])
+    await Trashable.query().upsert([{ id: 1, tenant_id: 1, slug: 'own', status: 'active' }], ['id'], ['status'])
+
+    expect(await read()).toEqual([[1, 1, 'active'], [2, 2, 'active']])
+  })
+})

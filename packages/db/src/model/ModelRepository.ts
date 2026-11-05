@@ -1839,8 +1839,8 @@ export class ModelRepository<
     return this.sanitizeWriteValues(values, mode, { massAssignment: true, mutate: true, rejected: 'generated' }) as ModelUpdatePayload<TTable>
   }
 
-  sanitizeUpsertRow(values: Partial<ModelRecord<TTable>> | Record<string, unknown>): ModelUpdatePayload<TTable> {
-    return this.sanitizeWriteValues(values, 'create', { massAssignment: true, mutate: true, rejected: 'computed', unguarded: [this.definition.primaryKey] }) as ModelUpdatePayload<TTable>
+  sanitizeUpsertRow(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, acceptsPrimaryKey: boolean): ModelUpdatePayload<TTable> {
+    return this.sanitizeWriteValues(values, 'create', { massAssignment: true, mutate: true, rejected: 'computed', unguarded: acceptsPrimaryKey ? [this.definition.primaryKey] : [] }) as ModelUpdatePayload<TTable>
   }
 
   assertUpsertUpdateColumns(columns: readonly string[]): void {

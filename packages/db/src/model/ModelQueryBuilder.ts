@@ -1979,9 +1979,10 @@ class ModelQueryBuilderBase<
     const updateColumns = requestedUpdateColumns.map(column => (resolveSourceColumnName(source, column) ?? column) as ModelWritableColumnName<TTable>)
     await this.repository.loadGuardableColumns()
     this.repository.assertUpsertUpdateColumns(updateColumns)
+    const acceptsPrimaryKey = this.scopePredicates.length === 0 && this.tableQuery.getPlan().predicates.length === 0
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
-      this.repository.withWriteTimestamps(this.repository.sanitizeUpsertRow(value), 'create', timestamp)
+      this.repository.withWriteTimestamps(this.repository.sanitizeUpsertRow(value, acceptsPrimaryKey), 'create', timestamp)
     ))
     const { updatedAtColumn } = this.repository.definition
     const timestampedUpdateColumns = updatedAtColumn && updateColumns.length > 0 && !updateColumns.includes(updatedAtColumn as ModelWritableColumnName<TTable>)
