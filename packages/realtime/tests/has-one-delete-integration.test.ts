@@ -95,6 +95,18 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     expect(JSON.stringify(subscription.current.data)).toContain('"second"')
   })
 
+  it('keeps a hasOne constrained by a limit equal to a fresh batched load', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    await db.table(posts).where('id', 2).update({ author_id: 2 })
+    await db.table(posts).where('id', 3).update({ author_id: 1 })
+    const handler = () => db.model(Author).query().with({ post: query => query.orderBy('id').limit(1) }).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('loads the next matching row for latestOfMany', async () => {
     const { db, posts, Author } = await openAuthors(driver)
     const handler = () => db.model(Author).query().with('latestPost').orderBy('id').getJson()

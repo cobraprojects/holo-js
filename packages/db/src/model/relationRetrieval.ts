@@ -152,7 +152,7 @@ export async function retrieveRelation(
   const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column))
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
-  const rowsPatchable = probe.canPatchLoadedRows()
+  const rowsPatchable = !paginated && probe.canPatchLoadedRows()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
