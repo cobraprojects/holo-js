@@ -11,7 +11,7 @@ import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
 } from './query-patch-results'
-import { createBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
+import { createRelatedBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
 import type {
   DatabaseQueryBelongsToManyRelationObservation,
   DatabaseQueryObservation,
@@ -272,7 +272,7 @@ async function fetchRelatedRelationRow(
     return undefined
   }
 
-  const rows = await createBackfillQuery({ table: relation.relatedTable, tableName: relation.relatedTableName }, connection)
+  const rows = await createRelatedBackfillQuery(relation, connection)
     .where(relation.relatedKey, relatedId)
     .limit(1)
     .get()

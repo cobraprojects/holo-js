@@ -26,6 +26,13 @@ export function createBackfillSelection(selection: DatabaseQuerySelectionObserva
     : `${selection.column} as ${selection.resultKey}`
 }
 
+export function createRelatedBackfillQuery(
+  relation: { readonly relatedTable?: TableDefinition, readonly relatedTableName: string },
+  connection: DatabaseContext,
+): TableQueryBuilder<string, Record<string, unknown>> {
+  return createBackfillQuery({ table: relation.relatedTable, tableName: relation.relatedTableName }, connection)
+}
+
 export function createBackfillQuery(
   query: Pick<DatabaseQueryObservation, 'table' | 'tableName'>,
   connection: DatabaseContext,

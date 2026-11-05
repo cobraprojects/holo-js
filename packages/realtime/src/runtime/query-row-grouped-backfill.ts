@@ -16,6 +16,7 @@ import {
   getBackfillDatabaseConnection,
   observedTableKey,
   readBackfilledRows,
+  readBackfilledValue,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -369,19 +370,20 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(connection, query, rows.rows, values)
+  return groupWindowRows(connection, query, groupColumn, rows.rows, values)
 }
 
 function groupWindowRows(
   connection: DatabaseContext,
   query: DatabaseQueryObservation,
+  groupColumn: string,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
   const requestedValues = new Set(values)
   const rowsByGroup = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
-    const groupValue = row[GROUPED_ROW_ID_ALIAS]
+    const groupValue = readBackfilledValue(connection, query.table, groupColumn, row[GROUPED_ROW_ID_ALIAS])
     if (typeof groupValue === 'undefined' || !requestedValues.has(groupValue)) {
       return undefined
     }

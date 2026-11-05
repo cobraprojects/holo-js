@@ -11,8 +11,16 @@ function mutate(handler: () => Promise<unknown>) {
   return executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
 }
 
-async function openFixture(driver: typeof drivers[number]) {
-  const { db, schema } = await openDatabase(driver)
+async function openFixture(driver: typeof drivers[number], statements: string[] = []) {
+  const { db, schema } = await openDatabase(driver, { wrapAdapter: adapter => new Proxy(adapter, {
+    get(target, property) {
+      if (property !== 'query') return Reflect.get(target, property, target)
+      return (sql: string, ...rest: unknown[]) => {
+        statements.push(sql)
+        return Reflect.apply(target.query, target, [sql, ...rest])
+      }
+    },
+  }) })
   onTestFinished(() => resetRealtimeRuntime())
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const groupsName = `holo_fill_groups_${suffix}`
@@ -111,6 +119,8 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     await expectFresh()
     await mutate(() => db.table(posts).where('id', 1).update({ group_id: 2 }))
     await expectFresh()
+    await mutate(() => db.table(posts).insert([{ id: 5, group_id: 1, score: 2, title: 'e' }, { id: 6, group_id: 2, score: 4, title: 'f' }]))
+    await expectFresh()
   })
 
   it('hydrates ordered hasOne rows for several parents the way a fresh model read does', async () => {
@@ -129,15 +139,20 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
   })
 
   it('backfills windows of several groups the way a fresh model read does', async () => {
-    const { db, posts, Post } = await openFixture(driver)
-    await db.table(posts).insert([{ id: 4, group_id: 2, score: 2, title: 'd' }])
+    const statements: string[] = []
+    const { db, posts, Post } = await openFixture(driver, statements)
+    await db.table(posts).insert([{ id: 4, group_id: 2, score: 2, title: 'd' }, { id: 5, group_id: 1, score: 9, title: 'e' }, { id: 6, group_id: 2, score: 7, title: 'f' }])
     const expectFresh = await subscribeAll({
-      first: () => db.model(Post).query().where('group_id', 1).orderBy('score').limit(1).getJson(),
-      second: () => db.model(Post).query().where('group_id', 2).orderBy('score').limit(1).getJson(),
+      first: () => db.model(Post).query().where('group_id', 1).orderBy('score').offset(1).limit(1).getJson(),
+      second: () => db.model(Post).query().where('group_id', 2).orderBy('score').offset(1).limit(1).getJson(),
     })
 
+    statements.length = 0
     await mutate(() => db.table(posts).where('id', 'in', [1, 4]).delete())
+    const reads = statements.slice(statements.findIndex(sql => sql.startsWith('DELETE'))).filter(sql => sql.startsWith('SELECT'))
     await expectFresh()
+    expect(reads).toHaveLength(1)
+    expect(reads[0]).toContain('__holo_grouped_rows')
   })
 
   it('backfills aggregates the way a fresh model read does', async () => {

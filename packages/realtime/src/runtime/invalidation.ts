@@ -1,5 +1,5 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
+import { HydrationError, onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
   parseDatabaseDependency,
@@ -176,11 +176,17 @@ export function scheduleSubscriptionRefresh(
   return scheduleRefreshKey(subscription.refreshKey)
 }
 
+function rerunUnreadableRows(error: unknown): false {
+  if (error instanceof HydrationError) return false
+  throw error
+}
+
 async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills)).catch(() => false)) {
+  const patched = await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills)).catch(rerunUnreadableRows)
+  if (patched) {
     return
   }
 

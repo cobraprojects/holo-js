@@ -7,7 +7,7 @@ import {
   createMutationIndexKey,
 } from './dependencies'
 import {
-  createBackfillQuery,
+  createRelatedBackfillQuery,
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
@@ -285,7 +285,8 @@ async function fetchGroupedRelatedHydrationRows(
     }
   }
 
-  let builder = createBackfillQuery({ table: hydration.relatedTable, tableName: hydration.relatedTableName }, connection).where(hydration.foreignKey, 'in', values)
+  let builder = createRelatedBackfillQuery(hydration, connection)
+    .where(hydration.foreignKey, 'in', values)
   for (const predicate of hydration.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -464,7 +465,8 @@ async function fetchRelatedHydrationRows(
     return undefined
   }
 
-  let builder = createBackfillQuery({ table: hydration.relatedTable, tableName: hydration.relatedTableName }, connection).where(hydration.foreignKey, localKey)
+  let builder = createRelatedBackfillQuery(hydration, connection)
+    .where(hydration.foreignKey, localKey)
   for (const predicate of hydration.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }

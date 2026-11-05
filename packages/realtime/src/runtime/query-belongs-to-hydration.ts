@@ -5,7 +5,7 @@ import {
   type MutationIndex,
 } from './dependencies'
 import {
-  createBackfillQuery,
+  createRelatedBackfillQuery,
   getBackfillDatabaseConnection,
 } from './query-backfill'
 import type {
@@ -215,7 +215,7 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  const rows = await createBackfillQuery({ table: target.relatedTable, tableName: target.relatedTableName }, connection)
+  const rows = await createRelatedBackfillQuery(target, connection)
     .where(target.ownerKey, 'in', values)
     .get()
 
@@ -248,7 +248,7 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  return await createBackfillQuery({ table: target.relatedTable, tableName: target.relatedTableName }, connection)
+  return await createRelatedBackfillQuery(target, connection)
     .where(target.ownerKey, foreignKey)
     .limit(1)
     .get()
