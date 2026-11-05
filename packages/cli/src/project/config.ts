@@ -258,8 +258,8 @@ export async function ensureGeneratedSchemaPlaceholder(
   }
 
   const placeholder = renderGeneratedSchemaPlaceholder()
-  await writeTextFile(filePath, placeholder)
   recordWrittenOutput(filePath, placeholder)
+  await writeTextFile(filePath, placeholder)
   return filePath
 }
 

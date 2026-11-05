@@ -8,7 +8,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
-import { recordWrittenOutput } from '../src/written-outputs'
+import { recordWrittenOutput, trackPackageManifestWrites } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
@@ -203,4 +203,66 @@ it('ignores events for a dependency manifest that still holds the content the CL
   emit('package.json')
   await captured.settled()
   expect(captured.changes).toEqual([{ path: 'package.json', kind: 'changed' }])
+})
+
+it('observes a user restoring a dependency manifest to content the CLI wrote earlier', async () => {
+  const root = await createProject()
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('change', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  const written = '{"name":"watch-fixture","type":"module","private":true}'
+  recordWrittenOutput(join(root, 'package.json'), written)
+  await write(root, 'package.json', '{"name":"watch-fixture","type":"module"}')
+  emit('package.json')
+  await captured.settled()
+  await write(root, 'package.json', written)
+  emit('package.json')
+  await captured.settled()
+  expect(captured.changes).toEqual([
+    { path: 'package.json', kind: 'changed' },
+    { path: 'package.json', kind: 'changed' },
+  ])
+})
+
+it('waits for a running dependency install to record its writes before judging manifest events', async () => {
+  const root = await createProject()
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('change', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  await trackPackageManifestWrites(root, async () => {
+    await write(root, 'package.json', '{"name":"watch-fixture","type":"module","dependencies":{}}')
+    emit('package.json')
+    await write(root, 'package-lock.json', '{}')
+    emit('package-lock.json')
+  })
+  await captured.settled()
+  expect(captured.changes).toEqual([])
 })

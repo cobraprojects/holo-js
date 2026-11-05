@@ -166,8 +166,8 @@ async function writePackageJsonDependencyState(
   }
 
   const packageJson = `${JSON.stringify(parsed, null, 2)}\n`
-  await writeTextFile(packageJsonPath, packageJson)
   recordWrittenOutput(packageJsonPath, packageJson)
+  await writeTextFile(packageJsonPath, packageJson)
 }
 
 export function hasLoadedConfigFile(

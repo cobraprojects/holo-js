@@ -171,8 +171,8 @@ async function importGeneratedSchema(
     await modules.import(generatedSchemaPath)
   } catch (error) {
     const placeholder = renderGeneratedSchemaPlaceholder()
-    await writeTextFile(generatedSchemaPath, placeholder)
     recordWrittenOutput(generatedSchemaPath, placeholder)
+    await writeTextFile(generatedSchemaPath, placeholder)
     process.stderr.write(
       `[Holo CLI] Discarded the Generated schema "${makeProjectRelativePath(projectRoot, generatedSchemaPath)}" `
       + `because it failed to load: ${errorMessage(error).split('\n')[0]}\n`,

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readTextFile } from './project/runtime'
 import { terminateChildProcess } from './framework-run'
-import { recordWrittenPackageManifests } from './written-outputs'
+import { trackPackageManifestWrites } from './written-outputs'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike, SupportedScaffoldPackageManager } from './cli-types'
 
 export function resolvePackageManagerSpawn(
@@ -112,6 +112,15 @@ export async function installProjectDependencies(
   spawnProcess: typeof spawn,
   signal?: AbortSignal,
 ): Promise<void> {
+  await trackPackageManifestWrites(projectRoot, () => runProjectDependencyInstallProcess(io, projectRoot, spawnProcess, signal))
+}
+
+async function runProjectDependencyInstallProcess(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn,
+  signal?: AbortSignal,
+): Promise<void> {
   const invocation = resolvePackageManagerSpawn(await resolvePackageManagerInstallInvocation(projectRoot))
   signal?.throwIfAborted()
   const child = spawnProcess(invocation.command, [...invocation.args], {
@@ -155,6 +164,5 @@ export async function installProjectDependencies(
   if (result.code !== 0) {
     throw new Error(stderr.trim() || stdout.trim() || 'Project dependency installation failed.')
   }
-  await recordWrittenPackageManifests(projectRoot)
 }
 
