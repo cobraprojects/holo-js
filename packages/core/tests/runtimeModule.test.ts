@@ -870,6 +870,29 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(loaded.origin).toBe('nested')
   })
 
+  it.each([
+    { label: 'the most specific wildcard export', manifest: { exports: { './*': './generic/*.mjs', './jobs/*': './jobs/*.mjs' } }, files: { 'generic/jobs/foo.mjs': "export const origin = 'generic'\n", 'jobs/foo.mjs': "export const origin = 'specific'\n" }, specifier: '@holo-js/app-only-exports/jobs/foo', origin: 'specific' },
+    { label: 'a legacy main directory', manifest: { main: './lib' }, files: { 'lib/index.js': "export const origin = 'legacy main'\n" }, specifier: '@holo-js/app-only-exports', origin: 'legacy main' },
+    { label: 'a null exports field', manifest: { exports: null, main: './entry.mjs' }, files: { 'entry.mjs': "export const origin = 'null exports'\n", 'deep.mjs': "export const origin = 'null exports subpath'\n" }, specifier: '@holo-js/app-only-exports/deep.mjs', origin: 'null exports subpath' },
+    { label: 'a blocked condition', manifest: { exports: { '.': { node: null, default: './browser.mjs' } } }, files: { 'browser.mjs': "export const origin = 'browser'\n" }, specifier: '@holo-js/app-only-exports', origin: undefined },
+  ])('resolves an application-only Holo package through $label as Node does', async ({ manifest, files, specifier, origin }) => {
+    const projectRoot = await realpath(await createTempProject())
+    const dependencyRoot = join(projectRoot, 'node_modules/@acme/jobs')
+    const packageRoot = join(dependencyRoot, 'node_modules/@holo-js/app-only-exports')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(dependencyRoot, 'package.json'), JSON.stringify({ name: '@acme/jobs', type: 'module', exports: { '.': './job.mjs' } }))
+    await writeFile(join(dependencyRoot, 'job.mjs'), `export { origin } from ${JSON.stringify(specifier)}\n`)
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-exports', type: 'module', ...manifest }))
+    for (const [file, contents] of Object.entries(files)) {
+      await mkdir(dirname(join(packageRoot, file)), { recursive: true })
+      await writeFile(join(packageRoot, file), contents)
+    }
+
+    const loading = importBundledRuntimeModule(projectRoot, join(dependencyRoot, 'job.mjs')) as Promise<{ origin: string }>
+    if (origin === undefined) await expect(loading).rejects.toThrow()
+    else expect((await loading).origin).toBe(origin)
+  })
+
   it('accepts an application-only Holo package that uses the runtime package copy the runtime registered from the project', async () => {
     const projectRoot = await realpath(await createTempProject())
     const configRoot = join(projectRoot, 'node_modules/@holo-js/config')

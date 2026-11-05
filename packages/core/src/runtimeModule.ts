@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import * as nodeModule from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -576,38 +576,69 @@ function assertApplicationHoloPackageSharesRuntime(specifier: string, resolveDir
 
 const applicationExportConditions = new Set(['import', 'node', 'default'])
 
-function exportConditionTarget(value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const target = exportConditionTarget(entry)
-      if (target) return target
-    }
-    return undefined
+function exportTarget(value: unknown, patternMatch: string | undefined): string | null | undefined {
+  if (typeof value === 'string') {
+    if (!value.startsWith('./')) return undefined
+    return patternMatch === undefined ? value : value.replaceAll('*', patternMatch)
   }
+  if (Array.isArray(value)) {
+    let blocked = false
+    for (const entry of value) {
+      const target = exportTarget(entry, patternMatch)
+      if (typeof target === 'string') return target
+      if (target === null) blocked = true
+    }
+    return blocked ? null : undefined
+  }
+  if (value === null) return null
   if (!isRecord(value)) return undefined
   for (const [condition, nested] of Object.entries(value)) {
     if (!applicationExportConditions.has(condition)) continue
-    const target = exportConditionTarget(nested)
-    if (target) return target
+    const target = exportTarget(nested, patternMatch)
+    if (target !== undefined) return target
   }
   return undefined
 }
 
-function packageExportTarget(exportsField: unknown, subpath: string): string | undefined {
+function comparePatternKeys(left: string, right: string): number {
+  const leftPrefix = left.indexOf('*') + 1
+  const rightPrefix = right.indexOf('*') + 1
+  if (leftPrefix !== rightPrefix) return rightPrefix - leftPrefix
+  return right.length - left.length
+}
+
+function packageExportTarget(exportsField: unknown, subpath: string): string | null | undefined {
   if (!isRecord(exportsField) || !Object.keys(exportsField).some(key => key.startsWith('.'))) {
-    return subpath === '.' ? exportConditionTarget(exportsField) : undefined
+    return subpath === '.' ? exportTarget(exportsField, undefined) : undefined
   }
-  if (subpath in exportsField) return exportConditionTarget(exportsField[subpath])
-  for (const [pattern, value] of Object.entries(exportsField)) {
+  if (!subpath.includes('*') && Object.hasOwn(exportsField, subpath)) return exportTarget(exportsField[subpath], undefined)
+  const patterns = Object.keys(exportsField)
+    .filter(key => key.indexOf('*') === key.lastIndexOf('*') && key.includes('*'))
+    .sort(comparePatternKeys)
+  for (const pattern of patterns) {
     const wildcard = pattern.indexOf('*')
-    if (wildcard < 0) continue
     const prefix = pattern.slice(0, wildcard)
     const suffix = pattern.slice(wildcard + 1)
-    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix) || subpath.length < prefix.length + suffix.length) continue
-    return exportConditionTarget(value)?.replaceAll('*', subpath.slice(prefix.length, subpath.length - suffix.length))
+    if (subpath === prefix || !subpath.startsWith(prefix)) continue
+    if (suffix && (!subpath.endsWith(suffix) || subpath.length < pattern.length)) continue
+    return exportTarget(exportsField[pattern], subpath.slice(prefix.length, subpath.length - suffix.length))
   }
   return undefined
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function legacyMainEntry(packageRoot: string, main: unknown): string | undefined {
+  const candidates = typeof main === 'string' && main
+    ? [main, `${main}.js`, `${main}.json`, `${main}.node`, join(main, 'index.js'), join(main, 'index.json'), join(main, 'index.node')]
+    : []
+  return [...candidates, 'index.js'].map(candidate => resolve(packageRoot, candidate)).find(isFile)
 }
 
 function applicationHoloPackageUrl(specifier: string, resolveDir: string): string {
@@ -616,12 +647,13 @@ function applicationHoloPackageUrl(specifier: string, resolveDir: string): strin
   if (!packageRoot) return specifier
   const manifest = readPackageManifest(packageRoot)
   const subpath = `.${specifier.slice(packageName.length)}`
-  const target = manifest?.exports !== undefined
-    ? packageExportTarget(manifest.exports, subpath)
-    : subpath === '.' ? (typeof manifest?.main === 'string' ? manifest.main : 'index.js') : subpath
-  if (!target) return specifier
-  const entryPath = resolve(packageRoot, target)
-  return existsSync(entryPath) ? pathToFileURL(entryPath).href : specifier
+  if (manifest?.exports !== undefined && manifest.exports !== null) {
+    const target = packageExportTarget(manifest.exports, subpath)
+    const entryPath = typeof target === 'string' ? resolve(packageRoot, target) : undefined
+    return entryPath && isFile(entryPath) ? pathToFileURL(entryPath).href : specifier
+  }
+  const entryPath = subpath === '.' ? legacyMainEntry(packageRoot, manifest?.main) : resolve(packageRoot, subpath)
+  return entryPath && isFile(entryPath) ? pathToFileURL(entryPath).href : specifier
 }
 
 function resolveHoloPackageFromRuntime(specifier: string, resolveDir: string): string {
