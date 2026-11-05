@@ -1913,11 +1913,11 @@ export class TableQueryBuilder<
     const wildcard = (table: string) => `${table.slice(table.lastIndexOf('.') + 1)}.*`
     const implicitSelections = this.plan.selections.length > 0
       ? []
-      : [...this.plan.joins.map(join => join.alias ?? join.table!), this.source.alias ?? this.source.tableName].map(wildcard)
+      : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
     const selections = !modelRow
       ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
       : implicitSelections.length > 0
-        ? implicitSelections
+        ? [...implicitSelections, wildcard(source)]
         : !this.plan.distinct && this.plan.groupBy.length === 0 ? [wildcard(source)] : [`${source}.${key}`]
     return { key, joined: !!join, selections }
   }

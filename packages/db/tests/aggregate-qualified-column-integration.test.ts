@@ -144,6 +144,21 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
   })
 
+  it.skipIf(driver !== 'sqlite').each(kinds)('%s keeps the row order of an unqualified order by on a limited joined query', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    await DB.table(ordersName).delete()
+    await DB.table(ordersName).insert([
+      { id: 30, product_id: 1, price: 100 },
+      { id: 20, product_id: 2, price: 200 },
+      { id: 10, product_id: 3, price: 300 },
+    ])
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
+
+    const query = DB.table(name).join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).orderBy('id').limit(1)
+    expect(Number(await query[kind](`${name}.price`))).toBe(10)
+    expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).orderBy('id').limit(1)[kind](`${name}.price`)).toBe(10)
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 
