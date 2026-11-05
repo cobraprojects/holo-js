@@ -72,6 +72,17 @@ export async function readSQLiteStoredTableName(connection: DatabaseContext, tab
   return storedName === undefined || schema === undefined ? storedName : `${schema}.${storedName}`
 }
 
+export async function resolveSQLiteTablePath(connection: DatabaseContext, tableName: string): Promise<string | undefined> {
+  if (splitTablePath(tableName).schema !== undefined) return readSQLiteStoredTableName(connection, tableName)
+  const result = await connection.introspectCompiled<{ schema: string, name: string }>({
+    sql: `SELECT t.schema, t.name FROM pragma_table_list t JOIN pragma_database_list d ON d.name = t.schema WHERE t.name = ? COLLATE NOCASE AND t.type IN ('table', 'virtual') ORDER BY CASE WHEN t.schema = '${TEMP_SCHEMA}' THEN 0 ELSE 1 END, d.seq LIMIT 1`,
+    bindings: [tableName],
+    source: `schema:introspect:resolveTable:${tableName}`,
+  })
+  const row = result.rows[0]
+  return row && `${row.schema}.${row.name}`
+}
+
 export async function readSQLiteTableObjects(connection: DatabaseContext, tableName: string): Promise<SQLiteTableObject[]> {
   const { schema, table } = splitTableName(tableName)
   const result = await connection.introspectCompiled<Omit<SQLiteTableObject, 'schema'>>({

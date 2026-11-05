@@ -332,6 +332,38 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table('temp.items').get()).toEqual([])
   })
 
+  it('rebuilds the table SQLite resolves when a temporary table shadows the rebuild name', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "__holo_rebuild_items" ("id" INTEGER PRIMARY KEY, "name" TEXT)', source: 'schema' })
+    await DB.table('main.items').insert({ id: 1, name: 'kept' })
+    await DB.table('temp.__holo_rebuild_items').insert({ id: 9, name: 'temp' })
+
+    await schema.table('items', (table) => {
+      table.string('name').nullable().change()
+    })
+
+    expect(await DB.table('main.items').get()).toEqual([{ id: 1, name: 'kept' }])
+    expect((await schema.getColumns('main.items')).find(columnInfo => columnInfo.name === 'name')?.notNull).toBe(false)
+    expect(await DB.table('temp.__holo_rebuild_items').get()).toEqual([{ id: 9, name: 'temp' }])
+    expect(await schema.getTables()).not.toContain('__holo_rebuild_items')
+  })
+
+  it('rebuilds and renames indexes on the temporary table that shadows a main table', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "name" TEXT)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE INDEX "main"."old_idx" ON "items" ("name")', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY, "code" TEXT)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE UNIQUE INDEX "temp"."old_idx" ON "items" ("code")', source: 'schema' })
+
+    await schema.table('items', (table) => {
+      table.renameIndex('old_idx', 'new_idx')
+    })
+
+    expect(await indexesOf(schema, 'temp.items')).toEqual([{ name: 'new_idx', unique: true, columns: ['code'] }])
+    expect(await indexesOf(schema, 'main.items')).toEqual([{ name: 'old_idx', unique: false, columns: ['name'] }])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {
