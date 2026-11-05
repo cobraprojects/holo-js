@@ -3304,7 +3304,8 @@ export class TableQueryBuilder<
       (current, key) => current.whereIn(key, [...new Set(rows.map(row => row[key]))]),
       new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
     )
-    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan()))
+    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
+    if (!result) return undefined
     const keyOf = (row: Readonly<Record<string, unknown>>) => {
       const readRow = this.readIntegerValue(row)
       return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { belongsToMany, column, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { belongsToMany, column, createDatabase, createDialect, defineGeneratedTable, defineModel } from '@holo-js/db'
+import { createMySQLAdapter } from '../../db-mysql/src'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
+import { integrationDrivers, mysqlTestConnection, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
@@ -171,6 +172,52 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
 
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).toContain('"rate":"2.50"')
+  })
+
+  it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {
+    const { db, rates } = await openFixture(driver)
+    const queries: Record<string, () => Promise<unknown>> = {
+      count: () => db.table(rates).where('group_id', '2').count(),
+      rows: () => db.table(rates).whereIn('group_id', ['2']).orderBy('id').get(),
+      first: () => db.table(rates).where('id', '2').first(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectFresh = async () => {
+      const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    }
+
+    await mutate(() => db.table(rates).insert({ id: 2, group_id: '2', tag_id: 1, rate: '1.00' }))
+    await expectFresh()
+    await mutate(() => db.table(rates).insert({ id: 3, group_id: 2, tag_id: 1, rate: '1.00' }))
+    await expectFresh()
+    await mutate(() => db.table(rates).where('id', '1').update({ group_id: '2' }))
+    await expectFresh()
+    expect(subscriptions[0]!.current.data).toBe(3)
+  })
+
+  it.runIf(driver === 'mysql')('keeps an insert by a user that cannot read the written decimal back and re-runs its subscriptions', async () => {
+    const { db, rates } = await openFixture(driver)
+    const connection = mysqlTestConnection()
+    const user = `holo_ins_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const password = randomUUID()
+    await db.executeCompiled({ sql: `CREATE USER '${user}'@'%' IDENTIFIED BY '${password}'`, source: 'schema' })
+    onTestFinished(() => db.executeCompiled({ sql: `DROP USER IF EXISTS '${user}'@'%'`, source: 'schema' }).then(() => undefined))
+    await db.executeCompiled({ sql: `GRANT INSERT, SELECT (\`group_id\`) ON \`${connection.database}\`.\`${rates.tableName}\` TO '${user}'@'%'`, source: 'schema' })
+    const insertOnly = createDatabase({ connectionName: 'default', adapter: createMySQLAdapter({ config: { ...connection, user, password } }), dialect: createDialect('mysql') })
+    onTestFinished(() => insertOnly.disconnect())
+    configureRealtimeRuntime({ db: () => insertOnly, loadAuthModule: async () => null })
+    const handler = () => insertOnly.table(rates).where('group_id', 2).count()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await mutate(() => insertOnly.table(rates).insert({ id: 2, group_id: 2, tag_id: 1, rate: '9.5' }))
+
+    expect(subscription.current.data).toBe(await handler())
+    expect(subscription.current.data).toBe(1)
   })
 
   it('keeps integer columns written in other representations equal to a fresh query', async () => {

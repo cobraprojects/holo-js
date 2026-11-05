@@ -9,6 +9,7 @@ import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
+import { readIntegerPredicates } from './query/resultColumns'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -1310,6 +1311,20 @@ function getColumnName(column: string): string {
   return column.split('.').at(-1)!
 }
 
+function readSourcePredicates(
+  source: Pick<QuerySource, 'tableName' | 'table' | 'alias'>,
+  connectionName: string,
+  predicates: readonly QueryPredicateNode[],
+): readonly QueryPredicateNode[] {
+  const table = source.table ?? getConnectionGeneratedTableDefinition(source.tableName, connectionName)
+  return readIntegerPredicates(table, [source.alias ?? source.tableName, source.tableName], predicates)
+}
+
+function readObservedPlan(plan: SelectQueryPlan, connectionName: string): SelectQueryPlan {
+  const predicates = readSourcePredicates(plan.source, connectionName, plan.predicates)
+  return predicates === plan.predicates ? plan : { ...plan, predicates }
+}
+
 function resolveObservedRowKey(source: Pick<QuerySource, 'tableName' | 'table' | 'primaryKey'>, connectionName: string): string | undefined {
   return source.primaryKey ?? resolveRowDependencyKey(source, connectionName)
 }
@@ -1909,7 +1924,7 @@ export function inferDatabaseQueryObservationDependencies(
 }
 
 function createDatabaseQueryObservationFromPlan(
-  plan: SelectQueryPlan,
+  observedPlan: SelectQueryPlan,
   connectionName: string,
   dependencies: readonly string[],
   result?: unknown,
@@ -1917,6 +1932,7 @@ function createDatabaseQueryObservationFromPlan(
   groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
+  const plan = readObservedPlan(observedPlan, connectionName)
   const primaryKey = resolveObservedRowKey(plan.source, connectionName)
   return Object.freeze({
     connectionName,
@@ -1986,7 +2002,7 @@ export function createDatabaseMutationEvent(
     connectionName,
     tableName: source.tableName,
     kind,
-    predicates: collectQueryPredicateObservations(predicates),
+    predicates: collectQueryPredicateObservations(readSourcePredicates(source, connectionName, predicates)),
     previousRows: previousRows ? Object.freeze([...previousRows]) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? Object.freeze([...rows]) : undefined,
@@ -2011,9 +2027,10 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 }
 
 export function inferAutomaticQueryCacheDependencies(
-  plan: SelectQueryPlan,
+  observedPlan: SelectQueryPlan,
   connectionName: string,
 ): readonly string[] | undefined {
+  const plan = readObservedPlan(observedPlan, connectionName)
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
@@ -2056,11 +2073,12 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
 }
 
 export function inferAutomaticQueryCacheInvalidationPlan(
-  plan: SelectQueryPlan,
+  mutationPlan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
   includeMetadata = false,
 ): DatabaseDependencyInvalidationPlan {
+  const plan = readObservedPlan(mutationPlan, connectionName)
   const tableKey = createTableCacheDependency(connectionName, plan.source.tableName)
   const dependencies = [tableKey]
   if (hasDisjunctivePredicate(plan.predicates)) {

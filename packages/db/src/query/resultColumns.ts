@@ -2,7 +2,7 @@ import { parseInteger, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal }
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
-import type { QueryColumnSelection, SelectQueryPlan } from './ast'
+import type { QueryColumnSelection, QueryPredicateNode, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
@@ -127,6 +127,36 @@ function holdsWrittenInteger(value: unknown): value is bigint | number | string 
 
 function integerColumnsOf(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): string[] {
   return columnsOf(table).flatMap(([key, definition]) => readsAsInteger(definition!) && Object.hasOwn(row, key) && holdsWrittenInteger(row[key]) ? [key] : [])
+}
+
+function readWrittenInteger(value: unknown): unknown {
+  return holdsWrittenInteger(value) && typeof value !== 'number' && Number.isSafeInteger(Number(value)) ? Number(value) : value
+}
+
+export function readIntegerPredicates(
+  table: TableDefinition | undefined,
+  qualifiers: readonly string[],
+  predicates: readonly QueryPredicateNode[],
+): readonly QueryPredicateNode[] {
+  let changed = false
+  const read = predicates.map((predicate): QueryPredicateNode => {
+    if (predicate.kind === 'group') {
+      const nested = readIntegerPredicates(table, qualifiers, predicate.predicates)
+      if (nested === predicate.predicates) return predicate
+      changed = true
+      return { ...predicate, predicates: nested }
+    }
+    if (predicate.kind !== 'comparison') return predicate
+    const separator = predicate.column.lastIndexOf('.')
+    const name = predicate.column.slice(separator + 1)
+    const definition = table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined
+    if (!definition || !readsAsInteger(definition) || (separator >= 0 && !qualifiers.includes(predicate.column.slice(0, separator)))) return predicate
+    const value = Array.isArray(predicate.value) ? predicate.value.map(readWrittenInteger) : readWrittenInteger(predicate.value)
+    if (Array.isArray(value) ? value.every((item, index) => item === (predicate.value as unknown[])[index]) : value === predicate.value) return predicate
+    changed = true
+    return { ...predicate, value }
+  })
+  return changed ? Object.freeze(read) : predicates
 }
 
 export function holdsUnsafeInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
