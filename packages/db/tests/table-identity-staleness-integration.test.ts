@@ -175,6 +175,37 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
     })
   })
 
+  it('still expires a replaced table on the retry after a failed identity refresh', async () => {
+    let failLookup = false
+    const { db, table } = await openDatabase(driver, {
+      security,
+      wrapAdapter: adapter => new Proxy(adapter, {
+        get(target, property) {
+          const query = target.query.bind(target)
+          if (property !== 'query') return Reflect.get(target, property, target)
+          return async (...args: Parameters<typeof query>) => {
+            if (failLookup && args[0].includes('pragma_table_list')) {
+              failLookup = false
+              throw new Error('lookup failed')
+            }
+            return query(...args)
+          }
+        },
+      }),
+    })
+    useMemoryCache()
+    const { bare, qualified } = tableSpellings(driver, table.tableName)
+    await DB.table(qualified).insert({ id: 1, name: 'old', active: false })
+    expect(await cachedNames(qualified)).toEqual(['old'])
+    await db.unsafeExecute(unsafeSql(`DROP TABLE "${bare}"`))
+    await db.unsafeExecute(unsafeSql(`CREATE TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`))
+
+    failLookup = true
+    await expect(cachedNames(qualified)).rejects.toThrow('lookup failed')
+
+    expect(await cachedNames(qualified)).toEqual([])
+  })
+
   it('stops serving cached bare reads to concurrent readers once a temp table shadows the bare name', async () => {
     const { db, table } = await openDatabase(driver)
     useMemoryCache()
@@ -187,19 +218,39 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
     expect(await Promise.all([cachedNames(bare), cachedNames(bare)])).toEqual([[], []])
   })
 
-  it('stops serving a cached qualified read once raw SQL replaces the table at the same path', async () => {
-    const { db, table } = await openDatabase(driver, { security })
-    useMemoryCache()
-    const { bare, qualified } = tableSpellings(driver, table.tableName)
-    await DB.table(qualified).insert({ id: 1, name: 'old', active: false })
-    expect(await cachedNames(qualified)).toEqual(['old'])
-
-    await db.unsafeExecute(unsafeSql(`DROP TABLE "${bare}"`))
-    await db.unsafeExecute(unsafeSql(`CREATE TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`))
-
-    expect(await cachedNames(qualified)).toEqual([])
-  })
 })
+
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)) {
+  describe(`${driver} cached reads after raw SQL replaces a table`, () => {
+    it('stops serving a cached qualified read once raw SQL replaces the table at the same path', async () => {
+      const { db, table } = await openDatabase(driver, { security })
+      useMemoryCache()
+      const { qualified } = tableSpellings(driver, table.tableName)
+      await DB.table(qualified).insert({ id: 1, name: 'old', active: false })
+      expect(await cachedNames(qualified)).toEqual(['old'])
+
+      await db.unsafeExecute(unsafeSql(`DROP TABLE ${quotePath(driver, qualified)}`))
+      await db.unsafeExecute(unsafeSql(`CREATE TABLE ${quotePath(driver, qualified)} (${quote(driver, 'id')} INTEGER PRIMARY KEY, ${quote(driver, 'name')} VARCHAR(255) NOT NULL, ${quote(driver, 'active')} BOOLEAN NOT NULL, ${quote(driver, 'settings')} TEXT)`))
+
+      expect(await cachedNames(qualified)).toEqual([])
+    })
+  })
+}
+
+for (const driver of integrationDrivers(['postgres', 'mysql'] as const)) {
+  describe(`${driver} concurrent cached reads after a session schema change`, () => {
+    it('stops serving cached bare reads to concurrent readers once the bare name points at another schema', async () => {
+      const { name, home, tenant, switchTo } = await openSingleSession(driver)
+      useMemoryCache()
+      await DB.table(`${home}.${name}`).insert({ id: 1, name: 'home' })
+      expect(await cachedNames(name)).toEqual(['home'])
+
+      await switchTo(tenant)
+
+      expect(await Promise.all([cachedNames(name), cachedNames(name)])).toEqual([[], []])
+    })
+  })
+}
 
 class RollbackRequested extends Error {}
 
@@ -320,6 +371,8 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       const Keyed = defineModel(qualified, { timestamps: false, fillable: ['*'] })
       expect(() => Keyed.make({ code: 'spoofed' })).toThrow('is not writable')
       expect(Keyed.make({ name: 'unsaved' }).get('name')).toBe('unsaved')
+      const Fillable = defineModel(qualified, { timestamps: false, fillable: ['code', 'name'] })
+      expect(Fillable.make({ code: 'natural', name: 'natural' }).get('code')).toBe('natural')
 
       expect(await Keyed.query().first()).toBeUndefined()
       await db.unsafeExecute(unsafeSql(`CREATE TABLE ${quotePath(driver, `${qualified}_other`)} (${quote(driver, 'id')} INTEGER PRIMARY KEY)`))

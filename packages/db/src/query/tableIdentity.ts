@@ -89,7 +89,9 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
   if (entry !== cached) {
     identities.set(tableName, entry)
     entry.identity.catch(() => {
-      if (identities.get(tableName) === entry) identities.delete(tableName)
+      if (identities.get(tableName) !== entry) return
+      if (cached) identities.set(tableName, cached)
+      else identities.delete(tableName)
     })
   }
   const identity = await entry.identity

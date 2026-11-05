@@ -3898,8 +3898,8 @@ export class ModelRepository<
     const guarded = new Set(this.definition.guarded)
 
     if (guarded.has('*') || guarded.has(column)) return false
-    if (isUnresolvedGeneratedPrimaryKey(this.definition.table.tableName, this.definition.connectionName, column)) return false
     if (fillable.has(column)) return true
+    if (isUnresolvedGeneratedPrimaryKey(this.definition.table.tableName, this.definition.connectionName, column)) return false
     if (this.isAutomaticallyGuardedColumn(column)) return false
     if (fillable.has('*')) return true
     return this.definition.hasExplicitFillable !== true && this.definition.hasExplicitGuarded === true
