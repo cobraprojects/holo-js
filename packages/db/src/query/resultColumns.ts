@@ -1,17 +1,25 @@
-import { readIntegerColumnValue, readsAsInteger } from '../schema/normalization'
+import { readIntegerColumnValue, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
-type SelectedColumn = readonly [key: string, integer: AnyColumnDefinition | undefined]
+type ColumnReader = (value: unknown) => unknown
 
-function integerColumn(column: AnyColumnDefinition | undefined): AnyColumnDefinition | undefined {
-  return column && readsAsInteger(column) ? column : undefined
+type SelectedColumn = readonly [key: string, reader: ColumnReader | undefined]
+
+function readsIntegerText(value: unknown): value is bigint | string {
+  return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 
-function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
-  return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, integerColumn(column)])
+function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
+  if (column && readsAsInteger(column)) return value => readsIntegerText(value) ? readIntegerColumnValue(column, value) : value
+  return column && readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
+}
+
+function columnsOf(dialect: SchemaDialectName, table: TableDefinition | undefined): SelectedColumn[] {
+  return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, columnReader(dialect, column)])
 }
 
 function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undefined> {
@@ -23,6 +31,7 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 }
 
 function selectedColumns(
+  dialect: SchemaDialectName,
   selection: QueryColumnSelection,
   tables: ReadonlyMap<string, TableDefinition | undefined>,
   unqualifiedTable: TableDefinition | undefined,
@@ -30,38 +39,33 @@ function selectedColumns(
   const separator = selection.column.lastIndexOf('.')
   const table = separator < 0 ? unqualifiedTable : tables.get(selection.column.slice(0, separator))
   const name = selection.column.slice(separator + 1)
-  if (name === '*') return columnsOf(table)
+  if (name === '*') return columnsOf(dialect, table)
   const column = table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined
-  return [[selection.alias ?? name, integerColumn(column)]]
+  return [[selection.alias ?? name, columnReader(dialect, column)]]
 }
 
-export type IntegerResultColumns = ReadonlyMap<string, AnyColumnDefinition>
+export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
-export function resolveIntegerResultColumns(plan: SelectQueryPlan): IntegerResultColumns {
+export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
   const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
   const tables = queryTables(plan)
   const selected: readonly SelectedColumn[] = plan.selections.length === 0
-    ? columnsOf(unqualifiedTable)
+    ? columnsOf(dialect, unqualifiedTable)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(selection, tables, unqualifiedTable)
+      ? selectedColumns(dialect, selection, tables, unqualifiedTable)
       : 'alias' in selection ? [[selection.alias, undefined]] : [])
-  const columns = new Map<string, AnyColumnDefinition>()
-  for (const [key, integer] of selected) {
-    if (integer) columns.set(key, integer)
+  const columns = new Map<string, ColumnReader>()
+  for (const [key, reader] of selected) {
+    if (reader) columns.set(key, reader)
     else columns.delete(key)
   }
   return columns
 }
 
-function readsIntegerText(value: unknown): value is bigint | string {
-  return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
-}
-
-export function readIntegerResultColumns(row: Record<string, unknown>, columns: IntegerResultColumns): Record<string, unknown> {
+export function readConvertedResultColumns(row: Record<string, unknown>, columns: ConvertedResultColumns): Record<string, unknown> {
   const values: Record<string, unknown> = { ...row }
-  for (const [key, column] of columns) {
-    const value = row[key]
-    if (readsIntegerText(value)) values[key] = readIntegerColumnValue(column, value)
+  for (const [key, read] of columns) {
+    if (Object.hasOwn(row, key)) values[key] = read(row[key])
   }
   return values
 }

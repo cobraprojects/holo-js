@@ -78,6 +78,26 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectWriteValue('postgres', stringColumn, { value: 'Mohamed' })).toEqual({ value: 'Mohamed' })
   })
 
+  it('reads SQLite decimal numbers as decimal text with at least two places', () => {
+    const decimalColumn = column.decimal().toDefinition({ name: 'total' })
+
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.34)).toBe('12.34')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.3)).toBe('12.30')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12)).toBe('12.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -0.5)).toBe('-0.50')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -0)).toBe('0.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.345)).toBe('12.345')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 1e21)).toBe('1000000000000000000000.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 1.5e-7)).toBe('0.00000015')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -1.25e22)).toBe('-12500000000000000000000.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, '9007199254740993')).toBe('9007199254740993.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 9007199254740993n)).toBe('9007199254740993.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 'not a number')).toBe('not a number')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, null)).toBeNull()
+    expect(normalizeDialectReadValue('postgres', decimalColumn, '12.3')).toBe('12.3')
+    expect(normalizeDialectReadValue('mysql', decimalColumn, '12.30')).toBe('12.30')
+  })
+
   it('defines vector support explicitly and normalizes vectors only for supporting dialects', () => {
     const vectorColumn = column.vector({ dimensions: 3 }).toDefinition({ name: 'embedding' })
 
