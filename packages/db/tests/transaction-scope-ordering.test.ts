@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSQLiteAdapter, sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { createDatabase, createDialect, createMigrationService, createQueryScheduler, createSchemaService, DB, defineMigration, type DatabaseLogger, type DriverAdapter } from '../src'
+import { createDatabase, createDeferredDatabaseDriverAdapter, createDialect, createMigrationService, createQueryScheduler, createSchemaService, DB, defineMigration, registerDatabaseDriverFactory, unregisterDatabaseDriverFactory, type DatabaseLogger, type DriverAdapter } from '../src'
 import { openDatabase } from './support/database'
 
 function deferred(): { promise: Promise<void>, resolve: () => void } {
@@ -265,6 +268,130 @@ describe('transaction scope ordering across contexts sharing one SQLite adapter'
     expect(await readForeignKeys(adapter)).toBe(1)
   }, 5_000)
 })
+
+async function openSQLiteFile(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'holo-sqlite-file-'))
+  onTestFinished(() => rm(directory, { recursive: true, force: true }))
+  const filename = join(directory, 'database.sqlite')
+  await writeFile(filename, '')
+  return filename
+}
+
+function delegateAdapter(adapter: DriverAdapter): DriverAdapter {
+  return new Proxy(adapter, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+async function openSharedSQLite(pair: (filename: string) => [DriverAdapter, DriverAdapter], logger?: DatabaseLogger) {
+  const filename = await openSQLiteFile()
+  const [first, second] = pair(filename)
+  const db = createDatabase({ adapter: first, dialect: createDialect('sqlite') })
+  const other = createDatabase({ adapter: second, dialect: createDialect('sqlite'), logger })
+  onTestFinished(async () => {
+    await other.disconnect()
+    await db.disconnect()
+  })
+  const schema = createSchemaService(db)
+  await schema.createTable('records', (table) => {
+    table.integer('id').primaryKey()
+    table.string('name')
+  })
+  return { db, other, schema, first, second }
+}
+
+const sharedSQLitePairs = {
+  'two adapter objects on one SQLite file': (filename: string): [DriverAdapter, DriverAdapter] => [
+    createSQLiteAdapter({ filename }),
+    createSQLiteAdapter({ filename }),
+  ],
+  'a SQLite adapter and a wrapper of it': (filename: string): [DriverAdapter, DriverAdapter] => {
+    const adapter = createSQLiteAdapter({ filename })
+    return [adapter, delegateAdapter(adapter)]
+  },
+  'two runtime connections on one SQLite file': (filename: string): [DriverAdapter, DriverAdapter] => {
+    const factory = { ...sqliteDatabaseDriverFactory, driver: `sqlite_${randomUUID()}` }
+    registerDatabaseDriverFactory(factory)
+    onTestFinished(() => unregisterDatabaseDriverFactory(factory))
+    return [
+      createDeferredDatabaseDriverAdapter(factory.driver, { url: filename }),
+      createDeferredDatabaseDriverAdapter(factory.driver, { url: filename }),
+    ]
+  },
+}
+
+for (const [label, pair] of Object.entries(sharedSQLitePairs)) {
+  describe(`transaction scope ordering across ${label}`, () => {
+    it('finishes a root transaction on the other adapter that starts while withoutForeignKeyConstraints() yields', async () => {
+      const transactions = watchRootTransactions()
+      const { db, other, schema, first, second } = await openSharedSQLite(pair, transactions.logger)
+      const seen: number[] = []
+      const transaction = startFromAnotherChain(() => other.transaction(async (tx) => {
+        const result = await tx.queryCompiled<{ foreign_keys: number }>({ sql: 'PRAGMA foreign_keys', bindings: [], source: 'schema' })
+        seen.push(Number(result.rows[0]?.foreign_keys))
+        await tx.table('records').insert({ id: 3, name: 'transaction' })
+      }))
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        await db.table('records').insert({ id: 1, name: 'before yield' })
+        const started = transactions.nextStart()
+        transaction.start()
+        await started
+        await nextMacrotask()
+        await db.table('records').insert({ id: 2, name: 'after yield' })
+      })
+      await transaction.done
+
+      expect(seen).toEqual([1])
+      expect(await other.table('records').orderBy('id').pluck('id')).toEqual([1, 2, 3])
+      expect(await readForeignKeys(first)).toBe(1)
+      expect(await readForeignKeys(second)).toBe(1)
+    }, 5_000)
+
+    it('finishes when a suspension writes through the other adapter on which a root transaction started meanwhile', async () => {
+      const transactions = watchRootTransactions()
+      const { other, schema, first, second } = await openSharedSQLite(pair, transactions.logger)
+      const transaction = startFromAnotherChain(() => other.transaction(async (tx) => {
+        await tx.table('records').insert({ id: 2, name: 'transaction' })
+      }))
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        const started = transactions.nextStart()
+        transaction.start()
+        await started
+        await nextMacrotask()
+        await other.table('records').insert({ id: 1, name: 'suspension' })
+      })
+      await transaction.done
+
+      expect(await other.table('records').orderBy('id').pluck('id')).toEqual([1, 2])
+      expect(await readForeignKeys(first)).toBe(1)
+      expect(await readForeignKeys(second)).toBe(1)
+    }, 5_000)
+
+    it('keeps statements of the other adapter from another chain off the file while foreign-key checks are off', async () => {
+      const { other, schema } = await openSharedSQLite(pair)
+      const read = startFromAnotherChain(async () => {
+        const result = await other.queryCompiled<{ foreign_keys: number }>({ sql: 'PRAGMA foreign_keys', bindings: [], source: 'schema' })
+        return Number(result.rows[0]?.foreign_keys)
+      })
+      let finishedInside = false
+
+      await schema.withoutForeignKeyConstraints(async () => {
+        read.start()
+        await nextMacrotask()
+        await nextMacrotask()
+        finishedInside = await Promise.race([read.done.then(() => true), nextMacrotask().then(() => false)])
+      })
+
+      expect(finishedInside).toBe(false)
+      expect(await read.done).toBe(1)
+    }, 5_000)
+  })
+}
 
 describe('query scheduler exclusive gate', () => {
   it('never runs two exclusive sections at once when one starts while the gate hands over to a waiter', async () => {

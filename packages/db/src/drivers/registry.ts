@@ -1,4 +1,5 @@
 import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
+import { transactionScopeIdentity, transactionScopeKey, type TransactionScopeIdentity } from '../core/transactionScope'
 import type { CompiledStatement, DatabaseOperationOptions, DatabaseTransactionOptions, DriverAdapter, DriverExecutionResult, DriverQueryResult } from '../core/types'
 
 export type DatabaseDriverConnection = Pick<HoloProjectConnectionConfig, 'max' | 'connectionTimeoutMillis' | 'idleTimeoutMillis' | 'application_name'> & {
@@ -51,9 +52,15 @@ export class DeferredDatabaseDriverAdapter implements DriverAdapter {
     return getDatabaseDriverFactory(this.driver)?.supportsConcurrentTransactionScopes === true
   }
 
+  get [transactionScopeKey](): TransactionScopeIdentity {
+    this.adapter ??= getDatabaseDriverFactory(this.driver)?.create(this.connection)
+    return this.adapter ? transactionScopeIdentity(this.adapter) : this
+  }
+
   private async resolve(): Promise<DriverAdapter> {
     if (this.adapter) return this.adapter
     this.pending ??= Promise.resolve().then(() => {
+      if (this.adapter) return this.adapter
       const factory = getDatabaseDriverFactory(this.driver)
       if (!factory) throw new Error(`[@holo-js/db] Driver "${this.driver}" is not registered. Import its concrete driver package before initializing the database runtime.`)
       this.adapter = factory.create(this.connection)
