@@ -73,13 +73,17 @@ async function findMissingAncestors(path: string): Promise<string[]> {
   return missing
 }
 
-function setEntry(key: string, entry: LedgerEntry): void {
-  entries.delete(key)
-  entries.set(key, entry)
+function trimEntries(): void {
   for (const candidate of entries.keys()) {
     if (entries.size <= MAX_LEDGER_ENTRIES) break
     if (!pendingWrites.has(candidate)) entries.delete(candidate)
   }
+}
+
+function setEntry(key: string, entry: LedgerEntry): void {
+  entries.delete(key)
+  entries.set(key, entry)
+  trimEntries()
 }
 
 async function trackWrites<TResult>(
@@ -90,15 +94,18 @@ async function trackWrites<TResult>(
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
   const keys: string[] = []
+  const previousHashes = new Map<string, string | null | undefined>()
   const markPending = (key: string): void => {
     if (keys.includes(key)) return
     keys.push(key)
+    previousHashes.set(key, entries.get(key)?.hash)
     pendingWrites.set(key, pending)
     setEntry(key, { hash: entries.get(key)?.hash })
   }
   const requested = paths.map(path => resolve(path))
   requested.forEach(markPending)
   const recorded: string[] = []
+  const hashesBefore = new Map<string, string | null>()
   try {
     const targets = await Promise.all(requested.map(path => resolveTrackedPath(path)))
     targets.forEach(markPending)
@@ -106,17 +113,25 @@ async function trackWrites<TResult>(
     const ancestors = (await Promise.all(targets.map(findMissingAncestors))).flat()
     ancestors.forEach(markPending)
     recorded.push(...ancestors)
+    await Promise.all(recorded.map(async (key) => {
+      if (writtenContents?.(key) === undefined) hashesBefore.set(key, await readContentHash(key))
+    }))
     return await write()
   } finally {
     const hashes = await Promise.all(recorded.map(async (key) => {
       const contents = writtenContents?.(key)
       return contents === undefined ? await readContentHash(key) : hashContents(contents)
     }))
-    recorded.forEach((key, index) => setEntry(key, { hash: hashes[index] ?? null }))
+    recorded.forEach((key, index) => {
+      const hash = hashes[index] ?? null
+      const unchanged = hashesBefore.has(key) && hashesBefore.get(key) === hash
+      setEntry(key, { hash: unchanged ? previousHashes.get(key) : hash })
+    })
     for (const key of keys) {
       if (pendingWrites.get(key) === pending) pendingWrites.delete(key)
-      if (!recorded.includes(key) && entries.get(key)?.hash === undefined) entries.delete(key)
+      if (entries.get(key)?.hash === undefined) entries.delete(key)
     }
+    trimEntries()
     release()
   }
 }

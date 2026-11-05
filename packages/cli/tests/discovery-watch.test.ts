@@ -428,3 +428,10 @@ it('records a write through a symbolic link under the file it changes', async ()
   await writeTextFile(join(root, 'app/alias.ts'), 'export default { linked: true }')
   await expect(isUnchangedWrittenOutput(join(root, 'config/linked.ts'))).resolves.toBe(true)
 })
+
+it('keeps a user edit to a manifest that a tracked CLI command leaves untouched', async () => {
+  const root = await createProject()
+  await write(root, 'package.json', '{"name":"watch-fixture","type":"module","private":true}')
+  await trackPackageManifestWrites(root, async () => {})
+  await expect(isUnchangedWrittenOutput(join(root, 'package.json'))).resolves.toBe(false)
+})
