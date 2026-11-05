@@ -201,6 +201,8 @@ await post.tags().attach({
 
 Attaching an ID that is already linked updates its pivot columns instead of inserting a duplicate.
 
+Pivot columns are typed from the pivot table's schema in `attach()`, `sync()`, `syncWithoutDetaching()`, `toggle()`, `updateExistingPivot()`, and factory `hasAttached()`. Only the columns declared with `withPivot()` or `withTimestamps()` are accepted. A pivot key column, a computed column, an undeclared column, or a value of the wrong type is a type error.
+
 `detach()` removes pivot rows and returns how many were removed. Call it with no arguments to remove them all:
 
 ```ts
