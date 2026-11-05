@@ -36,6 +36,16 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       expect(await cachedNames(qualified)).toEqual(['first', 'second'])
     })
 
+    it('refreshes a cached read whose explicit invalidation names the other spelling', async () => {
+      const { bare, qualified } = await openCachedTable(driver)
+      const cachedWithExplicitDependency = async () => (await DB.table(bare).orderBy('id').cache({ ttl: 60, invalidate: [qualified] }).get()).map(row => row.name)
+      expect(await cachedWithExplicitDependency()).toEqual(['first'])
+
+      await DB.table(bare).insert({ id: 2, name: 'second', active: false })
+
+      expect(await cachedWithExplicitDependency()).toEqual(['first', 'second'])
+    })
+
     it('refreshes cached reads by key after updates and deletes through the other spelling', async () => {
       const { bare, qualified } = await openCachedTable(driver)
       expect(await cachedName(bare, 1)).toBe('first')
@@ -67,6 +77,16 @@ describe('sqlite query cache table identity across temp and attached schemas', (
 
     await DB.table('ledgers').insert({ id: 3, name: 'third' })
     expect(await cachedNames('aux.ledgers')).toEqual(['first', 'second', 'third'])
+  })
+
+  it('refreshes a cached qualified read after a temp table starts shadowing it', async () => {
+    const { db, bare, qualified } = await openCachedTable('sqlite')
+    expect(await cachedNames(qualified)).toEqual(['first'])
+
+    await db.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
+    await DB.table(qualified).insert({ id: 2, name: 'second', active: false })
+
+    expect(await cachedNames(qualified)).toEqual(['first', 'second'])
   })
 
   it('keeps a temp table that shadows a main table separate from the main table', async () => {

@@ -1295,6 +1295,18 @@ function createDatabaseDependencyInvalidationEvent(
   return Object.freeze(event)
 }
 
+export async function invalidateReplacedTableIdentity(
+  connection: DatabaseContext,
+  identity: string,
+): Promise<void> {
+  if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners() && !hasDatabaseDependencyInvalidationPublisher()) {
+    return
+  }
+
+  const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
+  await invalidateQueryCacheDependencies(connection, [tableKey, `${tableKey}:row:*`])
+}
+
 export function normalizeQueryCacheDependencies(
   connectionName: string,
   dependencies: readonly string[],

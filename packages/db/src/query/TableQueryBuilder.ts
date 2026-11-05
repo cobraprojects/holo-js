@@ -2014,6 +2014,9 @@ export class TableQueryBuilder<
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
     if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
       await resolvePlanTableIdentities(this.connection, this.plan)
+      for (const dependency of cacheConfig?.invalidate ?? []) {
+        if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)
+      }
     }
     const dependencies = this.plan.lockMode
       || (!cacheConfig && !activeDependencyCollector)

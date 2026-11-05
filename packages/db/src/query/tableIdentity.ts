@@ -1,6 +1,7 @@
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { invalidateReplacedTableIdentity } from '../cache'
 import { splitTablePath } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
 import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
@@ -57,6 +58,10 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
   }
   const identity = await entry.identity
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
+  if (cached && entry !== cached) {
+    const replaced = await cached.identity.catch(() => identity)
+    if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
+  }
   return identity
 }
 
