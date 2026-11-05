@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DB, HydrationError, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, morphToMany, morphedByMany, registerGeneratedTables, resetDB } from '../src'
-import { openDatabase } from './support/database'
+import { openDatabase, postgresIntegration } from './support/database'
 
 async function openBigintScenario() {
   const { schema, adapter } = await openDatabase('postgres')
@@ -21,7 +21,7 @@ async function openBigintScenario() {
   return { schema, names }
 }
 
-describe('postgres bigint keys', () => {
+describe.runIf(postgresIntegration)('postgres bigint keys', () => {
   afterEach(() => {
     resetDB()
     clearGeneratedTables()

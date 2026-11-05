@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { type Entity, belongsToMany, column, hasMany, latestOfMany, morphToMany, oldestOfMany, scopeRelation, type TableDefinition } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
-import { openDatabase } from './support/database'
+import { mysqlTestConnection, openDatabase } from './support/database'
 
 function defineBoundedRelationLoadingScenario(driver: 'postgres' | 'mysql') {
   it('limits one-of-many, pivot and chunked eager loads on the real database', async () => {
@@ -17,7 +17,7 @@ function defineBoundedRelationLoadingScenario(driver: 'postgres' | 'mysql') {
     }
     const qualify = (name: string) => driver === 'postgres'
       ? `public.${name}`
-      : `${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`
+      : `${mysqlTestConnection().database}.${name}`
 
     try {
       await schema.createTable(names.users, table => {
@@ -150,7 +150,7 @@ function defineToQueryIntegerKeysScenario(driver: 'postgres' | 'mysql') {
   it('loads a toQuery integer key list above 256 keys as inline literals on the real database', async () => {
     const { db, schema } = await openDatabase(driver)
     const name = `holo_to_query_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-    const qualified = driver === 'postgres' ? name : `${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`
+    const qualified = driver === 'postgres' ? name : `${mysqlTestConnection().database}.${name}`
     await schema.createTable(name, table => {
       table.integer('id').primaryKey()
       table.string('name')
@@ -207,7 +207,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('findMany string key
     })
 
     try {
-      const codes = defineTable(`${process.env.HOLO_MYSQL_DATABASE ?? 'mysql'}.${name}`, { code: column.string().primaryKey(), label: column.string() })
+      const codes = defineTable(`${mysqlTestConnection().database}.${name}`, { code: column.string().primaryKey(), label: column.string() })
       await db.table(codes).insert([{ code: 'Abc', label: 'stored' }])
 
       const Code = defineModelFromTable(codes)

@@ -3,6 +3,7 @@ import { createPool } from 'mysql2/promise'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { createMySQLAdapter, type MySQLPoolLike } from '@holo-js/db-mysql'
 import { createDatabase, createDialect, createSchemaService, SchemaError } from '../src'
+import { mysqlTestConnection } from './support/database'
 
 const sqlModes = {
   'the server default': undefined,
@@ -11,11 +12,7 @@ const sqlModes = {
 
 function openMySQLWithSqlMode(sqlMode: string | undefined) {
   const pool = createPool({
-    host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-    port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-    user: process.env.HOLO_MYSQL_USER ?? 'root',
-    password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-    database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+    ...mysqlTestConnection(),
     timezone: 'Z',
     connectionLimit: 4,
   })

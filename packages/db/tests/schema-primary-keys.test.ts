@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { clearGeneratedTables, defineModel, holoRuntimeInternals, queryCacheInternals, registerGeneratedTables, renderGeneratedSchemaModule, renderGeneratedSchemaRuntimeModule, resetDB, SchemaError, type DatabaseContext, type DatabaseDependencyInvalidationEvent, type TableDefinition } from '../src'
 import type { DatabaseMutationEvent } from '../src/cache'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -14,7 +14,7 @@ function uniqueTableName(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`native ${driver} primary keys`, () => {
     it('creates a composite primary key that rejects duplicate pairs', async () => {
       const { db, schema } = await openDatabase(driver)
@@ -208,7 +208,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   })
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`${driver} composite primary keys in the Generated schema`, () => {
     const pivotTable = `primary_keys_post_tag_${driver}`
 
@@ -294,7 +294,7 @@ for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   })
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`${driver} composite primary key column order`, () => {
     beforeEach(() => {
       resetDB()

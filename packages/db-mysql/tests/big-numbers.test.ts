@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { mysqlDatabaseDriverFactory } from '../src'
+import { mysqlTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 
-const host = process.env.HOLO_MYSQL_HOST ?? '127.0.0.1'
-const port = Number(process.env.HOLO_MYSQL_PORT ?? 3306)
-const user = process.env.HOLO_MYSQL_USER ?? 'root'
-const password = process.env.HOLO_MYSQL_PASSWORD ?? ''
-const database = process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
-const url = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(database)}`
+function structuredConnection() {
+  const { user, ...connection } = mysqlTestConnection()
+  return { ...connection, username: user }
+}
+
+function connectionUrl(query = '') {
+  return `${testConnectionUrl('mysql', mysqlTestConnection())}${query}`
+}
 
 async function openNumbersTable(connection: Parameters<typeof mysqlDatabaseDriverFactory.create>[0]) {
   const adapter = mysqlDatabaseDriverFactory.create(connection)
@@ -21,7 +24,7 @@ async function openNumbersTable(connection: Parameters<typeof mysqlDatabaseDrive
 
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql big numbers against a live server', () => {
   it('returns a BIGINT beyond the safe integer range as its exact text, and parses DECIMAL and JSON as before', async () => {
-    const { adapter, table } = await openNumbersTable({ host, port, username: user, password, database })
+    const { adapter, table } = await openNumbersTable(structuredConnection())
     const inserted = await adapter.execute(`INSERT INTO ${table} (id, safe, price, wide) VALUES (9007199254740993, 42, 12.50, 123456789012345678901234567890)`)
     await adapter.execute(`UPDATE ${table} SET payload = CAST('{"big":9007199254740993}' AS JSON)`)
 
@@ -34,7 +37,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql b
   }, 30_000)
 
   it('returns exact text for a connection configured by URL', async () => {
-    const { adapter, table } = await openNumbersTable({ url })
+    const { adapter, table } = await openNumbersTable({ url: connectionUrl() })
     await adapter.execute(`INSERT INTO ${table} (id, safe) VALUES (-9007199254740993, -42)`)
 
     const result = await adapter.query(`SELECT id, safe FROM ${table}`)
@@ -43,7 +46,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql b
   }, 30_000)
 
   it('lets supportBigNumbers in the URL win over the default', async () => {
-    const { adapter, table } = await openNumbersTable({ url: `${url}?supportBigNumbers=false` })
+    const { adapter, table } = await openNumbersTable({ url: connectionUrl('?supportBigNumbers=false') })
     await adapter.execute(`INSERT INTO ${table} (id) VALUES (9007199254740993)`)
 
     const result = await adapter.query(`SELECT id FROM ${table}`)
@@ -52,7 +55,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql b
   }, 30_000)
 
   it('returns JSON as text when the URL sets jsonStrings', async () => {
-    const { adapter, table } = await openNumbersTable({ url: `${url}?jsonStrings=true` })
+    const { adapter, table } = await openNumbersTable({ url: connectionUrl('?jsonStrings=true') })
     await adapter.execute(`INSERT INTO ${table} (payload) VALUES (CAST('{"big":9007199254740993}' AS JSON))`)
 
     const result = await adapter.query(`SELECT payload FROM ${table}`)

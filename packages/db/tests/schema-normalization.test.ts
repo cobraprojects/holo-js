@@ -7,6 +7,8 @@ import {
   normalizeDialectReadValue,
   normalizeDialectWriteValue,
 } from '../src'
+import { readNumericValue } from '../src/schema/normalization'
+import { compareChunkValuesAscending, compareChunkValuesDescending } from '../src/query/chunkOrdering'
 
 describe('schema normalization rules', () => {
   it('normalizes boolean, json, and timestamp values on reads and writes across dialects', () => {
@@ -81,6 +83,41 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectWriteValue('sqlite', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectWriteValue('mysql', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectWriteValue('postgres', stringColumn, { value: 'Mohamed' })).toEqual({ value: 'Mohamed' })
+  })
+
+  it('reads finite numbers from decimal text for aggregates', () => {
+    expect(readNumericValue('12.30')).toBe(12.3)
+    expect(readNumericValue(-2)).toBe(-2)
+    expect(readNumericValue('9'.repeat(400))).toBeUndefined()
+    expect(readNumericValue(Number.NaN)).toBeUndefined()
+    expect(readNumericValue('1e3')).toBeUndefined()
+  })
+
+  it('orders decimal text beyond number precision in chunk traversal', () => {
+    expect(compareChunkValuesAscending('9007199254740993.00', '9007199254740992.00', true)).toBe(1)
+    expect(compareChunkValuesDescending('9007199254740993.00', '9007199254740992.00', true)).toBe(-1)
+    expect(compareChunkValuesAscending('-0.10', '-0.05', true)).toBe(-1)
+    expect(compareChunkValuesAscending('-0.00', '0', true)).toBe(0)
+  })
+
+  it('reads SQLite decimal numbers as decimal text with at least two places', () => {
+    const decimalColumn = column.decimal().toDefinition({ name: 'total' })
+
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.34)).toBe('12.34')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.3)).toBe('12.30')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12)).toBe('12.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -0.5)).toBe('-0.50')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -0)).toBe('0.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 12.345)).toBe('12.345')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 1e21)).toBe('1000000000000000000000.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 1.5e-7)).toBe('0.00000015')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, -1.25e22)).toBe('-12500000000000000000000.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, '9007199254740993')).toBe('9007199254740993.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 9007199254740993n)).toBe('9007199254740993.00')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, 'not a number')).toBe('not a number')
+    expect(normalizeDialectReadValue('sqlite', decimalColumn, null)).toBeNull()
+    expect(normalizeDialectReadValue('postgres', decimalColumn, '12.3')).toBe('12.3')
+    expect(normalizeDialectReadValue('mysql', decimalColumn, '12.30')).toBe('12.30')
   })
 
   it('defines vector support explicitly and normalizes vectors only for supporting dialects', () => {

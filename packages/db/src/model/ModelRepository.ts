@@ -102,8 +102,12 @@ type BelongsToManyRelatedObservationMetadata = {
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
 
+function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableDefinition | undefined): boolean {
+  return connection.getDriver() === 'sqlite' && typeof table === 'object' && Object.values(table.columns).some(column => column.kind === 'decimal')
+}
+
 function relatedRowsArePatchable(related: ModelRepository): boolean {
-  return !modelNeedsSerialization(related.definition)
+  return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -1298,7 +1302,11 @@ export class ModelRepository<
   }
 
   private pivotRowsArePatchable(relation: PivotRelationDefinition): boolean {
-    return !relation.pivotModel || !modelNeedsSerialization(this.resolveRelatedRepository(relation.pivotModel).definition)
+    const connection = this.getConnection()
+    if (readsSQLiteDecimals(connection, this.resolvePivotTable(relation.pivotTable, connection))) return false
+    if (!relation.pivotModel) return true
+    const pivot = this.resolveRelatedRepository(relation.pivotModel)
+    return !modelNeedsSerialization(pivot.definition) && !readsSQLiteDecimals(connection, pivot.definition.table)
   }
 
   private createBelongsToManyRelatedObservationMetadata(
@@ -2496,6 +2504,10 @@ export class ModelRepository<
       const parentKey = entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(parentKey) ?? [])
     }
+  }
+
+  relatedRowsArePatchable(related: () => ModelDefinitionLike): boolean {
+    return relatedRowsArePatchable(this.resolveRelatedRepository(related))
   }
 
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {

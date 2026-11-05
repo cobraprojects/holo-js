@@ -3,13 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { configureConfigRuntime, resetConfigRuntime } from '@holo-js/config'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import { DB, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { mysqlTestConnection, testConnectionUrl } from './support/database'
 
-const liveMySQLConfig = {
-  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-  user: process.env.HOLO_MYSQL_USER ?? 'root',
-  password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-  database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+function dateStringsUrl() {
+  const url = testConnectionUrl('mysql', mysqlTestConnection())
+  url.searchParams.set('dateStrings', 'true')
+  return url.toString()
 }
 
 async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>): Promise<T> {
@@ -28,7 +27,7 @@ async function withAppTimezone<T>(timeZone: string, callback: () => Promise<T>):
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and timestamp values in app.timezone', () => {
   it('reads and writes DATE, DATETIME, and TIMESTAMP values in app.timezone, not the process timezone', async () => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('mysql') })
       const source = `holo_tz_${randomUUID().replaceAll('-', '')}`
       const copy = `${source}_copy`
@@ -65,7 +64,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('saves an unchanged TIMESTAMP from the repeated fall-back hour back to the instant it was stored at', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('mysql') })
       const table = `holo_fallback_${randomUUID().replaceAll('-', '')}`
       try {
@@ -88,7 +87,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('reads a TIMESTAMP stored at the later repeated-hour instant one hour early, because the wall-clock text is the same for both', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
       const table = `holo_fallback_later_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, instant TIMESTAMP(3) NOT NULL)`)
@@ -106,7 +105,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('writes Date values through a typed model in app.timezone, not as UTC wall-clock text', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const table = `holo_model_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME(3) NOT NULL, instant TIMESTAMP(3) NOT NULL)`)
@@ -129,7 +128,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('truncates sub-second timestamps instead of rounding them into the future', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const table = `holo_subsecond_${randomUUID().replaceAll('-', '')}`
       const now = new Date('2026-11-15T17:00:00.900Z')
       vi.useFakeTimers({ toFake: ['Date'], now })
@@ -166,7 +165,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('holds the stored whole-second values on the model after a MySQL write', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const table = `holo_subsecond_model_${randomUUID().replaceAll('-', '')}`
       const created = new Date('2026-11-15T17:00:00.900Z')
       const updated = new Date('2026-11-15T17:00:05.400Z')
@@ -211,7 +210,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('holds the stored whole-second Date on an untyped model after a MySQL write', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const table = `holo_subsecond_untyped_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME NULL)`)
@@ -236,7 +235,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('rejects zoned text with an impossible calendar value instead of writing a different instant', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const table = `holo_mysql_invalid_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute(`CREATE TABLE ${table} (id INT PRIMARY KEY, at DATETIME(3) NOT NULL, instant TIMESTAMP(3) NOT NULL)`)
@@ -256,7 +255,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('keeps a TIMESTAMP as the same instant across a daylight saving change in app.timezone', async () => {
     await withAppTimezone('America/New_York', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       const db = createDatabase({ adapter, dialect: createDialect('mysql') })
       const table = `holo_dst_${randomUUID().replaceAll('-', '')}`
       try {
@@ -278,7 +277,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('returns MySQL zero dates as their stored text instead of a shifted Date', async () => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
       const table = `holo_zero_${randomUUID().replaceAll('-', '')}`
       try {
         await adapter.execute('SET SESSION sql_mode = \'\'')
@@ -299,7 +298,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('fails queries instead of running in the server time zone when MySQL does not know app.timezone', async () => {
     configureConfigRuntime({ app: { timezone: 'Not/AZone' } } as never)
-    const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1 } })
+    const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
     try {
       await expect(adapter.query('SELECT 1')).rejects.toThrow()
     } finally {
@@ -311,27 +310,29 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
   it.each([
     {
       label: 'dateStrings: true',
-      config: { ...liveMySQLConfig, connectionLimit: 1, dateStrings: true },
+      options: { dateStrings: true },
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'dateStrings in the connection URL',
-      config: { uri: `mysql://${liveMySQLConfig.user}@${liveMySQLConfig.host}:${liveMySQLConfig.port}/${liveMySQLConfig.database}?dateStrings=true`, connectionLimit: 1 },
+      viaUrl: true,
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'typeCast: false',
-      config: { ...liveMySQLConfig, connectionLimit: 1, typeCast: false },
+      options: { typeCast: false },
       stored: { day: '2024-03-15', at: '2024-03-15 10:00:00', instant: '2024-03-15 10:00:00' },
     },
     {
       label: 'dateStrings for DATETIME only',
-      config: { ...liveMySQLConfig, connectionLimit: 1, dateStrings: ['DATETIME' as const] },
+      options: { dateStrings: ['DATETIME' as const] },
       stored: { day: new Date('2024-03-14T15:00:00Z'), at: '2024-03-15 10:00:00', instant: new Date('2024-03-15T01:00:00Z') },
     },
-  ])('returns app.timezone wall-clock values and round-trips them with $label', async ({ config, stored: expected }) => {
+  ])('returns app.timezone wall-clock values and round-trips them with $label', async ({ options, viaUrl, stored: expected }) => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const adapter = createMySQLAdapter({ config })
+      const adapter = createMySQLAdapter({ config: viaUrl
+        ? { uri: dateStringsUrl(), connectionLimit: 1 }
+        : { ...mysqlTestConnection(), connectionLimit: 1, ...options } })
       const db = createDatabase({ adapter, dialect: createDialect('mysql') })
       const table = `holo_opt_${randomUUID().replaceAll('-', '')}`
       try {
@@ -356,7 +357,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
   })
 
   it('leaves other columns as the driver returns them when typeCast is false', async () => {
-    const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 1, typeCast: false } })
+    const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1, typeCast: false } })
     try {
       expect((await adapter.query<{ n: unknown, one: unknown }>('SELECT NULL AS n, CAST(1 AS SIGNED) AS one')).rows)
         .toEqual([{ n: null, one: Buffer.from('1') }])
@@ -367,7 +368,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('keeps a configured typeCast for columns Holo does not read', async () => {
     const adapter = createMySQLAdapter({ config: {
-      ...liveMySQLConfig,
+      ...mysqlTestConnection(),
       connectionLimit: 1,
       typeCast: (field, next) => (field.type === 'LONGLONG' ? 'custom' : next()),
     } })
@@ -381,7 +382,7 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('MySQL date and time
 
   it('pins the session time zone to app.timezone on every pooled connection', async () => {
     await withAppTimezone('Asia/Tokyo', async () => {
-      const adapter = createMySQLAdapter({ config: { ...liveMySQLConfig, connectionLimit: 2 } })
+      const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 2 } })
       try {
         const held = 'SELECT @@session.time_zone AS zone, SLEEP(0.1) AS held'
         const zones = await Promise.all([adapter.query<{ zone: string }>(held), adapter.query<{ zone: string }>(held)])
