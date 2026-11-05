@@ -183,6 +183,39 @@ it('evaluates a command that throws while loading with discovered jobs only once
   }
 }, 30000)
 
+it('evaluates a failing command once when a discovered job imports it', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/commands/record.ts', "import { appendFileSync } from 'node:fs'\nappendFileSync('attempts.log', 'attempt\\n')\nif (process.env.FAIL_COMMAND_INIT === '1') throw new Error('command init failed')\nexport const label = 'record'\nexport default { description: 'Record an attempt', async run() {} }")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nimport { label } from '../commands/record'\nexport default defineJob({ async handle() { console.log(label) } })")
+    await execute(process.execPath, [cli, 'record'], { cwd: root })
+    await writeFile(join(root, 'attempts.log'), '')
+    await expect(execute(process.execPath, [cli, 'record'], { cwd: root, env: { ...process.env, FAIL_COMMAND_INIT: '1' } })).rejects.toThrow('command init failed')
+    expect(await readFile(join(root, 'attempts.log'), 'utf8')).toBe('attempt\n')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
+it('boots the runtime with the rewritten registry when a refresh fails after writing it', async () => {
+  const { root, write } = await createProject()
+  try {
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle() {} })")
+    await write('server/commands/announce.ts', "import { defineCommand } from '@holo-js/cli'\nexport default defineCommand({ description: 'Announce', async run({ withRuntime }) { await withRuntime(async () => { const { default: Requested } = await import('../events/requested'); await Requested.dispatch({ n: 3 }) }); console.log('done') } })")
+    await write('server/events/requested.ts', "import { defineEvent } from '@holo-js/events'\nexport default defineEvent<{ n: number }>({ name: 'work.requested' })")
+    expect((await execute(process.execPath, [cli, 'announce'], { cwd: root })).stdout.trim()).toBe('done')
+    await rm(join(root, '.holo-js/generated/schema.mjs'), { force: true })
+    await mkdir(join(root, '.holo-js/generated/schema.mjs/blocked'), { recursive: true })
+    await write('server/listeners/log-request.ts', "import { defineListener } from '@holo-js/events'\nimport Requested from '../events/requested'\nexport default defineListener({ listensTo: [Requested], async handle(event) { console.log('heard ' + event.payload.n) } })")
+    const { stdout } = await execute(process.execPath, [cli, 'announce'], { cwd: root })
+    expect(stdout.trim().split('\n')).toEqual(['heard 3', 'done'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('runs app commands that do not use a discovered job whose imports fail to load', async () => {
   const { root, write } = await createProject()
   try {

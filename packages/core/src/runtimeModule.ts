@@ -575,15 +575,16 @@ const sourceModuleLoaders: Readonly<Record<string, Loader>> = {
   '.jsx': 'jsx',
 }
 
-function sourceModuleUrlFunctionName(contents: string): string {
-  if (!contents.includes('__holoMetaUrl')) return '__holoMetaUrl'
+function unusedHelperName(preferred: string, prefix: string, width: number, contents: string, identifiers: ReadonlySet<string>): string {
+  const isUnused = (name: string) => !contents.includes(name) && !identifiers.has(name)
+  if (isUnused(preferred)) return preferred
   for (let index = 0; ; index += 1) {
-    const name = `__holoUrl${index.toString(36).padStart(4, '0')}`
-    if (!contents.includes(name)) return name
+    const name = `${prefix}${index.toString(36).padStart(width - prefix.length, '0')}`
+    if (isUnused(name)) return name
   }
 }
 
-function sourceModuleUrlReplacement(functionName: string, original: string): string {
+function sameWidthReplacement(functionName: string, original: string): string {
   const call = `${functionName}()`
   const lines = original.split(/(\r\n|\n|\r|\u2028|\u2029)/)
   if (lines.length === 1) return call.padEnd(original.length, ' ')
@@ -602,19 +603,86 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (!contents.includes('meta')) return { contents, loader }
 
         const ts = await import('typescript')
-        const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest)
-        const functionName = sourceModuleUrlFunctionName(contents)
+        const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true)
+        const identifiers = new Set<string>()
+        const collectIdentifiers = (node: TypeScriptNode): void => {
+          if (ts.isIdentifier(node)) identifiers.add(node.text)
+          ts.forEachChild(node, collectIdentifiers)
+        }
+        collectIdentifiers(source)
+        const urlFunction = unusedHelperName('__holoMetaUrl', '__holoUrl', 13, contents, identifiers)
+        const metaFunction = unusedHelperName('__hMeta00', '__hMeta', 9, contents, identifiers)
+        const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
+        const isUrlRead = (node: TypeScriptNode): boolean => (
+          ts.isPropertyAccessExpression(node) && node.name.text === 'url' && isImportMeta(node.expression)
+        ) || (
+          ts.isElementAccessExpression(node)
+          && isImportMeta(node.expression)
+          && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+          && node.argumentExpression.text === 'url'
+        )
+        const isAssignmentTarget = (node: TypeScriptNode): boolean => {
+          let current = node
+          let parent = current.parent
+          while (parent) {
+            if (ts.isParenthesizedExpression(parent) || ts.isArrayLiteralExpression(parent) || ts.isSpreadElement(parent)
+              || ts.isObjectLiteralExpression(parent) || ts.isShorthandPropertyAssignment(parent)
+              || ts.isSpreadAssignment(parent) || (ts.isPropertyAssignment(parent) && parent.initializer === current)
+              || ts.isAsExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)
+              || ts.isTypeAssertionExpression(parent)) {
+              current = parent
+              parent = current.parent
+              continue
+            }
+            if (ts.isBinaryExpression(parent)) {
+              return parent.left === current
+                && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+                && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+            }
+            if (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) {
+              return parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken
+            }
+            if (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) return parent.initializer === current
+            return false
+          }
+          return false
+        }
+        const isDestructuredImportMeta = (node: TypeScriptNode): boolean => {
+          if (!isImportMeta(node)) return false
+          let current = node
+          let parent = current.parent
+          while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent))) {
+            current = parent
+            parent = current.parent
+          }
+          if (!parent) return false
+          if (ts.isVariableDeclaration(parent)) return parent.initializer === current && ts.isObjectBindingPattern(parent.name)
+          if (ts.isBinaryExpression(parent) && parent.right === current && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            let target: TypeScriptNode = parent.left
+            while (ts.isParenthesizedExpression(target)) target = target.expression
+            return ts.isObjectLiteralExpression(target)
+          }
+          return false
+        }
         const fragments: string[] = []
         let cursor = 0
+        let usesUrlFunction = false
+        let usesMetaFunction = false
+        const replace = (node: TypeScriptNode, functionName: string) => {
+          const start = node.getStart(source)
+          fragments.push(contents.slice(cursor, start), sameWidthReplacement(functionName, contents.slice(start, node.end)))
+          cursor = node.end
+        }
 
         function visit(node: TypeScriptNode): void {
-          if (ts.isPropertyAccessExpression(node)
-            && node.name.text === 'url'
-            && ts.isMetaProperty(node.expression)
-            && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
-            const start = node.getStart(source)
-            fragments.push(contents.slice(cursor, start), sourceModuleUrlReplacement(functionName, contents.slice(start, node.end)))
-            cursor = node.end
+          if (isUrlRead(node) && !isAssignmentTarget(node)) {
+            replace(node, urlFunction)
+            usesUrlFunction = true
+            return
+          }
+          if (isDestructuredImportMeta(node)) {
+            replace(node, metaFunction)
+            usesMetaFunction = true
             return
           }
           ts.forEachChild(node, visit)
@@ -622,7 +690,10 @@ function createSourceModuleUrlPlugin(): Plugin {
 
         visit(source)
         if (cursor === 0) return { contents, loader }
-        fragments.push(contents.slice(cursor), `\nfunction ${functionName}() { return ${JSON.stringify(pathToFileURL(path).href)} }\n`)
+        const sourceUrl = JSON.stringify(pathToFileURL(path).href)
+        fragments.push(contents.slice(cursor))
+        if (usesUrlFunction) fragments.push(`\nfunction ${urlFunction}() { return ${sourceUrl} }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return { ...import.meta, url: ${sourceUrl} } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },

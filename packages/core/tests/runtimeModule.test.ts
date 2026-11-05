@@ -794,7 +794,7 @@ try { ability.manageTenants({ id: 7 }) } catch (error) { console.log(JSON.string
     const projectRoot = await realpath(await createTempProject())
     const abilityPath = join(projectRoot, 'server/abilities/locate.ts')
     await mkdir(dirname(abilityPath), { recursive: true })
-    const source = "type Tenant = { id: number }\nexport const origin = import.meta\n  .url\nexport function locate(tenant: Tenant): never {\n  const where = import.meta.url; throw new Error(`denied ${tenant.id} ${where === origin}`)\n}\n"
+    const source = "type Tenant = { id: number }\nexport const origin = import.meta\n  .url\nexport function locate(tenant: Tenant): never {\n  const { url: where } = import.meta; throw new Error(`denied ${tenant.id} ${where === origin}`)\n}\n"
     await writeFile(abilityPath, source)
     const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
     const childPath = join(projectRoot, 'child.mjs')
@@ -838,6 +838,29 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     await writeFile(entryPath, "import { origin } from '@holo-js/app-only-fixture'\nexport default { origin }\n")
     const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { default: { origin: string } }
     expect(loaded.default).toEqual({ origin: 'application' })
+  })
+
+  it('rewrites every import.meta url read and leaves assignment targets alone', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/meta-forms.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, [
+      'const __holoMeta\\u0055rl = (value: string) => value',
+      "export const escaped = __holoMeta\\u0055rl('escaped')",
+      "export const element = import.meta['url']",
+      'const { url: destructured } = import.meta',
+      'export { destructured }',
+      'export function assign(value: string) { try { import.meta.url = value } catch { return \'rejected\' } return import.meta.url }',
+      'export const dotted = import.meta.url',
+      '',
+    ].join('\n'))
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { escaped: string, element: string, destructured: string, dotted: string, assign(value: string): string }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.escaped).toBe('escaped')
+    expect(loaded.element).toBe(sourceUrl)
+    expect(loaded.destructured).toBe(sourceUrl)
+    expect(loaded.dotted).toBe(sourceUrl)
+    expect(typeof loaded.assign('file:///elsewhere')).toBe('string')
   })
 
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {

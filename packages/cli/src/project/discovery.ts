@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, join, resolve } from 'node:path'
+import { build } from 'esbuild'
 import {
   normalizeHoloProjectConfig,
   type NormalizedHoloProjectConfig,
@@ -732,7 +733,7 @@ async function loadCommandDiscoveryRegistry(
     return prepareProjectDiscovery(projectRoot, config)
   }
   if (await areCommandDefinitionsCurrent(projectRoot, config, cachedRegistry)) return cachedRegistry
-  return prepareProjectDiscovery(projectRoot, config).catch(() => cachedRegistry)
+  return prepareProjectDiscovery(projectRoot, config).catch(async () => await loadGeneratedProjectRegistry(projectRoot) ?? cachedRegistry)
 }
 
 async function hashSourceFile(filePath: string): Promise<string | undefined> {
@@ -746,6 +747,30 @@ function definitionsLoadedMarkers(): DefinitionsLoadedMarkers {
   const host = globalThis as typeof globalThis & { __holoAppCommandDefinitionsLoaded__?: DefinitionsLoadedMarkers }
   host.__holoAppCommandDefinitionsLoaded__ ??= new Set<string>()
   return host.__holoAppCommandDefinitionsLoaded__
+}
+
+async function definitionsImportCommand(
+  projectRoot: string,
+  definitionPaths: readonly string[],
+  commandPath: string,
+): Promise<boolean> {
+  const { packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
+  const result = await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
+    absWorkingDir: projectRoot,
+    bundle: true,
+    entryPoints: [...definitionPaths],
+    outdir: join(projectRoot, '.holo-js', 'runtime', 'command-graph'),
+    write: false,
+    metafile: true,
+    format: 'esm',
+    logLevel: 'silent',
+    packages: 'external',
+    platform: 'node',
+    target: 'node22',
+    tsconfig: tsconfigPath,
+    plugins: [packageSubpathResolutionInternals.createPackageSubpathResolutionPlugin()],
+  })).catch(() => undefined)
+  return Object.keys(result?.metafile.inputs ?? {}).some(input => resolve(projectRoot, input) === commandPath)
 }
 
 async function importAppCommandAndInstallDefinitionImporter(
@@ -770,7 +795,7 @@ async function importAppCommandAndInstallDefinitionImporter(
     try {
       importDefinition = await coreRuntimeInternals.loadProjectDefinitionRuntimeModules(projectRoot, [...definitionPaths, markerPath, commandPath])
     } catch (error) {
-      if (definitionsLoadedMarkers().has(marker)) throw error
+      if (definitionsLoadedMarkers().has(marker) || await definitionsImportCommand(projectRoot, definitionPaths, commandPath)) throw error
       return importProjectModule(projectRoot, commandPath)
     }
   } finally {
