@@ -2,10 +2,12 @@ import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import {
+  createDatabaseQueryFallbackObservation,
   createDatabaseQueryObservation,
   createTableCacheDependency,
   createTablePredicateCacheDependency,
   hasActiveDatabaseDependencyCollector,
+  inferDatabaseQueryObservationDependencies,
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
@@ -107,6 +109,16 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+}
+
+function createRelationQueryObservation(plan: SelectQueryPlan, connectionName: string): DatabaseQueryObservation | undefined {
+  const dependencies = resolveQueryCacheDependencies(plan, connectionName)
+  const observation = dependencies ? createDatabaseQueryObservation(plan, connectionName, dependencies) : undefined
+  return observation ?? createDatabaseQueryFallbackObservation(
+    plan,
+    connectionName,
+    inferDatabaseQueryObservationDependencies(plan, connectionName) ?? [createTableCacheDependency(connectionName, plan.source.tableName)],
+  )
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -1005,7 +1017,7 @@ export class ModelRepository<
           ...observed,
           patchable: observed.patchable && relatedRowsArePatchable(related),
           ...serializedFlag(!relatedRowsArePatchable(related)),
-        }, resultPath))
+        }, resultPath, 'single'))
         continue
       }
 
@@ -1042,7 +1054,7 @@ export class ModelRepository<
         })]),
         selections: [],
         tableName: related.definition.table.tableName,
-      }), resultPath))
+      }), resultPath, 'single'))
     }
   }
 
@@ -1101,7 +1113,7 @@ export class ModelRepository<
   private createNullableSingleRecordRelationObservation(
     observation: DatabaseQueryObservation,
     resultPath: readonly DatabaseQueryResultPathSegment[],
-    rowWindowMode: 'limited' | 'single' = 'single',
+    rowWindowMode: 'limited' | 'single',
   ): DatabaseQueryObservation {
     return Object.freeze({
       ...observation,
@@ -1171,8 +1183,7 @@ export class ModelRepository<
       operator: '=',
       value: parentKey,
     })
-    const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName())
-    return createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies!)
+    return createRelationQueryObservation(parentPlan, related.getConnectionName())
   }
 
   private createBelongsToRelationObservation(
@@ -1191,8 +1202,7 @@ export class ModelRepository<
       operator: '=',
       value: ownerKey,
     })
-    const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName())
-    return createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies!)
+    return createRelationQueryObservation(ownerPlan, related.getConnectionName())
   }
 
   private recordBelongsToManyRelationObservations(

@@ -81,6 +81,24 @@ function createApplier(
 }
 
 describe('@holo-js/realtime record patching', () => {
+  it('backfills the record when a delete leaves its limited window short', async () => {
+    const query = createQuery({ predicates: [{ column: 'author_id', operator: '=', value: 1 }], rowWindowMode: 'limited' })
+    const backfillKey = createBackfillQueryKey(query, 0, 1)
+
+    await expect(tryPatchQueryRecord(
+      query,
+      { id: 1, author_id: 1 },
+      [createMutation({ kind: 'delete' })],
+      createBackfills({ rows: new Map([[backfillKey, Promise.resolve([{ id: 2, author_id: 1 }])]]) }),
+      createQueryContext(),
+      createApplier({ patched: true, backfill: true, rows: [] }),
+    )).resolves.toEqual({
+      patched: true,
+      query,
+      value: { id: 2, author_id: 1 },
+    })
+  })
+
   it('rejects record patching when there are no mutations', async () => {
     await expect(tryPatchQueryRecord(
       createQuery(),

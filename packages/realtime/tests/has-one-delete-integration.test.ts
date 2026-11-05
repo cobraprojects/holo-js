@@ -41,8 +41,7 @@ async function openAuthors(driver: Driver) {
   const Author = defineModel(authors, {
     timestamps: false,
     relations: {
-      firstPost: hasOne(() => Post, 'author_id'),
-      anyPost: hasOne(() => Post, 'author_id'),
+      post: hasOne(() => Post, 'author_id'),
       latestPost: latestOfMany(() => Post, 'author_id'),
       oldestPost: oldestOfMany(() => Post, 'author_id'),
     },
@@ -61,19 +60,19 @@ async function subscribe(handler: () => Promise<unknown>) {
 describe.each(drivers)('realtime hasOne relations after deleting the loaded row on %s', (driver) => {
   it('loads the remaining row for an unordered hasOne', async () => {
     const { db, posts, Author } = await openAuthors(driver)
-    const handler = () => db.model(Author).query().with('anyPost').orderBy('id').getJson()
+    const handler = () => db.model(Author).query().with('post').orderBy('id').getJson()
     const subscription = await subscribe(handler)
-    const loaded = (subscription.current.data as { anyPost: { id: number } }[])[0]!.anyPost.id
+    const loaded = (subscription.current.data as { post: { id: number } }[])[0]!.post.id
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', loaded).delete() }))
 
     expect(subscription.current.data).toEqual(await handler())
-    expect(subscription.current.data).toContainEqual(expect.objectContaining({ id: 1, anyPost: expect.objectContaining({ id: 3 - loaded }) }))
+    expect(subscription.current.data).toContainEqual(expect.objectContaining({ id: 1, post: expect.objectContaining({ id: 3 - loaded }) }))
   })
 
   it('loads the next matching row for hasOne', async () => {
     const { db, posts, Author } = await openAuthors(driver)
-    const handler = () => db.model(Author).query().with({ firstPost: query => query.orderBy('id') }).orderBy('id').getJson()
+    const handler = () => db.model(Author).query().with({ post: query => query.orderBy('id') }).orderBy('id').getJson()
     const subscription = await subscribe(handler)
     expect(JSON.stringify(subscription.current.data)).toContain('"first"')
 
@@ -108,7 +107,7 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
 
   it('keeps an ordered hasOne in step with inserts and deletes', async () => {
     const { db, posts, Author } = await openAuthors(driver)
-    const handler = () => db.model(Author).query().with({ firstPost: query => query.orderBy('id', 'desc') }).orderBy('id').getJson()
+    const handler = () => db.model(Author).query().with({ post: query => query.orderBy('id', 'desc') }).orderBy('id').getJson()
     const subscription = await subscribe(handler)
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).insert({ id: 4, author_id: 1, title: 'newest' }) }))
@@ -118,6 +117,30 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 4).delete() }))
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).toContain('"second"')
+  })
+
+  it('keeps a subquery-constrained hasOne from loading rows its constraint hides', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const handler = () => db.model(Author).query().with({ post: query => query.whereSub('id', 'in', db.table(posts).select('id').where('id', '!=', 2)) }).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).not.toContain('"second"')
+  })
+
+  it('keeps a hasOne from loading rows a subquery global scope hides', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const ScopedPost = defineModel(posts, { timestamps: false, globalScopes: { visible: query => query.whereSub('id', 'in', db.table(posts).select('id').where('id', '!=', 2)) } })
+    const ScopedAuthor = defineModel(Author.definition.table, { timestamps: false, relations: { post: hasOne(() => ScopedPost, 'author_id') } })
+    const handler = () => db.model(ScopedAuthor).query().with('post').orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).not.toContain('"second"')
   })
 
   it('patches the relation to null when the last matching row is deleted', async () => {
