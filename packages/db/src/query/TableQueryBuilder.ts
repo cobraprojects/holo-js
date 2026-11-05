@@ -1903,7 +1903,8 @@ export class TableQueryBuilder<
   [selectAggregateColumn](selection: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const implicitSelections = this.plan.selections.length > 0
       ? []
-      : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(table => `${table}.*`)
+      : [...this.plan.joins.map(join => join.alias ?? join.table!), this.source.alias ?? this.source.tableName]
+          .map(table => `${table.slice(table.lastIndexOf('.') + 1)}.*`)
     return this.clone(appendSelections(this.plan, [...implicitSelections, selection]))
   }
 
