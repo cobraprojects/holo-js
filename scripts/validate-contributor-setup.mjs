@@ -9,7 +9,8 @@ const contributingPage = 'apps/docs/docs/advanced/contributing.md'
 const setupHeading = '## Set up the repository'
 const postSetupTest = 'bun run --cwd packages/config test -- --reporter=json'
 
-export function documentedSetupCommands(markdown) {
+export function documentedSetupCommands(source) {
+  const markdown = source.replace(/\r\n/g, '\n')
   const start = markdown.indexOf(`${setupHeading}\n`)
   if (start === -1) throw new Error(`${contributingPage} has no "${setupHeading}" section.`)
   const block = /```bash\n([\s\S]*?)```/.exec(markdown.slice(start))

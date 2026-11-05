@@ -37,6 +37,11 @@ test('contributor setup commands come from the setup section after the clone ste
   assert.deepEqual(documentedSetupCommands(markdown), ['bun install', 'bun run build'])
 })
 
+test('contributor setup reads a docs page checked out with Windows line endings', () => {
+  const markdown = '## Set up the repository\r\n\r\n```bash\r\ngit clone https://example.test/holo-js.git\r\ncd holo-js\r\nbun install\r\n```\r\n'
+  assert.deepEqual(documentedSetupCommands(markdown), ['bun install'])
+})
+
 test('contributor setup rejects a docs page without clone steps or a setup section', () => {
   assert.throws(() => documentedSetupCommands('# Contributing\n'), /no "## Set up the repository" section/)
   assert.throws(() => documentedSetupCommands('## Set up the repository\n\nRun it.\n'), /no bash block/)
