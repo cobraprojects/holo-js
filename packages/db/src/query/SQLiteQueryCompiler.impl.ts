@@ -3,7 +3,7 @@ import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
 import { CompilerError } from '../core/errors'
-import { splitTablePath } from '../schema/identifiers'
+import { quoteTablePath, splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
 import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
 
@@ -59,14 +59,17 @@ function convertLikePatternToGlob(pattern: string): string {
   return pattern.replace(/[[*?%_]/g, character => SQLITE_GLOB_PATTERN_REPLACEMENTS[character] ?? character)
 }
 
-function splitSchemaTable(tableName: string): { readonly schemaName: string, readonly schema: string, readonly table: string } {
-  const separator = tableName.indexOf('.')
-  if (separator === -1) {
-    return { schemaName: 'main', schema: '', table: tableName }
-  }
+const SQLITE_ESCAPED_QUOTING = {
+  quoteIdentifier: (segment: string) => `"${segment.replaceAll('"', '""')}"`,
+}
 
-  const schemaName = tableName.slice(0, separator)
-  return { schemaName, schema: `"${schemaName.replaceAll('"', '""')}".`, table: tableName.slice(separator + 1) }
+function sqliteMetadataTable(tableName: string, metadataTable: string): { readonly schemaName: string, readonly metadataTable: string, readonly table: string } {
+  const { schema, table } = splitTablePath(tableName)
+  return {
+    schemaName: schema ?? 'main',
+    metadataTable: quoteTablePath(SQLITE_ESCAPED_QUOTING, schema === undefined ? metadataTable : `${schema}.${metadataTable}`),
+    table,
+  }
 }
 
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
@@ -89,15 +92,16 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
-    const { schema, table } = splitSchemaTable(tableName)
+    const { metadataTable: master } = sqliteMetadataTable(tableName, 'sqlite_master')
+    const { metadataTable: sequence, table } = sqliteMetadataTable(tableName, 'sqlite_sequence')
     return {
       probe: {
-        sql: `SELECT 1 AS "present" FROM ${schema}"sqlite_master" WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
+        sql: `SELECT 1 AS "present" FROM ${master} WHERE "type" = 'table' AND "name" = 'sqlite_sequence'`,
         bindings: [],
         source: `query:select:${tableName}`,
       },
       reset: {
-        sql: `DELETE FROM ${schema}"sqlite_sequence" WHERE "name" = ? COLLATE NOCASE`,
+        sql: `DELETE FROM ${sequence} WHERE "name" = ? COLLATE NOCASE`,
         bindings: [table],
         source: `query:delete:${tableName}`,
       },
@@ -105,9 +109,9 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   override compileReferencingTables(tableName: string): CompiledStatement {
-    const { schemaName, schema, table } = splitSchemaTable(tableName)
+    const { schemaName, metadataTable: master, table } = sqliteMetadataTable(tableName, 'sqlite_master')
     return {
-      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${schema}"sqlite_master" AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
+      sql: `SELECT DISTINCT "tables"."name" AS "name" FROM ${master} AS "tables", pragma_foreign_key_list("tables"."name", ?) AS "keys" WHERE "tables"."type" = 'table' AND lower("keys"."table") = lower(?) AND lower("tables"."name") != lower(?)`,
       bindings: [schemaName, table, table],
       source: `query:select:${tableName}`,
     }

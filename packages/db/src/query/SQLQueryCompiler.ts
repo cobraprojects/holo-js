@@ -852,7 +852,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileTableReference(reference: string): string {
-    return quoteTablePath({ quoteIdentifier: identifier => this.quoteIdentifier(identifier) }, reference)
+    return quoteTablePath({ quoteIdentifier: segment => this.quoteIdentifier(segment) }, reference)
   }
 
   protected compileSource(source: SelectQueryPlan['source']): string {

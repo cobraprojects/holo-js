@@ -457,7 +457,7 @@ export abstract class SQLSchemaCompiler {
 
   protected compileIdentifierPath(identifier: string): string {
     assertValidTablePath(identifier, 'Identifier path')
-    return quoteTablePath({ quoteIdentifier: identifier => this.quoteIdentifier(identifier) }, identifier)
+    return quoteTablePath({ quoteIdentifier: segment => this.quoteIdentifier(segment) }, identifier)
   }
 
   protected assertSupportedDefaultValue(value: unknown, column: AnyColumnDefinition): void {
