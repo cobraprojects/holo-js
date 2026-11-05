@@ -22,6 +22,7 @@ type Context = {
 }
 
 const bindingBudget = 900
+const SUB_MILLISECOND_TEXT = /\.\d{3}\d*[1-9]/
 
 function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
   return id instanceof Date || ArrayBuffer.isView(id)
@@ -176,7 +177,8 @@ export class PivotMutation {
 
   private readKey(value: unknown): unknown {
     const kind = this.context.relatedKey?.kind
-    return kind === 'date' || kind === 'datetime' || kind === 'timestamp' ? parseStoredDate(this.context.dialect, value) : value
+    if (kind !== 'date' && kind !== 'datetime' && kind !== 'timestamp') return value
+    return typeof value === 'string' && SUB_MILLISECOND_TEXT.test(value) ? value : parseStoredDate(this.context.dialect, value)
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {

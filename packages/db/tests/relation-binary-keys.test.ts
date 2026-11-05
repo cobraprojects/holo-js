@@ -311,6 +311,26 @@ describe('relation loading over binary keys', () => {
     expect(await db.table(ownerGrade).get()).toEqual([{ ownerId: 1, score: 1.5, note: 'new' }])
   })
 
+  it('keeps timestamp pivot keys distinct below a millisecond', async () => {
+    const db = openSQLite()
+    const owners = defineTable('micro_key_owners', { id: column.id(), name: column.string() })
+    const slots = defineTable('micro_key_slots', { startsAt: column.timestamp().primaryKey() })
+    const ownerSlot = defineTable('micro_key_owner_slot', { ownerId: column.integer(), startsAt: column.string(), note: column.string().nullable() })
+    for (const table of [owners, slots, ownerSlot]) await createTestTable(db, table)
+    const first = '2026-01-02 03:04:05.000001'
+    const second = '2026-01-02 03:04:05.000002'
+    await db.table(owners).insert([{ id: 1, name: 'A' }])
+    await db.table(ownerSlot).insert([{ ownerId: 1, startsAt: first }, { ownerId: 1, startsAt: second }])
+    const Slot = defineModelFromTable(slots)
+    const Owner = defineModelFromTable(owners, {
+      relations: { slots: belongsToMany(() => Slot, 'micro_key_owner_slot', 'ownerId', 'startsAt', 'id', 'startsAt').withPivot('note') },
+    })
+    const owner = await Owner.findOrFail(1)
+
+    expect(await owner.sync('slots', { [first]: { note: 'changed' } })).toEqual({ attached: [], detached: [second], updated: [first] })
+    expect(await db.table(ownerSlot).get()).toEqual([{ ownerId: 1, startsAt: first, note: 'changed' }])
+  })
+
   it('matches unsafe big integer pivot ids on an untyped pivot table', async () => {
     const db = openSQLite()
     const owners = defineTable('big_key_owners', { id: column.id(), name: column.string() })
