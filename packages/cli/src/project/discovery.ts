@@ -4,8 +4,7 @@ import {
   type NormalizedHoloProjectConfig,
 } from '@holo-js/kernel'
 import { holoRuntimeInternals, renderGeneratedSchemaPlaceholder, type MigrationDefinition, type SeederDefinition } from '@holo-js/db'
-import { writeTextFile } from './atomic-file'
-import { recordWrittenOutput } from '../written-outputs'
+import { writeOutputFile } from '../written-outputs'
 import { errorMessage } from '../error-message'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
@@ -170,9 +169,7 @@ async function importGeneratedSchema(
   try {
     await modules.import(generatedSchemaPath)
   } catch (error) {
-    const placeholder = renderGeneratedSchemaPlaceholder()
-    recordWrittenOutput(generatedSchemaPath, placeholder)
-    await writeTextFile(generatedSchemaPath, placeholder)
+    await writeOutputFile(generatedSchemaPath, renderGeneratedSchemaPlaceholder())
     process.stderr.write(
       `[Holo CLI] Discarded the Generated schema "${makeProjectRelativePath(projectRoot, generatedSchemaPath)}" `
       + `because it failed to load: ${errorMessage(error).split('\n')[0]}\n`,

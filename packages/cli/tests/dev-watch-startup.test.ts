@@ -7,7 +7,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import type { WatchFactory, WatchHandle } from '../src/cli-types'
 import { runProjectDevServer } from '../src/dev'
 import { DISCOVERY_WATCH_PROBE_PATH } from '../src/discovery-watch'
-import { recordWrittenOutput } from '../src/written-outputs'
+import { writeOutputFile } from '../src/written-outputs'
 
 type WatchListener = (eventType: string, fileName: string) => void
 
@@ -133,8 +133,7 @@ it('does no extra prepare at startup when no discovery source changed', async ()
 })
 
 async function writeOwnOutput(root: string, path: string, content: string): Promise<void> {
-  await write(root, path, content)
-  recordWrittenOutput(join(root, path), content)
+  await writeOutputFile(join(root, path), content)
 }
 
 it('does not re-prepare for the dependency manifests and Generated schema the initial prepare writes', async () => {

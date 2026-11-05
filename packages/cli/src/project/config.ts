@@ -32,7 +32,7 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 import { writeTextFile } from './atomic-file'
-import { recordWrittenOutput } from '../written-outputs'
+import { writeOutputFile } from '../written-outputs'
 import { loadConfigWithNormalizers } from './load-config'
 
 type ProjectConfigImportState = {
@@ -257,9 +257,7 @@ export async function ensureGeneratedSchemaPlaceholder(
     return filePath
   }
 
-  const placeholder = renderGeneratedSchemaPlaceholder()
-  recordWrittenOutput(filePath, placeholder)
-  await writeTextFile(filePath, placeholder)
+  await writeOutputFile(filePath, renderGeneratedSchemaPlaceholder())
   return filePath
 }
 
