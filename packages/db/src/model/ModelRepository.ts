@@ -1840,7 +1840,17 @@ export class ModelRepository<
   }
 
   sanitizeUpsertRow(values: Partial<ModelRecord<TTable>> | Record<string, unknown>): ModelUpdatePayload<TTable> {
-    return this.sanitizeWriteValues(values, 'create', { massAssignment: false, mutate: true, rejected: 'computed' }) as ModelUpdatePayload<TTable>
+    return this.sanitizeWriteValues(values, 'create', { massAssignment: true, mutate: true, rejected: 'computed', unguarded: [this.definition.primaryKey] }) as ModelUpdatePayload<TTable>
+  }
+
+  assertUpsertUpdateColumns(columns: readonly string[]): void {
+    const unguarded: readonly (string | undefined)[] = [this.definition.primaryKey, this.definition.updatedAtColumn]
+    for (const column of columns) {
+      const { columnName } = findWriteColumn(this.definition, column, 'computed')
+      if (!unguarded.includes(columnName)) {
+        this.assertWritableColumn(columnName, column)
+      }
+    }
   }
 
   private sanitizeStoredValues(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, mode: WriteMode): Partial<ModelRecord<TTable>> {
@@ -1850,7 +1860,7 @@ export class ModelRepository<
   private sanitizeWriteValues(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
-    rules: { readonly massAssignment: boolean, readonly mutate: boolean, readonly rejected: RejectedGeneratedColumns },
+    rules: { readonly massAssignment: boolean, readonly mutate: boolean, readonly rejected: RejectedGeneratedColumns, readonly unguarded?: readonly string[] },
   ): Record<string, unknown> {
     const entries = Object.entries(values)
 
@@ -1865,7 +1875,7 @@ export class ModelRepository<
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
       }
 
-      if (rules.massAssignment) {
+      if (rules.massAssignment && !rules.unguarded?.includes(columnName)) {
         this.assertWritableColumn(columnName, key)
       }
 

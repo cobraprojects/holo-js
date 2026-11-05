@@ -195,7 +195,7 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
-As in Laravel, the rows skip the model's `fillable` and `guarded` rules, so they may carry the auto-increment `id`, which is the usual unique column. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators still apply to each value:
+The rows may carry the model's primary key, such as the auto-increment `id`, which is the usual unique column, even when `fillable` doesn't list it or `guarded` names it. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators apply to each value:
 
 ```ts
 await Product.query().upsert(
@@ -419,7 +419,7 @@ Inside the callback, mass assignment rules are off for every model, not only `Us
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
 :::
 
-A query's `upsert()` skips these rules, as Laravel's does, because it writes rows without making models. Pick the fields of each row yourself before you pass request input to it.
+A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted when it isn't fillable, because it's the column upserts usually match on, and `updated_at` may always be an update column. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
 
 ## Method reference
 

@@ -235,20 +235,52 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     ])
   })
 
-  it('writes upsert rows without the mass assignment filter, as Laravel does', async () => {
+  it('accepts the primary key in upsert rows when the model guards it explicitly', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))
-    const Product = defineModel(names.products, { guarded: ['*'], timestamps: false })
-    await Product.query().upsert([{ id: 7, price: 2, quantity: 3, name: 'Ink', note: 'first' }], ['id'], ['price', 'note'])
-    await Product.query().upsert([{ id: 7, price: 5, quantity: 3, name: 'Ink', note: 'second' }], ['id'], ['price', 'note'])
+    const Product = defineModel(names.products, { guarded: ['id'], timestamps: false })
+    await Product.query().upsert([{ id: 7, price: 2, quantity: 3, name: 'Ink' }], ['id'], ['price'])
+    await Product.query().upsert([{ id: 7, price: 5, quantity: 3, name: 'Ink' }], ['id'], ['price'])
 
-    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, row.note, Number(row.total)])).toEqual([[7, 5, 'second', 15]])
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, Number(row.total)])).toEqual([[7, 5, 15]])
+  })
+
+  it('rejects a protected column in the upsert rows as create() does, before any SQL runs', async () => {
+    const statements: string[] = []
+    const { db, names } = await openComputedDatabase(driver, { logger: { onQueryStart: (entry) => { statements.push(entry.sql) } } })
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    const Locked = defineModel(names.products, { guarded: ['*'], timestamps: false })
+    const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+    const protectedColumn = `Column "note" is not writable on model "${Product.definition.name}".`
+    await expect(Product.create({ price: 1, quantity: 1, name: 'Pen', note: 'admin' })).rejects.toThrow(protectedColumn)
+
+    statements.length = 0
+    await expect(Product.query().upsert([{ id, price: 5, quantity: 3, name: 'Ink', note: 'admin' }], ['id'], ['price'])).rejects.toThrow(protectedColumn)
+    await expect(Locked.query().upsert([{ id, price: 5, quantity: 3, name: 'Ink' }], ['id'], ['price'])).rejects.toThrow(`Column "price" is not writable on model "${Locked.definition.name}".`)
+    expect(statements).toEqual([])
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, row.note])).toEqual([[id, 2, null]])
+  })
+
+  it('rejects an upsert update column the model cannot mass assign, before any SQL runs', async () => {
+    const statements: string[] = []
+    const { db, names } = await openComputedDatabase(driver, { logger: { onQueryStart: (entry) => { statements.push(entry.sql) } } })
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
+    const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+    await db.executeCompiled({ sql: `UPDATE ${names.products} SET note = 'kept'`, source: 'test:computed-columns' })
+
+    statements.length = 0
+    await expect(Product.query().upsert([{ id, price: 5, quantity: 3, name: 'Ink' }], ['id'], ['price', 'note'])).rejects.toThrow(`Column "note" is not writable on model "${Product.definition.name}".`)
+    expect(statements).toEqual([])
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, row.note])).toEqual([[id, 2, 'kept']])
   })
 
   it('applies mutators and casts to upsert row values', async () => {
     const { db, names } = await openComputedDatabase(driver)
     await reloadGeneratedSchema(await readTables(db, [names.products]))
     const Product = defineModel(names.products, {
+      fillable: ['price', 'quantity', 'name'],
       timestamps: false,
       mutators: { name: value => String(value).trim() },
       casts: { name: { set: value => String(value).toUpperCase() } },

@@ -1977,7 +1977,8 @@ class ModelQueryBuilderBase<
   ): Promise<DriverExecutionResult> {
     const { source } = this.tableQuery.getPlan()
     const updateColumns = requestedUpdateColumns.map(column => (resolveSourceColumnName(source, column) ?? column) as ModelWritableColumnName<TTable>)
-    this.repository.assertWriteTargets(updateColumns)
+    await this.repository.loadGuardableColumns()
+    this.repository.assertUpsertUpdateColumns(updateColumns)
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (
       this.repository.withWriteTimestamps(this.repository.sanitizeUpsertRow(value), 'create', timestamp)
