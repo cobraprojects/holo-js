@@ -1,3 +1,4 @@
+import { readBackfillTableKey } from './query-backfill'
 import { createMutationIndexKey } from './dependencies'
 import {
   readPrimaryKey,
@@ -160,6 +161,8 @@ export function createRowBackfillKeyPrefix(query: DatabaseQueryObservation): str
     + stableStringify(query.predicates)
     + ',"selections":'
     + stableStringify(query.selections ?? [])
+    + ',"table":'
+    + stableStringify(readBackfillTableKey(query))
     + ',"tableName":'
     + stableStringify(query.tableName)
 }

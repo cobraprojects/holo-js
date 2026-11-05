@@ -198,6 +198,44 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await expectFresh()
   })
 
+  it('backfills grouped offset windows and keeps declared and name-only reads apart', async () => {
+    const { db, schema } = await openDatabase(driver)
+    onTestFinished(() => resetRealtimeRuntime())
+    const name = `holo_norm_items_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('category')
+      table.bigInteger('score')
+    })
+    onTestFinished(() => schema.dropTable(name))
+    const items = defineGeneratedTable(name, { id: column.id(), category: column.string(), score: column.bigInteger() })
+    await db.table(items).insert([
+      { id: 1, category: 'a', score: 10 },
+      { id: 2, category: 'b', score: 20 },
+      { id: 3, category: 'a', score: 30 },
+      { id: 4, category: 'b', score: 40 },
+      { id: 5, category: 'a', score: 50 },
+      { id: 6, category: 'b', score: 60 },
+    ])
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const queries: Record<string, () => Promise<unknown>> = {
+      groupA: () => db.table(items).where('category', 'a').orderBy('id').offset(1).limit(1).get(),
+      groupB: () => db.table(items).where('category', 'b').orderBy('id').offset(1).limit(1).get(),
+      declared: () => db.table(items).orderBy('id').offset(1).limit(1).get(),
+      nameOnly: () => db.table(name).orderBy('id').offset(1).limit(1).get(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+
+    await mutate(() => db.table(items).whereIn('id', [1, 2]).delete())
+
+    const fresh = await Promise.all(Object.values(queries).map(handler => handler()))
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+  })
+
   it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {
     const { db, rates } = await openFixture(driver)
     const queries: Record<string, () => Promise<unknown>> = {

@@ -11,6 +11,9 @@ import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
+import { createSelectQueryPlan, createTableSource } from './query/ast'
+import { readConvertedResultColumns, resolveConvertedResultColumns } from './query/resultColumns'
+import type { SchemaDialectName } from './schema/typeMapping'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -2500,6 +2503,22 @@ export async function invalidateQueryCacheDependencies(
   connection.afterCommit(invalidate)
 }
 
+function readObservedRows(
+  query: { readonly selections?: readonly DatabaseQuerySelectionObservation[], readonly table?: TableDefinition },
+  driver: string,
+  rows: readonly Readonly<Record<string, unknown>>[],
+): readonly Readonly<Record<string, unknown>>[] {
+  if (!query.table) return rows
+  const plan: SelectQueryPlan = {
+    ...createSelectQueryPlan(createTableSource(query.table)),
+    selections: (query.selections ?? []).map(selection => selection.resultKey === selection.column
+      ? { kind: 'column' as const, column: selection.column }
+      : { kind: 'column' as const, column: selection.column, alias: selection.resultKey }),
+  }
+  const columns = resolveConvertedResultColumns(driver as SchemaDialectName, plan)
+  return columns.size === 0 ? rows : rows.map(row => Object.freeze(readConvertedResultColumns({ ...row }, columns)))
+}
+
 export const queryCacheInternals = {
   getRootDatabaseContext,
   setMutationPreviousRowsRequirement,
@@ -2532,6 +2551,7 @@ export const queryCacheInternals = {
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
   onDatabaseDependencyInvalidated,
+  readObservedRows,
   recordDatabaseQueryDependencies,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,

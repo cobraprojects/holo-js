@@ -1,4 +1,4 @@
-import type { CompiledStatement, DatabaseContext } from '@holo-js/db'
+import { queryCacheInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import {
   readQueryRowWindowMode,
 } from './query-metadata'
@@ -14,6 +14,7 @@ import {
   createBackfillQuery,
   createBackfillSelection,
   getBackfillDatabaseConnection,
+  readBackfillTableKey,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -115,6 +116,7 @@ function exactRowBackfillQueriesShareScope(
     && readQueryExactIdPredicateValue(candidate) !== NO_EXACT_ID_PREDICATE
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
+    && query.table === candidate.table
     && readPrimaryKey(query) === readPrimaryKey(candidate)
     && selectionsEqual(query.selections ?? [], candidate.selections ?? [])
 }
@@ -171,6 +173,8 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(readPrimaryKey(query))
     + ',"selections":'
     + stableStringify(query.selections ?? [])
+    + ',"table":'
+    + stableStringify(readBackfillTableKey(query))
     + ',"tableName":'
     + stableStringify(query.tableName)
     + '}'
@@ -278,6 +282,7 @@ function groupedWindowBackfillQueriesShareScope(
     && rightPredicate
     && query.connectionName === candidate.connectionName
     && query.tableName === candidate.tableName
+    && query.table === candidate.table
     && query.limit === candidate.limit
     && (query.offset ?? 0) === (candidate.offset ?? 0)
     && leftPredicate.column === rightPredicate.column
@@ -347,6 +352,8 @@ function createGroupedWindowBackfillKey(
     + stableStringify(groupColumn)
     + ',"selections":'
     + stableStringify(query.selections ?? [])
+    + ',"table":'
+    + stableStringify(readBackfillTableKey(query))
     + ',"tableName":'
     + stableStringify(query.tableName)
     + '}'
@@ -367,7 +374,7 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(rows.rows, values)
+  return groupWindowRows(queryCacheInternals.readObservedRows(query, connection.getDriver(), rows.rows), values)
 }
 
 function groupWindowRows(
