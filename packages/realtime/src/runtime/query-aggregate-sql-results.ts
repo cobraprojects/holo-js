@@ -30,12 +30,10 @@ function readAggregateSqlColumnBackfillRow(
   index: number,
 ): AggregateSqlColumnBackfillResult | undefined {
   const sum = normalizeSqlAggregateNumber(row[`__holo_sum_${index}`])
-  const count = normalizeSqlAggregateCount(row[`__holo_count_${index}`])
   const min = normalizeSqlAggregateNumber(row[`__holo_min_${index}`])
   const max = normalizeSqlAggregateNumber(row[`__holo_max_${index}`])
   if (
     typeof sum === 'undefined'
-    || typeof count === 'undefined'
     || typeof min === 'undefined'
     || typeof max === 'undefined'
   ) {
@@ -43,7 +41,6 @@ function readAggregateSqlColumnBackfillRow(
   }
 
   return Object.freeze({
-    count,
     max,
     min,
     sum: sum ?? 0,

@@ -96,4 +96,17 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
     expect(subscription.current.data).toEqual(await handler())
     expect(subscription.current.data).toContainEqual(expect.objectContaining({ group_id: null }))
   })
+  it('keeps a plain decimal average equal to a fresh query when the sum is inexact in floating point', async () => {
+    const { db, scores } = await openScores(driver)
+    await db.table(scores).where('id', '>', 2).delete()
+    await db.table(scores).where('id', 1).update({ amount: '0.01' })
+    await db.table(scores).where('id', 2).update({ amount: '0.03' })
+    const handler = () => db.table(scores).orderBy('id').avg('amount')
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).insert({ id: 6, group_id: 1, points: 1, amount: '0.17' }) }))
+
+    expect(subscription.current.data).toBe(await handler())
+    expect(subscription.current.data).toBe(0.07)
+  })
 })
