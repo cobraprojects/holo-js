@@ -29,7 +29,7 @@ describe('SQLite writes of objects into a column without a json cast', () => {
     const adapter = createSQLiteAdapter({ filename: join(directory, 'database.sqlite') })
     await adapter.ensureDatabaseExists()
     database = createDatabase({ adapter, dialect: createDialect('sqlite') })
-    await createSchemaService(database).createTable('posts', (table) => {
+    await createSchemaService(database).createTable('posts', table => {
       table.integer('id').primaryKey()
       table.text('meta').nullable()
       table.json('settings').nullable()
@@ -57,18 +57,25 @@ describe('SQLite writes of objects into a column without a json cast', () => {
     expect(await posts.get()).toEqual([{ id: 1, meta: 'plain', settings: null, payload: null, stamp: null }])
   })
 
+  const definedPosts = () => database.table(defineGeneratedTable('posts', {
+    id: column.integer().primaryKey(),
+    meta: column.text().nullable(),
+    settings: column.json().nullable(),
+    payload: column.blob().nullable(),
+    stamp: column.integer().nullable(),
+  }))
+
   it('names the column when the table definition declares a text column', async () => {
-    const posts = database.table(defineGeneratedTable('posts', {
-      id: column.integer().primaryKey(),
-      meta: column.text().nullable(),
-      settings: column.json().nullable(),
-      payload: column.blob().nullable(),
-      stamp: column.integer().nullable(),
-    }))
+    const posts = definedPosts()
 
     await expect(posts.insert({ id: 1, meta: { theme: 'dark' } as never })).rejects.toThrow(new SerializationError(objectMessage))
     await posts.insert({ id: 1, settings: { theme: 'dark' }, payload: new Uint8Array([1, 2]) })
     expect(await posts.value('settings')).toBe('{"theme":"dark"}')
+  })
+
+  it('keeps writing dates and typed arrays to defined columns that are not text', async () => {
+    const posts = definedPosts()
+
     await posts.insert({ id: 2, stamp: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)) as never, payload: new Float32Array([1.5]) as never })
     expect(await posts.where('id', 2).value('stamp')).toBe('2026-01-02 03:04:05')
     expect(await posts.where('id', 2).value('payload')).toEqual(Buffer.from(new Float32Array([1.5]).buffer))
@@ -84,14 +91,18 @@ describe('SQLite writes of objects into a column without a json cast', () => {
     expect(await database.table('posts').where('id', 2).value('meta')).toBe('{"theme":"dark"}')
   })
 
+  it('keeps writing typed arrays without a schema', async () => {
+    const posts = database.table('posts')
+
+    await posts.insert({ id: 3, payload: new Float32Array([2.5]) })
+    expect(await posts.where('id', 3).value('payload')).toEqual(Buffer.from(new Float32Array([2.5]).buffer))
+  })
+
   it('keeps binary, null and scalar writes working without a schema', async () => {
     const posts = database.table('posts')
 
     await posts.insert({ id: 1, meta: null, payload: Buffer.from([7]) })
     await posts.insert({ id: 2, meta: 'text', settings: '{"a":1}', payload: new Uint8Array([8]) })
-    await posts.insert({ id: 3, payload: new Float32Array([2.5]) })
-    expect(await posts.where('id', 3).value('payload')).toEqual(Buffer.from(new Float32Array([2.5]).buffer))
-    await posts.where('id', 3).delete()
 
     expect(await posts.orderBy('id').get()).toEqual([
       { id: 1, meta: null, settings: null, payload: Buffer.from([7]), stamp: null },
