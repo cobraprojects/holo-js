@@ -146,13 +146,17 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
   it.each([
     ['a nested eager load', 'post.author'],
     ['a constrained nested eager load', 'constrained'],
+    ['a dotted eager load beside a constrained root', 'dotted'],
   ] as const)('keeps %s on the next hasOne row', async (_name, load) => {
     const { db, posts, Author } = await openAuthors(driver)
     const AuthoredPost = defineModel(posts, { timestamps: false, relations: { author: belongsTo(() => Author, 'author_id') } })
     const NestedAuthor = defineModel(Author.definition.table, { timestamps: false, relations: { post: hasOne(() => AuthoredPost, 'author_id') } })
-    const handler = () => (load === 'constrained'
-      ? db.model(NestedAuthor).query().with({ post: query => query.orderBy('id').with('author') })
-      : db.model(NestedAuthor).query().with(load)).orderBy('id').getJson()
+    const loads = {
+      'post.author': () => db.model(NestedAuthor).query().with('post.author'),
+      'constrained': () => db.model(NestedAuthor).query().with({ post: query => query.orderBy('id').with('author') }),
+      'dotted': () => db.model(NestedAuthor).query().with({ post: query => query.orderBy('id') }).with('post.author'),
+    }
+    const handler = () => loads[load]().orderBy('id').getJson()
     const subscription = await subscribe(handler)
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))

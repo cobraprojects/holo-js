@@ -534,6 +534,7 @@ export class ModelRepository<
       await this.loadRelation(pending, relationName, relation, node.constraint)
 
       if (node.children.length > 0) {
+        this.forgetPatchableRelationObservations(pending, relationName)
         const relatedEntities = this.collectLoadedRelationEntities(pending, relationName)
         if (relatedEntities.length > 0) {
           if (relation.kind === 'morphTo') {
@@ -1184,6 +1185,19 @@ export class ModelRepository<
     const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
     observations.set(relationName, observation)
     relationQueryObservationMetadata.set(entity, observations)
+  }
+
+  private forgetPatchableRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+  ): void {
+    for (const entity of entities) {
+      const observations = relationQueryObservationMetadata.get(entity)
+      const observation = observations?.get(relationName)
+      if (observations && observation?.patchable) {
+        observations.set(relationName, Object.freeze({ ...observation, patchable: false }))
+      }
+    }
   }
 
   private getRelationQueryObservation(
