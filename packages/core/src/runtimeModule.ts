@@ -167,7 +167,7 @@ export async function importOptionalRuntimeModule<TModule>(
 
   try {
     const loaded = await importModule<TModule>(resolvedSpecifier)
-    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>)
+    registerRuntimeModuleInstance(specifier, loaded as Record<string, unknown>, resolvedSpecifier === specifier ? undefined : resolvedSpecifier)
     return loaded
   } catch (error) {
     if (isMissingOptionalModule(error, specifier, resolvedSpecifier)) {
@@ -486,8 +486,17 @@ function runtimeModuleInstances(): RuntimeModuleInstances {
   return registry[slot]
 }
 
-export function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>): void {
+function runtimeModuleLocations(): Map<string, string> {
+  const registry = globalThis as typeof globalThis & Record<symbol, Map<string, string> | undefined>
+  const slot = Symbol.for(`${runtimeModuleInstancesSlot()}.locations`)
+  registry[slot] ??= new Map()
+  return registry[slot]
+}
+
+export function registerRuntimeModuleInstance(specifier: string, instance: Record<string, unknown>, location?: string): void {
   runtimeModuleInstances().set(specifier, instance)
+  if (location) runtimeModuleLocations().set(specifier, location)
+  else runtimeModuleLocations().delete(specifier)
 }
 
 function runtimeInstanceModuleSource(specifier: string, instance: Record<string, unknown>): string {
@@ -527,7 +536,7 @@ function installedPackageRoot(fromDirectory: string, packageName: string): strin
 function runtimePackageRoot(packageName: string): string | undefined {
   let resolved: string
   try {
-    resolved = fileURLToPath(import.meta.resolve(packageName))
+    resolved = fileURLToPath(runtimeModuleLocations().get(packageName) ?? import.meta.resolve(packageName))
   } catch {
     return undefined
   }
@@ -565,13 +574,63 @@ function assertApplicationHoloPackageSharesRuntime(specifier: string, resolveDir
   check(holoPackageName(specifier), resolveDir)
 }
 
+const applicationExportConditions = new Set(['import', 'node', 'default'])
+
+function exportConditionTarget(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const target = exportConditionTarget(entry)
+      if (target) return target
+    }
+    return undefined
+  }
+  if (!isRecord(value)) return undefined
+  for (const [condition, nested] of Object.entries(value)) {
+    if (!applicationExportConditions.has(condition)) continue
+    const target = exportConditionTarget(nested)
+    if (target) return target
+  }
+  return undefined
+}
+
+function packageExportTarget(exportsField: unknown, subpath: string): string | undefined {
+  if (!isRecord(exportsField) || !Object.keys(exportsField).some(key => key.startsWith('.'))) {
+    return subpath === '.' ? exportConditionTarget(exportsField) : undefined
+  }
+  if (subpath in exportsField) return exportConditionTarget(exportsField[subpath])
+  for (const [pattern, value] of Object.entries(exportsField)) {
+    const wildcard = pattern.indexOf('*')
+    if (wildcard < 0) continue
+    const prefix = pattern.slice(0, wildcard)
+    const suffix = pattern.slice(wildcard + 1)
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix) || subpath.length < prefix.length + suffix.length) continue
+    return exportConditionTarget(value)?.replaceAll('*', subpath.slice(prefix.length, subpath.length - suffix.length))
+  }
+  return undefined
+}
+
+function applicationHoloPackageUrl(specifier: string, resolveDir: string): string {
+  const packageName = holoPackageName(specifier)
+  const packageRoot = installedPackageRoot(resolveDir, packageName)
+  if (!packageRoot) return specifier
+  const manifest = readPackageManifest(packageRoot)
+  const subpath = `.${specifier.slice(packageName.length)}`
+  const target = manifest?.exports !== undefined
+    ? packageExportTarget(manifest.exports, subpath)
+    : subpath === '.' ? (typeof manifest?.main === 'string' ? manifest.main : 'index.js') : subpath
+  if (!target) return specifier
+  const entryPath = resolve(packageRoot, target)
+  return existsSync(entryPath) ? pathToFileURL(entryPath).href : specifier
+}
+
 function resolveHoloPackageFromRuntime(specifier: string, resolveDir: string): string {
   try {
     return import.meta.resolve(specifier)
   } catch (error) {
     if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND')) throw error
     assertApplicationHoloPackageSharesRuntime(specifier, resolveDir)
-    return specifier
+    return applicationHoloPackageUrl(specifier, resolveDir)
   }
 }
 
@@ -717,7 +776,7 @@ function createSourceModuleUrlPlugin(): Plugin {
           if (!isImportMeta(node)) return false
           let current = node
           let parent = current.parent
-          while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent))) {
+          while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent) || ts.isTypeAssertionExpression(parent))) {
             current = parent
             parent = current.parent
           }
