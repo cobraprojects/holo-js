@@ -222,6 +222,8 @@ A selection that would put a joined column into a model column throws a `Compile
 
 A joined wildcard such as `users.*` throws the same way unless the query also selects the model's columns it would replace, such as `posts.*`. When Holo doesn't know the joined table's columns, select `posts.*` with it. Each query in a union of joined model queries must select the same tables' columns in the same order.
 
+To cursor paginate a union, a `distinct()` query or a grouped query by a joined column, select that column under an alias and order by the alias, such as `select('posts.*', 'users.created_at as author_joined_at').orderBy('author_joined_at')`.
+
 ::: info Differs from Laravel
 In Laravel, a joined column overwrites the model attribute of the same name, so a model can carry another table's `id`, and a later `save()` writes to the wrong row. Holo keeps the model's own columns and rejects selections that would replace them.
 :::

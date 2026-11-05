@@ -214,6 +214,9 @@ class ModelQueryBuilderBase<
       ? []
       : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' && !aliasedColumns.has(order.column) ? [order.column] : [])
     if (joinedOrders.length === 0) return { query: this, cursorColumns: [] }
+    if (plan.distinct || plan.groupBy.length > 0) {
+      throw new CompilerError(`Cannot cursor paginate a distinct or grouped joined "${plan.source.tableName}" model query by "${joinedOrders[0]}". Select it under an alias and order by that alias.`)
+    }
     if (plan.unions.length > 0) {
       throw new CompilerError(`Cannot cursor paginate a union of joined "${plan.source.tableName}" model queries by "${joinedOrders[0]}". Select it under an alias in each query and order by that alias.`)
     }
