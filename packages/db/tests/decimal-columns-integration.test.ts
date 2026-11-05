@@ -120,6 +120,22 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(['12.30', '2.50']).toContain(rows[0]!.amount)
   })
 
+  it('leaves a column that a later unknown wildcard may overwrite as the driver returns it', async () => {
+    const { prices, schema } = await openPrices(driver)
+    const legacyName = `holo_legacy_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(legacyName, (table) => {
+      table.id()
+      table.integer('amount')
+    })
+    onTestFinished(() => schema.dropTable(legacyName))
+    await DB.table(prices).insert({ label: 'exact', amount: '12.30' })
+    await DB.table(legacyName).insert({ amount: 7 })
+
+    const row = await DB.table(prices).crossJoin(legacyName).select(`${prices.tableName}.*`, `${legacyName}.*`).first()
+
+    expect(row?.amount).toBe(7)
+  })
+
   it('chunks by a decimal column in numeric order when the rows are sorted in memory', async () => {
     const { prices } = await openPrices(driver)
     await DB.table(prices).insert([

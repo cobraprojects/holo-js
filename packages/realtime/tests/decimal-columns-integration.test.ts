@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable } from '@holo-js/db'
+import { column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -29,7 +29,7 @@ async function openPrices(driver: Driver) {
     { id: 2, group_id: 2, amount: '12.34' },
   ])
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { db, prices }
+  return { db, prices, schema }
 }
 
 describe.each(drivers)('realtime decimal columns on %s', (driver) => {
@@ -74,5 +74,26 @@ describe.each(drivers)('realtime decimal columns on %s', (driver) => {
 
     expect(subscription.current.data).toEqual([{ group_id: 1, total: 2 }, { group_id: 2, total: 1 }])
     expect(handlerRuns).toBe(1)
+  })
+
+  it('keeps eager-loaded decimal relations correct after a related insert', async () => {
+    const { db, prices, schema } = await openPrices(driver)
+    const groupsName = `holo_live_groups_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(groupsName, (table) => {
+      table.id()
+      table.string('name')
+    })
+    onTestFinished(() => schema.dropTable(groupsName))
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), name: column.string() })
+    await db.table(groups).insert([{ id: 1, name: 'first' }, { id: 2, name: 'second' }])
+    const Price = defineModel(prices, { timestamps: false })
+    const Group = defineModel(groups, { timestamps: false, relations: { prices: hasMany(() => Price, 'group_id') } })
+    const handler = () => db.model(Group).query().with({ prices: query => query.orderBy('id') }).orderBy('id').getJson()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(prices).insert({ id: 3, group_id: 1, amount: '9.50' }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"9.50"')
   })
 })

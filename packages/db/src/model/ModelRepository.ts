@@ -101,6 +101,7 @@ type PivotMutationRelationDefinition = PivotRelationDefinition
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !modelNeedsSerialization(related.definition)
+    && !(related.getConnection().getDriver() === 'sqlite' && Object.values(related.definition.table.columns).some(column => column.kind === 'decimal'))
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {

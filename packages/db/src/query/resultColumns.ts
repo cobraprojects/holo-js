@@ -6,6 +6,8 @@ import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
+const UNKNOWN_COLUMNS = '\0*'
+
 type ColumnReader = (value: unknown) => unknown
 
 type SelectedColumn = readonly [key: string, definition: AnyColumnDefinition | undefined]
@@ -51,7 +53,7 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
     return name === '*' ? unambiguousColumns(tables) : [[selection.alias ?? name, unambiguousColumn(tables, name)]]
   }
   const table = tables.get(selection.column.slice(0, separator))
-  if (name === '*') return columnsOf(table)
+  if (name === '*') return table ? columnsOf(table) : [[UNKNOWN_COLUMNS, undefined]]
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
@@ -64,7 +66,8 @@ function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, Any
       : 'alias' in selection ? [[selection.alias, undefined]] : [])
   const definitions = new Map<string, AnyColumnDefinition>()
   for (const [key, definition] of selected) {
-    if (definition) definitions.set(key, definition)
+    if (key === UNKNOWN_COLUMNS) definitions.clear()
+    else if (definition) definitions.set(key, definition)
     else definitions.delete(key)
   }
   return definitions
