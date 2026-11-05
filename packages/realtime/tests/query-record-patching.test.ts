@@ -220,6 +220,7 @@ describe('@holo-js/realtime record patching', () => {
       belongsToHydrations: [{
         foreignKey: 'author_id',
         ownerKey: 'id',
+        predicates: [],
         relatedConnectionName: 'main',
         relatedTableName: 'users',
         relationKey: 'author',

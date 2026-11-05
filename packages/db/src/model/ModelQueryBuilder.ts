@@ -2593,6 +2593,10 @@ class ModelQueryBuilderBase<
       && this.aggregateLoads.length === 0
   }
 
+  canPatchLoadedRows(): boolean {
+    return this.canBindRowsToSerializedResult()
+  }
+
   private canBindRowsToSerializedResult(): boolean {
     return this.canBindRowsToSerializedResultBase()
       && this.eagerLoads.length === 0
@@ -2615,19 +2619,17 @@ class ModelQueryBuilderBase<
 
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
-        if (relation.constraint || load.constraint) {
+        const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
+        if (!predicates) {
           return undefined
         }
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (!this.repository.relatedRowsArePatchable(relation.related)) {
-          return undefined
-        }
-
         belongsToHydrations.push(Object.freeze({
           foreignKey: relation.foreignKey,
           ownerKey: relation.ownerKey,
+          predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),

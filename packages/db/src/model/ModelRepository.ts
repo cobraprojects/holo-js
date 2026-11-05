@@ -13,6 +13,7 @@ import {
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
+  type DatabaseQueryPredicateObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
@@ -863,7 +864,7 @@ export class ModelRepository<
       }
 
       if (relation.kind === 'belongsTo') {
-        this.recordBelongsToRelationObservations(entities, relationName, relation, createPath)
+        this.recordBelongsToRelationObservations(entities, relationName, relation, entry.constraint, createPath)
         continue
       }
 
@@ -1000,9 +1001,11 @@ export class ModelRepository<
     entities: readonly Entity<TTable>[],
     relationName: string,
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    constraint: RelationConstraint | undefined,
     createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
   ): void {
     const related = this.resolveRelatedRepository(relation.related)
+    const ownerPredicates = this.resolveBelongsToOwnerPredicates(relation, constraint)
     for (let index = 0; index < entities.length; index += 1) {
       const entity = entities[index]
       if (!entity || !entity.hasRelation(relationName)) {
@@ -1016,7 +1019,7 @@ export class ModelRepository<
         relationName,
         relation,
         resultPath.slice(0, -1),
-        !relation.constraint && relatedRowsArePatchable(related),
+        ownerPredicates,
       ))
       if (observed) {
         recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
@@ -1070,7 +1073,7 @@ export class ModelRepository<
     relationName: string,
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     resultPath: readonly DatabaseQueryResultPathSegment[],
-    patchable: boolean,
+    ownerPredicates: readonly DatabaseQueryPredicateObservation[] | undefined,
   ): DatabaseQueryObservation | undefined {
     const parentKey = entity.toAttributes()[this.definition.primaryKey as keyof ReturnType<typeof entity.toAttributes>]
     if (parentKey === null || typeof parentKey === 'undefined') {
@@ -1094,7 +1097,7 @@ export class ModelRepository<
       connectionName: this.getConnectionName(),
       dependencies,
       orderBy: [],
-      patchable,
+      patchable: typeof ownerPredicates !== 'undefined',
       ...serializedFlag(!relatedRowsArePatchable(related)),
       predicates: Object.freeze([Object.freeze({
         column: this.definition.primaryKey,
@@ -1105,6 +1108,7 @@ export class ModelRepository<
         foreignKey: relation.foreignKey,
         kind: 'belongsToParentKey' as const,
         ownerKey: relation.ownerKey,
+        predicates: ownerPredicates ?? Object.freeze([]),
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: related.definition.table.tableName,
@@ -2511,6 +2515,33 @@ export class ModelRepository<
 
   relatedRowsArePatchable(related: () => ModelDefinitionLike): boolean {
     return relatedRowsArePatchable(this.resolveRelatedRepository(related))
+  }
+
+  resolveBelongsToOwnerPredicates(
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    constraint?: RelationConstraint,
+  ): readonly DatabaseQueryPredicateObservation[] | undefined {
+    const related = this.resolveRelatedRepository(relation.related)
+    if (!relatedRowsArePatchable(related)) {
+      return undefined
+    }
+
+    const query = this.applyRelationConstraint(relation, related, constraint)
+    if (!query.canPatchLoadedRows()) {
+      return undefined
+    }
+
+    const observation = createDatabaseQueryObservation(query.getTableQueryBuilder().getPlan(), related.getConnectionName(), [])
+    if (
+      !observation?.patchable
+      || observation.selections.length > 0
+      || typeof observation.limit !== 'undefined'
+      || typeof observation.offset !== 'undefined'
+    ) {
+      return undefined
+    }
+
+    return observation.predicates
   }
 
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {

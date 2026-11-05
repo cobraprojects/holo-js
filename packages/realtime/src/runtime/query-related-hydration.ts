@@ -492,7 +492,7 @@ function validateRelatedHydrationRows(
   return rows
 }
 
-function canBackfillRelatedHydrationPredicates(
+export function canBackfillRelatedHydrationPredicates(
   predicates: readonly DatabaseQueryPredicateObservation[],
 ): boolean {
   for (const predicate of predicates) {
