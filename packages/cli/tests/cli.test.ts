@@ -3,6 +3,7 @@ import { isIgnorableWatchError } from '../src/watch-paths'
 import { writeLauncher, writeLauncherSync } from '../../../tests/support/launchers'
 import { createPackageManagerShims } from '../../../tests/support/package-manager-shim'
 import { copyWorkspaceDist, isWorkspaceDistCurrent, runWorkspaceBuild } from '../../../tests/support/workspace-dist'
+import { mysqlTestConnection, postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, cp, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -1008,31 +1009,21 @@ function sqliteTableNames(projectRoot: string): readonly string[] {
   }
 }
 
-const livePostgresServer = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-  password: process.env.HOLO_POSTGRES_PASSWORD ?? '',
-}
-
-const liveMySQLServer = {
-  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-  user: process.env.HOLO_MYSQL_USER ?? 'root',
-  password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-}
 
 const isolatedMigrationDatabases = [
   {
     driver: 'postgres',
     enabled: process.env.HOLO_POSTGRES_INTEGRATION === '1',
-    connection: (database: string) => ({ driver: 'postgres', ...livePostgresServer, username: livePostgresServer.user, database }),
+    connection: (database: string) => {
+      const { user, password, ...server } = postgresTestConnection()
+      return { driver: 'postgres', ...server, username: user, password: password ?? '', database }
+    },
     open: (database: string) => createDatabase({
-      adapter: createPostgresAdapter({ config: { ...livePostgresServer, database } }),
+      adapter: createPostgresAdapter({ config: { ...postgresTestConnection(), database } }),
       dialect: createDialect('postgres'),
     }),
     async administer(statement: string) {
-      const admin = createPostgresAdapter({ config: { ...livePostgresServer, database: 'postgres' } })
+      const admin = createPostgresAdapter({ config: postgresTestConnection() })
       await admin.initialize()
       try {
         await admin.execute(statement)
@@ -1050,13 +1041,16 @@ const isolatedMigrationDatabases = [
   {
     driver: 'mysql',
     enabled: process.env.HOLO_MYSQL_INTEGRATION === '1',
-    connection: (database: string) => ({ driver: 'mysql', ...liveMySQLServer, username: liveMySQLServer.user, database }),
+    connection: (database: string) => {
+      const { user, ...server } = mysqlTestConnection()
+      return { driver: 'mysql', ...server, username: user, database }
+    },
     open: (database: string) => createDatabase({
-      adapter: createMySQLAdapter({ config: { ...liveMySQLServer, database } }),
+      adapter: createMySQLAdapter({ config: { ...mysqlTestConnection(), database } }),
       dialect: createDialect('mysql'),
     }),
     async administer(statement: string) {
-      const admin = createMySQLAdapter({ config: liveMySQLServer })
+      const admin = createMySQLAdapter({ config: mysqlTestConnection() })
       await admin.initialize()
       try {
         await admin.execute(statement)
@@ -6919,8 +6913,8 @@ export default defineMigration({
     const databaseName = `holo_nocreate_${suffix}`
     await writeSchemaSourceProject(projectRoot, {
       driver: 'postgres',
-      host: livePostgresServer.host,
-      port: livePostgresServer.port,
+      host: postgresTestConnection().host,
+      port: postgresTestConnection().port,
       username: role,
       password: 'secret',
       database: databaseName,
@@ -6948,8 +6942,7 @@ export default defineMigration({
     tempDirs.push(projectRoot)
     const postgres = isolatedMigrationDatabases[0]
     const databaseName = `holo_tenant_${randomUUID().replaceAll('-', '')}`
-    const credentials = `${encodeURIComponent(livePostgresServer.user)}:${encodeURIComponent(livePostgresServer.password)}`
-    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}${query}`
+    const url = `${testConnectionUrl('postgresql', { ...postgresTestConnection(), database: databaseName })}${query}`
     await writeSchemaSourceProject(projectRoot, { driver: 'postgres', url, schema: 'tenant' })
     await postgres.create(databaseName)
     try {
@@ -6996,9 +6989,8 @@ export default defineMigration({
     tempDirs.push(projectRoot)
     const postgres = isolatedMigrationDatabases[0]
     const databaseName = `holo_search_path_${randomUUID().replaceAll('-', '')}`
-    const credentials = `${encodeURIComponent(livePostgresServer.user)}:${encodeURIComponent(livePostgresServer.password)}`
     const searchPath = encodeURIComponent('-c search_path=tenant,public')
-    const url = `postgres://${credentials}@${livePostgresServer.host}:${livePostgresServer.port}/${databaseName}?options=${searchPath}`
+    const url = `${testConnectionUrl('postgresql', { ...postgresTestConnection(), database: databaseName })}?options=${searchPath}`
     await writeSchemaSourceProject(projectRoot, { driver: 'postgres', url, schema: 'tenant' })
     await postgres.create(databaseName)
     try {

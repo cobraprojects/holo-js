@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { clearGeneratedTables, defineModel, holoRuntimeInternals, registerGeneratedTables, renderGeneratedSchemaModule, SchemaError } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -15,7 +15,7 @@ const expectedKinds = {
   mysql: { foreignId: 'bigInteger', json: 'json', timestamp: 'timestamp' },
 } as const
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`native ${driver} schema reading`, () => {
     it('reads a table the schema builder created into its table definition', async () => {
       const { db, schema } = await openDatabase(driver)

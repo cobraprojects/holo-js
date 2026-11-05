@@ -9,7 +9,7 @@ import {
   type DatabaseContext,
   type TableDefinition,
 } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 
 const { createSchemaReader } = holoRuntimeInternals
 
@@ -49,7 +49,7 @@ async function readGeneratedTables(db: DatabaseContext, tableNames: readonly str
   return tables
 }
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   describe(`${driver} casts over the Generated schema`, () => {
     const castTable = `cast_types_${driver}`
     const legacyTable = `cast_types_legacy_${driver}`

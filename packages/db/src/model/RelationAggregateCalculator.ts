@@ -1,6 +1,7 @@
 import type { DatabaseQueryAggregateObservation } from '../cache'
 import { DatabaseError } from '../core/errors'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
+import { readNumericValue } from '../schema/normalization'
 import type { Entity } from './Entity'
 import type { RelationAggregateKind } from './types'
 
@@ -71,9 +72,10 @@ export class RelationAggregateCalculator {
     kind: Exclude<RelationAggregateKind, 'count' | 'exists'>,
     column: string,
   ): number {
-    if (typeof value !== 'number' || Number.isNaN(value)) {
+    const numericValue = readNumericValue(value)
+    if (numericValue === undefined) {
       throw new DatabaseError(`Relation aggregate "${kind}" requires numeric values for column "${column}".`)
     }
-    return value
+    return numericValue
   }
 }
