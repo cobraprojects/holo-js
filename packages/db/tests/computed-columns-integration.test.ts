@@ -68,8 +68,8 @@ async function createProductsTable(schema: SchemaService, driver: Driver, name: 
   })
 }
 
-async function openComputedDatabase(driver: Driver) {
-  const opened = await openDatabase(driver)
+async function openComputedDatabase(driver: Driver, options: NonNullable<Parameters<typeof openDatabase>[1]> = {}) {
+  const opened = await openDatabase(driver, options)
   const names = { products: `computed_builder_${driver}`, shapes: `computed_raw_${driver}` }
   const drop = async () => {
     for (const name of Object.values(names)) {
@@ -245,16 +245,32 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price, row.note, Number(row.total)])).toEqual([[7, 5, 'second', 15]])
   })
 
-  it('rejects a computed column in the upsert rows before any SQL runs', async () => {
+  it('applies mutators and casts to upsert row values', async () => {
     const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, {
+      timestamps: false,
+      mutators: { name: value => String(value).trim() },
+      casts: { name: { set: value => String(value).toUpperCase() } },
+    })
+    await Product.query().upsert([{ id: 3, price: 2, quantity: 3, name: '  ink  ' }], ['id'], ['name'])
+
+    expect((await db.queryCompiled<{ name: string }>({ sql: `SELECT name FROM ${names.products}`, source: 'test:computed-columns' })).rows).toEqual([{ name: 'INK' }])
+  })
+
+  it('rejects a computed column in the upsert rows before any SQL runs', async () => {
+    const statements: string[] = []
+    const { db, names } = await openComputedDatabase(driver, { logger: { onQueryStart: (entry) => { statements.push(entry.sql) } } })
     await reloadGeneratedSchema(await readTables(db, [names.products]))
     const Product = defineModel(names.products, { fillable: ['price', 'quantity', 'name'], timestamps: false })
     const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
 
+    statements.length = 0
     await expect(Product.query().upsert([
       { id, price: 5, quantity: 3, name: 'Ink' },
       { id: id + 100, price: 1, quantity: 4, name: 'Pen', total: 1 } as never,
     ], ['id'], ['price'])).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+    expect(statements).toEqual([])
     expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price])).toEqual([[id, 2]])
   })
 
