@@ -703,7 +703,7 @@ function createSourceModuleUrlPlugin(): Plugin {
       buildContext.onLoad({ filter: /\.(?:[cm]?[jt]s|[jt]sx)$/, namespace: 'file' }, async ({ path }) => {
         const contents = await readFile(path, 'utf8')
         const loader = sourceModuleLoaders[extname(path)] ?? 'js'
-        if (!contents.includes('meta')) return { contents, loader }
+        if (!/\bimport\s*\.\s*meta\b/.test(contents)) return undefined
 
         const ts = await import('typescript')
         const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true)

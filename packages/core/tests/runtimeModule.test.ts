@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
-import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals } from '../src/runtimeModule'
+import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const postModule = "export const Post = { title: 'post' }\n"
@@ -954,6 +954,20 @@ console.log(JSON.stringify({ copy: loaded.copy }))
 
     expect(JSON.parse(stdout.trim().split('\n').at(-1) ?? '')).toEqual({ copy: 'project' })
   }, 30_000)
+
+  it('leaves modules that never read import.meta to the bundler', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const metadataPath = join(projectRoot, 'server/support/metadata.ts')
+    const metaPath = join(projectRoot, 'server/support/meta.ts')
+    await mkdir(dirname(metadataPath), { recursive: true })
+    await writeFile(metadataPath, "export const metadata = { metafile: true }\n")
+    await writeFile(metaPath, 'export const url = import.meta.url\n')
+    const onLoad: Array<(args: { path: string }) => Promise<{ contents: string } | undefined>> = []
+    sourceModuleUrlInternals.createSourceModuleUrlPlugin().setup({ onLoad: (_options: unknown, callback: (args: { path: string }) => Promise<{ contents: string } | undefined>) => onLoad.push(callback) } as never)
+
+    await expect(onLoad[0]!({ path: metadataPath })).resolves.toBeUndefined()
+    expect((await onLoad[0]!({ path: metaPath }))?.contents).toContain(JSON.stringify(pathToFileURL(metaPath).href))
+  })
 
   it('rewrites every import.meta url read and leaves assignment targets alone', async () => {
     const projectRoot = await realpath(await createTempProject())
