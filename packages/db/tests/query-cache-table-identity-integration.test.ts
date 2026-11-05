@@ -93,8 +93,8 @@ describe.each(integrationDrivers(['postgres'] as const))('%s query cache table i
     const schemaName = 'holo_t575_app'
     const { schema } = await openDatabase(driver, { schemaName })
     const name = `holo_identity_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-    await schema.createTable(name, table => table.integer('id').primaryKey())
-    await schema.createTable(`public.${name}`, table => table.integer('id').primaryKey())
+    await schema.createTable(name, (table) => { table.integer('id').primaryKey() })
+    await schema.createTable(`public.${name}`, (table) => { table.integer('id').primaryKey() })
     try {
       expect(await collectedDependencies(`${schemaName}.${name}`)).toEqual(await collectedDependencies(name))
       expect(await collectedDependencies(`public.${name}`)).toEqual([`db:default:public.${name}`])
