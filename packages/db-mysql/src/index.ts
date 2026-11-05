@@ -84,10 +84,28 @@ function dateStringTypes(config: PoolOptions): ReadonlySet<string> {
   return new Set()
 }
 
+function uriFlag(value: string): boolean {
+  try {
+    return Boolean(JSON.parse(value))
+  } catch {
+    return value.length > 0
+  }
+}
+
+function readsJsonAsText(config: PoolOptions): boolean {
+  const uriOption = typeof config.uri === 'string' ? new URL(config.uri).searchParams.get('jsonStrings') : null
+  return Boolean(config.jsonStrings) || (uriOption !== null && uriFlag(uriOption))
+}
+
 function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
   const fallback = typeof config.typeCast === 'function' ? config.typeCast : config.typeCast === false ? rawTypeCast : undefined
   const stringTypes = dateStringTypes(config)
+  const jsonText = readsJsonAsText(config)
   return (field, next) => {
+    if ((field.type === 'JSON' || field.extendedFormat === 'json') && !fallback && !jsonText) {
+      const text = field.type === 'JSON' ? field.string('utf8') : field.string()
+      return text === null ? null : JSON.parse(text)
+    }
     if (field.type !== 'DATE' && field.type !== 'DATETIME' && field.type !== 'TIMESTAMP') {
       return fallback ? fallback(field, next) : next()
     }
@@ -198,10 +216,23 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 
 const DEFAULT_MAX_PREPARED_STATEMENTS = 256
 
+const BIG_NUMBER_OPTIONS = ['supportBigNumbers', 'bigNumberStrings'] as const
+
+function resolveBigNumberOptions(config: PoolOptions): PoolOptions {
+  const defaults = { supportBigNumbers: true, bigNumberStrings: false }
+  if (typeof config.uri !== 'string') return { ...defaults, ...config }
+  const uri = new URL(config.uri)
+  const fromUri = BIG_NUMBER_OPTIONS.some(option => uri.searchParams.has(option))
+    ? Object.fromEntries(BIG_NUMBER_OPTIONS.map(option => [option, uriFlag(uri.searchParams.get(option) ?? '')]))
+    : defaults
+  for (const option of BIG_NUMBER_OPTIONS) uri.searchParams.delete(option)
+  return { ...fromUri, ...config, uri: uri.toString() }
+}
+
 function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
   const pool = mysql.createPool({
     maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS,
-    ...config,
+    ...resolveBigNumberOptions(config),
     timezone: config.timezone ?? 'Z',
     typeCast: applicationTypeCast(config),
   })
