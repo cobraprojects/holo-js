@@ -20,8 +20,8 @@ function scratchDatabase(flag: string, variable: string): string {
     throw new Error(`Real database tests must be gated on ${flag}=1 before they connect.`)
   }
   const database = process.env[variable]
-  if (!database || systemDatabases.has(database.toLowerCase())) {
-    throw new Error(`${variable} must name a scratch test database; real database tests never fall back to a default or system database.`)
+  if (!database || !/^\w+$/.test(database) || systemDatabases.has(database.toLowerCase())) {
+    throw new Error(`${variable} must name a scratch test database made of letters, digits and underscores; real database tests never fall back to a default or system database.`)
   }
   return database
 }

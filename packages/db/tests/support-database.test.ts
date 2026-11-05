@@ -24,7 +24,13 @@ describe('real database test support', () => {
     ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'mysql'],
     ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'Information_Schema'],
     ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'sys'],
-  ] as const)('refuses to open %s on the %s system database %s', async (driver, flag, database, name) => {
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', '.'],
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', '..'],
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', 'postgres#scratch'],
+    ['postgres', 'HOLO_POSTGRES_INTEGRATION', 'HOLO_POSTGRES_DATABASE', 'holo?test'],
+    ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'holo/test'],
+    ['mysql', 'HOLO_MYSQL_INTEGRATION', 'HOLO_MYSQL_DATABASE', 'holo test'],
+  ] as const)('refuses %s when %s is on and %s is the system or unsafe name %s', async (driver, flag, database, name) => {
     vi.stubEnv(flag, '1')
     vi.stubEnv(database, name)
     await expect(openDatabase(driver)).rejects.toThrow(`${database} must name a scratch test database`)
