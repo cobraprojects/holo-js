@@ -1,4 +1,5 @@
 import type { DatabaseContext } from '../core/DatabaseContext'
+import { quoteTablePath, tablePathSegments } from './identifiers'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
@@ -37,15 +38,14 @@ const MAX_QUALIFIED_NAME_PARTS = 3
 const entriesByConnection = new WeakMap<DatabaseContext, Map<string, CaseInsensitiveColumnsEntry>>()
 
 async function readCaseInsensitiveColumns(connection: DatabaseContext, tableName: string): Promise<CaseInsensitiveColumns> {
-  const parts = tableName.split('.')
-  if (parts.length > MAX_QUALIFIED_NAME_PARTS) {
+  if (tablePathSegments(tableName).length > MAX_QUALIFIED_NAME_PARTS) {
     return 'all'
   }
 
   const dialect = connection.getDialect()
   const read = (reader: DatabaseContext) => reader.introspectCompiled<{ name: string }>({
     sql: CASE_INSENSITIVE_COLUMNS_SQL,
-    bindings: [parts.map(part => dialect.quoteIdentifier(part)).join('.')],
+    bindings: [quoteTablePath(dialect, tableName)],
     source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
   })
   try {

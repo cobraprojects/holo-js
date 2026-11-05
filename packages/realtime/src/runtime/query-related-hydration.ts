@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import { TableQueryBuilder, holoRuntimeInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import type {
   DatabaseMutationEvent,
   MutationIndex,
@@ -8,7 +8,6 @@ import {
 } from './dependencies'
 import {
   getBackfillDatabaseConnection,
-  quoteTableReference,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -375,7 +374,7 @@ function compileGroupedRelatedTopOneStatement(
   const upperBoundPlaceholder = placeholder(1)
   const derivedAlias = quote('__holo_grouped_related_rows')
   const rowNumberColumn = quote(GROUPED_RELATED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${quoteTableReference(dialect, hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT *, ${quote(hydration.foreignKey)} AS ${quote(GROUPED_RELATED_ROW_ID_ALIAS)}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, hydration.relatedTableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_RELATED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,

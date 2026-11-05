@@ -5,6 +5,7 @@ import { isInlineIntegerValue, readAllColumnsSelectionTable } from './ast'
 import { validateQueryPlan } from './validator'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import { isTrustedRawPredicate } from './trustedRawPredicate'
+import { quoteTablePath, splitTablePath } from '../schema/identifiers'
 import type { CompiledStatement, CompiledStatementMetadata } from '../core/types'
 import type {
   DeleteQueryPlan,
@@ -221,7 +222,7 @@ export class SQLQueryCompiler {
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
     const lockOf = plan.joins.some(join => join.subquery !== undefined && isOneOfManyAggregatePlan(join.subquery))
-      ? this.quoteIdentifier(plan.source.alias ?? plan.source.tableName.slice(plan.source.tableName.lastIndexOf('.') + 1))
+      ? this.quoteIdentifier(plan.source.alias ?? splitTablePath(plan.source.tableName).table)
       : undefined
     const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode, lockOf) : ''
     const lockClause = compiledLockClause ? ` ${compiledLockClause}` : ''
@@ -840,14 +841,10 @@ export class SQLQueryCompiler {
   }
 
   protected compileColumnReference(reference: string): string {
-    if (!reference.includes('.')) {
-      return this.quoteIdentifier(reference)
-    }
-
-    return reference
-      .split('.')
-      .map(part => this.quoteIdentifier(part))
-      .join('.')
+    const { schema: table, table: column } = splitTablePath(reference)
+    return table === undefined
+      ? this.quoteIdentifier(column)
+      : `${this.compileTableReference(table)}.${this.quoteIdentifier(column)}`
   }
 
   protected compileAllColumnsOf(tableReference: string, _plan: SelectQueryPlan): string {
@@ -855,7 +852,7 @@ export class SQLQueryCompiler {
   }
 
   protected compileTableReference(reference: string): string {
-    return this.compileColumnReference(reference)
+    return quoteTablePath({ quoteIdentifier: identifier => this.quoteIdentifier(identifier) }, reference)
   }
 
   protected compileSource(source: SelectQueryPlan['source']): string {

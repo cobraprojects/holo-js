@@ -13,7 +13,7 @@ function assertValidIdentifierPath(identifier: string, context: string): void {
     throw new SchemaError(`${context} must not be empty.`)
   }
 
-  const segments = identifier.split('.')
+  const segments = tablePathSegments(identifier)
   if (segments.some(segment => !segment.trim())) {
     throw new SchemaError(`${context} must not contain empty identifier segments.`)
   }
@@ -25,7 +25,7 @@ function assertValidIdentifierPath(identifier: string, context: string): void {
 
 export function assertValidTablePath(identifier: string, context: string): void {
   assertValidIdentifierPath(identifier, context)
-  if (identifier.split('.').length > 2) {
+  if (tablePathSegments(identifier).length > 2) {
     throw new SchemaError(`${context} "${identifier}" must be a table name or a schema-qualified table name.`)
   }
 }
@@ -40,6 +40,20 @@ export function splitTablePath(tableName: string): TablePath {
   return separator === -1
     ? { table: tableName }
     : { schema: tableName.slice(0, separator), table: tableName.slice(separator + 1) }
+}
+
+export interface IdentifierQuoting {
+  quoteIdentifier(identifier: string): string
+}
+
+export function tablePathSegments(tableName: string): string[] {
+  return tableName.split('.')
+}
+
+export function quoteTablePath(dialect: IdentifierQuoting, tableName: string): string {
+  return tablePathSegments(tableName)
+    .map(segment => dialect.quoteIdentifier(segment))
+    .join('.')
 }
 
 export function sanitizeIdentifierForGeneratedName(identifier: string): string {

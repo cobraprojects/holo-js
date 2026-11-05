@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import { TableQueryBuilder, holoRuntimeInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import {
   readQueryRowWindowMode,
 } from './query-metadata'
@@ -13,7 +13,6 @@ import {
 import {
   createBackfillSelection,
   getBackfillDatabaseConnection,
-  quoteTableReference,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -426,7 +425,7 @@ function compileGroupedWindowBackfillStatement(
   const upperBoundPlaceholder = placeholder(windowUpperBound)
   const derivedAlias = quote('__holo_grouped_rows')
   const rowNumberColumn = quote(GROUPED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quoteTableReference(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,
