@@ -40,7 +40,7 @@ function isNumericIdentity(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint'
 }
 
-export function rowIdentitiesMayMatch(left: unknown, right: unknown): boolean {
+function rowIdentitiesMayMatch(left: unknown, right: unknown): boolean {
   return left === right
     || Array.isArray(left)
     || Array.isArray(right)
