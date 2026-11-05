@@ -10,6 +10,7 @@ import {
 
 export type DatabaseMutationEvent = {
   readonly connectionName: string
+  readonly convertedColumns?: readonly string[]
   readonly exactId?: unknown | typeof NO_EXACT_ID_PREDICATE
   readonly firstPredicate?: DatabaseQueryPredicateObservation
   readonly kind: 'insert' | 'update' | 'delete' | 'upsert'

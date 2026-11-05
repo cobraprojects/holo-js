@@ -1036,7 +1036,7 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
         })
         expect(await db.table(definition).where('id', sample.id).first()).toEqual({
           id: sample.id,
-          active: sample.active ? 1 : 0,
+          active: sample.active,
           code: sample.code,
           settings: sample.storedSettings,
           born_on: '1990-05-17 00:00:00',
@@ -1079,7 +1079,7 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
       })
       const first = await Record.findOrFail(1)
       expect([first.get('active'), first.get('born_on'), first.get('code'), first.get('settings')]).toEqual([true, new Date('1990-05-17T00:00:00.000Z'), '00123', { zip: '02134' }])
-      expect(await db.table(definition).where('id', 2).first()).toEqual({ id: 2, active: 0, born_on: '2001-02-03 00:00:00', code: '1e3', settings: '"7"', nickname: '007' })
+      expect(await db.table(definition).where('id', 2).first()).toEqual({ id: 2, active: false, born_on: '2001-02-03 00:00:00', code: '1e3', settings: '"7"', nickname: '007' })
     })
 
     it.runIf(driver === 'mysql')('keeps enum values of a table renamed out of another database', async () => {
