@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build, type Plugin } from 'esbuild'
+import type { BundleSources } from '@holo-js/core'
 import { createSourceModuleUrlPlugin } from './source-module-url'
 import type {
   AuthorizationDiscoveryModule,
@@ -147,17 +148,17 @@ export async function bundleProjectModule(
   projectRoot: string,
   entryPath: string,
   options: ProjectBundleOptions = {},
-): Promise<{ path: string, cleanup(): Promise<void> }> {
+): Promise<{ path: string, sources: BundleSources, cleanup(): Promise<void> }> {
   const bundle = await bundleProjectModules(projectRoot, [entryPath], options)
-  return { path: bundle.paths[0]!, cleanup: bundle.cleanup }
+  return { path: bundle.paths[0]!, sources: bundle.sources[0]!, cleanup: bundle.cleanup }
 }
 
 export async function bundleProjectModules(
   projectRoot: string,
   entryPaths: readonly string[],
   options: ProjectBundleOptions = {},
-): Promise<{ paths: readonly string[], cleanup(): Promise<void> }> {
-  if (entryPaths.length === 0) return { paths: [], async cleanup() {} }
+): Promise<{ paths: readonly string[], sources: readonly BundleSources[], cleanup(): Promise<void> }> {
+  if (entryPaths.length === 0) return { paths: [], sources: [], async cleanup() {} }
   const runtimeTempRoot = join(projectRoot, CLI_RUNTIME_ROOT)
   await mkdir(runtimeTempRoot, { recursive: true })
   const tempDir = await mkdtemp(join(runtimeTempRoot, 'bundle-'))
@@ -169,8 +170,8 @@ export async function bundleProjectModules(
   }
 
   try {
-    const { packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
-    await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
+    const { bundleSourceInternals, packageSubpathResolutionInternals, projectTsconfigInternals } = await import('@holo-js/core')
+    const result = await projectTsconfigInternals.withLoaderTsconfig(projectRoot, tsconfigPath => build({
       absWorkingDir: projectRoot,
       bundle: true,
       entryPoints: entryPaths.map((entryPath, index) => ({ in: entryPath, out: outputNames[index]! })),
@@ -183,6 +184,7 @@ export async function bundleProjectModules(
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: false,
+      metafile: true,
       plugins: [
         createSourceModuleUrlPlugin(),
         createHoloPackageBundlerPlugin(projectRoot),
@@ -191,8 +193,10 @@ export async function bundleProjectModules(
       external: [...(options.external ?? [])],
     }))
 
+    const paths = outputNames.map(name => join(outdir, `${name}.mjs`))
     return {
-      paths: outputNames.map(name => join(outdir, `${name}.mjs`)),
+      paths,
+      sources: paths.map((path, index) => bundleSourceInternals.collectBundleSources(projectRoot, result.metafile, path, entryPaths[index])),
       cleanup,
     }
   } catch (error) {
@@ -233,19 +237,19 @@ export interface ProjectModuleBatch {
 }
 
 export function createProjectModuleBatch(projectRoot: string): ProjectModuleBatch {
-  const bundledPaths = new Map<string, string>()
+  const bundledSources = new Map<string, BundleSources>()
   const cleanups: Array<() => Promise<void>> = []
 
   return {
     async bundle(entryPaths) {
       const bundle = await bundleProjectModules(projectRoot, entryPaths)
       cleanups.push(bundle.cleanup)
-      entryPaths.forEach((entryPath, index) => bundledPaths.set(entryPath, bundle.paths[index]!))
+      entryPaths.forEach((entryPath, index) => bundledSources.set(entryPath, bundle.sources[index]!))
     },
     async import(entryPath) {
-      const bundledPath = bundledPaths.get(entryPath)
-      if (!bundledPath) throw new Error(`${entryPath} was not bundled.`)
-      return await import(`${pathToFileURL(bundledPath).href}?t=${Date.now()}`)
+      const sources = bundledSources.get(entryPath)
+      if (!sources) throw new Error(`${entryPath} was not bundled.`)
+      return await importBundledProjectModule(sources)
     },
     async cleanup() {
       await Promise.all(cleanups.splice(0).map(cleanup => cleanup()))
@@ -257,10 +261,15 @@ export async function importProjectModule(projectRoot: string, entryPath: string
   const bundled = await bundleProjectModule(projectRoot, entryPath)
 
   try {
-    return await import(`${pathToFileURL(bundled.path).href}?t=${Date.now()}`)
+    return await importBundledProjectModule(bundled.sources)
   } finally {
     await bundled.cleanup()
   }
+}
+
+export async function importBundledProjectModule(sources: BundleSources, query?: string): Promise<unknown> {
+  const { bundleSourceInternals } = await import('@holo-js/core')
+  return await bundleSourceInternals.importBundle(sources, url => import(url), query)
 }
 
 export async function findProjectRoot(startDir: string): Promise<string> {

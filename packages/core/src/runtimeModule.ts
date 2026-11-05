@@ -5,7 +5,7 @@ import * as nodeModule from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { BuildOptions, BuildResult, OnResolveArgs, OnResolveResult, Plugin } from 'esbuild'
+import type { BuildOptions, BuildResult, Metafile, OnResolveArgs, OnResolveResult, Plugin } from 'esbuild'
 import type { Diagnostic, ExtendedConfigCacheEntry } from 'typescript'
 import * as holoConfigModule from '@holo-js/config'
 import * as holoDbModule from '@holo-js/db'
@@ -574,6 +574,93 @@ export const packageSubpathResolutionInternals = {
   createPackageSubpathResolutionPlugin,
 }
 
+export type BundleSources = {
+  readonly path: string
+  readonly sourcePath?: string
+  readonly importers: Readonly<Record<string, string>>
+}
+
+const namespacedInput = /^[a-z][\w-]*:/i
+const bareSpecifier = /^(?![./]|[a-z][\w+.-]*:|#)/i
+
+function packageName(specifier: string): string {
+  return specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
+}
+
+function projectRelative(projectRoot: string, path: string): string {
+  return relative(projectRoot, path).split(sep).join('/')
+}
+
+function collectBundleSources(
+  projectRoot: string,
+  metafile: Metafile | undefined,
+  bundlePath: string,
+  entryPath?: string,
+): BundleSources {
+  const sourcePath = entryPath === undefined ? undefined : projectRelative(projectRoot, entryPath)
+  const output = Object.entries(metafile?.outputs ?? {}).find(([outputPath]) => resolve(projectRoot, outputPath) === bundlePath)?.[1]
+  const importers: Record<string, string> = {}
+  for (const inputPath of Object.keys(output?.inputs ?? {})) {
+    if (namespacedInput.test(inputPath)) continue
+    const inputSource = projectRelative(projectRoot, resolve(projectRoot, inputPath))
+    for (const dependency of metafile?.inputs[inputPath]?.imports ?? []) {
+      const specifier = dependency.original ?? dependency.path
+      if (!dependency.external || !bareSpecifier.test(specifier)) continue
+      if (importers[specifier] === undefined || inputSource === sourcePath) importers[specifier] = inputSource
+    }
+  }
+  return { path: bundlePath, ...(sourcePath === undefined ? {} : { sourcePath }), importers }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function loadErrorSource(message: string, sources: BundleSources): string | undefined {
+  const importers = Object.entries(sources.importers)
+  const mentions = [
+    (specifier: string) => `'${specifier}'`,
+    (specifier: string) => `'${packageName(specifier)}'`,
+    (specifier: string) => `/node_modules/${packageName(specifier)}/`,
+  ]
+  for (const mention of mentions) {
+    const importer = importers.find(([specifier]) => message.includes(mention(specifier)))
+    if (importer) return importer[1]
+  }
+  return sources.sourcePath
+}
+
+function withBundleSources(error: unknown, sources: BundleSources): unknown {
+  if (!error || typeof error !== 'object' || typeof (error as { message?: unknown }).message !== 'string') return error
+  const message = (error as { message: string }).message
+  const bundleLocation = new RegExp(`(?:${escapeRegExp(pathToFileURL(sources.path).href)}|${escapeRegExp(sources.path)})(?:\\?[^\\s'"]*)?`, 'g')
+  if (!message.match(bundleLocation)) return error
+  const source = loadErrorSource(message, sources)
+  if (source === undefined) return error
+  const attributed = message.replace(bundleLocation, () => source)
+  if (error instanceof Error) {
+    error.message = attributed
+    if (typeof error.stack === 'string') error.stack = error.stack.replace(message, attributed)
+    return error
+  }
+  const code = (error as { code?: unknown }).code
+  return Object.assign(new Error(attributed, { cause: error }), typeof code === 'string' ? { code } : {})
+}
+
+async function importBundle(sources: BundleSources, importModule: (url: string) => Promise<unknown>, query = `t=${Date.now()}`): Promise<unknown> {
+  try {
+    return await importModule(`${pathToFileURL(sources.path).href}?${query}`)
+  } catch (error) {
+    throw withBundleSources(error, sources)
+  }
+}
+
+export const bundleSourceInternals = {
+  collectBundleSources,
+  importBundle,
+  withBundleSources,
+}
+
 registerRuntimeModuleInstance('@holo-js/config', holoConfigModule)
 registerRuntimeModuleInstance('@holo-js/db', holoDbModule)
 registerRuntimeModuleInstance('@holo-js/kernel', holoKernelModule)
@@ -581,7 +668,6 @@ registerRuntimeModuleInstance('@holo-js/kernel', holoKernelModule)
 async function bundleRuntimeModule(
   projectRoot: string,
   entryPath: string,
-  metafile = false,
 ): Promise<{ path: string, metafile: BuildResult['metafile'], cleanup(): Promise<void> }> {
   const runtimeTempRoot = join(projectRoot, '.holo-js', 'runtime')
   await mkdir(runtimeTempRoot, { recursive: true })
@@ -606,7 +692,7 @@ async function bundleRuntimeModule(
       target: 'node22',
       tsconfig: tsconfigPath,
       sourcemap: 'inline',
-      metafile,
+      metafile: true,
     }))
 
     return {
@@ -831,7 +917,7 @@ export async function loadProjectDefinitionRuntimeModules(
   let bundled: Awaited<ReturnType<typeof bundleRuntimeModule>> | undefined
   try {
     await writeFile(entryPath, entryPaths.map((sourcePath, index) => `export * as definition${index} from ${JSON.stringify(sourcePath)}`).join('\n'), 'utf8')
-    bundled = await bundleRuntimeModule(projectRoot, entryPath, true)
+    bundled = await bundleRuntimeModule(projectRoot, entryPath)
     const sources = new Map<string, string>()
     const nativeSourceLoader = isBunRuntime()
       || [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)].some(argument => /(?:^|[/\\])tsx[/\\]/.test(argument) || /^(?:--import=)?tsx(?:\/esm)?$/.test(argument))
@@ -864,7 +950,10 @@ export async function loadProjectDefinitionRuntimeModules(
     if (nativeGraph) {
       for (const sourcePath of entryPaths) definitions.set(sourcePath, await importModule(pathToFileURL(sourcePath).href))
     } else {
-      const modules = await importModule<Record<string, unknown>>(pathToFileURL(bundled.path).href)
+      const modules = await bundleSourceInternals.importBundle(
+        bundleSourceInternals.collectBundleSources(projectRoot, bundled.metafile, bundled.path),
+        importModule,
+      ) as Record<string, unknown>
       entryPaths.forEach((sourcePath, index) => definitions.set(sourcePath, modules[`definition${index}`]))
     }
     return async sourcePath => {
@@ -884,8 +973,9 @@ export async function importBundledRuntimeModule(
   const bundled = await bundleRuntimeModule(projectRoot, entryPath)
 
   try {
-    return await runtimeModuleInternals.importModule(
-      `${pathToFileURL(bundled.path).href}?t=${Date.now()}`,
+    return await bundleSourceInternals.importBundle(
+      bundleSourceInternals.collectBundleSources(projectRoot, bundled.metafile, bundled.path, entryPath),
+      url => runtimeModuleInternals.importModule(url),
     )
   } finally {
     await bundled.cleanup()

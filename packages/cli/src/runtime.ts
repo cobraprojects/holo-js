@@ -72,7 +72,7 @@ async function bundleRuntimeEntries(projectRoot: string, entries: readonly strin
   for (const entry of entries) {
     const bundle = await bundleProjectModule(projectRoot, resolve(projectRoot, entry), { external: ['@holo-js/db'] })
     bundled.push(bundle)
-    bundledEntries.push({ sourcePath: entry, path: bundle.path })
+    bundledEntries.push({ sourcePath: entry, path: bundle.path, importers: bundle.sources.importers })
   }
   return bundledEntries
 }
@@ -248,8 +248,8 @@ async function refreshDiscoveryAfterFailedRun(
   }
 }
 
-function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string } {
-  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href }
+function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string, readonly importers: Readonly<Record<string, string>> } {
+  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href, importers: entry.importers }
 }
 
 export async function withRuntimeEnvironment<T>(

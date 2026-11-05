@@ -804,3 +804,49 @@ try { ability.manageTenants({ id: 7 }) } catch (error) { console.log(JSON.string
     expect(loaded.default).toEqual({ value: 42 })
   })
 })
+
+describe('bundled module load errors', () => {
+  async function createSourceProject(files: Record<string, string>): Promise<string> {
+    const projectRoot = await realpath(await createTempProject())
+    await writeFile(join(projectRoot, 'package.json'), '{"type":"module"}\n')
+    for (const [name, contents] of Object.entries(files)) {
+      await mkdir(join(projectRoot, dirname(name)), { recursive: true })
+      await writeFile(join(projectRoot, name), contents)
+    }
+    return projectRoot
+  }
+
+  async function loadError(projectRoot: string, entry: string): Promise<Error & { code?: string }> {
+    const error = await importBundledRuntimeModule(projectRoot, join(projectRoot, entry)).then(() => undefined, (failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    return error as Error & { code?: string }
+  }
+
+  it('names the source file that imports a missing package instead of the bundle', async () => {
+    const projectRoot = await createSourceProject({
+      'server/models/User.ts': "import { slug } from 'missing-slugger'\nexport default { slug }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.code).toBe('ERR_MODULE_NOT_FOUND')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.stack).toContain("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.stack).not.toContain('.holo-js')
+  })
+
+  it('names the imported source file that reaches a missing scoped package', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/columns.ts': "import { columns } from '@scope/missing-columns/helpers'\nexport const extra = columns\n",
+      'server/models/User.ts': "import { extra } from '../support/columns'\nexport default { extra }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toMatch(/^Cannot find package '@scope\/missing-columns(?:\/helpers)?' imported from server\/support\/columns\.ts$/)
+  })
+
+  it('leaves errors thrown by the loaded module unchanged', async () => {
+    const projectRoot = await createSourceProject({
+      'server/models/User.ts': "throw new Error('model failed')\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe('model failed')
+  })
+})
