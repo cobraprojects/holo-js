@@ -4,35 +4,50 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { onTestFinished } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, type DatabaseContextOptions, type DriverAdapter } from '../../src'
+import { mysqlTestConnection, postgresTestConnection, type TestDriver } from '../../../../tests/support/real-database'
 import { defineTable } from './internal'
 
-export async function openDatabase(driver: 'sqlite' | 'postgres' | 'mysql' = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'schemaName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
+export { integrationDrivers, mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection, testConnectionUrl } from '../../../../tests/support/real-database'
+
+type RealConnection = ReturnType<typeof postgresTestConnection> | ReturnType<typeof mysqlTestConnection>
+
+function realConnection(driver: TestDriver): RealConnection | undefined {
+  if (driver === 'postgres') return postgresTestConnection()
+  if (driver === 'mysql') return mysqlTestConnection()
+  return undefined
+}
+
+function createTestAdapter(driver: TestDriver, connection: RealConnection | undefined, schemaName?: string) {
+  if (connection && driver === 'postgres') {
+    return createPostgresAdapter({ config: { ...connection, ...(schemaName ? { options: `-c search_path="${schemaName}"` } : {}) } })
+  }
+  if (connection && driver === 'mysql') return createMySQLAdapter({ config: connection })
+  return createSQLiteAdapter({ filename: ':memory:' })
+}
+
+async function dropFixture(driver: TestDriver, connection: RealConnection, fixture: string) {
+  const db = createDatabase({ adapter: createTestAdapter(driver, connection), dialect: createDialect(driver) })
+  try {
+    await createSchemaService(db).dropTable(fixture)
+  } finally {
+    await db.disconnect()
+  }
+}
+
+export async function openDatabase(driver: TestDriver = 'sqlite', options: Pick<DatabaseContextOptions, 'connectionName' | 'schemaName' | 'security' | 'logger' | 'concurrency'> & { wrapAdapter?: (adapter: DriverAdapter) => DriverAdapter } = {}) {
   const { wrapAdapter, ...databaseOptions } = options
-  const database = process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
-  const createdAdapter = driver === 'sqlite' ? createSQLiteAdapter({ filename: ':memory:' })
-    : driver === 'postgres' ? createPostgresAdapter({ config: {
-      host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-      user: process.env.HOLO_POSTGRES_USER ?? 'postgres',
-      password: process.env.HOLO_POSTGRES_PASSWORD,
-      database: process.env.HOLO_POSTGRES_DATABASE ?? 'postgres',
-      ...(databaseOptions.schemaName ? { options: `-c search_path="${databaseOptions.schemaName}"` } : {}),
-    } }) : createMySQLAdapter({ config: {
-      host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-      port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-      user: process.env.HOLO_MYSQL_USER ?? 'root',
-      password: process.env.HOLO_MYSQL_PASSWORD ?? '',
-      database,
-    } })
+  const connection = realConnection(driver)
+  const createdAdapter = createTestAdapter(driver, connection, databaseOptions.schemaName)
   const adapter = wrapAdapter ? wrapAdapter(createdAdapter) : createdAdapter
   const db = createDatabase({ connectionName: 'default', ...databaseOptions, adapter, dialect: createDialect(driver) })
   configureDB(createConnectionManager({ defaultConnection: db.getConnectionName(), connections: { [db.getConnectionName()]: db } }))
   const name = `holo_native_${randomUUID().replaceAll('-', '')}`
-  const qualified = driver === 'postgres' ? `public.${name}` : driver === 'mysql' ? `${database}.${name}` : name
+  const qualified = driver === 'postgres' ? `public.${name}` : driver === 'mysql' && connection ? `${connection.database}.${name}` : name
   const fixture = driver === 'postgres' ? qualified : name
   const schema = createSchemaService(db)
   onTestFinished(async () => {
-    try { await schema.dropTable(fixture) } finally { await db.disconnect() }
+    await db.disconnect()
+    if (connection) await dropFixture(driver, connection, fixture)
   })
   if (driver === 'postgres' && databaseOptions.schemaName) {
     await db.executeCompiled({ sql: `CREATE SCHEMA IF NOT EXISTS "${databaseOptions.schemaName}"`, source: 'schema' })

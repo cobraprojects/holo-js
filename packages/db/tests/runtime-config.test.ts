@@ -10,7 +10,7 @@ import {
   parseDatabaseDriver,
   resolveRuntimeConnectionManagerOptions,
   DeferredDatabaseDriverAdapter } from '../src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, openDatabase } from './support/database'
 import { DEFAULT_HOLO_PROJECT_PATHS, defineHoloProject, normalizeHoloProjectConfig } from '@holo-js/kernel'
 
 registerDatabaseDriverFactory(sqliteDatabaseDriverFactory)
@@ -180,7 +180,7 @@ describe('runtime config helpers', () => {
     expect(postgresOptions.security).toBeUndefined()
   })
 
-  it.each(['sqlite', 'postgres', 'mysql'] as const)('logs real %s query and transaction outcomes', async driver => {
+  it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('logs real %s query and transaction outcomes', async driver => {
     expect(createRuntimeLogger(false)).toBeUndefined()
     const warnings = vi.spyOn(console, 'warn')
     const errors = vi.spyOn(console, 'error')

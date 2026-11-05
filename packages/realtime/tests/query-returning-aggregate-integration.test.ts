@@ -1,9 +1,9 @@
 import { expect, it, onTestFinished } from 'vitest'
-import { openDatabase } from '../../db/tests/support/database'
+import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
 
-for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
   it(`patches native ${driver} grouped sums after value and membership updates without refreshing the handler`, async () => {
     const { db, schema, table } = await openDatabase(driver)
     onTestFinished(() => resetRealtimeRuntime())

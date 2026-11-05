@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB, belongsToMany, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel, registerGeneratedTables, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
@@ -8,6 +8,9 @@ async function openConnections() {
   const { db, schema } = await openDatabase('postgres')
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const names = { users: `conn_users_${suffix}`, events: `conn_events_${suffix}`, roles: `conn_roles_${suffix}`, memberships: `conn_memberships_${suffix}` }
+  onTestFinished(async () => {
+    for (const name of [names.memberships, names.events, names.users]) if (await schema.hasTable(name)) await schema.dropTable(name)
+  })
   await schema.createTable(names.users, (table) => {
     table.integer('id').primaryKey()
     table.boolean('active')

@@ -10,6 +10,7 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createMySQLAdapter } from '@holo-js/db-mysql'
 import migration from '../../../apps/blog-next/server/db/migrations/2026_10_08_000001_create_auth_session_revocations'
 import { createCoreSessionRevocationStore } from '../src/portable/authSessionRevocations'
+import { mysqlIntegration, mysqlTestConnection, postgresIntegration, postgresTestConnection } from '../../../tests/support/real-database'
 
 const directories: string[] = []
 const connections: DatabaseContext[] = []
@@ -104,13 +105,12 @@ it('preserves revocation state when a fresh process reconnects to the durable da
 })
 
 for (const driver of ['postgres', 'mysql'] as const) {
-  const databaseName = driver === 'postgres' ? process.env.HOLO_AUTH_REDEMPTION_POSTGRES_DATABASE : process.env.HOLO_AUTH_REDEMPTION_MYSQL_DATABASE
-  it.skipIf(!databaseName)(`preserves exact string identities and competing revocation validity in native ${driver}`, async () => {
+  it.runIf(driver === 'postgres' ? postgresIntegration : mysqlIntegration)(`preserves exact string identities and competing revocation validity in native ${driver}`, async () => {
     const connection = new DatabaseContext({
       driver, dialect: createDialect(driver),
       adapter: driver === 'postgres'
-        ? createPostgresAdapter({ config: { host: process.env.HOLO_AUTH_REDEMPTION_POSTGRES_HOST ?? '127.0.0.1', port: Number(process.env.HOLO_AUTH_REDEMPTION_POSTGRES_PORT ?? 54383), user: process.env.PGUSER ?? 'postgres', password: process.env.PGPASSWORD, database: databaseName } })
-        : createMySQLAdapter({ config: { host: '127.0.0.1', port: Number(process.env.HOLO_AUTH_REDEMPTION_MYSQL_PORT ?? 33183), user: process.env.MYSQL_USER ?? 'root', password: process.env.MYSQL_PASSWORD, database: databaseName } }),
+        ? createPostgresAdapter({ config: postgresTestConnection() })
+        : createMySQLAdapter({ config: mysqlTestConnection() }),
     })
     connections.push(connection)
     await connection.initialize()

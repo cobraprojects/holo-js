@@ -20,20 +20,18 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
+import { mysqlTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
 
-const liveMySqlConfig = {
-  host: process.env.HOLO_MYSQL_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_MYSQL_PORT ?? 3306),
-  user: 'root',
-  database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql',
+function liveMySqlUri(database: string) {
+  return testConnectionUrl('mysql', { ...mysqlTestConnection(), database }).toString()
 }
 
-describe('@holo-js/db-mysql', () => {
+describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql', () => {
   it('connects to the selected integration database', async () => {
-    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    const adapter = createMySQLAdapter({ config: mysqlTestConnection() })
     try {
       const result = await adapter.query<{ selected_database: string }>('SELECT DATABASE() AS selected_database')
-      expect(result.rows).toEqual([{ selected_database: process.env.HOLO_MYSQL_DATABASE ?? 'mysql' }])
+      expect(result.rows).toEqual([{ selected_database: mysqlTestConnection().database }])
     } finally {
       await adapter.disconnect()
     }
@@ -42,10 +40,10 @@ describe('@holo-js/db-mysql', () => {
   it.each(['create', 'add', 'compiled-add'] as const)('enforces constrained foreign keys when using %s columns', async (operation) => {
     const databaseName = `holo_foreign_keys_${randomUUID().replaceAll('-', '_')}`
     const admin = createMySQLAdapter({
-      config: liveMySqlConfig,
+      config: mysqlTestConnection(),
     })
     const adapter = createMySQLAdapter({
-      config: { ...liveMySqlConfig,
+      config: { ...mysqlTestConnection(),
         database: databaseName, },
     })
     const schema = createSchemaService(createDatabase({ adapter, dialect: createDialect('mysql') }))
@@ -100,10 +98,10 @@ describe('@holo-js/db-mysql', () => {
 
   it.each(['config', 'uri'] as const)('creates and reopens a quoted database name through %s configuration', async mode => {
     const database = `holo_quoted_${randomUUID().replaceAll('-', '')}\`tenant`
-    const admin = createMySQLAdapter({ config: liveMySqlConfig })
+    const admin = createMySQLAdapter({ config: mysqlTestConnection() })
     const adapter = createMySQLAdapter(mode === 'config'
-      ? { config: { ...liveMySqlConfig, database } }
-      : { uri: `mysql://${liveMySqlConfig.user}@${liveMySqlConfig.host}:${liveMySqlConfig.port}/${encodeURIComponent(database)}` })
+      ? { config: { ...mysqlTestConnection(), database } }
+      : { uri: liveMySqlUri(database) })
     try {
       await adapter.ensureDatabaseExists()
       await adapter.ensureDatabaseExists()
@@ -119,7 +117,7 @@ describe('@holo-js/db-mysql', () => {
   }, 30_000)
 
   it.each(['update', 'shared'] as const)('reads a paginated row under a native %s lock', async mode => {
-    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    const adapter = createMySQLAdapter({ config: mysqlTestConnection() })
     const database = createDatabase({ adapter, dialect: createDialect('mysql') })
     const schema = createSchemaService(database)
     const tableName = `locked_rows_${randomUUID().replaceAll('-', '')}`
@@ -143,8 +141,8 @@ describe('@holo-js/db-mysql', () => {
     const suffix = randomUUID().replaceAll('-', '_')
     const usersTable = `holo_one_of_many_lock_users_${suffix}`
     const postsTable = `holo_one_of_many_lock_posts_${suffix}`
-    const adapter = createMySQLAdapter({ config: { ...liveMySqlConfig, connectionLimit: 1 } })
-    const holder = await createConnection(liveMySqlConfig)
+    const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
+    const holder = await createConnection(mysqlTestConnection())
     const Post = defineModel(defineGeneratedTable(postsTable, {
       id: column.id(),
       user_id: column.integer(),
@@ -190,8 +188,8 @@ describe('@holo-js/db-mysql', () => {
   it('reports real database creation permission failures', async () => {
     const user = `holo_denied_${randomUUID().replaceAll('-', '').slice(0, 16)}`
     const password = randomUUID()
-    const admin = createMySQLAdapter({ config: liveMySqlConfig })
-    const adapter = createMySQLAdapter({ config: { ...liveMySqlConfig, user, password, database: user } })
+    const admin = createMySQLAdapter({ config: mysqlTestConnection() })
+    const adapter = createMySQLAdapter({ config: { ...mysqlTestConnection(), user, password, database: user } })
     try {
       await admin.execute(`CREATE USER '${user}'@'%' IDENTIFIED BY '${password}'`)
       await expect(adapter.ensureDatabaseExists()).rejects.toThrow(`MySQL database "${user}" could not be found or created`)
@@ -203,7 +201,7 @@ describe('@holo-js/db-mysql', () => {
   }, 30_000)
 
   it('uses a real injected client for bound writes, commit, and rollback', async () => {
-    const client = await createConnection(liveMySqlConfig)
+    const client = await createConnection(mysqlTestConnection())
     const adapter = createMySQLAdapter({ client })
     try {
       await adapter.execute('CREATE TEMPORARY TABLE direct_records (id INT AUTO_INCREMENT PRIMARY KEY, value TEXT NOT NULL)')
@@ -224,7 +222,7 @@ describe('@holo-js/db-mysql', () => {
 
   it('applies JSON and text defaults from native schema migrations', async () => {
     const tableName = `holo_defaults_${randomUUID().replaceAll('-', '_')}`
-    const adapter = createMySQLAdapter({ config: liveMySqlConfig })
+    const adapter = createMySQLAdapter({ config: mysqlTestConnection() })
     const db = createDatabase({ adapter, dialect: createDialect('mysql') })
     const schema = createSchemaService(db)
     try {
@@ -244,7 +242,7 @@ describe('@holo-js/db-mysql', () => {
   it('runs queries against a local MySQL server through the public adapter', async () => {
     const tableName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const adapter = createMySQLAdapter({
-      config: liveMySqlConfig,
+      config: mysqlTestConnection(),
     })
 
     try {
@@ -270,11 +268,11 @@ describe('@holo-js/db-mysql', () => {
     const databaseName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const tableName = 'users'
     const admin = createMySQLAdapter({
-      config: liveMySqlConfig,
+      config: mysqlTestConnection(),
     })
     const adapter = createMySQLAdapter({
       config: {
-        ...liveMySqlConfig,
+        ...mysqlTestConnection(),
         database: databaseName,
       },
     })
@@ -316,11 +314,11 @@ describe('@holo-js/db-mysql', () => {
       },
     })
     const admin = createMySQLAdapter({
-      config: liveMySqlConfig,
+      config: mysqlTestConnection(),
     })
     const adapter = createMySQLAdapter({
       config: {
-        ...liveMySqlConfig,
+        ...mysqlTestConnection(),
         database: databaseName,
       },
     })

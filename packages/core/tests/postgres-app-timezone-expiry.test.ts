@@ -8,13 +8,9 @@ import passwordResetMigration from '../../../apps/blog-next/server/db/migrations
 import sessionsMigration from '../../../apps/blog-next/server/db/migrations/2026_04_25_044033_create_sessions'
 import { createCoreAuthPersistence } from '../src/portable/authPersistence'
 import { createCoreDatabaseSessionAdapter } from '../src/portable/sessionPersistence'
+import { postgresTestConnection } from '../../../tests/support/real-database'
 
 const gate = process.env.HOLO_POSTGRES_INTEGRATION === '1'
-const config = {
-  host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
-  port: Number(process.env.HOLO_POSTGRES_PORT ?? 5432),
-  user: 'postgres',
-}
 
 let previousTimeZone: string | undefined
 
@@ -34,13 +30,13 @@ function connect(database: string): DatabaseContext {
   return new DatabaseContext({
     driver: 'postgres',
     dialect: createDialect('postgres'),
-    adapter: createPostgresAdapter({ config: { ...config, database, max: 2 } }),
+    adapter: createPostgresAdapter({ config: { ...postgresTestConnection(), database, max: 2 } }),
   })
 }
 
 async function withDatabase(run: (connection: DatabaseContext) => Promise<void>): Promise<void> {
   const name = `expiry_${randomUUID().replaceAll('-', '')}`
-  const admin = connect('postgres')
+  const admin = connect(postgresTestConnection().database)
   const connection = connect(name)
   try {
     await admin.executeCompiled({ sql: `CREATE DATABASE "${name}"`, source: 'schema' })
