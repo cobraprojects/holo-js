@@ -220,6 +220,24 @@ async function collectDirectoryTree(
   }
 }
 
+function collectWatchRootPaths(
+  project: LoadedProjectConfig,
+  pluginWatches: readonly PluginPrepareWatch[],
+): readonly string[] {
+  return [...new Set([...resolveConfiguredDiscoveryRoots(project), ...pluginWatches.flatMap(watch => watch.roots)])]
+}
+
+async function findNearestExistingAncestor(projectRoot: string, path: string): Promise<string | undefined> {
+  if (await stat(path).catch(() => undefined)) return undefined
+  let ancestor = dirname(path)
+  while (ancestor !== projectRoot && ancestor.startsWith(`${projectRoot}${sep}`)) {
+    const ancestorStats = await stat(ancestor).catch(() => undefined)
+    if (ancestorStats) return ancestorStats.isDirectory() ? ancestor : undefined
+    ancestor = dirname(ancestor)
+  }
+  return undefined
+}
+
 async function collectDiscoveryWatchRoots(
   projectRoot: string,
   project: LoadedProjectConfig,
@@ -250,6 +268,13 @@ async function collectDiscoveryWatchRoots(
     ]
     for (const root of watch.roots) {
       await collectDirectoryTree(resolve(projectRoot, root), directories, excludedPaths)
+    }
+  }
+
+  for (const root of collectWatchRootPaths(project, pluginWatches)) {
+    const ancestor = await findNearestExistingAncestor(projectRoot, resolve(projectRoot, root))
+    if (ancestor && !hostExcludedPaths.some(excludedPath => ancestor === excludedPath || ancestor.startsWith(`${excludedPath}${sep}`))) {
+      directories.add(ancestor)
     }
   }
 
@@ -450,11 +475,16 @@ export async function startDiscoveryWatch({
     return Math.floor(current.createdAt) <= startedAt ? current : undefined
   }
 
-  const findGainedDirectories = (baseline: WatchPolicyBaseline): readonly string[] => {
-    const gained = watchedDirectories
-      .filter(directory => !baseline.directories.has(directory))
-      .map(directory => toPosixSlashes(relative(projectRoot, directory)))
-      .filter(path => isDiscoveryRelevantPath(path, project, pluginWatches))
+  const findGainedDirectories = (baseline: WatchPolicyBaseline, eventPaths: readonly string[]): readonly string[] => {
+    const startupRoots = collectWatchRootPaths(baseline.project, baseline.pluginWatches)
+    const currentRoots = collectWatchRootPaths(project, pluginWatches)
+    const gained = [...new Set([
+      ...watchedDirectories
+        .filter(directory => !baseline.directories.has(directory))
+        .map(directory => toPosixSlashes(relative(projectRoot, directory))),
+      ...currentRoots.filter(root => !startupRoots.includes(root) && !watchedDirectories.includes(resolve(projectRoot, root))),
+      ...currentRoots.filter(root => eventPaths.some(path => pathIsWithin(root, path))),
+    ])].filter(path => isDiscoveryRelevantPath(path, project, pluginWatches))
     return gained.filter(path => !gained.some(other => other !== path && pathIsWithin(path, other)))
   }
 
@@ -554,7 +584,7 @@ export async function startDiscoveryWatch({
     deferredEvents = undefined
     startupBaseline = undefined
     if (!events || closed || signal.aborted) return
-    const gainedRoots = baseline && recursive === false ? findGainedDirectories(baseline) : []
+    const gainedRoots = baseline && recursive === false ? findGainedDirectories(baseline, [...events.keys()]) : []
     const relevant = [...events]
       .filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches) && !gainedRoots.includes(path))
       .map(([path, eventType]) => ({ path, eventType, previous: findStartupSnapshot(path, baseline) }))
