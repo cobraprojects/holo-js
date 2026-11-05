@@ -15,6 +15,28 @@ async function readTempViewsAndTriggers(adapter: DriverAdapter): Promise<string[
 
 for (const driver of ['sqlite', 'postgres', 'mysql'] as const) {
   describe(`native ${driver} schema service`, () => {
+    it('finds schema-qualified tables with hasTable()', async () => {
+      const { schema, adapter, table } = await openDatabase(driver)
+      const name = table.tableName.split('.').at(-1)!
+      const home = driver === 'sqlite' ? `main.${name}` : table.tableName
+      expect(await schema.hasTable(home)).toBe(true)
+      expect(await schema.hasTable(`${home}_missing`)).toBe(false)
+      if (driver === 'sqlite') return
+      const tenant = `holo_tenant_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+      const quoted = driver === 'postgres' ? `"${tenant}"` : `\`${tenant}\``
+      onTestFinished(async () => { await adapter.execute(driver === 'postgres' ? `DROP SCHEMA IF EXISTS ${quoted} CASCADE` : `DROP DATABASE IF EXISTS ${quoted}`) })
+      await adapter.execute(driver === 'postgres' ? `CREATE SCHEMA ${quoted}` : `CREATE DATABASE ${quoted}`)
+      await schema.createTable(`${tenant}.orders`, table => {
+        table.id()
+        table.string('reference')
+      })
+
+      expect(await schema.hasTable(`${tenant}.orders`)).toBe(true)
+      expect(await schema.hasTable(`${tenant}.invoices`)).toBe(false)
+      expect(await schema.hasTable('orders')).toBe(false)
+      expect((await schema.getColumns(`${tenant}.orders`)).map(column => column.name)).toEqual(['id', 'reference'])
+    })
+
     it('creates typed columns, defaults, indexes, and constraints that accept valid records', async () => {
       const { db, schema } = await openDatabase(driver)
       const name = `holo_schema_${randomUUID().replaceAll('-', '')}`

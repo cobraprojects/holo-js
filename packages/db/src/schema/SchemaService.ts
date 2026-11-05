@@ -5,7 +5,7 @@ import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, cr
 import { resolveCoveringForeignKey, resolveCoveringIndex } from './coveringKeys'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedIndexName } from './generatedNames'
-import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidIdentifierPath, assertValidIdentifierSegment, splitTablePath } from './identifiers'
 import { PostgresEnumChecks } from './PostgresEnumChecks'
 import { PostgresVirtualColumns } from './PostgresVirtualColumns'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
@@ -162,6 +162,7 @@ export class SchemaService {
 
   async hasTable(name: string): Promise<boolean> {
     assertValidIdentifierPath(name, 'Table name')
+    if (splitTablePath(name).schema !== undefined) return (await this.readTableStructure(name)) !== undefined
     const tables = await this.getTables()
     return tables.includes(name)
   }
