@@ -409,3 +409,22 @@ it('ignores events for files and new directories the CLI writes through its atom
   await captured.settled()
   expect(captured.changes).toEqual([])
 })
+
+it('observes a user replacing a directory the CLI created', async () => {
+  const root = await createProject()
+  const directory = join(root, 'config/plugin')
+  await writeTextFile(join(directory, 'settings.ts'), 'export default {}')
+  await expect(isUnchangedWrittenOutput(directory)).resolves.toBe(true)
+  await rm(directory, { recursive: true })
+  await write(root, 'config/plugin/other.ts', 'export default { other: true }')
+  await expect(isUnchangedWrittenOutput(directory)).resolves.toBe(false)
+})
+
+it('records a write through a symbolic link under the file it changes', async () => {
+  const root = await createProject()
+  await write(root, 'config/linked.ts', 'export default {}')
+  await mkdir(join(root, 'app'), { recursive: true })
+  await symlink(join(root, 'config/linked.ts'), join(root, 'app/alias.ts'))
+  await writeTextFile(join(root, 'app/alias.ts'), 'export default { linked: true }')
+  await expect(isUnchangedWrittenOutput(join(root, 'config/linked.ts'))).resolves.toBe(true)
+})
