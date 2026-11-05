@@ -14,9 +14,14 @@ type TableIdentityRow = {
   readonly bare_schema: string | null
 }
 
+type TableResolution = {
+  readonly identity: string
+  readonly target: string | undefined
+}
+
 type TableIdentityEntry = {
   readonly generation: number
-  readonly identity: Promise<string>
+  readonly resolution: Promise<TableResolution>
 }
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
@@ -58,33 +63,40 @@ function toCanonicalName(tableName: string, row: TableIdentityRow | undefined): 
   return row.schema === row.bare_schema ? table : `${row.schema}.${table}`
 }
 
-async function lookupTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
+async function lookupTableResolution(connection: DatabaseContext, tableName: string): Promise<TableResolution> {
   const statement = createQueryCompiler(connection).compileTableIdentityLookup(tableName)
-  if (!statement) return tableName
+  if (!statement) return { identity: tableName, target: undefined }
   const { rows } = await connection.queryCompiled<TableIdentityRow>(statement)
-  return toCanonicalName(tableName, rows[0])
+  const row = rows[0]
+  return {
+    identity: toCanonicalName(tableName, row),
+    target: row?.schema && row.name ? `${row.schema}.${row.name}` : undefined,
+  }
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
   await resolveTableNameFolding(connection)
   const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
-  if (splitTablePath(tableName).schema === undefined) return fold(tableName)
   const identities = ownerIdentities(connection)
   const cached = identities.get(tableName)
+  const bare = splitTablePath(tableName).schema === undefined
   const entry = cached?.generation === currentSchemaGeneration()
     ? cached
-    : { generation: currentSchemaGeneration(), identity: lookupTableIdentity(connection, tableName) }
+    : { generation: currentSchemaGeneration(), resolution: bare ? Promise.resolve({ identity: tableName, target: undefined }) : lookupTableResolution(connection, tableName) }
   if (entry !== cached) {
     identities.set(tableName, entry)
-    entry.identity.catch(() => {
+    entry.resolution.catch(() => {
       if (identities.get(tableName) === entry) identities.delete(tableName)
     })
   }
-  const identity = fold(await entry.identity)
+  const resolution = await entry.resolution
+  const identity = fold(resolution.identity)
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
   if (cached && entry !== cached) {
-    const replaced = fold(await cached.identity.catch(() => identity))
-    if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
+    const replaced = await cached.resolution.catch(() => resolution)
+    const replacedIdentity = fold(replaced.identity)
+    if (replacedIdentity !== identity) await invalidateReplacedTableIdentity(connection, replacedIdentity)
+    else if (bare || replaced.target !== resolution.target) await invalidateReplacedTableIdentity(connection, identity)
   }
   return identity
 }

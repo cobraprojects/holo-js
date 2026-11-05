@@ -2948,6 +2948,7 @@ export class TableQueryBuilder<
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
+    await this.bindGeneratedTable()
     assertSinglePrimaryKey(this.source.table)
     return this.insertGetKey(values, this.resolvePrimaryKeyColumn())
   }
@@ -3069,6 +3070,7 @@ export class TableQueryBuilder<
     }
 
     await this.prepareMutation()
+    await query.bindGeneratedTable()
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
