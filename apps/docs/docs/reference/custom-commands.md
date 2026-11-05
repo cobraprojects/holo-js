@@ -53,7 +53,7 @@ Command names and aliases must be unique. If one clashes with a built-in command
 
 Holo discovers `.ts`, `.mts`, `.cts`, `.js`, `.mjs`, and `.cjs` files. The command can be the default export or a named export.
 
-Holo keeps a list of your commands in `.holo-js/generated`. When you add, delete, rename, or edit a command file, the next `holo` run updates that list, so you don't need to run `holo prepare` first.
+Holo keeps a list of your commands, jobs, events, and listeners in `.holo-js/generated`. When you add, delete, rename, or edit one of those files, the next run of one of your commands updates that list, so you don't need to run `holo prepare` first.
 
 Holo loads every command file to read its name and description. If a command file fails to load, for example because a module it imports is missing, the other commands still work. `holo list` shows the failed command under its file path name with `Failed to load:` and the error, and running it prints the same error. If another command already uses that name, `holo` leaves the failed command out. Once the file loads again, its custom `name` and `aliases` work again.
 
@@ -133,6 +133,8 @@ When the callback finishes (or throws), Holo shuts the services down and closes 
 You can call `withRuntime()` more than once. Nested calls reuse the same connections.
 
 A command can import the same app modules as your routes, including modules that import framework packages. For example, a service that imports `next/headers` loads in a command too.
+
+Jobs and events you import work the same way. Inside `withRuntime()`, `SendReport.dispatch(payload)` runs the job on the `sync` driver or queues it on the `database` driver, as it would from a route.
 
 ### The runtime object
 

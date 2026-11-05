@@ -24,6 +24,7 @@ export type ModelArithmeticColumnName<TTable extends TableDefinition> = ModelAri
 export type ModelColumnReference<TTable extends TableDefinition> = ModelColumnName<TTable> | `${string}.${string}`
 export type ModelJsonColumnPath<TTable extends TableDefinition> = ModelColumnName<TTable> | `${ModelColumnName<TTable>}->${string}`
 export type ModelWritableJsonColumnPath<TTable extends TableDefinition> = ModelWritableColumnName<TTable> | `${ModelWritableColumnName<TTable>}->${string}`
+export type ModelAggregateColumn<TTable extends TableDefinition, TJoinedTables extends string = never> = ModelColumnName<TTable> | `${TJoinedTables}.${string}`
 export type ModelSelectableColumn<TTable extends TableDefinition, TJoinedTables extends string = never> = ModelColumnName<TTable>
   | `${ModelColumnName<TTable>} as ${string}`
   | TableWildcardSelection<TTable['tableName'] | TJoinedTables>

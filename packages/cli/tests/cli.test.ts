@@ -8232,6 +8232,7 @@ export const listener = defineListener({
           tries: 3,
           backoff: [5, 30],
           timeout: 60,
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
         {
           sourcePath: 'server/jobs/reports/daily.mjs',
@@ -8239,6 +8240,7 @@ export const listener = defineListener({
           exportName: 'job',
           connection: 'database',
           queue: 'reports',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
         {
           sourcePath: 'server/jobs/send-email.mjs',
@@ -8246,6 +8248,7 @@ export const listener = defineListener({
           exportName: 'default',
           connection: 'redis',
           queue: 'emails',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
         {
           sourcePath: 'server/jobs/fallback-queue.mjs',
@@ -8253,6 +8256,7 @@ export const listener = defineListener({
           exportName: 'default',
           connection: 'sync',
           queue: 'default',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
       ]))
       expect(registry.events).toEqual(expect.arrayContaining([
@@ -8260,11 +8264,13 @@ export const listener = defineListener({
           sourcePath: 'server/events/user/registered.mjs',
           name: 'user.registered',
           exportName: 'default',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
         {
           sourcePath: 'server/events/audit/activity.mjs',
           name: 'audit.activity',
           exportName: 'ActivityRecorded',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
       ]))
       expect(registry.listeners).toEqual(expect.arrayContaining([
@@ -8273,12 +8279,14 @@ export const listener = defineListener({
           id: 'user.send-welcome-email',
           eventNames: ['user.registered'],
           exportName: 'default',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
         {
           sourcePath: 'server/listeners/audit/record-user-events.mjs',
           id: 'audit.record-user-events-explicit',
           eventNames: ['user.registered', 'audit.activity'],
           exportName: 'listener',
+          sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         },
       ]))
       await expect(readFile(join(projectRoot, '.holo-js/generated/jobs.ts'), 'utf8')).resolves.toContain('"media.generate-conversions"')
