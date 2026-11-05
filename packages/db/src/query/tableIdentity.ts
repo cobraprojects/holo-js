@@ -1,5 +1,7 @@
 import { getRootDatabaseContext } from '../core/contextOwnership'
+import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
+import type { TransactionFrame } from '../core/openTransactions'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { invalidateReplacedTableIdentity } from '../cache'
 import { splitTablePath } from '../schema/identifiers'
@@ -21,8 +23,13 @@ type TableIdentityEntry = {
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
 
+function schemaChangingTransaction(connection: DatabaseContext): TransactionFrame | undefined {
+  const frame = currentRootTransaction(connection)
+  return frame?.schemaChanged ? frame : undefined
+}
+
 function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
-  const owner = getRootDatabaseContext(connection)
+  const owner = schemaChangingTransaction(connection) ?? getRootDatabaseContext(connection)
   const existing = resolvedIdentities.get(owner)
   if (existing) return existing
   const created = new Map<string, TableIdentityEntry>()
@@ -57,7 +64,7 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
     })
   }
   const identity = await entry.identity
-  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
+  rememberCanonicalTableName(connection.getConnectionName(), tableName, identity, schemaChangingTransaction(connection))
   if (cached && entry !== cached) {
     const replaced = await cached.identity.catch(() => identity)
     if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
