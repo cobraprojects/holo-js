@@ -83,6 +83,7 @@
   "devDependencies": {
     "@holo-js/adapter-sveltekit": "catalog:",
     "@holo-js/broadcast": "catalog:",
+    "@holo-js/db-sqlite": "catalog:",
     "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",
     "@holo-js/media": "catalog:",
