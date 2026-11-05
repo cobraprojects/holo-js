@@ -76,7 +76,7 @@ async function openKeyFixtures(driver: Driver, kind: KeyKind) {
   await DB.table(items).insert([{ id: 10, owner_id: key(1) }, { id: 11, owner_id: key(1) }, { id: 20, owner_id: key(2) }, { id: 30, owner_id: '1.50' }])
   await DB.table(parts).insert([{ id: 100, item_id: key(10) }, { id: 101, item_id: key(11) }, { id: 200, item_id: key(20) }, { id: 300, item_id: key(30) }, { id: 999, item_id: '10.50' }])
   await DB.table(tags).insert([{ id: 1, name: 'red' }, { id: 2, name: 'blue' }, { id: 3, name: 'unused' }])
-  await DB.table(pivot).insert([{ id: 1, owner_id: key(1), tag_id: key(1) }, { id: 2, owner_id: key(1), tag_id: key(2) }, { id: 3, owner_id: key(2), tag_id: key(2) }, { id: 4, owner_id: '3.50', tag_id: key(3) }])
+  await DB.table(pivot).insert([{ id: 1, owner_id: key(1), tag_id: key(1) }, { id: 3, owner_id: key(1), tag_id: key(2) }, { id: 2, owner_id: key(2), tag_id: key(2) }, { id: 4, owner_id: '3.50', tag_id: key(3) }])
   await DB.table(notes).insert([
     { id: 10, noteable_type: ownerType, noteable_id: key(1) },
     { id: 11, noteable_type: ownerType, noteable_id: key(1) },
@@ -116,7 +116,7 @@ async function openKeyFixtures(driver: Driver, kind: KeyKind) {
       morphOwners: morphedByMany(() => Owner, 'taggable', taggables, 'tag_id'),
     },
   })
-  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts, tagsTable: names.tags, ownersTable: names.owners }
+  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts, tagsTable: names.tags, ownersTable: names.owners, pivotTable: names.pivot }
 }
 
 async function openDecimalOwnerFixtures(driver: Driver) {
@@ -213,9 +213,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     })
 
     it('filters and counts belongsToMany', async () => {
-      const { Owner, Tag, tagsTable, ownersTable } = await openKeyFixtures(driver, kind)
+      const { Owner, Tag, tagsTable, ownersTable, pivotTable } = await openKeyFixtures(driver, kind)
 
       expect(valuesOf(await Owner.has('tags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('tags', query => query.from(`${tagsTable} as ${pivotTable}`).where(`${pivotTable}.name`, 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Owner.whereHas('tags', query => query.from(`${tagsTable} as t`).where('t.name', 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Tag.whereHas('owners', query => query.from(`${ownersTable} as o`).where('o.name', 'second')).orderBy('id').get())).toEqual([2])
       expect(valuesOf(await Owner.whereHas('tags', query => query.where('name', 'red')).orderBy('id').get())).toEqual([1])

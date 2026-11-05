@@ -29,6 +29,7 @@ export interface QueryColumnSelection {
   readonly kind: 'column'
   readonly column: string
   readonly alias?: string
+  readonly keyCast?: QueryKeyCast
 }
 
 export function readAllColumnsSelectionTable(column: string): string | undefined {

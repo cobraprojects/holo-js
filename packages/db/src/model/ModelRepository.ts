@@ -15,7 +15,7 @@ import {
   type DatabaseQueryObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, whereKeyColumn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -2726,11 +2726,11 @@ export class ModelRepository<
     const pivotDefinition = typeof pivotTable === 'string' ? undefined : pivotTable
     const relatedTable = related.definition.table
     const relatedCast = sourceKeyCast(pivotDefinition ? ownEntry(pivotDefinition.columns, relatedPivotColumn) : undefined, ownEntry(relatedTable.columns, relation.relatedKey))
-    const relatedQuery = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
-    const source = relatedQuery.getPlan().source
-    const correlated = whereKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, `${source.alias ?? source.tableName}.${relation.relatedKey}`, { left: relatedCast })
+    const pivotKeys = selectKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, relatedCast)
 
-    return relatedQuery.whereExists(correlated)
+    return this.applyRelationConstraint(relation, related, constraint)
+      .getTableQueryBuilder()
+      .whereInSub(relation.relatedKey, pivotKeys)
   }
 
   private resolveMorphExistenceReferences(

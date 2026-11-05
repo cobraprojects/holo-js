@@ -206,7 +206,7 @@ export class SQLQueryCompiler {
             return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
-          const column = this.compileColumnReference(selection.column)
+          const column = this.compileKeyOperand(selection.column, selection.keyCast)
           return selection.alias
             ? `${column} AS ${this.quoteIdentifier(selection.alias)}`
             : column
