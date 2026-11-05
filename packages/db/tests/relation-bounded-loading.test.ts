@@ -19,7 +19,7 @@ import {
 type QueryStartLog = { sql: string, bindings: readonly unknown[] }
 import { defineModelFromTable, defineTable } from './support/internal'
 import { canonicalStoredKey } from '../src/model/entityRuntime'
-import { StoredKeyMap } from '../src/model/storedKeyCollections'
+import { StoredKeyMap, StoredKeySet } from '../src/model/storedKeyCollections'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { queryCacheInternals } from '../src'
 import { createTestTable } from './support/schema'
@@ -329,6 +329,24 @@ describe('bounded relation loading', () => {
     const circular: Record<string, unknown> = {}
     circular.self = circular
     expect(canonicalStoredKey(circular)).toBe(circular)
+  })
+
+  it('matches numeric relation dictionary keys by value across integer, bigint, decimal and numeric text', () => {
+    const parents = new StoredKeyMap<string>([[1, 'one'], ['2.50', 'two and a half'], [9007199254740993n, 'big'], [0, 'zero']], { numeric: true })
+    expect(parents.get('1.00')).toBe('one')
+    expect(parents.get('1')).toBe('one')
+    expect(parents.get(1n)).toBe('one')
+    expect(parents.get('1.50')).toBeUndefined()
+    expect(parents.get('2.5')).toBe('two and a half')
+    expect(parents.get(2.5)).toBe('two and a half')
+    expect(parents.get('2')).toBeUndefined()
+    expect(parents.get('9007199254740993.00')).toBe('big')
+    expect(parents.get('9007199254740992')).toBeUndefined()
+    expect(parents.get('-0.00')).toBe('zero')
+    expect(parents.get('01')).toBeUndefined()
+    expect(parents.get('02.50')).toBeUndefined()
+    expect(parents.get(true)).toBeUndefined()
+    expect(new StoredKeySet([1], { numeric: true }).has('1.00')).toBe(true)
   })
 
   it('matches relation dictionary Date keys by instance so millisecond-truncated timestamps never attach unrelated parents', () => {

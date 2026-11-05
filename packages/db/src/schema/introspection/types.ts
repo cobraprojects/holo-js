@@ -68,4 +68,5 @@ export interface DialectSchemaReader {
   locateTable(tableName: string): Promise<TableLocation | undefined>
   resolveReferencedTableSchema(tableName: string, ownerSchema: string): Promise<string | undefined>
   readTableStructure(tableName: string): Promise<DatabaseTableStructure | undefined>
+  readListedTableStructure?(tableName: string): Promise<DatabaseTableStructure | undefined>
 }
