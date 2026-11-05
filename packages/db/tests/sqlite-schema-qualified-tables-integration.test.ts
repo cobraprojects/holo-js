@@ -287,6 +287,26 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect((await db.queryCompiled<Record<string, unknown>>({ sql: 'SELECT * FROM "price.summary"', source: 'test' })).rows).toEqual([{ 'id': 1, 'unit.price': 12 }])
   })
 
+  it('rejects a rebuild that would leave a foreign key violation in an attached database and rolls it back', async () => {
+    const { schema } = await openArchive()
+    await schema.createTable('archive.parents', (table) => {
+      table.id()
+    })
+    await schema.createTable('archive.children', (table) => {
+      table.id()
+      table.integer('parent_id')
+    })
+    await DB.table('archive.parents').insert({ id: 1 })
+    await DB.table('archive.children').insert([{ id: 1, parent_id: 1 }, { id: 2, parent_id: 99 }])
+
+    await expect(schema.table('archive.children', (table) => {
+      table.foreign('parent_id').references('id').on('archive.parents')
+    })).rejects.toThrow('SQLite cannot rebuild table "archive.children" because it would leave 1 foreign key violation.')
+
+    expect(await schema.getForeignKeys('archive.children')).toEqual([])
+    expect(await DB.table('archive.children').orderBy('id').pluck('parent_id')).toEqual([1, 99])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {

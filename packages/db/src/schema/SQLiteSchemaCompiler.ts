@@ -80,7 +80,9 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   }
 
   compileForeignKeyViolationsQuery(tableName: string): DDLStatement {
-    return { sql: 'PRAGMA foreign_key_check', source: `schema:sqliteRebuild:foreignKeyCheck:${tableName}` }
+    const { schema } = splitTablePath(tableName)
+    const pragma = schema === undefined ? 'PRAGMA foreign_key_check' : `PRAGMA ${this.compileIdentifierPath(schema)}.foreign_key_check`
+    return { sql: pragma, source: `schema:sqliteRebuild:foreignKeyCheck:${tableName}` }
   }
 
   compileCopyTableRows(tableName: string, temporaryTableName: string, columnNames: readonly string[]): DDLStatement {
