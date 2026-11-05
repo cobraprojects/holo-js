@@ -696,7 +696,7 @@ function sameWidthReplacement(functionName: string, original: string): string {
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
-const importMetaGap = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r\u2028\u2029]*)*`
+const importMetaGap = String.raw`(?:\s|\/\*[^*]*\*+(?:[^*/][^*]*\*+)*\/|\/\/[^\n\r\u2028\u2029]*(?:[\n\r\u2028\u2029]|$))*`
 const importMetaPattern = new RegExp(String.raw`\bimport${importMetaGap}\.${importMetaGap}meta\b`)
 
 function createSourceModuleUrlPlugin(): Plugin {

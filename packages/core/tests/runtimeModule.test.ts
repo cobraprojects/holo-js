@@ -967,7 +967,10 @@ console.log(JSON.stringify({ copy: loaded.copy }))
 
     await expect(onLoad[0]!({ path: metadataPath })).resolves.toBeUndefined()
     expect((await onLoad[0]!({ path: metaPath }))?.contents).toContain(JSON.stringify(pathToFileURL(metaPath).href))
-    for (const [name, expression] of [['block', 'import /* a */ . /* b */ meta.url'], ['line', 'import // a\n.meta.url']]) {
+    const commentHeavyPath = join(projectRoot, 'server/support/comment-heavy.ts')
+    await writeFile(commentHeavyPath, `import ${'/* x */ '.repeat(64)}{ readFile } from 'node:fs'\n// ${'/'.repeat(64)}\nexport { readFile }\n`)
+    await expect(onLoad[0]!({ path: commentHeavyPath })).resolves.toBeUndefined()
+    for (const [name, expression] of [['block', 'import /* a */ . /* b */ meta.url'], ['line', 'import // a\n.meta.url'], ['starred', 'import /** a **/ . /*/ b */ meta.url']]) {
       const commentedPath = join(projectRoot, `server/support/commented-${name}.ts`)
       await writeFile(commentedPath, `export const url = ${expression}\n`)
       expect((await onLoad[0]!({ path: commentedPath }))?.contents).toContain(JSON.stringify(pathToFileURL(commentedPath).href))
