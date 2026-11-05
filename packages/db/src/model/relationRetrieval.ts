@@ -189,9 +189,7 @@ export async function retrievePivotRelation(
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
   const pivotQuery = createPivotQuery()
   const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
-  const pivotKeys = pivotParentKey || keyDefinitions.parentKey?.kind !== 'decimal'
-    ? keysForColumn(parentKeys, pivotParentKey)
-    : keysForColumn(parentKeys.map(readIntegralDecimalKey), keyDefinitions.parentKey)
+  const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey)
   const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)

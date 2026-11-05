@@ -306,6 +306,40 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(ids(relation(owner, 'tags'))).toEqual([1])
   })
 
+  it('keeps decimal parent keys as text for an unregistered text pivot', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `ut_owners_${suffix}`, tags: `ut_tags_${suffix}`, pivot: `ut_owner_tags_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+      table.decimal('code')
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.tags, (table) => {
+      table.integer('id').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.tags))
+    await schema.createTable(names.pivot, (table) => {
+      table.integer('id').primaryKey()
+      table.string('owner_code')
+      table.integer('tag_id')
+    })
+    onTestFinished(() => schema.dropTable(names.pivot))
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), code: column.decimal() })
+    const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey() })
+    await DB.table(owners).insert([{ id: 1, code: '5.00' }])
+    await DB.table(tags).insert([{ id: 1 }])
+    await DB.table(names.pivot).insert([{ id: 1, owner_code: '5.00', tag_id: 1 }])
+    const Tag = defineModel(tags, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { tags: belongsToMany(() => Tag, names.pivot, 'owner_code', 'tag_id', 'code') } })
+
+    const [owner] = await (await Owner.with('tags').get()).loadCount('tags')
+
+    expect(ids(relation(owner, 'tags'))).toEqual([1])
+    expect(owner?.get('tags_count' as never)).toBe(1)
+  })
+
   it('loads a related row once when equal numeric keys fall into different key chunks', async () => {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
