@@ -90,7 +90,7 @@ function alignmentRole(branch: SelectQueryPlan, selection: QuerySelection, model
 }
 
 function moveShadowingColumnsFirst(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[]): readonly QuerySelection[] {
-  const firstOwn = selections.findIndex(selection => selectionRole(branch.source, selection) === 'own')
+  const firstOwn = selections.findIndex(selection => selection.kind === 'column' && selectionRole(branch.source, selection) === 'own' && ['*', ...modelColumns].includes(columnOutputName(selection)))
   if (firstOwn === -1) return Object.freeze([...selections])
   const following = selections.slice(firstOwn)
   const moved = following.filter(selection => shadowsModelColumn(branch, selection, modelColumns))

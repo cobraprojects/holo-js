@@ -279,6 +279,22 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect([first, second].map(page => page.data.map(entity => Number((entity.toAttributes() as Record<string, unknown>).product_key)))).toEqual([[1], [2]])
   })
 
+  it('keeps the precedence of outputs that are not model columns', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('product_id')
+      table.string('label')
+    })
+    await DB.table(notes).insert([{ product_id: 1, label: 'first' }, { product_id: 2, label: 'second' }])
+
+    const rows = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.price as label` as never, `${products}.*`, `${notes}.*`).get()
+    expect(rows.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
+  })
+
   it('shows the projected SQL that a joined model query runs', async () => {
     const { products, orders, joined } = await createFixture(driver)
 
