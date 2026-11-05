@@ -247,7 +247,7 @@ describe('SQLite date columns created before 0.6', () => {
     })
     const user = await defineUser().create({ name: 'Ada' })
     const tag = await Tag.create({ name: 'math' })
-    await user.attach('tags', tag.id, { is_primary: true })
+    await user.attach('tags', tag.id, { is_primary: 1 })
     expect((await defineUser().with('tags').findOrFail(user.id)).tags[0]?.pivot.is_primary).toBe(1)
 
     await createSchemaService(db).table('legacy_date_tag_user', (table) => {

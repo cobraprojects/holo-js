@@ -1148,6 +1148,7 @@ describe('model relation slice', () => {
       101: { grantedAt: '2026-04-01' },
       102: { grantedAt: '2026-05-01' },
     })).toEqual({ attached: [], detached: [], updated: [] })
+    // @ts-expect-error reserved pivot keys
     await expect(user.syncWithoutDetaching('roles', { 101: { userId: 999, roleId: 999 } })).rejects.toThrow(
       'Pivot attribute "userId" on relation "roles" is reserved and cannot be set explicitly.',
     )
