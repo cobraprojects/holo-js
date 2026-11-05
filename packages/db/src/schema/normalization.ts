@@ -1,5 +1,5 @@
 import { CapabilityError, HydrationError } from '../core/errors'
-import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp } from '../applicationTime'
+import { SERVER_WALL_CLOCK_AMBIGUITY, formatCalendarDate, formatWithOffset, parseCalendarDate, parseWallClockTimestamp, startOfDayInTimezone } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
 import type { AnyColumnDefinition } from './types'
@@ -198,25 +198,25 @@ function normalizeSQLiteDateValue(value: unknown): unknown {
 
 const OFFSET_FREE_WALL_CLOCK = /^(\d{4,})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d{1,6})?)?)?$/
 
-function wallClockInstant(dialect: SchemaDialectName, value: string, timeZone: string): Date | undefined {
+function wallClockInstant(dialect: Exclude<SchemaDialectName, 'sqlite'>, value: string, timeZone: string): Date | undefined {
   const match = OFFSET_FREE_WALL_CLOCK.exec(value)
   if (!match) return undefined
   const [, year, month, day, hour = '00', minute = '00', second = '00', fraction = ''] = match
   if (Number(month) < 1 || Number(month) > 12 || Number(day) < 1 || Number(day) > daysInMonth(Number(year), Number(month))) return undefined
   if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return undefined
-  if (dialect === 'sqlite') return parseSQLiteDateTime(`${year}-${month}-${day} ${hour}:${minute}:${second}${fraction}`)
   return match[4] === undefined
     ? parseCalendarDate(`${year}-${month}-${day}`, timeZone)
     : parseWallClockTimestamp(`${year}-${month}-${day} ${hour}:${minute}:${second}${fraction}`, timeZone, SERVER_WALL_CLOCK_AMBIGUITY[dialect])
 }
 
 export function calendarMidnightWriteValue(dialect: SchemaDialectName, value: unknown): unknown {
+  if (dialect === 'sqlite' && typeof value === 'string' && OFFSET_FREE_WALL_CLOCK.test(value)) return dateLikeWriteValue(dialect, value)
   const timeZone = getApplicationTimezone()
   const instant = value instanceof Date ? value
     : typeof value !== 'string' ? undefined
-      : OFFSET_FREE_WALL_CLOCK.test(value) ? wallClockInstant(dialect, value, timeZone) : parseIsoInstantText(value)?.instant
-  const midnight = instant && !Number.isNaN(instant.getTime()) ? parseCalendarDate(formatCalendarDate(instant, timeZone), timeZone) : undefined
-  return midnight ? dateLikeWriteValue(dialect, midnight) : value
+      : dialect !== 'sqlite' && OFFSET_FREE_WALL_CLOCK.test(value) ? wallClockInstant(dialect, value, timeZone) : parseIsoInstantText(value)?.instant
+  if (!instant || Number.isNaN(instant.getTime())) return typeof value === 'string' ? value : dateLikeWriteValue(dialect, value)
+  return dateLikeWriteValue(dialect, parseCalendarDate(formatCalendarDate(instant, timeZone), timeZone) ?? startOfDayInTimezone(instant, timeZone))
 }
 
 export function wholeSecondInstant(instant: Date): Date {

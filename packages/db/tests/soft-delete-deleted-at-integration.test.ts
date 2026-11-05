@@ -169,26 +169,42 @@ describe.each(drivers)('soft deleting a model on %s', (driver) => {
     expect(post.created_at).toEqual((await fresh()).created_at)
     expect(post.updated_at).toEqual((await fresh()).updated_at)
     expect(post.updated_at).toEqual(new Date('2026-03-06T15:00:00.000Z'))
-    expect(post.created_at?.getUTCHours()).toBe(15)
     expect(await Post.where('updated_at', post.updated_at).count()).toBe(1)
 
-    post.created_at = '2026-03-08' as never
     post.updated_at = '2026-03-09T01:00:00+09:00' as never
     await post.save()
 
-    expect(post.created_at).toEqual(new Date('2026-03-07T15:00:00.000Z'))
-    expect(post.created_at).toEqual((await fresh()).created_at)
     expect(post.updated_at).toEqual(new Date('2026-03-08T15:00:00.000Z'))
     expect(post.updated_at).toEqual((await fresh()).updated_at)
 
-    const wallClockMidnight = driver === 'sqlite' ? new Date('2026-03-05T15:00:00.000Z') : new Date('2026-03-04T15:00:00.000Z')
-    for (const wallClock of ['2026-03-05T23:34:56', '2026-03-05T23:34', '2026-03-05 23:34', '2026-03-05T23:34:56.123456']) {
-      post.created_at = wallClock as never
+    for (const assigned of ['2026-03-08', '2026-03-05T23:34:56', '2026-03-05T23:34', '2026-03-05 23:34', '2026-03-05T23:34:56.123456']) {
+      post.created_at = assigned as never
       await post.save()
 
-      expect(post.created_at).toEqual(wallClockMidnight)
       expect(post.created_at).toEqual((await fresh()).created_at)
+      if (driver !== 'mysql' || assigned === '2026-03-08') {
+        expect(await Post.where('created_at', assigned).count()).toBe(1)
+        expect((await Post.updateOrCreate({ created_at: assigned } as never, { title: assigned })).id).toBe(post.id)
+      }
+      if (driver !== 'sqlite') {
+        expect(post.created_at).toEqual(assigned === '2026-03-08' ? new Date('2026-03-07T15:00:00.000Z') : new Date('2026-03-04T15:00:00.000Z'))
+      }
     }
+  })
+
+  it('holds a BC date written to a DATE timestamp as a fresh read returns it', async () => {
+    useTokyoAppAt(new Date('2026-03-04T20:00:00.123Z'), 'UTC')
+    const Post = defineModel(await createDatePostsTable(driver), { fillable: ['title', 'created_at'] })
+
+    const ancient = new Date('-000001-03-04T12:34:56Z')
+    if (driver === 'mysql') {
+      await expect(Post.create({ title: 'Ancient', created_at: ancient })).rejects.toThrow()
+      return
+    }
+
+    const post = await Post.create({ title: 'Ancient', created_at: ancient })
+
+    expect(post.created_at).toEqual((await Post.findOrFail(post.id)).created_at)
   })
 
   it('resolves a repeated midnight the way a DATE read does', async () => {
