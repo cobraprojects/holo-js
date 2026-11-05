@@ -186,6 +186,10 @@ export function insertGetIdByKey(
 const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: readonly unknown[]) => unknown>()
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
+function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
+  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
+}
+
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
 }
@@ -664,10 +668,7 @@ export class TableQueryBuilder<
     const separator = column.lastIndexOf('.')
     if (separator === -1) return column
 
-    const qualifier = column.slice(0, separator)
-    const tableName = this.source.tableName
-    const ownQualifiers = [tableName, tableName.slice(tableName.lastIndexOf('.') + 1), this.source.alias]
-    return ownQualifiers.includes(qualifier) ? column.slice(separator + 1) : undefined
+    return qualifiesTable(column.slice(0, separator), this.source.tableName, this.source.alias) ? column.slice(separator + 1) : undefined
   }
 
   private assertJsonRootColumn(column: string, methodName: string): void {
@@ -1896,8 +1897,8 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
-  [resolveSourceColumn](column: string, operation: 'aggregate'): string {
-    return Object.keys(this.resolveSourceColumnKeys([[column, column]], operation))[0]!
+  [resolveSourceColumn](column: string): string {
+    return Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
   }
 
   cache(
@@ -3604,21 +3605,19 @@ export class TableQueryBuilder<
     readonly key: string
     readonly column: string
   } {
-    if (!column.includes('.')) return { query: this, key: column, column }
+    const root = column.split('->', 1)[0]!
+    if (!root.includes('.')) return { query: this, key: column, column }
 
-    if (typeof this.resolveSourceColumnName(column) === 'undefined' && this.isJoinedColumn(column)) {
-      return { query: this.scalarQuery(column), key: column.slice(column.lastIndexOf('.') + 1), column }
-    }
+    const qualifier = root.slice(0, root.lastIndexOf('.'))
+    const join = this.plan.joins.find(join => qualifiesTable(qualifier, join.table, join.alias))
+    const key = join ? column.slice(qualifier.length + 1) : this[resolveSourceColumn](column)
+    if (this.plan.joins.length === 0) return { query: this, key, column: key }
 
-    const key = this[resolveSourceColumn](column, 'aggregate')
-    return { query: this.plan.joins.length === 0 ? this : this.scalarQuery(column), key, column: key }
-  }
-
-  private isJoinedColumn(column: string): boolean {
-    const qualifier = column.slice(0, column.lastIndexOf('.'))
-    return this.plan.joins.some(join => typeof join.alias === 'string'
-      ? join.alias === qualifier
-      : typeof join.table === 'string' && [join.table, join.table.slice(join.table.lastIndexOf('.') + 1)].includes(qualifier))
+    const source = join ? join.alias ?? join.table : this.source.alias ?? this.source.tableName
+    const query = this.plan.unions.length > 0 || this.plan.having.length > 0
+      ? this
+      : this.clone(withSelections(this.plan, [`${source}.${key}`]))
+    return { query, key, column: join ? column : key }
   }
 
   private extractNumericValues(

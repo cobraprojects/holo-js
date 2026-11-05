@@ -1764,7 +1764,8 @@ class ModelQueryBuilderBase<
   }
 
   async sum(requestedColumn: ModelColumnName<TTable>): Promise<number> {
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
+    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().sum(requestedColumn)
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1785,7 +1786,8 @@ class ModelQueryBuilderBase<
   }
 
   async avg(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
+    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().avg(requestedColumn)
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1804,7 +1806,8 @@ class ModelQueryBuilderBase<
   }
 
   async min(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
+    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().min(requestedColumn)
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1827,7 +1830,8 @@ class ModelQueryBuilderBase<
   }
 
   async max(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
-    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
+    if (this.aggregatesInSql(requestedColumn)) return this.getTableQueryBuilder().max(requestedColumn)
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn)
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -2456,6 +2460,10 @@ class ModelQueryBuilderBase<
         ? query => query.whereNull(relatedKey as never).whereNotNull(relatedKey as never)
         : query => query.whereIn(relatedKey as never, keys),
     })
+  }
+
+  private aggregatesInSql(column: string): boolean {
+    return this.tableQuery.getPlan().joins.length > 0 && column.split('->', 1)[0]!.includes('.')
   }
 
   private extractNumericValues(

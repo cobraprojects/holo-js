@@ -80,6 +80,24 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(Number(await query[kind]('p.price'))).toBe(expected[kind])
   })
 
+  it.each(kinds)('%s reads the requested table when the query already selects both same-named columns', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+
+    const query = DB.table(name)
+      .join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)
+      .select(`${name}.price`, `${ordersName}.price`)
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
+  })
+
+  it.each(kinds)('%s reads an aliased query table through a join when qualified with its table name', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+
+    const query = DB.table(`${name} as p`).join(`${ordersName} as o`, 'o.product_id', '=', 'p.id')
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${ordersName}.price`))).toBe(expected[kind] * 10)
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 
@@ -100,6 +118,16 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
 
     expect(await Product.query()[kind](`${name}.price`)).toBe(expected[kind])
     expect(await Product[kind](`${name}.price`)).toBe(expected[kind])
+  })
+
+  it.each(kinds)('%s on a joined model query reads the requested table', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
+
+    const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)
+    expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
+    expect(Number(await query[kind](`${ordersName}.price` as never))).toBe(expected[kind] * 10)
+    expect(Number(await query.where(`${ordersName}.price`, '>', 100)[kind](`${name}.price`))).toBe(kind === 'sum' ? 50 : kind === 'avg' ? 25 : kind === 'min' ? 20 : 30)
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {
