@@ -124,6 +124,10 @@ function assertTablePath(value: string, kind: string, message = `${kind} "${valu
   }
 }
 
+export function assertQueryTablePath(tableName: string): void {
+  assertTablePath(tableName, 'Table')
+}
+
 function assertHavingClause(clause: QueryHavingClause): void {
   if (!HAVING_EXPRESSION_PATTERN.test(clause.expression)) {
     throw new SecurityError(`Having expression "${clause.expression}" is not allowed in safe query mode.`)

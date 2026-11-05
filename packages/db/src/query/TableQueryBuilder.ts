@@ -122,7 +122,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
-import { validateQueryPlan } from './validator'
+import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
 
@@ -3184,6 +3184,7 @@ export class TableQueryBuilder<
 
   private async shouldCaptureInsertReturningRows(): Promise<boolean> {
     if (!this.shouldUseReturningMutationRows(hasDatabaseDependencyInvalidationListeners())) return false
+    assertQueryTablePath(this.source.tableName)
     await this.connection.initialize()
     const statement = this.connection.getAdapter().getMutationReturningPermissionQuery?.(this.source.tableName)
     if (!statement) return true

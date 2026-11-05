@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, SchemaError, SecurityError, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, resetDB, type DriverAdapter } from '../src'
+import { DB, SchemaError, SecurityError, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, onDatabaseDependencyInvalidated, resetDB, type DriverAdapter } from '../src'
 
 const unreachable = async (): Promise<never> => {
   throw new Error('The statement reached the database.')
@@ -17,7 +17,8 @@ function openUnreachableDatabase(driver: 'sqlite' | 'postgres' | 'mysql') {
     rollback: unreachable,
   }
   const db = createDatabase({ connectionName: 'default', adapter, dialect: createDialect(driver) })
-  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  const secondary = createDatabase({ connectionName: 'secondary', adapter, dialect: createDialect(driver) })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db, secondary } }))
   return { db, schema: createSchemaService(db) }
 }
 
@@ -38,8 +39,35 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('table paths with more t
     await expect(DB.table('a.b.c as t').get()).rejects.toThrow(error)
     await expect(DB.table('users').join('a.b.c', 'a.b.c.id', '=', 'users.id').get())
       .rejects.toThrow(new SecurityError('Join table "a.b.c" must be a table name or a schema-qualified table name.'))
-    await expect(DB.table('users').select('a.b.c.*').get())
-      .rejects.toThrow(new SecurityError('Column reference "a.b.c.*" must select every column of a table name or a schema-qualified table name.'))
+    const wildcardError = new SecurityError('Column reference "a.b.c.*" must select every column of a table name or a schema-qualified table name.')
+    await expect(DB.table('users').select('a.b.c.*').get()).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').count()).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').exists()).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').paginate(10, 1)).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').sum('id')).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').max('id')).rejects.toThrow(wildcardError)
+    await expect(DB.table('users').select('a.b.c.*').first()).rejects.toThrow(wildcardError)
+  })
+
+  it('rejects them before inserts look up RETURNING permissions', async () => {
+    const { db } = openUnreachableDatabase(driver)
+    const adapter = db.getAdapter() as DriverAdapter & { getMutationReturningPermissionQuery?: (tableName: string) => { sql: string, source: string } }
+    adapter.getMutationReturningPermissionQuery = tableName => ({ sql: `SELECT ${tableName}`, source: 'test' })
+    const stop = onDatabaseDependencyInvalidated(() => {})
+    try {
+      const error = new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.')
+      await expect(DB.table('a.b.c').insert({ id: 1 })).rejects.toThrow(error)
+      await expect(DB.table('a.b.c').insertOrIgnore({ id: 1 })).rejects.toThrow(error)
+    } finally {
+      stop()
+    }
+  })
+
+  it('rejects them before an untyped model loads its guarded columns', async () => {
+    openUnreachableDatabase(driver)
+    const Thing = defineModel('a.b.c', { connectionName: 'secondary', guarded: ['id'], timestamps: false })
+
+    await expect(Thing.create({ name: 'x' })).rejects.toThrow(new SecurityError('Table "a.b.c" must be a table name or a schema-qualified table name.'))
   })
 
   it('keeps accepting schema-qualified column references', async () => {

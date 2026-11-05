@@ -131,6 +131,7 @@ export class SQLQueryCompiler {
   }
 
   compileCount(plan: SelectQueryPlan): CompiledStatement {
+    validateQueryPlan(plan, this.dialect)
     const countsRows = !plan.distinct
       && plan.groupBy.length === 0
       && plan.having.length === 0
