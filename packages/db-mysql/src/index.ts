@@ -198,9 +198,16 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
 
 const DEFAULT_MAX_PREPARED_STATEMENTS = 256
 
+function exactBigNumberDefaults(config: PoolOptions): PoolOptions {
+  const uriParameters = typeof config.uri === 'string' ? new URL(config.uri).searchParams : undefined
+  if (uriParameters?.has('supportBigNumbers') || uriParameters?.has('bigNumberStrings')) return {}
+  return { supportBigNumbers: true, bigNumberStrings: false }
+}
+
 function createNativeMySQLPool(config: PoolOptions): MySQLPoolLike {
   const pool = mysql.createPool({
     maxPreparedStatements: DEFAULT_MAX_PREPARED_STATEMENTS,
+    ...exactBigNumberDefaults(config),
     ...config,
     timezone: config.timezone ?? 'Z',
     typeCast: applicationTypeCast(config),

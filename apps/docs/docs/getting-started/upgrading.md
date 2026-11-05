@@ -302,6 +302,12 @@ A PostgreSQL connection's `schema` option now also sets the connection's `search
 
 On PostgreSQL, `schema.getTables()`, `getColumns()`, `getIndexes()` and `getForeignKeys()` read the schema that unqualified statements use, so they find the tables your migrations created. That is `schema`, or the first existing schema of a `search_path` that wins over it. On MySQL, `getColumns()` reports the `enum` and `uuid` logical types, and `getTables()` leaves out views. See [getColumns()](/database/migrations#getcolumns).
 
+### MySQL `bigint` values above the safe integer range come back as text
+
+A MySQL `bigint` above `Number.MAX_SAFE_INTEGER` now comes back as its exact text, such as `'9007199254740993'`, in raw queries, queries started with a table name, and untyped models. Before, the driver rounded it to the nearest number, such as `9007199254740992`, so the value you read could point at a different row. Smaller values are still numbers, and `DECIMAL` values are unchanged.
+
+Models and table definitions that type such a column as `number` throw a `HydrationError` for it, on every database. If a column can hold larger values, use `uuid()`, `ulid()` or `snowflake()` keys, or read it with raw SQL as text. See [Large integers](/database/#large-integers).
+
 ### PostgreSQL connections use `app.timezone` as their session time zone
 
 Holo now sets each PostgreSQL connection's session `TimeZone` to `app.timezone`, as it already did on MySQL. Before, the server's time zone applied, so on a server whose time zone isn't `app.timezone`, `defaultNow()` and `timestamps()` defaults on `timestamp` columns were written in the server's wall-clock time and read back off by the difference. Rows written that way keep their values; Holo doesn't rewrite them. To keep the server's time zone, set `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in `PGOPTIONS`. See [PostgreSQL dates and time zones](/database/#postgresql-dates-and-time-zones).

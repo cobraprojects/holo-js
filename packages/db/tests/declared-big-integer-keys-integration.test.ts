@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DB, HydrationError, column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { DB, HydrationError, column, configureDB, createConnectionManager, defineGeneratedTable, defineModel, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -12,7 +12,7 @@ const drivers = [
 const UNSAFE_KEY = '9007199254740993'
 
 async function openUnsafeKeyTable(driver: typeof drivers[number]) {
-  const { schema, adapter } = await openDatabase(driver)
+  const { schema, adapter, db } = await openDatabase(driver)
   const name = `unsafe_keys_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   await schema.createTable(name, (table) => {
     table.id()
@@ -20,7 +20,7 @@ async function openUnsafeKeyTable(driver: typeof drivers[number]) {
   })
   await DB.table(name).insert({ id: UNSAFE_KEY, name: 'seed' })
   if (driver === 'postgres') await adapter.query(`SELECT setval(pg_get_serial_sequence('${name}', 'id'), ${UNSAFE_KEY})`)
-  return { schema, name, counted: defineGeneratedTable(name, { id: column.id(), name: column.string() }) }
+  return { schema, db, name, counted: defineGeneratedTable(name, { id: column.id(), name: column.string() }) }
 }
 
 describe.each(drivers)('id() keys beyond the safe integer range on %s', (driver) => {
@@ -69,6 +69,20 @@ describe.each(drivers)('id() keys beyond the safe integer range on %s', (driver)
       await expect(joined().first()).rejects.toThrow(HydrationError)
     } finally {
       await schema.dropTable(labels)
+      await schema.dropTable(name)
+    }
+  })
+
+  it('reads it as its exact text through an untyped model and a table name', async () => {
+    const { schema, db, name } = await openUnsafeKeyTable(driver)
+    try {
+      configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db, analytics: db } }))
+      const Counted = defineModel(name, { connectionName: 'analytics', fillable: ['name'], timestamps: false })
+
+      expect((await Counted.where('name', 'seed').firstOrFail()).get('id')).toBe(UNSAFE_KEY)
+      expect(await DB.table(name).where('name', 'seed').value('id')).toBe(UNSAFE_KEY)
+      expect((await Counted.create({ name: 'next' })).get('id')).toBe('9007199254740994')
+    } finally {
       await schema.dropTable(name)
     }
   })
