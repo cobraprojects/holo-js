@@ -5,7 +5,7 @@ import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
 import { splitTablePath } from './identifiers'
-import { canonicalTableName } from './tableIdentityRegistry'
+import { canonicalTableName, isTableIdentityResolved } from './tableIdentityRegistry'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface GeneratedSchemaTables {}
@@ -111,6 +111,19 @@ export function getConnectionGeneratedTableDefinition(tableName: string, connect
   if (isGeneratedSchemaSuspended()) return undefined
   const schemaConnection = generatedSchemaSource.connectionName
   return schemaConnection === undefined || schemaConnection === connectionName ? findGeneratedTableByIdentity(tableName, connectionName) : undefined
+}
+
+export function getGeneratedModelTableDefinition(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
+  const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
+  return schemaConnection === undefined ? generatedTables.get(tableName) : getConnectionGeneratedTableDefinition(tableName, schemaConnection)
+}
+
+export function awaitsGeneratedTableIdentity(tableName: string, connectionName: string | undefined): boolean {
+  const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
+  return schemaConnection !== undefined
+    && !generatedTables.has(tableName)
+    && listGeneratedTableSpellings(tableName).length > 0
+    && !isTableIdentityResolved(schemaConnection, tableName)
 }
 
 export function isGeneratedSchemaConnection(connectionName: string): boolean {

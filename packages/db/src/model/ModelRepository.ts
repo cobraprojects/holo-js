@@ -48,6 +48,7 @@ import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { canonicalTableName } from '../schema/tableIdentityRegistry'
+import { resolveGeneratedTableIdentity } from '../query/tableIdentity'
 import type {
   AnyModelDefinition,
   ModelDefinitionLike,
@@ -3847,6 +3848,7 @@ export class ModelRepository<
   }
 
   async loadGuardableColumns(): Promise<void> {
+    await resolveGeneratedTableIdentity(this.getConnection(), this.definition.table.tableName)
     if (this.guardsByColumnListing()) {
       await loadColumnListing(this.getConnection(), this.definition.table.tableName)
     }

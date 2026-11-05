@@ -1,0 +1,233 @@
+import { randomUUID } from 'node:crypto'
+import { createMySQLAdapter } from '@holo-js/db-mysql'
+import { createPostgresAdapter } from '@holo-js/db-postgres'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
+import { DB, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, unsafeSql } from '../src'
+import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection, tableSpellings } from './support/database'
+import type { TestDriver as Driver } from '../../../tests/support/real-database'
+
+const security = { allowUnsafeRawSql: true }
+const uniqueName = (prefix: string) => `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+const quote = (driver: Driver, identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
+const quotePath = (driver: Driver, path: string) => path.split('.').map(part => quote(driver, part)).join('.')
+
+function useMemoryCache() {
+  configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+  onTestFinished(() => resetCacheRuntime())
+}
+
+function useGeneratedTables(tables: Parameters<typeof registerGeneratedTables>[0]) {
+  registerGeneratedTables(tables)
+  onTestFinished(() => clearGeneratedTables())
+}
+
+const cachedNames = async (tableName: string) => (await DB.table(tableName).orderBy('id').cache(60).get()).map(row => row.name)
+
+for (const driver of integrationDrivers(['sqlite', 'postgres'] as const)) {
+  describe(`${driver} table identity after raw DDL`, () => {
+    it('refreshes a cached bare read after a write through the qualified name of a table raw SQL created', async () => {
+      const { db, schema } = await openDatabase(driver, { security })
+      useMemoryCache()
+      const name = uniqueName('holo_raw')
+      const { qualified } = tableSpellings(driver, name)
+      onTestFinished(() => schema.dropTable(qualified))
+      await expect(cachedNames(qualified)).rejects.toThrow()
+
+      await db.unsafeExecute(unsafeSql(`CREATE TABLE ${quotePath(driver, qualified)} (${quote(driver, 'id')} INTEGER PRIMARY KEY, ${quote(driver, 'name')} VARCHAR(255) NOT NULL)`))
+      expect(await cachedNames(name)).toEqual([])
+      await DB.table(qualified).insert({ id: 1, name: 'first' })
+
+      expect(await cachedNames(name)).toEqual(['first'])
+    })
+  })
+}
+
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)) {
+  describe(`${driver} column listing after raw DDL`, () => {
+    it('accepts a column that raw SQL added to a guarded untyped model table', async () => {
+      const { db, table } = await openDatabase(driver, { connectionName: 'reporting', security })
+      const app = createDatabase({ connectionName: 'app', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+      onTestFinished(() => app.disconnect())
+      configureDB(createConnectionManager({ defaultConnection: 'app', connections: { app, reporting: db } }))
+      const tableName = `${table.tableName}_events`
+      await createSchemaService(db).createTable(tableName, (columns) => {
+        columns.id()
+        columns.string('name')
+      })
+      onTestFinished(() => createSchemaService(db).dropTable(tableName))
+      const Event = defineModel(tableName, { connectionName: 'reporting', guarded: ['admin'], timestamps: false })
+      expect((await Event.create({ name: 'first' })).get('name')).toBe('first')
+      await expect(Event.create({ name: 'early', nickname: 'early' })).rejects.toThrow('Column "nickname" is not writable')
+
+      await db.unsafeExecute(unsafeSql(`ALTER TABLE ${quotePath(driver, tableName)} ADD COLUMN ${quote(driver, 'nickname')} VARCHAR(255)`))
+
+      expect((await Event.create({ name: 'late', nickname: 'late' })).get('nickname')).toBe('late')
+    })
+  })
+}
+
+async function openSingleSession(driver: 'postgres' | 'mysql') {
+  const adapter = driver === 'postgres'
+    ? createPostgresAdapter({ config: { ...postgresTestConnection(), max: 1 } })
+    : createMySQLAdapter({ config: { ...mysqlTestConnection(), connectionLimit: 1 } })
+  const db = createDatabase({ connectionName: 'default', adapter, dialect: createDialect(driver), security })
+  configureDB(createConnectionManager({ defaultConnection: 'default', connections: { default: db } }))
+  const tenant = uniqueName('holo_tenant')
+  const name = uniqueName('holo_session')
+  const home = driver === 'postgres' ? 'public' : mysqlTestConnection().database
+  const dropTenant = driver === 'postgres' ? `DROP SCHEMA IF EXISTS "${tenant}" CASCADE` : `DROP DATABASE IF EXISTS \`${tenant}\``
+  onTestFinished(async () => {
+    try {
+      await db.getAdapter().execute(dropTenant)
+      await createSchemaService(db).dropTable(`${home}.${name}`)
+    } finally {
+      await db.disconnect()
+    }
+  })
+  await db.getAdapter().execute(driver === 'postgres' ? `CREATE SCHEMA "${tenant}"` : `CREATE DATABASE \`${tenant}\``)
+  const schema = createSchemaService(db)
+  for (const owner of [home, tenant]) {
+    await schema.createTable(`${owner}.${name}`, (table) => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+  }
+  const switchTo = (owner: string) => db.unsafeExecute(unsafeSql(driver === 'postgres' ? `SET search_path TO "${owner}"` : `USE \`${owner}\``))
+  return { db, tenant, name, home, switchTo }
+}
+
+for (const driver of integrationDrivers(['postgres', 'mysql'] as const)) {
+  describe(`${driver} table identity after a session schema change`, () => {
+    it(`refreshes a cached bare read after a write through the qualified name once ${driver === 'postgres' ? 'search_path' : 'USE'} points the bare name at it`, async () => {
+      const { tenant, name, switchTo } = await openSingleSession(driver)
+      useMemoryCache()
+      expect(await cachedNames(`${tenant}.${name}`)).toEqual([])
+
+      await switchTo(tenant)
+      expect(await cachedNames(name)).toEqual([])
+      await DB.table(`${tenant}.${name}`).insert({ id: 1, name: 'tenant' })
+
+      expect(await cachedNames(name)).toEqual(['tenant'])
+    })
+  })
+}
+
+class RollbackRequested extends Error {}
+
+describe.each(integrationDrivers(['postgres'] as const))('%s table identity after a rolled-back search_path change', (driver) => {
+  it('refreshes a cached bare read after a write through the qualified name once the rollback restores search_path', async () => {
+    const { tenant, name, home } = await openSingleSession(driver)
+    useMemoryCache()
+    await expect(DB.transaction(async (transaction) => {
+      await transaction.unsafeExecute(unsafeSql(`SET LOCAL search_path TO "${tenant}"`))
+      expect(await cachedNames(`${home}.${name}`)).toEqual([])
+      throw new RollbackRequested()
+    })).rejects.toThrow(RollbackRequested)
+
+    expect(await cachedNames(name)).toEqual([])
+    await DB.table(`${home}.${name}`).insert({ id: 1, name: 'home' })
+
+    expect(await cachedNames(name)).toEqual(['home'])
+  })
+})
+
+async function foldsTableNames(driver: Driver, db: Awaited<ReturnType<typeof openDatabase>>['db']): Promise<boolean> {
+  if (driver === 'sqlite') return true
+  if (driver === 'postgres') return false
+  const { rows } = await db.getAdapter().query<{ value: number | string }>('SELECT @@lower_case_table_names AS value')
+  return Number(rows[0]!.value) !== 0
+}
+
+for (const driver of integrationDrivers(['sqlite', 'mysql'] as const)) {
+  describe(`${driver} table identity across case variants`, () => {
+    it('refreshes a cached read through an upper-case spelling after a write through the lower-case one', async (context) => {
+      const { db, table } = await openDatabase(driver)
+      if (!await foldsTableNames(driver, db)) context.skip()
+      useMemoryCache()
+      await DB.table(table.tableName).insert({ id: 1, name: 'first', active: false })
+      const { bare } = tableSpellings(driver, table.tableName)
+      const shouting = bare.toUpperCase()
+      expect(await cachedNames(shouting)).toEqual(['first'])
+
+      await DB.table(bare).insert({ id: 2, name: 'second', active: false })
+      expect(await cachedNames(shouting)).toEqual(['first', 'second'])
+
+      await DB.table(`${tableSpellings(driver, table.tableName).qualified.split('.')[0]}.${shouting}`).insert({ id: 3, name: 'third', active: false })
+      expect(await cachedNames(bare)).toEqual(['first', 'second', 'third'])
+    })
+  })
+}
+
+describe.each(integrationDrivers(['postgres'] as const))('%s table identity across case variants', (driver) => {
+  it('keeps quoted case variants of a table name as separate tables', async () => {
+    const { schema } = await openDatabase(driver)
+    useMemoryCache()
+    const lower = uniqueName('holo_case')
+    const upper = lower.toUpperCase()
+    for (const name of [lower, upper]) {
+      await schema.createTable(name, (table) => {
+        table.integer('id').primaryKey()
+        table.string('name')
+      })
+      onTestFinished(() => schema.dropTable(name))
+    }
+    expect(await cachedNames(upper)).toEqual([])
+
+    await DB.table(lower).insert({ id: 1, name: 'lower' })
+    await DB.table(`public.${lower}`).insert({ id: 2, name: 'qualified' })
+
+    expect(await cachedNames(upper)).toEqual([])
+    expect(await cachedNames(lower)).toEqual(['lower', 'qualified'])
+  })
+})
+
+const itemColumns = {
+  id: column.integer().primaryKey(),
+  name: column.string(),
+  active: column.boolean(),
+  settings: column.json().nullable(),
+}
+
+const storedJson = (value: unknown) => typeof value === 'string' ? JSON.parse(value) : value
+
+for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)) {
+  describe(`${driver} generated table identity before the first query`, () => {
+    it('casts the attributes of a model defined by the qualified name of a table generated by its bare name', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      useGeneratedTables({ items: defineGeneratedTable(bare, itemColumns) })
+      const Item = defineModel(qualified, { timestamps: false, fillable: ['id', 'name', 'active', 'settings'] })
+
+      await Item.create({ id: 1, name: 'first', active: true, settings: { theme: 'dark' } })
+
+      expect(storedJson(await DB.table(bare).where('id', 1).value('settings'))).toEqual({ theme: 'dark' })
+      expect((await Item.findOrFail(1)).get('settings')).toEqual({ theme: 'dark' })
+    })
+
+    it('reads a model defined by the qualified name of a table generated by its bare name through a where() on a cast column', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: { theme: 'dark' } })
+      const Item = defineModel(qualified, { timestamps: false })
+
+      const item = await Item.where('settings', { theme: 'dark' }).firstOrFail()
+
+      expect(item.get('settings')).toEqual({ theme: 'dark' })
+      expect(item.get('active')).toBe(true)
+    })
+
+    it('normalizes a where() value on the qualified name of a table generated by its bare name', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: { theme: 'dark' } })
+
+      expect(await DB.table(qualified).where('settings', { theme: 'dark' }).value('id')).toBe(1)
+    })
+  })
+}

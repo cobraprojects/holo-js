@@ -309,11 +309,11 @@ export class DatabaseContext {
   ): Promise<DriverQueryResult<TRow>> {
     this._assertUnsafeRawAllowed()
     this._assertUnsafeStatement(statement)
-    return this._runLogged('query', statement, async () => this._adapter.query<TRow>(
+    return this._runSchemaChanging(() => this._runLogged('query', statement, async () => this._adapter.query<TRow>(
       statement.sql,
       statement.bindings ?? [],
       options,
-    ), options)
+    ), options))
   }
 
   async unsafeExecute(
@@ -322,11 +322,11 @@ export class DatabaseContext {
   ): Promise<DriverExecutionResult> {
     this._assertUnsafeRawAllowed()
     this._assertUnsafeStatement(statement)
-    return this._runLogged('execute', statement, async () => this._adapter.execute(
+    return this._runSchemaChanging(() => this._runLogged('execute', statement, async () => this._adapter.execute(
       statement.sql,
       statement.bindings ?? [],
       options,
-    ), options)
+    ), options))
   }
 
   async queryCompiled<TRow extends Record<string, unknown> = Record<string, unknown>>(
@@ -378,12 +378,16 @@ export class DatabaseContext {
     statement: CompiledStatement,
     options?: DatabaseOperationOptions,
   ): Promise<DriverExecutionResult> {
+    return this._runSchemaChanging(() => this.executeCompiled(statement, options))
+  }
+
+  private async _runSchemaChanging<T>(run: () => Promise<T>): Promise<T> {
     const transaction = currentRootTransaction(this)
     if (transaction) {
       transaction.schemaChanged = true
     }
     try {
-      return await this.executeCompiled(statement, options)
+      return await run()
     } finally {
       advanceSchemaGeneration()
     }
@@ -514,7 +518,11 @@ export class DatabaseContext {
       try {
         value = await runInRootTransaction(this, frame, () => this._runTransactionCallback(child, callback))
       } catch (error) {
-        await this._callTransactionHook('rollback', rollbackAdapter)
+        try {
+          await this._callTransactionHook('rollback', rollbackAdapter)
+        } finally {
+          if (frame.schemaChanged) advanceSchemaGeneration()
+        }
         throw error
       }
 
@@ -525,10 +533,8 @@ export class DatabaseContext {
         await this._rollbackAdapterTransaction().catch(() => undefined)
         runCommitFailureRestores(child)
         throw commitError
-      }
-
-      if (frame.schemaChanged) {
-        advanceSchemaGeneration()
+      } finally {
+        if (frame.schemaChanged) advanceSchemaGeneration()
       }
 
       return { value, transaction: child, entry }

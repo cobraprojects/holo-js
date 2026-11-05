@@ -98,7 +98,7 @@ import type { SQLQueryCompiler } from './SQLQueryCompiler'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
-import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { awaitsGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
 import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
@@ -111,6 +111,7 @@ import type {
   QueryJsonUpdateOperation,
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
+  QueryDatePredicate,
   QueryColumnPredicate,
   QueryDatePart,
   QueryOperator,
@@ -130,6 +131,7 @@ import {
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
+import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -214,7 +216,11 @@ function qualifiesTable(qualifier: string, tableName: string | undefined, alias:
 }
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
-  return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
+  return Object.freeze(predicates.map((predicate) => {
+    const copied = Object.freeze({ ...predicate }) as QueryPredicateNode
+    copyDeferredPredicateNormalization(predicate, copied)
+    return copied
+  }))
 }
 
 function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table' | 'alias' | 'definition'> {
@@ -257,7 +263,7 @@ export class TableQueryBuilder<
 > {
   private readonly ownSource: ReturnType<typeof createTableSource>
   private boundSource?: ReturnType<typeof createTableSource>
-  private readonly plan: SelectQueryPlan
+  private plan: SelectQueryPlan
 
   constructor(
     table: TTableOrName,
@@ -291,6 +297,17 @@ export class TableQueryBuilder<
 
   private async bindGeneratedTable(): Promise<void> {
     await resolvePlanGeneratedTableIdentities(this.connection, this.plan)
+    this.plan = applyDeferredPredicateNormalizations(this.plan)
+  }
+
+  private awaitsGeneratedTable(): boolean {
+    return !this.source.table && awaitsGeneratedTableIdentity(this.ownSource.tableName, this.connection.getConnectionName())
+  }
+
+  private normalizedPredicate<TPredicate extends QueryPredicateNode>(predicate: TPredicate, normalize: () => Partial<TPredicate>): TPredicate {
+    return this.awaitsGeneratedTable()
+      ? deferPredicateNormalization(predicate, normalize)
+      : { ...predicate, ...normalize() }
   }
 
   private async prepareMutation(): Promise<void> {
@@ -625,13 +642,13 @@ export class TableQueryBuilder<
       }))
     }
 
-    return this.clone(withPredicate(this.plan, {
+    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator: normalized.operator as QueryOperator,
-      ...this.normalizeComparisonValue(column, normalized.value, normalized.operator),
-    }))
+      value: normalized.value,
+    }, () => this.normalizeComparisonValue(column, normalized.value, normalized.operator))))
   }
 
   private whereExistsWithBoolean(
@@ -672,14 +689,17 @@ export class TableQueryBuilder<
     const normalized = this.normalizeOperatorValue(operator, value)
     const partValue = normalizeDatePartPredicateValue(part, normalized.value)
 
-    return this.clone(withPredicate(this.plan, {
+    const predicate: QueryDatePredicate = {
       kind: 'date',
       boolean,
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: partValue ?? this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
-    }))
+      value: partValue ?? normalized.value,
+    }
+    return this.clone(withPredicate(this.plan, partValue === undefined
+      ? this.normalizedPredicate(predicate, () => ({ value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator) }))
+      : predicate))
   }
 
   private isScalarJsonValue(value: unknown): boolean {
@@ -960,13 +980,13 @@ export class TableQueryBuilder<
       return this.whereSubWithBoolean(boolean, column, operator, values)
     }
 
-    return this.clone(withPredicate(this.plan, {
+    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator,
-      ...this.normalizeComparisonValue(column, values, operator),
-    }))
+      value: values,
+    }, () => this.normalizeComparisonValue(column, values, operator))))
   }
 
   private whereBetweenWithBoolean(
@@ -975,13 +995,13 @@ export class TableQueryBuilder<
     range: readonly [unknown, unknown],
     operator: 'between' | 'not between',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(withPredicate(this.plan, {
+    return this.clone(withPredicate(this.plan, this.normalizedPredicate<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator,
-      ...this.normalizeComparisonValue(column, range, operator),
-    }))
+      value: range,
+    }, () => this.normalizeComparisonValue(column, range, operator))))
   }
 
   whereBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -1022,15 +1042,10 @@ export class TableQueryBuilder<
     bounds: readonly [string, string],
     negated: boolean,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(withPredicate(this.plan, {
-      kind: 'between-columns',
-      boolean,
-      subject: 'value' in subject
-        ? { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) }
-        : subject,
-      bounds,
-      negated,
-    }))
+    const predicate: QueryBetweenColumnsPredicate = { kind: 'between-columns', boolean, subject, bounds, negated }
+    return this.clone(withPredicate(this.plan, 'value' in subject
+      ? this.normalizedPredicate(predicate, () => ({ subject: { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) } }))
+      : predicate))
   }
 
   whereLike(
@@ -2000,16 +2015,17 @@ export class TableQueryBuilder<
   }
 
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
-    return this.getCompiledRows<TRow>(this.toSQL())
+    return this.getCompiledRows<TRow>(() => this.toSQL())
   }
 
   private async getCompiledRows<TRow extends Record<string, unknown>>(
-    statement: CompiledStatement,
+    compileStatement: () => CompiledStatement,
     collectObservation = true,
     scopeCacheKey = false,
     convertColumns = true,
   ): Promise<TRow[]> {
     await this.bindGeneratedTable()
+    const statement = compileStatement()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
     if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
@@ -2451,11 +2467,11 @@ export class TableQueryBuilder<
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
     const offset = (page - 1) * perPage
-    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compilePaginationCount(this.plan), false, true, false)
+    const counts = await this.getCompiledRows<{ __holo_count: number | string }>(() => this.getCompiler().compilePaginationCount(this.plan), false, true, false)
     const total = Number(counts[0]?.__holo_count)
     if (!Number.isSafeInteger(total) || total < 0) throw new CompilerError('Pagination count must be a non-negative safe integer.')
     const pageQuery = this.limit(perPage).offset(offset === 0 ? undefined : offset)
-    const data = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
+    const data = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
     const from = data.length === 0 ? null : offset + 1
     const to = data.length === 0 ? null : offset + data.length
     const result = createPaginator(data, {
@@ -2490,7 +2506,7 @@ export class TableQueryBuilder<
 
     const offset = (page - 1) * perPage
     const pageQuery = this.limit(perPage + 1).offset(offset === 0 ? undefined : offset)
-    const pageRows = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
+    const pageRows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
     const hasMorePages = pageRows.length > perPage
     const data = hasMorePages ? pageRows.slice(0, perPage) : pageRows
     const from = data.length === 0 ? null : offset + 1
@@ -2523,6 +2539,7 @@ export class TableQueryBuilder<
     assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
     const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new SecurityError(message))
     const decodedCursor = decodeValueCursor(cursor, message => new SecurityError(message))
+    await this.bindGeneratedTable()
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
     if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
@@ -2537,7 +2554,7 @@ export class TableQueryBuilder<
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)
-    const rows = await pageQuery.getCompiledRows<TRow>(pageQuery.toSQL(), true, true)
+    const rows = await pageQuery.getCompiledRows<TRow>(() => pageQuery.toSQL(), true, true)
     const pageRows = rows
     const hasMorePages = pageRows.length > perPage
     const data = pageRows.slice(0, perPage)
@@ -2676,7 +2693,7 @@ export class TableQueryBuilder<
   }
 
   async count(): Promise<number> {
-    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(this.getCompiler().compileCount(this.plan), true, true, false)
+    const rows = await this.getCompiledRows<{ __holo_count: number | string }>(() => this.getCompiler().compileCount(this.plan), true, true, false)
     const result = Number(rows[0]?.__holo_count)
     if (!Number.isSafeInteger(result) || result < 0) throw new CompilerError('Query count must be a non-negative safe integer.')
     if (hasActiveDatabaseDependencyCollector()) {
@@ -2687,7 +2704,7 @@ export class TableQueryBuilder<
 
   async exists(): Promise<boolean> {
     if (!hasActiveDatabaseDependencyCollector()) {
-      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(this.getCompiler().compileExists(this.plan), false, true, false)
+      const rows = await this.getCompiledRows<{ __holo_exists: boolean | number }>(() => this.getCompiler().compileExists(this.plan), false, true, false)
       return rows[0]?.__holo_exists === true || rows[0]?.__holo_exists === 1
     }
     const count = await this.count()

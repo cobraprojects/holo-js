@@ -4,7 +4,7 @@ import { createQueryCompiler } from './queryCompilerFactory'
 import { invalidateReplacedTableIdentity } from '../cache'
 import { splitTablePath } from '../schema/identifiers'
 import { listGeneratedTableSpellings } from '../schema/generated'
-import { rememberCanonicalTableName } from '../schema/tableIdentityRegistry'
+import { foldTableName, rememberCanonicalTableName, rememberTableNameFolding, type TableNameFolding } from '../schema/tableIdentityRegistry'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { SelectQueryPlan, QueryPredicateNode } from './ast'
 
@@ -20,6 +20,28 @@ type TableIdentityEntry = {
 }
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
+const tableNameFoldings = new WeakMap<object, Promise<TableNameFolding>>()
+
+async function readTableNameFolding(connection: DatabaseContext): Promise<TableNameFolding> {
+  const compiler = createQueryCompiler(connection)
+  const statement = compiler.compileTableNameFoldingLookup()
+  if (!statement) return compiler.tableNameFolding()
+  const { rows } = await connection.queryCompiled(statement)
+  return compiler.tableNameFolding(rows[0])
+}
+
+async function resolveTableNameFolding(connection: DatabaseContext): Promise<void> {
+  const owner = getRootDatabaseContext(connection)
+  const cached = tableNameFoldings.get(owner)
+  const folding = cached ?? readTableNameFolding(connection)
+  if (!cached) {
+    tableNameFoldings.set(owner, folding)
+    folding.catch(() => {
+      if (tableNameFoldings.get(owner) === folding) tableNameFoldings.delete(owner)
+    })
+  }
+  rememberTableNameFolding(connection.getConnectionName(), await folding)
+}
 
 function ownerIdentities(connection: DatabaseContext): Map<string, TableIdentityEntry> {
   const owner = getRootDatabaseContext(connection)
@@ -44,7 +66,9 @@ async function lookupTableIdentity(connection: DatabaseContext, tableName: strin
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
-  if (splitTablePath(tableName).schema === undefined) return tableName
+  await resolveTableNameFolding(connection)
+  const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
+  if (splitTablePath(tableName).schema === undefined) return fold(tableName)
   const identities = ownerIdentities(connection)
   const cached = identities.get(tableName)
   const entry = cached?.generation === currentSchemaGeneration()
@@ -56,10 +80,10 @@ export async function resolveTableIdentity(connection: DatabaseContext, tableNam
       if (identities.get(tableName) === entry) identities.delete(tableName)
     })
   }
-  const identity = await entry.identity
+  const identity = fold(await entry.identity)
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
   if (cached && entry !== cached) {
-    const replaced = await cached.identity.catch(() => identity)
+    const replaced = fold(await cached.identity.catch(() => identity))
     if (replaced !== identity) await invalidateReplacedTableIdentity(connection, replaced)
   }
   return identity
