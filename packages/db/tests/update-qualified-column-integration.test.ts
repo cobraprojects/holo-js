@@ -33,7 +33,7 @@ async function createProducts(driver: typeof drivers[number]) {
   return { name, read }
 }
 
-describe.each(drivers)('update with a table-qualified column on %s', (driver) => {
+describe.each(drivers)('writes with a table-qualified column or alias on %s', (driver) => {
   afterEach(() => {
     resetDB()
   })
@@ -93,6 +93,65 @@ describe.each(drivers)('update with a table-qualified column on %s', (driver) =>
     expect(await read()).toEqual([
       { price: 11, label: 'bare', color: 'red' },
       { price: 21, label: 'qualified', color: 'blue' },
+    ])
+  })
+
+  it('updates through a query that filters on the table alias', async () => {
+    const { name, read } = await createProducts(driver)
+
+    const result = await DB.table(`${name} as p`).where('p.id', 2).update({ 'p.price': 26, label: 'filtered' })
+
+    expect(result.affectedRows).toBe(1)
+    expect(await read()).toEqual([
+      { price: 10, label: 'first', color: 'red' },
+      { price: 26, label: 'filtered', color: 'blue' },
+    ])
+  })
+
+  it('increments through a query that filters on the table alias', async () => {
+    const { name, read } = await createProducts(driver)
+
+    await DB.table(`${name} as p`).where('p.id', 1).increment('p.price', 4)
+    await DB.table(`${name} as p`).where('p.price', '>', 15).orderBy('p.id').limit(1).decrement('price', 3)
+
+    expect(await read()).toEqual([
+      { price: 14, label: 'first', color: 'red' },
+      { price: 17, label: 'second', color: 'blue' },
+    ])
+  })
+
+  it('deletes through a query that filters on the table alias', async () => {
+    const { name, read } = await createProducts(driver)
+
+    const result = await DB.table(`${name} as p`).where('p.id', 1).delete()
+
+    expect(result.affectedRows).toBe(1)
+    expect(await read()).toEqual([
+      { price: 20, label: 'second', color: 'blue' },
+    ])
+  })
+
+  it('upserts with update columns qualified with the query table or its alias', async () => {
+    const { name, read } = await createProducts(driver)
+
+    await DB.table(name).upsert([{ id: 1, price: 31, label: 'own' }], ['id'], [`${name}.price`, `${name}.label`])
+    await DB.table(`${name} as p`).upsert([{ id: 2, price: 32, label: 'aliased' }], ['id'], ['p.price', 'label'])
+
+    expect(await read()).toEqual([
+      { price: 31, label: 'own', color: 'red' },
+      { price: 32, label: 'aliased', color: 'blue' },
+    ])
+  })
+
+  it('rejects upsert update columns qualified with another table or named twice and leaves the rows unchanged', async () => {
+    const { name, read } = await createProducts(driver)
+
+    await expect(DB.table(name).upsert([{ id: 1, price: 99, label: 'x' }], ['id'], ['label', 'orders.price'])).rejects.toThrow(`Cannot upsert column "orders.price" outside table "${name}".`)
+    await expect(DB.table(name).upsert([{ id: 1, price: 99, label: 'x' }], ['id'], ['price', `${name}.price`])).rejects.toThrow(`Cannot upsert column "price" more than once.`)
+
+    expect(await read()).toEqual([
+      { price: 10, label: 'first', color: 'red' },
+      { price: 20, label: 'second', color: 'blue' },
     ])
   })
 

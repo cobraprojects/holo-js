@@ -2807,8 +2807,9 @@ export class TableQueryBuilder<
   async upsert(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     uniqueBy: readonly string[],
-    updateColumns: readonly string[] = [],
+    requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -3448,11 +3449,11 @@ export class TableQueryBuilder<
   }
 
   private resolveSourceColumnKeys<TValue>(
-    values: Readonly<Record<string, TValue>>,
-    operation: 'update' | 'increment/decrement',
+    values: Readonly<Record<string, TValue>> | readonly (readonly [string, TValue])[],
+    operation: 'update' | 'upsert' | 'increment/decrement',
   ): Readonly<Record<string, TValue>> {
     const resolved: Record<string, TValue> = {}
-    for (const [column, value] of Object.entries(values)) {
+    for (const [column, value] of Array.isArray(values) ? values : Object.entries(values)) {
       const pathStart = column.indexOf('->')
       const root = pathStart === -1 ? column : column.slice(0, pathStart)
       const rootName = this.resolveSourceColumnName(root)
