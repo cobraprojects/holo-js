@@ -262,4 +262,19 @@ describe('SQLite unqualified table resolution', () => {
     expect(qualified.extraTables).not.toContain('items')
     expect(qualified.tables.map(table => [table.table, table.hasChanges])).toEqual([['main.items', false]])
   })
+
+  it('diffs foreign keys of a main table that a temp table shadows', async () => {
+    const { db, schema } = await openSQLite([
+      'CREATE TABLE "main"."parents" ("id" INTEGER PRIMARY KEY NOT NULL)',
+      'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY NOT NULL, "parent_id" INTEGER REFERENCES "parents" ("id"))',
+    ])
+    const generated = (await createSchemaReader(db).readGeneratedSchema()).find(table => table.tableName === 'items')!
+    const parentId = generated.columns.parent_id!
+    const declared = defineTable('items', { ...generated.columns, parent_id: { ...parentId, references: { ...parentId.references!, table: 'main.parents' } } })
+    await db.executeCompiled({ sql: 'CREATE TABLE "temp"."items" ("id" INTEGER PRIMARY KEY NOT NULL, "parent_id" INTEGER)', source: 'schema' })
+
+    const diff = await diffSchema(schema, [declared])
+
+    expect(diff.tables.map(table => [table.table, table.missingForeignKeys, table.extraForeignKeys, table.hasChanges])).toEqual([['items', [], [], false]])
+  })
 })

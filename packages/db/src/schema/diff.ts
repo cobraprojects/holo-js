@@ -167,7 +167,7 @@ async function resolveReferencedTable(
   const owner = splitTablePath(ownerTableName)
   const referenced = splitTablePath(referencedTableName)
   if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
-  const ownerSchema = (await tableLocations.table(ownerTableName))?.schema
+  const ownerSchema = (await tableLocations.table(owner.schema === undefined ? tableLocations.listedPath(ownerTableName) : ownerTableName))?.schema
   if (ownerSchema === undefined) return referencedTableName
   const referencedSchema = await tableLocations.reference(referencedTableName, ownerSchema)
   if (referencedSchema === undefined) return referencedTableName
