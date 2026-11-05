@@ -868,17 +868,29 @@ function loadErrorSource(message: string, sources: BundleSources): string | unde
     (specifier: string) => `'${packageNameOf(specifier)}'`,
     (specifier: string) => `/node_modules/${packageNameOf(specifier)}/`,
   ]
+  const normalizedMessage = message.replaceAll('\\', '/')
   for (const mention of mentions) {
-    const importer = importers.find(([specifier]) => message.includes(mention(specifier)))
+    const importer = importers.find(([specifier]) => normalizedMessage.includes(mention(specifier)))
     if (importer) return importer[1]
   }
   return sources.sourcePath
 }
 
+function bundleRealPath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
 function withBundleSources(error: unknown, sources: BundleSources): unknown {
   if (!error || typeof error !== 'object' || typeof (error as { message?: unknown }).message !== 'string') return error
   const message = (error as { message: string }).message
-  const bundleLocation = new RegExp(`(?:${escapeRegExp(pathToFileURL(sources.path).href)}|${escapeRegExp(sources.path)})(?:\\?[^\\s'"]*)?`, 'g')
+  const locations = [...new Set([sources.path, bundleRealPath(sources.path)])]
+    .flatMap(path => [pathToFileURL(path).href, path])
+    .map(escapeRegExp)
+  const bundleLocation = new RegExp(`(?:${locations.join('|')})(?:\\?[^\\s'"]*)?`, 'g')
   if (!message.match(bundleLocation)) return error
   const source = loadErrorSource(message, sources)
   if (source === undefined) return error

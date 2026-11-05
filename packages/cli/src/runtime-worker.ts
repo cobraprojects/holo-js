@@ -31,7 +31,7 @@ type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOpt
 type RuntimeModuleEntry = {
   readonly sourcePath: string
   readonly url: string
-  readonly importers?: Readonly<Record<string, string>>
+  readonly importers: Readonly<Record<string, string>>
 }
 
 type RuntimePayload = {
@@ -117,7 +117,7 @@ async function loadModule(path: string): Promise<unknown> {
 
 async function loadBundledModule(entry: RuntimeModuleEntry): Promise<unknown> {
   return bundleSourceInternals.importBundle(
-    { path: fileURLToPath(entry.url), sourcePath: entry.sourcePath, importers: entry.importers ?? {} },
+    { path: fileURLToPath(entry.url), sourcePath: entry.sourcePath, importers: entry.importers },
     url => import(url),
   )
 }
