@@ -195,7 +195,7 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
-As in Laravel, the rows skip the model's `fillable` and `guarded` rules, so they may carry the auto-increment `id`, which is the usual unique column. Rows that carry it update the record with that `id` and insert the rest under the `id` they give. Casts and mutators still apply to each value:
+As in Laravel, the rows skip the model's `fillable` and `guarded` rules, so they may carry the auto-increment `id`, which is the usual unique column. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators still apply to each value:
 
 ```ts
 await Product.query().upsert(
@@ -208,7 +208,7 @@ await Product.query().upsert(
 )
 ```
 
-The rows and the update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
+The rows' keys and the update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes
 
