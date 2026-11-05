@@ -427,6 +427,23 @@ describe('a Generated-schema table with a case-insensitive string key', () => {
     expect(live.snapshots.at(-1)).toEqual({ code: 'de', name: 'Germany' })
   })
 
+  it('follows a detail subscription through a recased key to later updates', async () => {
+    registerGeneratedTables({
+      regions: defineGeneratedTable('regions', { code: column.string().primaryKey(), name: column.string() }),
+    })
+    await adapter.execute('CREATE TABLE regions (code TEXT PRIMARY KEY COLLATE NOCASE, name TEXT NOT NULL)')
+    await adapter.execute("INSERT INTO regions VALUES ('DE', 'Germany'), ('FR', 'France')")
+    const live = await subscribe(db => db.table('regions').where('code', 'DE').first())
+    await mutate(async ({ db }) => {
+      await db.table('regions').where('code', 'DE').update({ code: 'de' })
+    })
+    await mutate(async ({ db }) => {
+      await db.table('regions').where('code', 'DE').update({ name: 'Deutschland' })
+    })
+
+    expect(live.snapshots.at(-1)).toEqual({ code: 'de', name: 'Deutschland' })
+  })
+
   it('keeps grouped detail subscriptions when an update recases one of their keys', async () => {
     registerGeneratedTables({
       regions: defineGeneratedTable('regions', { code: column.string().primaryKey(), name: column.string() }),
@@ -437,11 +454,19 @@ describe('a Generated-schema table with a case-insensitive string key', () => {
       germany: await db.table('regions').select('code', 'name').where('code', 'DE').first(),
       france: await db.table('regions').select('code', 'name').where('code', 'FR').first(),
     }))
+    const ordered = await subscribe(async db => ({
+      germany: await db.table('regions').select('code', 'name').where('code', 'DE').orderBy('code').first(),
+      france: await db.table('regions').select('code', 'name').where('code', 'FR').orderBy('code').first(),
+    }))
     await mutate(async ({ db }) => {
       await db.table('regions').where('code', 'DE').update({ code: 'de' })
     })
 
     expect(live.snapshots.at(-1)).toEqual({
+      germany: { code: 'de', name: 'Germany' },
+      france: { code: 'FR', name: 'France' },
+    })
+    expect(ordered.snapshots.at(-1)).toEqual({
       germany: { code: 'de', name: 'Germany' },
       france: { code: 'FR', name: 'France' },
     })

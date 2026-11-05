@@ -375,7 +375,7 @@ function groupWindowRows(
   const rowsByGroup = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const groupValue = row[GROUPED_ROW_ID_ALIAS]
-    if (typeof groupValue === 'undefined') {
+    if (typeof groupValue === 'undefined' || !values.some(value => Object.is(value, groupValue))) {
       return undefined
     }
 

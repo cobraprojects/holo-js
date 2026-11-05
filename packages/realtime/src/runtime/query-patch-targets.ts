@@ -43,6 +43,7 @@ import type {
   QueryPatchCapability,
   QueryPatchPlan,
   QueryPatchTarget,
+  QueryRowPatchContext,
   RecordQueryPatchTarget,
   RowPatchMode,
   RowsQueryPatchTarget,
@@ -93,6 +94,16 @@ export function createPatchedQueryObservation(
   result: unknown,
   resultPathKey: string,
 ): DatabaseQueryObservation {
+  const exactId = readQueryExactIdPredicateValue({
+    predicates: query.predicates,
+    primaryKey: query.primaryKey,
+    result,
+    selections: query.selections,
+  })
+  const patchPlan = query.patchPlan?.resultPathKey === resultPathKey
+    && (!query.patchPlan.rowContext || Object.is(query.patchPlan.rowContext.exactQueryId, exactId))
+    ? query.patchPlan
+    : undefined
   return Object.freeze({
     aggregate: query.aggregate,
     aggregateBackfillKey: query.aggregateBackfillKey,
@@ -104,7 +115,7 @@ export function createPatchedQueryObservation(
     cursorRows: query.cursorRows,
     dependencies: query.dependencies,
     emptyRecordValue: query.emptyRecordValue,
-    exactId: readQueryExactIdPredicateValue(query),
+    exactId,
     groupedAggregate: query.groupedAggregate,
     hasOrderBy: hasQueryOrderBy(query),
     hasProjectedSelections: hasProjectedSelections(query),
@@ -118,7 +129,7 @@ export function createPatchedQueryObservation(
     orderMultipliers: readQueryOrderMultipliers(query),
     patchable: query.patchable,
     pagination: query.pagination,
-    patchPlan: query.patchPlan?.resultPathKey === resultPathKey ? query.patchPlan : undefined,
+    patchPlan,
     predicateColumns: readQueryPredicateColumns(query),
     predicates: query.predicates,
     primaryKey: query.primaryKey,
@@ -185,6 +196,12 @@ function createQueryPatchTarget(
   })
 }
 
+function readTargetRowContext(target: QueryPatchTarget, query: DatabaseQueryObservation): QueryRowPatchContext | undefined {
+  return target.rowContext && !Object.is(target.rowContext.exactQueryId, readQueryExactIdPredicateValue(query))
+    ? createQueryRowPatchContext(query)
+    : target.rowContext
+}
+
 export function updatePatchedQueryPatchTarget(
   target: QueryPatchTarget,
   query: DatabaseQueryObservation,
@@ -208,7 +225,7 @@ export function updatePatchedQueryPatchTarget(
     patchCapability: selectQueryPatchCapability(query, target.aggregatePatchMode, rowPatchMode, skipsPatching),
     query,
     rowMutationApplier: target.rowMutationApplier,
-    rowContext: target.rowContext,
+    rowContext: readTargetRowContext(target, query),
     rowPatchMode,
     skipsPatching,
     resultPath,
@@ -233,7 +250,7 @@ export function updateQueryPatchTargetCurrentValue(
     patchCapability: selectQueryPatchCapability(query, target.aggregatePatchMode, rowPatchMode, skipsPatching),
     query,
     rowMutationApplier: target.rowMutationApplier,
-    rowContext: target.rowContext,
+    rowContext: readTargetRowContext(target, query),
     rowPatchMode,
     skipsPatching,
     resultPath: target.resultPath,
