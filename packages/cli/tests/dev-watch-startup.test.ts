@@ -205,6 +205,17 @@ it('re-prepares after a prepare that follows startup writes a watched file, as b
   expect(calls).toEqual(['live', 'prepare', 'prepare', 'prepare', 'spawn'])
 })
 
+async function installWatchPlugin(root: string): Promise<void> {
+  await write(root, 'config/app.mjs', "export default {\n  plugins: ['demo-watch-plugin'],\n}\n")
+  await write(root, 'node_modules/demo-watch-plugin/package.json', JSON.stringify({ name: 'demo-watch-plugin', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
+  await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
+}
+
+async function waitForNextSecond(): Promise<void> {
+  const nextSecond = Math.floor(Date.now() / 1_000) * 1_000 + 1_000
+  while (Date.now() < nextSecond) await delay(nextSecond - Date.now())
+}
+
 function createNonRecursiveWatcher() {
   const createWatcher = ((_path: string, options: { recursive: boolean }) => {
     if (options.recursive) {
@@ -217,9 +228,7 @@ function createNonRecursiveWatcher() {
 
 it('re-prepares before launching when a startup edit lands in a plugin watch root the initial prepare created, without recursive watching', async () => {
   const root = await createProject()
-  await write(root, 'config/app.mjs', "export default {\n  plugins: ['demo-watch-plugin'],\n}\n")
-  await write(root, 'node_modules/demo-watch-plugin/package.json', JSON.stringify({ name: 'demo-watch-plugin', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
-  await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
+  await installWatchPlugin(root)
   const calls: string[] = []
 
   await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {
@@ -234,12 +243,9 @@ it('re-prepares before launching when a startup edit lands in a plugin watch roo
 
 it('does no extra prepare at startup without recursive watching when the initial prepare only writes its own files in a new plugin watch root', async () => {
   const root = await createProject()
-  await write(root, 'config/app.mjs', "export default {\n  plugins: ['demo-watch-plugin'],\n}\n")
-  await write(root, 'node_modules/demo-watch-plugin/package.json', JSON.stringify({ name: 'demo-watch-plugin', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
-  await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
+  await installWatchPlugin(root)
   await write(root, 'resources/existing/Untouched.ts')
-  const nextSecond = Math.floor(Date.now() / 1_000) * 1_000 + 1_000
-  while (Date.now() < nextSecond) await delay(nextSecond - Date.now())
+  await waitForNextSecond()
   const calls: string[] = []
 
   await runDev(root, createNonRecursiveWatcher(), calls, async (call) => {

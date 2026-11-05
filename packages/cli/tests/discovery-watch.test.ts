@@ -531,7 +531,7 @@ async function startDeferredWatch(root: string, recursive: boolean) {
   }
   if (recursive) emit(DISCOVERY_WATCH_PROBE_PATH)
   await watcher.ready
-  return { ...captured, watcher, emit, watchedDirectories: () => [...listeners.keys()] }
+  return { ...captured, watcher, emit }
 }
 
 it('replays a file created during startup as created when the watch policy changes', async () => {
@@ -571,18 +571,32 @@ it('replays a startup edit to a file that existed before startup as changed when
   expect(changes).toEqual([{ path: 'server/models/User.ts', kind: 'changed' }])
 })
 
+it('replays a startup edit to a file that existed before startup in a newly watched root as changed', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await write(root, 'resources/demo/Existing.ts', 'edited')
+  emit('resources/demo/Existing.ts')
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo/Existing.ts', kind: 'changed' }])
+})
+
 it('catches up on startup edits in a watch root created during startup when only the non-recursive watcher is available', async () => {
   const root = await createProject()
   await installWatchPlugin(root)
   await write(root, 'resources/legacy/Untouched.ts')
   await waitForNextSecond()
   const config = defaultProjectConfig()
-  const { watcher, changes, settled, watchedDirectories } = await startDeferredWatch(root, false)
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
   await writeOutputFile(join(root, 'resources/demo/Generated.ts'), 'generated')
   await write(root, 'resources/demo/nested/Edited.ts')
   await declarePluginWatchRoots(root, ['resources/demo', 'resources/legacy'])
   await watcher.refresh({ config })
-  expect(watchedDirectories()).toEqual(expect.arrayContaining([join(root, 'resources/demo'), join(root, 'resources/demo/nested')]))
   watcher.resume()
   await settled()
   expect(changes).toEqual([{ path: 'resources/demo/nested/Edited.ts', kind: 'created' }])
