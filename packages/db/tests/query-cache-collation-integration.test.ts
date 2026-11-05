@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, clearGeneratedTables, column, registerGeneratedTables } from '../src'
+import { resolveCaseInsensitiveColumns } from '../src/schema/caseInsensitiveColumns'
 import { defineTable } from './support/internal'
 import { mysqlIntegration, openDatabase, postgresIntegration } from './support/database'
 
@@ -201,6 +202,27 @@ describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
   })
 })
 
+describe('query cache invalidation by a key whose table-level primary key is NOCASE on sqlite', () => {
+  it('refreshes a cached read by key after an upsert matched by a case-differing key through the primary key collation', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), label: column.string() }) })
+    onTestFinished(() => {
+      clearGeneratedTables()
+      resetCacheRuntime()
+    })
+    await adapter.execute(`CREATE TABLE ${name} (code TEXT NOT NULL, label VARCHAR(64) NOT NULL, PRIMARY KEY (code COLLATE NOCASE))`)
+    await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).upsert({ code: 'fr', label: 'République' }, ['code'], ['label'])
+
+    expect(await cachedLabel()).toBe('République')
+  })
+})
+
 describe('query cache invalidation by an RTRIM key on sqlite', () => {
   it('refreshes a cached read by key after an update matched by the key with trailing spaces', async () => {
     const countries = await createCountries('sqlite', 'TEXT COLLATE RTRIM')
@@ -264,6 +286,63 @@ describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_0900_b
     await countries.update('FR  ', 'République')
 
     expect(await countries.cachedLabel('FR')).toBe('France')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation on mysql when the column lookup fails', () => {
+  it('refreshes a cached read by a text key after an update by a number when the writer cannot read collations', async () => {
+    let failLookups = false
+    const { db, adapter } = await openDatabase('mysql', {
+      wrapAdapter: inner => new Proxy(inner, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          if ((property === 'query' || property === 'introspect') && typeof value === 'function') {
+            return (sql: string, ...rest: unknown[]) => failLookups && /^\s*SHOW\b|information_schema/i.test(sql)
+              ? target.query('SELECT * FROM holo_missing_lookup_table', [])
+              : Reflect.apply(value, target, [sql, ...rest])
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }),
+    })
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), label: column.string() }) })
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      clearGeneratedTables()
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (code, label) VALUES ('FR', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+    failLookups = true
+    await db.executeSchemaStatement({ sql: 'DO 0', source: 'schema' })
+
+    await DB.table(name).where('code', 0).update({ label: 'Zero' })
+
+    expect(await cachedLabel()).toBe('Zero')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('column collation lookup on mysql', () => {
+  it('reads the collation of a temporary table that shadows a permanent one', async () => {
+    const { db, adapter } = await openDatabase('mysql')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL)`)
+    onTestFinished(async () => {
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+
+    const exact = await db.transaction(async (transaction) => {
+      await transaction.executeCompiled({ sql: `CREATE TEMPORARY TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL)`, source: 'test' })
+      const columns = await resolveCaseInsensitiveColumns(transaction, name)
+      await transaction.executeCompiled({ sql: `DROP TEMPORARY TABLE ${name}`, source: 'test' })
+      return typeof columns === 'object' && 'findTextColumn' in columns ? columns.findTextColumn('code')?.exact : undefined
+    })
+
+    expect(exact).toBe(false)
   })
 })
 

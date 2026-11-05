@@ -3462,7 +3462,8 @@ export class TableQueryBuilder<
     predicates: readonly QueryPredicateNode[] = [],
   ): Promise<CaseInsensitiveColumns> {
     if (isMySQLConnection(this.connection)) {
-      return await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
     }
 
     if (!isPostgresConnection(this.connection) && !isSQLiteConnection(this.connection)) {
