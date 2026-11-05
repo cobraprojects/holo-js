@@ -12,7 +12,9 @@ async function createCountries(driver: Driver) {
   const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
   registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), label: column.string() }) })
-  const code = driver === 'sqlite' ? 'code TEXT PRIMARY KEY COLLATE NOCASE NOT NULL' : 'code VARCHAR(16) PRIMARY KEY NOT NULL'
+  const code = driver === 'sqlite'
+    ? 'code TEXT PRIMARY KEY COLLATE NOCASE NOT NULL'
+    : `code VARCHAR(16) COLLATE ${driver === 'mysql' ? 'utf8mb4_0900_ai_ci' : '"C"'} PRIMARY KEY NOT NULL`
   await adapter.execute(`CREATE TABLE ${name} (${code}, label VARCHAR(64) NOT NULL)`)
   onTestFinished(async () => {
     clearGeneratedTables()

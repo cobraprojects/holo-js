@@ -39,7 +39,7 @@ function codeColumnDefinition(driver: Driver, primaryKey: boolean): string {
     return `code TEXT${key} COLLATE NOCASE NOT NULL`
   }
 
-  return `code VARCHAR(16)${key} NOT NULL`
+  return `code VARCHAR(16) COLLATE ${driver === 'mysql' ? 'utf8mb4_0900_ai_ci' : '"C"'}${key} NOT NULL`
 }
 
 async function createCountries(driver: Driver, keyedByCode: boolean) {
@@ -75,9 +75,11 @@ async function createCountries(driver: Driver, keyedByCode: boolean) {
     await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
     return snapshots
   }
+  let queryRuns = 0
   const subscribeAll = async (code: string) => {
     const snapshots: unknown[] = []
     const query = defineRealtimeQuery({ access: 'public', handler: async ({ db }) => {
+      queryRuns += 1
       return (await db.table(tableName).where('code', code).get()).map(row => row.label).sort()
     } })
     await subscribeRealtimeQuery(query, {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
@@ -91,7 +93,7 @@ async function createCountries(driver: Driver, keyedByCode: boolean) {
   const insert = (id: number, code: string, label: string) => mutate(({ db }) => db.table(tableName).insert({ id, code, label }))
   const writeBehindRealtime = (code: string, label: string) => adapter.execute(`UPDATE ${tableName} SET label = '${label}' WHERE code = '${code}'`)
 
-  return { insert, subscribe, subscribeAll, update, upsert, writeBehindRealtime }
+  return { insert, queryRuns: () => queryRuns, subscribe, subscribeAll, update, upsert, writeBehindRealtime }
 }
 
 function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
@@ -128,6 +130,16 @@ function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
 
     expect(snapshots.at(-1)).toEqual(['Deutschland', 'Germany'])
   })
+
+  it('re-runs a subscription after an insert of a string it cannot rule out under the collation', async () => {
+    const countries = await createCountries(driver, false)
+    const snapshots = await countries.subscribeAll('DE')
+
+    await countries.insert(3, 'IT', 'Italy')
+
+    expect(countries.queryRuns()).toBe(2)
+    expect(snapshots).toEqual([['Germany']])
+  })
 }
 
 describe('realtime invalidation on a NOCASE column on sqlite', () => {
@@ -160,6 +172,16 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalid
 
     await countries.insert(3, 'de', 'Deutschland')
 
+    expect(snapshots).toEqual([['Germany']])
+  })
+
+  it('does not re-run a subscription after an insert of a different string', async () => {
+    const countries = await createCountries('postgres', false)
+    const snapshots = await countries.subscribeAll('DE')
+
+    await countries.insert(3, 'IT', 'Italy')
+
+    expect(countries.queryRuns()).toBe(1)
     expect(snapshots).toEqual([['Germany']])
   })
 })

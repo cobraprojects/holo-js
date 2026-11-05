@@ -98,6 +98,7 @@ import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schem
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
+import { isPostgresConnection } from '../schema/connectionDialect'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -3315,7 +3316,7 @@ export class TableQueryBuilder<
       rows,
       lastInsertId,
       hasInvalidationListeners,
-      this.hasCollatedStringComparison(),
+      !isPostgresConnection(this.connection),
     )
 
     await invalidateQueryCacheDependencies(
@@ -3324,10 +3325,6 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
-  }
-
-  private hasCollatedStringComparison(): boolean {
-    return !this.connection.getDialect().name.startsWith('postgres')
   }
 
   private async invalidateMutationQueries(
@@ -3345,7 +3342,7 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       values,
       hasInvalidationListeners,
-      this.hasCollatedStringComparison(),
+      !isPostgresConnection(this.connection),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
