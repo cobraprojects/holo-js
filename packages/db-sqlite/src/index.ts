@@ -43,7 +43,9 @@ function resolveSQLiteFilename(filename: string): string {
 
 const transactionTails = new Map<string | SQLiteAdapter, Promise<void>>()
 
-const heldTransactionScopes = new AsyncLocalStorage<ReadonlySet<string | SQLiteAdapter>>()
+type HeldTransactionScope = { active: boolean }
+
+const heldTransactionScopes = new AsyncLocalStorage<ReadonlyMap<string | SQLiteAdapter, HeldTransactionScope>>()
 
 function normalizeBinding(value: unknown): unknown {
   if (typeof value === 'boolean') {
@@ -148,7 +150,7 @@ export class SQLiteAdapter implements DriverAdapter {
 
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
     const held = heldTransactionScopes.getStore()
-    if (held?.has(this.transactionKey)) {
+    if (held?.get(this.transactionKey)?.active) {
       return callback()
     }
 
@@ -161,9 +163,11 @@ export class SQLiteAdapter implements DriverAdapter {
 
     await previous
 
+    const scope: HeldTransactionScope = { active: true }
     try {
-      return await heldTransactionScopes.run(new Set(held).add(this.transactionKey), callback)
+      return await heldTransactionScopes.run(new Map(held).set(this.transactionKey, scope), callback)
     } finally {
+      scope.active = false
       release()
       if (transactionTails.get(this.transactionKey) === current) transactionTails.delete(this.transactionKey)
     }
