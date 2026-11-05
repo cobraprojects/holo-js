@@ -114,6 +114,9 @@ it('types pivot attribute writes from the pivot table columns', () => {
       await user.roles().attach([1, 2], { approved: false })
       await user.roles().attach({ 1: { approved: true } })
       await user.roles().sync([1, 2])
+      await user.roles().sync(null)
+      await user.roles().toggle(undefined)
+      await user.roles().attach([new Uint8Array([1])])
       await user.roles().sync({ 1: { approved: true }, 2: { note: 'x' } })
       await user.roles().toggle({ 1: { approved: true } })
       await user.roles().updateExistingPivot(1, { note: 'x' })
@@ -127,6 +130,8 @@ it('types pivot attribute writes from the pivot table columns', () => {
       await user.updateExistingPivot('roles', 1, { approved: false })
       UserFactory.hasAttached(RoleFactory, 'roles', { approved: true })
 
+      // @ts-expect-error a single binary id is read as an id map
+      await user.roles().attach(new Uint8Array([1]))
       // @ts-expect-error unknown pivot column
       await user.roles().attach(1, { aproved: true })
       // @ts-expect-error computed pivot column

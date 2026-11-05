@@ -111,17 +111,20 @@ type PivotTableDefinition<TPivotTable extends string | TableDefinition>
 export type PivotTableColumnName<TPivotTable extends string | TableDefinition>
   = Extract<keyof InferSelect<PivotTableDefinition<TPivotTable>>, string>
 
-export type PivotAttributes<TPivotTable extends string | TableDefinition = string | TableDefinition>
-  = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>>
+type IsUntypedPivotTable<TPivotTable extends string | TableDefinition>
+  = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>> ? true : false
+
+export type PivotAttributes<TPivotTable extends string | TableDefinition>
+  = IsUntypedPivotTable<TPivotTable> extends true
     ? Record<string, unknown>
     : ModelUpdatePayload<PivotTableDefinition<TPivotTable>>
 
-export type PivotRelatedKey = string | number | bigint | Uint8Array
+export type PivotRelatedKey = string | number | bigint
 
-export type PivotRelatedIds<TPivotTable extends string | TableDefinition = string | TableDefinition>
-  = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>>
+export type PivotRelatedIds<TPivotTable extends string | TableDefinition>
+  = IsUntypedPivotTable<TPivotTable> extends true
     ? unknown
-    : PivotRelatedKey | readonly PivotRelatedKey[] | { readonly [id: string]: PivotAttributes<TPivotTable> }
+    : PivotRelatedKey | readonly (PivotRelatedKey | Uint8Array)[] | { readonly [id: string]: PivotAttributes<TPivotTable> } | null | undefined
 
 export interface BelongsToRelationDefinition<TRelated extends ModelDefinitionLike = ModelDefinitionLike> extends ScopedRelationDefinition {
   readonly kind: 'belongsTo'
