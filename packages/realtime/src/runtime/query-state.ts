@@ -33,6 +33,7 @@ export type DatabaseQueryObservation = {
   readonly pagination?: DatabaseQueryPaginationObservation
   readonly predicateColumns?: readonly string[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly primaryKey?: string
   readonly relation?: DatabaseQueryRelationObservation
   readonly projectedIdentityColumn?: string | typeof NO_PROJECTED_IDENTITY_COLUMN
   readonly result?: unknown
@@ -57,6 +58,7 @@ export type DatabaseQueryObservation = {
 export type DatabaseQueryBelongsToHydrationObservation = {
   readonly foreignKey: string
   readonly ownerKey: string
+  readonly primaryKey?: string
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -258,9 +260,8 @@ export const DUPLICATE_ROW_IDENTITY = Symbol('duplicate row identity')
 export const NO_PROJECTED_IDENTITY_COLUMN = Symbol('no projected identity column')
 export const ROW_IDENTITY_INDEXES_BY_ROWS = new WeakMap<
   readonly Readonly<Record<string, unknown>>[],
-  ReadonlyMap<unknown, number>
+  Map<string, ReadonlyMap<unknown, number> | undefined>
 >()
-export const ROWS_WITHOUT_UNIQUE_IDENTITY_INDEX = new WeakSet<readonly Readonly<Record<string, unknown>>[]>()
 
 export type DatabaseQueryOrderObservation = {
   readonly column: string
@@ -388,6 +389,7 @@ export type MutationPatchMetadata = {
   readonly exactMutationId: unknown | typeof NO_EXACT_ID_PREDICATE
   readonly hasValues: boolean
   readonly mutationPredicates: PredicateMatchContext
+  readonly primaryKey?: string
   readonly valueKeys: readonly string[]
 }
 
@@ -441,6 +443,7 @@ export type RowPatchContext = {
   readonly orderColumns: readonly string[]
   readonly orderMultipliers: readonly number[]
   previousRowsContainExactQueryId?: boolean
+  readonly primaryKey?: string
   previousRowsContainExactQueryIdCached?: boolean
   readonly projectedIdentityColumn: string | typeof NO_PROJECTED_IDENTITY_COLUMN
   readonly projectedSelectionChanged: boolean
@@ -461,6 +464,7 @@ export type QueryRowPatchContext = {
   readonly hasProjectedSelections: boolean
   readonly orderColumns: readonly string[]
   readonly orderMultipliers: readonly number[]
+  readonly primaryKey?: string
   readonly projectedIdentityColumn: string | typeof NO_PROJECTED_IDENTITY_COLUMN
   readonly queryPredicates: PredicateMatchContext
   readonly selectionColumns: readonly string[]

@@ -4,6 +4,7 @@ import type {
 import {
   hasRecordKey,
   readMutationValueKeys,
+  readPrimaryKey,
   valueKeysChangeColumns,
 } from './predicate-matching'
 import {
@@ -34,7 +35,7 @@ export function canPatchStableWindowMutationWithoutBackfill(
 ): boolean {
   const stableColumns = readStableWindowColumns(query)
   if (mutation.kind === 'upsert') {
-    return mutationRowsPreserveColumns(mutation, stableColumns)
+    return mutationRowsPreserveColumns(mutation, stableColumns, readPrimaryKey(query))
   }
 
   return mutation.kind === 'update'
@@ -59,6 +60,7 @@ function readStableWindowColumns(query: DatabaseQueryObservation): readonly stri
 function mutationRowsPreserveColumns(
   mutation: DatabaseMutationEvent,
   columns: readonly string[],
+  primaryKey: string,
 ): boolean {
   if (columns.length === 0) {
     return true
@@ -70,7 +72,7 @@ function mutationRowsPreserveColumns(
 
   const previousRows = new Map<unknown, Readonly<Record<string, unknown>>>()
   for (const row of mutation.previousRows) {
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     if (typeof identity === 'undefined' || previousRows.has(identity)) {
       return false
     }
@@ -79,7 +81,7 @@ function mutationRowsPreserveColumns(
   }
 
   for (const row of mutation.rows) {
-    const identity = rowIdentity(row)
+    const identity = rowIdentity(row, primaryKey)
     const previous = typeof identity === 'undefined' ? undefined : previousRows.get(identity)
     if (!previous || !rowPreservesColumns(row, previous, columns)) {
       return false

@@ -44,6 +44,18 @@ export function inferModelName(tableName: string): string {
 
 export class CompositeModelKeyError extends SchemaError {}
 
+export function resolveModelRowKey(definition: { readonly primaryKey: string }): string | undefined {
+  try {
+    return definition.primaryKey
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): Extract<keyof TTable['columns'], string> {
   const [primaryKey, ...otherPrimaryKeys] = Object.values(table.columns).filter(column => column.primaryKey)
   if (!primaryKey) {

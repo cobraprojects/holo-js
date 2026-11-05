@@ -1,3 +1,4 @@
+import { readPrimaryKey } from './predicate-matching'
 import {
   appendRowLazily,
 } from './query-row-array'
@@ -36,7 +37,8 @@ export function upsertPatchRowLazily(
   query?: DatabaseQueryObservation,
 ): Readonly<Record<string, unknown>>[] | undefined {
   const targetRows = nextRows ?? rows
-  const identity = rowIdentity(row)
+  const primaryKey = readPrimaryKey(query ?? {})
+  const identity = rowIdentity(row, primaryKey)
   if (typeof identity !== 'undefined') {
     if (!nextRows && query) {
       const indexedRows = upsertPatchRowFromQueryRowsLazily(rows, query, row, identity, keys)
@@ -47,7 +49,7 @@ export function upsertPatchRowLazily(
 
     for (let index = 0; index < targetRows.length; index += 1) {
       const current = targetRows[index]
-      if (!current || rowIdentity(current) !== identity) {
+      if (!current || rowIdentity(current, primaryKey) !== identity) {
         continue
       }
 
@@ -84,7 +86,7 @@ export function upsertOrderedPatchRowLazily(
   orderState: RowsOrderState,
 ): Readonly<Record<string, unknown>>[] | undefined {
   const targetRows = nextRows ?? rows
-  const identity = rowIdentity(row)
+  const identity = rowIdentity(row, readPrimaryKey(context))
   if (typeof identity !== 'undefined') {
     if (!nextRows) {
       const indexedRows = upsertOrderedPatchRowFromQueryRowsLazily(
@@ -104,7 +106,7 @@ export function upsertOrderedPatchRowLazily(
 
     for (let index = 0; index < targetRows.length; index += 1) {
       const current = targetRows[index]
-      if (!current || rowIdentity(current) !== identity) {
+      if (!current || rowIdentity(current, readPrimaryKey(context)) !== identity) {
         continue
       }
 

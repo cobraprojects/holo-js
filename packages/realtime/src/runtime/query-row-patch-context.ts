@@ -11,6 +11,7 @@ import {
   matchesPredicateValue,
   readMutationExactIdPredicateValue,
   readMutationValueKeys,
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
   valueKeysChangeColumns,
   type PredicateMatchContext,
@@ -49,7 +50,7 @@ export function matchesPredicateContext(
   context: PredicateMatchContext,
 ): boolean | undefined {
   if (context.exactId !== NO_EXACT_ID_PREDICATE) {
-    const matchesExactId = matchesExactRowIdentity(row, context.exactId)
+    const matchesExactId = matchesExactRowIdentity(row, context.exactId, readPrimaryKey(context))
     return matchesExactId ? matchesRemainingPredicateContext(row, context) : matchesExactId
   }
 
@@ -87,7 +88,7 @@ export function matchesPatchedPredicateContext(
   context: PredicateMatchContext,
 ): boolean | undefined {
   if (context.exactId !== NO_EXACT_ID_PREDICATE) {
-    const matchesExactId = matchesPatchedExactRowIdentity(row, values, context.exactId)
+    const matchesExactId = matchesPatchedExactRowIdentity(row, values, context.exactId, readPrimaryKey(context))
     return matchesExactId ? matchesRemainingPatchedPredicateContext(row, values, context) : matchesExactId
   }
 
@@ -119,7 +120,7 @@ function matchesRemainingPredicateContext(
   context: PredicateMatchContext,
 ): boolean | undefined {
   for (const predicate of context.predicates) {
-    if (isMatchedExactIdPredicate(predicate, context.exactId)) {
+    if (isMatchedExactIdPredicate(predicate, context)) {
       continue
     }
 
@@ -142,7 +143,7 @@ function matchesRemainingPatchedPredicateContext(
   context: PredicateMatchContext,
 ): boolean | undefined {
   for (const predicate of context.predicates) {
-    if (isMatchedExactIdPredicate(predicate, context.exactId)) {
+    if (isMatchedExactIdPredicate(predicate, context)) {
       continue
     }
 
@@ -165,12 +166,12 @@ function isMatchedExactIdPredicate(
     readonly operator: string
     readonly value: unknown
   }>,
-  exactId: unknown | typeof NO_EXACT_ID_PREDICATE,
+  context: PredicateMatchContext,
 ): boolean {
-  return exactId !== NO_EXACT_ID_PREDICATE
-    && predicate.column === 'id'
+  return context.exactId !== NO_EXACT_ID_PREDICATE
+    && predicate.column === readPrimaryKey(context)
     && predicate.operator === '='
-    && predicate.value === exactId
+    && predicate.value === context.exactId
 }
 
 export function readMutationPatchMetadata(
@@ -193,6 +194,7 @@ function createMutationPatchMetadata(mutation: DatabaseMutationEvent): MutationP
     exactMutationId,
     hasValues: Boolean(mutation.values),
     mutationPredicates: createMutationPredicateMatchContext(mutation, exactMutationId),
+    primaryKey: readPrimaryKey(mutation),
     valueKeys: readMutationValueKeys(mutation),
   })
 }
@@ -230,14 +232,16 @@ export function canBackfillShrinkingRows(
 
 export function createQueryRowPatchContext(query: DatabaseQueryObservation): QueryRowPatchContext {
   const exactQueryId = readQueryExactIdPredicateValue(query)
+  const primaryKey = readPrimaryKey(query)
   const projectedIdentityColumn = readQueryProjectedIdentityColumn(query)
   return {
     exactQueryId,
     hasProjectedSelections: query.hasProjectedSelections ?? hasProjectedSelections(query),
     orderColumns: readQueryOrderColumns(query),
     orderMultipliers: readQueryOrderMultipliers(query),
+    primaryKey,
     projectedIdentityColumn,
-    queryPredicates: createPredicateMatchContext(query.predicates, exactQueryId),
+    queryPredicates: createPredicateMatchContext(query.predicates, exactQueryId, primaryKey),
     relationKeys: [
       ...(query.belongsToHydrations ?? []).map(hydration => hydration.relationKey),
       ...(query.relatedHydrations ?? []).map(hydration => hydration.relationKey),
@@ -255,12 +259,13 @@ export function createMutationRowPatchContext(
   metadata: MutationPatchMetadata,
 ): RowPatchContext {
   return {
-    exactMutationId: metadata.exactMutationId,
+    exactMutationId: readPrimaryKey(metadata) === readPrimaryKey(queryContext) ? metadata.exactMutationId : NO_EXACT_ID_PREDICATE,
     exactQueryId: queryContext.exactQueryId,
     hasProjectedSelections: queryContext.hasProjectedSelections,
     mutationPredicates: metadata.mutationPredicates,
     orderColumns: queryContext.orderColumns,
     orderMultipliers: queryContext.orderMultipliers,
+    primaryKey: readPrimaryKey(queryContext),
     projectedIdentityColumn: queryContext.projectedIdentityColumn,
     projectedSelectionChanged: selectionColumnsChangedByMutation(queryContext.selectionColumns, metadata),
     queryOrderChanged: valueKeysChangeColumns(metadata.valueKeys, queryContext.orderColumns),
