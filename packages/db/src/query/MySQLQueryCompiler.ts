@@ -57,11 +57,11 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileUpsertSuffix(plan: UpsertQueryPlan, insertColumns: readonly string[]): string {
-    let updateColumns = plan.updateColumns
-    if (updateColumns.length === 0) {
-      updateColumns = [plan.uniqueBy[0] ?? insertColumns[0]!]
+    if (plan.updateColumns.length === 0) {
+      const column = this.quoteIdentifier(plan.uniqueBy[0] ?? insertColumns[0]!)
+      return ` ON DUPLICATE KEY UPDATE ${column} = ${column}`
     }
-    const updates = updateColumns
+    const updates = plan.updateColumns
       .map(column => `${this.quoteIdentifier(column)} = VALUES(${this.quoteIdentifier(column)})`)
       .join(', ')
     return ` ON DUPLICATE KEY UPDATE ${updates}`
