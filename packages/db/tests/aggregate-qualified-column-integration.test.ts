@@ -2,13 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { DB, column, defineModel, defineGeneratedTable, resetDB } from '../src'
 import cache, { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { openDatabase } from './support/database'
+import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
 
-const drivers = [
-  'sqlite' as const,
-  ...(process.env.HOLO_POSTGRES_INTEGRATION === '1' ? ['postgres' as const] : []),
-  ...(process.env.HOLO_MYSQL_INTEGRATION === '1' ? ['mysql' as const] : []),
-] as const
+const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
 const kinds = ['max', 'min', 'sum', 'avg'] as const
 
@@ -140,7 +136,7 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
 
   it.each(kinds)('%s reads a schema-qualified query table through a join', async (kind) => {
     const { name, ordersName } = await createProducts(driver)
-    const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const schemaName = driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
 
     const query = DB.table(`${schemaName}.${name}`).join(`${schemaName}.${ordersName}`, `${ordersName}.product_id`, '=', `${name}.id`).distinct()
     expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
@@ -183,7 +179,7 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
   it.skipIf(driver === 'sqlite').each(kinds)('%s reads each of two same-named tables joined from different schemas', async (kind) => {
     const { name } = await createProducts(driver)
     const { adapter, schema } = await openDatabase(driver)
-    const schemaName = driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const schemaName = driver === 'postgres' ? 'public' : mysqlTestConnection().database
     const tenant = uniqueName('holo_tenant')
     const quote = (identifier: string) => driver === 'postgres' ? `"${identifier}"` : `\`${identifier}\``
     onTestFinished(async () => {
@@ -209,7 +205,7 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
 
   it.skipIf(driver === 'sqlite').each(kinds)('%s accepts the bare name of a schema-qualified table', async (kind) => {
     const { name } = await createProducts(driver)
-    const schemaName = driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
+    const schemaName = driver === 'postgres' ? 'public' : mysqlTestConnection().database
 
     expect(Number(await DB.table(`${schemaName}.${name}`)[kind](`${name}.price`))).toBe(expected[kind])
     expect(Number(await DB.table(`${schemaName}.${name}`)[kind](`${schemaName}.${name}.price`))).toBe(expected[kind])
