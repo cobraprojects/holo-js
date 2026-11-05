@@ -10,6 +10,7 @@ import {
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   recordDatabaseQueryRefreshObservation,
+  refreshTruncatedDatabaseQueryObservations,
   resolveQueryCacheDependencies,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
@@ -3400,7 +3401,7 @@ export class ModelRepository<
     const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
     const grouped = await this.queryThroughEntitiesByParentKey(entities, relation, constraint)
     if (typeof observationCount === 'number') {
-      truncateDatabaseQueryObservations(observationCount)
+      refreshTruncatedDatabaseQueryObservations(observationCount)
       this.recordThroughRelationObservations(relation)
     }
     return grouped
