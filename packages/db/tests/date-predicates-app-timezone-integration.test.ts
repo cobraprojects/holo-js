@@ -172,6 +172,27 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
     await expect(titles(DB.table(events).whereColumn('day', '<', 'at'))).resolves.toEqual(['model', 'calendar', 'later'])
   })
 
+  it('compares a DATE column with a DATETIME column by the DATE column\'s calendar midnight', async () => {
+    useAppTimezoneAt(new Date('2026-11-04T20:00:00Z'))
+    const { events } = await createEventsTable(driver)
+    await DB.table(events).insert({ title: 'noon', day: tokyoNoonNov5, at: tokyoMidnightNov5 })
+
+    await expect(titles(DB.table(events).whereColumn('day', '=', 'at'))).resolves.toEqual(['noon'])
+    await expect(titles(DB.table(events).whereColumn('day', '>', 'at'))).resolves.toEqual([])
+  })
+
+  it('keeps fractional seconds when it compares a DATE column with a DATETIME column', async () => {
+    useAppTimezoneAt(new Date('2026-11-05T01:00:00Z'), 'UTC')
+    const { events } = await createEventsTable(driver)
+    await DB.table(events).insert({ title: 'fraction', day: '2026-11-05', at: new Date('2026-11-05T00:00:00.500Z') })
+
+    const stored = await DB.table(events).where('title', 'fraction').value('at')
+    const keepsFraction = /\.\d*[1-9]/.test(stored instanceof Date ? stored.toISOString() : String(stored))
+
+    await expect(titles(DB.table(events).whereColumn('day', '=', 'at').where('title', 'fraction'))).resolves.toEqual(keepsFraction ? [] : ['fraction'])
+    await expect(titles(DB.table(events).whereColumn('day', '<', 'at').where('title', 'fraction'))).resolves.toEqual(keepsFraction ? ['fraction'] : [])
+  })
+
   it('matches calendar text by its own day on a table without a column definition', async () => {
     useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
     const { events } = await createEventsTable(driver)

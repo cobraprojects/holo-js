@@ -108,7 +108,7 @@ export interface QueryColumnPredicate {
   readonly column: string
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly compareTo: string
-  readonly valueType?: 'date'
+  readonly dateOperands?: { readonly column: boolean, readonly compareTo: boolean }
 }
 
 export interface QueryNullPredicate {

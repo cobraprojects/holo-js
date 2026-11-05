@@ -209,11 +209,16 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {
-    if (predicate.valueType !== 'date') return super.compileColumnComparison(predicate)
+    if (!predicate.dateOperands) return super.compileColumnComparison(predicate)
 
-    const column = `datetime(${this.compileAppWallClock(this.compileColumnReference(predicate.column))})`
-    const compareTo = `datetime(${this.compileAppWallClock(this.compileColumnReference(predicate.compareTo))})`
+    const column = this.compileWallClockOperand(predicate.column, predicate.dateOperands.column)
+    const compareTo = this.compileWallClockOperand(predicate.compareTo, predicate.dateOperands.compareTo)
     return `${column} ${predicate.operator.toUpperCase()} ${compareTo}`
+  }
+
+  private compileWallClockOperand(column: string, isDate: boolean): string {
+    const wallClock = this.compileAppWallClock(this.compileColumnReference(column))
+    return isDate ? `(date(${wallClock}) || ' 00:00:00.000')` : `strftime('%Y-%m-%d %H:%M:%f', ${wallClock})`
   }
 
   protected override compileComparisonSubject(predicate: QueryPredicate): string {

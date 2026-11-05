@@ -865,13 +865,14 @@ export class TableQueryBuilder<
     compareTo?: string,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const comparedColumn = compareTo ?? operatorOrCompareTo
+    const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
     return this.clone(withPredicate(this.plan, {
       kind: 'column',
       boolean,
       column,
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
-      ...(this.isDateColumn(column) || this.isDateColumn(comparedColumn) ? { valueType: 'date' as const } : {}),
+      ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
     }))
   }
 

@@ -31,5 +31,8 @@ export function formatSQLiteWallClock(epochMilliseconds: unknown, timeZone: unkn
   }
 
   const instant = new Date(Math.round(epochMilliseconds))
-  return Number.isNaN(instant.getTime()) ? null : formatWallClockSeconds(instant, timeZone)
+  if (Number.isNaN(instant.getTime())) return null
+
+  const milliseconds = ((instant.getTime() % 1000) + 1000) % 1000
+  return `${formatWallClockSeconds(instant, timeZone)}.${String(milliseconds).padStart(3, '0')}`
 }

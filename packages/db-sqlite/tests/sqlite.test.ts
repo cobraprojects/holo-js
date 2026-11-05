@@ -70,7 +70,7 @@ describe('@holo-js/db-sqlite', () => {
         expect((await adapter.query(
           'SELECT holo_wall_clock((julianday(at) - 2440587.5) * 86400000.0, ?) AS local FROM events',
           ['Asia/Tokyo'],
-        )).rows).toEqual([{ local: '2026-11-05 05:30:00' }, { local: '2027-01-01 01:00:00' }, { local: null }])
+        )).rows).toEqual([{ local: '2026-11-05 05:30:00.000' }, { local: '2027-01-01 01:00:00.500' }, { local: null }])
       } finally {
         await adapter.disconnect()
       }
