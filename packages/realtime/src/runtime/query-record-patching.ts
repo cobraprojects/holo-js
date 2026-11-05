@@ -66,7 +66,7 @@ export async function tryPatchQueryRecord(
     }
 
     const result = applyMutation(patchedRows, query, hydratedMutation, createMutationRowPatchContext(queryContext, metadata))
-    if (!result.patched) {
+    if (!result.patched || ('backfill' in result && result.backfill === true)) {
       return await tryBackfillCurrentQueryRecord(query, emptyValue, backfills)
     }
 

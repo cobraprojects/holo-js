@@ -18,6 +18,7 @@ import {
 } from './predicate-matching'
 import {
   hasProjectedSelections,
+  isSingleIdQuery,
   readQueryOrderColumns,
   readQueryOrderMultipliers,
   readQueryPredicateColumns,
@@ -204,7 +205,7 @@ export function canPatchShrinkingRows(
   query: DatabaseQueryObservation,
 ): boolean {
   const windowMode = readQueryRowWindowMode(query)
-  if (windowMode === 'single' || windowMode === 'unwindowed') {
+  if (windowMode === 'unwindowed' || (windowMode === 'single' && isSingleIdQuery(query))) {
     return true
   }
 
