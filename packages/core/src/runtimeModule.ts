@@ -851,7 +851,7 @@ function collectBundleSources(
     for (const dependency of metafile?.inputs[inputPath]?.imports ?? []) {
       const specifier = dependency.original ?? dependency.path
       if (!dependency.external || !bareSpecifier.test(specifier)) continue
-      if (importers[specifier] === undefined || inputSource === sourcePath) importers[specifier] = inputSource
+      if (!Object.hasOwn(importers, specifier) || inputSource === sourcePath) importers[specifier] = inputSource
     }
   }
   return { path: bundlePath, ...(sourcePath === undefined ? {} : { sourcePath }), importers }

@@ -1108,6 +1108,20 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     expect(error.cause).toBe(failure)
   })
 
+  it('records importers of packages named like object prototype members', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/build.ts': "import { make } from 'constructor'\nimport { get } from 'toString/sub'\nexport const built = [make, get]\n",
+      'server/models/User.ts': "import { built } from '../support/build'\nexport default { built }\n",
+    })
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'server/models/User.ts'))
+    try {
+      const sources = bundleSourceInternals.collectBundleSources(projectRoot, bundled.metafile, bundled.path)
+      expect({ ...sources.importers }).toEqual({ 'constructor': 'server/support/build.ts', 'toString/sub': 'server/support/build.ts' })
+    } finally {
+      await bundled.cleanup()
+    }
+  })
+
   it('leaves errors thrown by the loaded module unchanged', async () => {
     const projectRoot = await createSourceProject({
       'server/models/User.ts': "throw new Error('model failed')\n",
