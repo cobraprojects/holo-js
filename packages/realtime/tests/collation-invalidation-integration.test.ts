@@ -142,12 +142,60 @@ function registerCaseInsensitiveScenarios(driver: Exclude<Driver, 'postgres'>) {
   })
 }
 
+async function createStringIdCountries(driver: Driver) {
+  const adapter = createAdapter(driver)
+  const tableName = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  const db = createDatabase({ adapter, dialect: createDialect(driver), connectionName: 'main' })
+  await adapter.initialize()
+  onTestFinished(async () => {
+    resetRealtimeRuntime()
+    resetDatabaseDependencyInvalidationListeners()
+    resetDB()
+    await adapter.execute(`DROP TABLE IF EXISTS ${tableName}`)
+    await adapter.disconnect()
+  })
+  const id = driver === 'sqlite' ? 'id TEXT PRIMARY KEY COLLATE NOCASE' : 'id VARCHAR(16) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY'
+  await adapter.execute(`CREATE TABLE ${tableName} (${id}, label VARCHAR(64) NOT NULL)`)
+  await adapter.execute(`INSERT INTO ${tableName} (id, label) VALUES ('FR', 'France'), ('DE', 'Germany')`)
+  configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+  configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+  const subscribe = async (handler: Parameters<typeof defineRealtimeQuery>[0]['handler']) => {
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
+    return snapshots
+  }
+  const update = (value: string, label: string) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: ({ db }) => db.table(tableName).where('id', value).update({ label }) }))
+  return { subscribe, tableName, update }
+}
+
+function registerStringIdScenarios(driver: Exclude<Driver, 'postgres'>) {
+  it('refreshes a subscription by a string id after an update matched by a case-differing id', async () => {
+    const countries = await createStringIdCountries(driver)
+    const snapshots = await countries.subscribe(async ({ db }) => await db.table(countries.tableName).where('id', 'FR').first())
+
+    await countries.update('fr', 'République')
+
+    expect(snapshots.at(-1)).toEqual({ id: 'FR', label: 'République' })
+  })
+
+  it('refreshes a subscription over all rows after an update matched by a case-differing string id', async () => {
+    const countries = await createStringIdCountries(driver)
+    const snapshots = await countries.subscribe(async ({ db }) => await db.table(countries.tableName).orderBy('id').get())
+
+    await countries.update('fr', 'République')
+
+    expect(snapshots.at(-1)).toEqual([{ id: 'DE', label: 'Germany' }, { id: 'FR', label: 'République' }])
+  })
+}
+
 describe('realtime invalidation on a NOCASE column on sqlite', () => {
   registerCaseInsensitiveScenarios('sqlite')
+  registerStringIdScenarios('sqlite')
 })
 
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('realtime invalidation on a default _ci column on mysql', () => {
   registerCaseInsensitiveScenarios('mysql')
+  registerStringIdScenarios('mysql')
 })
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('realtime invalidation on a case-sensitive column on postgres', () => {
