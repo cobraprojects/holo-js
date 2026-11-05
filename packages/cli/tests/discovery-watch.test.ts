@@ -157,7 +157,7 @@ it('defers observed edits until it is resumed and judges them by the policy in e
   emit('README.md')
   await watcher.refresh({ config: { ...config, paths: { ...config.paths, models: 'src/models' } } })
   expect(captured.changes).toEqual([])
-  watcher.resume()
+  await watcher.resume()
   emit('config/app.ts')
   await vi.waitFor(() => expect(captured.changes).toHaveLength(2))
   expect(captured.changes).toEqual(expect.arrayContaining([

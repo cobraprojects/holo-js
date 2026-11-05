@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { realpathSync, watch, type WatchEventType } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -5,6 +6,7 @@ import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js
 import type { LoadedProjectConfig } from './types'
 import type { WatchFactory, WatchHandle } from './cli-types'
 import type { ObservedPrepareChange } from './framework-restart'
+import type { PreparedOutput } from './project-prepare'
 import { resolveProjectPlugins } from './project/plugins'
 import { normalizeArtifactPath } from './project/plugin-prepare/paths'
 import { isIgnorableWatchError, isRecursiveWatchUnsupported, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
@@ -363,9 +365,15 @@ type DiscoveryWatchOptions = {
 
 type DiscoveryWatch = {
   readonly ready: Promise<void>
+  recordPreparedOutputs(output: PreparedOutput): Promise<void>
   refresh(project: LoadedProjectConfig): Promise<void>
-  resume(): void
+  resume(): Promise<void>
   close(): void
+}
+
+async function readContentHash(path: string): Promise<string | undefined> {
+  const contents = await readFile(path).catch(() => undefined)
+  return contents && createHash('sha256').update(contents).digest('hex')
 }
 
 function waitForLivenessOrProbeInterval(liveness: Promise<void>): Promise<void> {
@@ -396,6 +404,7 @@ export async function startDiscoveryWatch({
   const handles: WatchHandle[] = []
   const warnedPlugins = new Set<string>()
   let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
+  const preparedOutputHashes = new Map<string, string | undefined>()
   let probing = true
   let stopProbing = (): void => {}
   const liveness = new Promise<void>((resolvePromise) => {
@@ -434,7 +443,7 @@ export async function startDiscoveryWatch({
     : { path, kind: 'changed' }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
-    if (isAlwaysExcludedWatchPath(path) || isAlwaysWatchedPath(path, project)) return
+    if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return
     if (events.get(path) !== 'rename') events.set(path, eventType)
   }
 
@@ -510,12 +519,26 @@ export async function startDiscoveryWatch({
     if (recursive === false && !closed) acquireDirectories(directories)
   }
 
-  const resume = (): void => {
+  const recordPreparedOutputs = async (output: PreparedOutput): Promise<void> => {
+    const paths = output === 'dependencies'
+      ? [...PACKAGE_MANIFEST_DISCOVERY_PATHS]
+      : [toPosixSlashes(resolveGeneratedSchemaPath(project))]
+    const hashes = await Promise.all(paths.map(path => readContentHash(resolve(projectRoot, path))))
+    paths.forEach((path, index) => preparedOutputHashes.set(path, hashes[index]))
+  }
+
+  const isUnchangedPreparedOutput = async (path: string): Promise<boolean> => preparedOutputHashes.has(path)
+    && preparedOutputHashes.get(path) === await readContentHash(resolve(projectRoot, path))
+
+  const resume = async (): Promise<void> => {
     const events = deferredEvents
     deferredEvents = undefined
-    if (!events || closed || signal.aborted) return
-    const relevant = [...events].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
-    if (relevant.length > 0) observe(async () => Promise.all(relevant.map(([path, eventType]) => classify(path, eventType))))
+    const relevant = [...events ?? []].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+    const unchanged = await Promise.all(relevant.map(([path]) => isUnchangedPreparedOutput(path)))
+    preparedOutputHashes.clear()
+    const changed = relevant.filter((_, index) => !unchanged[index])
+    if (changed.length === 0 || closed || signal.aborted) return
+    observe(async () => Promise.all(changed.map(([path, eventType]) => classify(path, eventType))))
   }
 
   const probeLiveness = async (): Promise<void> => {
@@ -553,7 +576,7 @@ export async function startDiscoveryWatch({
       acquireDirectories(directories)
       stopProbing()
     }
-    return { ready: probeLiveness(), refresh, resume, close }
+    return { ready: probeLiveness(), recordPreparedOutputs, refresh, resume, close }
   } catch (error) {
     close()
     throw error
