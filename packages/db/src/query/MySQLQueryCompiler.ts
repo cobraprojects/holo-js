@@ -2,7 +2,7 @@ import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
-import type { InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
+import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
@@ -40,6 +40,12 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
     return `LATERAL ${subquery} ${this.quoteIdentifier(alias)}`
+  }
+
+  protected override compileDeleteTarget(source: DeleteQueryPlan['source']): string {
+    return source.alias
+      ? `DELETE ${this.quoteIdentifier(source.alias)} FROM ${this.compileWriteTarget(source)}`
+      : super.compileDeleteTarget(source)
   }
 
   protected override compileLockClause(lockMode: QueryLockMode): string {
