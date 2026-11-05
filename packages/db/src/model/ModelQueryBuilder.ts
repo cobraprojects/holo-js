@@ -24,7 +24,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { resolveSourceColumnName, TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -1973,8 +1973,10 @@ class ModelQueryBuilderBase<
   async upsert(
     values: ModelInsertPayload<TTable> | readonly ModelInsertPayload<TTable>[],
     uniqueBy: readonly ModelColumnName<TTable>[],
-    updateColumns: readonly ModelWritableColumnName<TTable>[] = [],
+    requestedUpdateColumns: readonly ModelWritableColumnName<TTable>[] = [],
   ): Promise<DriverExecutionResult> {
+    const { source } = this.tableQuery.getPlan()
+    const updateColumns = requestedUpdateColumns.map(column => (resolveSourceColumnName(source, column) ?? column) as ModelWritableColumnName<TTable>)
     this.repository.assertWriteTargets(updateColumns)
     const timestamp = new Date().toISOString()
     const rows = (Array.isArray(values) ? values : [values]).map(value => (

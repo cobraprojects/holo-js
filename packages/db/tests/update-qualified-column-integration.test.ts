@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { DB, resetDB } from '../src'
+import { column, DB, resetDB } from '../src'
 import { openDatabase } from './support/database'
+import { defineModelFromTable, defineTable } from './support/internal'
 
 const drivers = [
   'sqlite' as const,
@@ -174,6 +175,48 @@ describe.each(drivers)('writes with a table-qualified column or alias on %s', (d
     expect(await read()).toEqual([
       { price: 10, label: 'first', color: 'red' },
       { price: 20, label: 'second', color: 'blue' },
+    ])
+  })
+})
+
+describe.each(drivers)('model upsert with a qualified updated_at update column on %s', (driver) => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('touches updated_at once when the update columns name it with the table or the query alias', async () => {
+    const { schema } = await openDatabase(driver)
+    const name = `posts_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    onTestFinished(async () => {
+      await schema.dropTable(name)
+    })
+    await schema.createTable(name, (table) => {
+      table.id()
+      table.string('slug').unique()
+      table.string('title')
+      table.timestamps()
+    })
+    const past = new Date('2020-01-01T00:00:00.000Z')
+    await DB.table(name).insert([
+      { id: 1, slug: 'own', title: 'Own', created_at: past, updated_at: past },
+      { id: 2, slug: 'aliased', title: 'Aliased', created_at: past, updated_at: past },
+    ])
+    const posts = defineTable(name, {
+      id: column.id(),
+      slug: column.string().unique(),
+      title: column.string(),
+      created_at: column.timestamp(),
+      updated_at: column.timestamp(),
+    })
+    const Post = defineModelFromTable(posts, { fillable: ['slug', 'title'] })
+
+    await Post.query().upsert([{ slug: 'own', title: 'Own changed' }], ['slug'], [`${name}.updated_at`])
+    await Post.query().from(`${name} as p`).upsert([{ slug: 'aliased', title: 'Aliased changed' }], ['slug'], ['p.updated_at' as never])
+
+    const rows = await DB.table(name).orderBy('id').get()
+    expect(rows.map(row => [row.title, new Date(row.updated_at as string).getTime() > past.getTime()])).toEqual([
+      ['Own', true],
+      ['Aliased', true],
     ])
   })
 })
