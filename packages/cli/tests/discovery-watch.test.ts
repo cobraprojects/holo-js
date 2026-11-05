@@ -1,9 +1,10 @@
 import { writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { EventEmitter, once } from 'node:events'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
@@ -482,4 +483,107 @@ it('keeps a user manifest edit made while a framework sync that restores manifes
     await writeFile(manifest, '{"name":"watch-fixture","type":"module","private":true}')
   })
   await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
+})
+
+async function waitForNextSecond(): Promise<void> {
+  const nextSecond = Math.floor(Date.now() / 1_000) * 1_000 + 1_000
+  while (Date.now() < nextSecond) await delay(nextSecond - Date.now())
+}
+
+type DeferredWatchListener = (eventType: string, fileName: string) => void
+
+async function installWatchPlugin(root: string): Promise<void> {
+  await rm(join(root, 'config/app.ts'))
+  await write(root, 'config/app.mjs', "export default {\n  plugins: ['demo-watch-plugin'],\n}\n")
+  await write(root, 'node_modules/demo-watch-plugin/package.json', JSON.stringify({ name: 'demo-watch-plugin', version: '1.0.0', type: 'module', holo: { plugin: './plugin.mjs' } }))
+  await write(root, 'node_modules/demo-watch-plugin/plugin.mjs', "export default { id: 'demo', name: 'Demo' }")
+}
+
+async function declarePluginWatchRoots(root: string, roots: readonly string[]): Promise<void> {
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), JSON.stringify({ watch: { roots, excludes: [] } }))
+}
+
+async function startDeferredWatch(root: string, recursive: boolean) {
+  const listeners = new Map<string, DeferredWatchListener[]>()
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    deferred: true,
+    createWatcher: ((path: string, options: { recursive: boolean }, listener: DeferredWatchListener) => {
+      if (options.recursive && !recursive) {
+        throw Object.assign(new Error('recursive watch unavailable'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' })
+      }
+      listeners.set(path, [...listeners.get(path) ?? [], listener])
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string, eventType = 'rename') => {
+    for (const [directory, directoryListeners] of listeners) {
+      const fileName = recursive ? path : relative(directory, join(root, path))
+      if (!recursive && dirname(join(root, path)) !== directory) continue
+      directoryListeners.forEach(listener => listener(eventType, fileName))
+    }
+  }
+  if (recursive) emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  return { ...captured, watcher, emit, watchedDirectories: () => [...listeners.keys()] }
+}
+
+it('replays a file created during startup as created when the watch policy changes', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await write(root, 'server/models/New.ts')
+  emit('server/models/New.ts')
+  await write(root, 'resources/demo/Added.ts')
+  emit('resources/demo/Added.ts')
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual(expect.arrayContaining([
+    { path: 'server/models/New.ts', kind: 'created' },
+    { path: 'resources/demo/Added.ts', kind: 'created' },
+  ]))
+  expect(changes).toHaveLength(2)
+})
+
+it('replays a startup edit to a file that existed before startup as changed when the watch policy changes', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'server/models/User.ts')
+  const config = defaultProjectConfig()
+  const { watcher, emit, changes, settled } = await startDeferredWatch(root, true)
+  await rm(join(root, 'server/models/User.ts'))
+  await write(root, 'server/models/User.ts', 'replaced')
+  emit('server/models/User.ts')
+  await declarePluginWatchRoots(root, ['resources/demo'])
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'server/models/User.ts', kind: 'changed' }])
+})
+
+it('catches up on startup edits in a watch root created during startup when only the non-recursive watcher is available', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  await write(root, 'resources/legacy/Untouched.ts')
+  await waitForNextSecond()
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled, watchedDirectories } = await startDeferredWatch(root, false)
+  await writeOutputFile(join(root, 'resources/demo/Generated.ts'), 'generated')
+  await write(root, 'resources/demo/nested/Edited.ts')
+  await declarePluginWatchRoots(root, ['resources/demo', 'resources/legacy'])
+  await watcher.refresh({ config })
+  expect(watchedDirectories()).toEqual(expect.arrayContaining([join(root, 'resources/demo'), join(root, 'resources/demo/nested')]))
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([{ path: 'resources/demo/nested/Edited.ts', kind: 'created' }])
 })

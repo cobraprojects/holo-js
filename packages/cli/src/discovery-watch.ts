@@ -284,6 +284,7 @@ function normalizeContainedWatchedFilePath(
 type WatchedPathSnapshot = {
   readonly modifiedAt: number
   readonly size: number
+  readonly createdAt: number
 }
 
 async function readWatchedPathSnapshot(path: string): Promise<WatchedPathSnapshot | undefined> {
@@ -292,7 +293,7 @@ async function readWatchedPathSnapshot(path: string): Promise<WatchedPathSnapsho
     return undefined
   }
 
-  return Object.freeze({ modifiedAt: pathStats.mtimeMs, size: pathStats.size })
+  return Object.freeze({ modifiedAt: pathStats.mtimeMs, size: pathStats.size, createdAt: pathStats.birthtimeMs })
 }
 
 async function collectWatchedPathSnapshots(
@@ -331,8 +332,8 @@ function classifyWatchedPathChange(
   path: string,
   snapshot: WatchedPathSnapshot | undefined,
   snapshots: Map<string, WatchedPathSnapshot>,
+  previous: WatchedPathSnapshot | undefined,
 ): HoloProjectPrepareChange {
-  const previous = snapshots.get(path)
   if (snapshot) {
     snapshots.set(path, snapshot)
   } else {
@@ -346,6 +347,12 @@ function classifyWatchedPathChange(
     return { path, kind: 'deleted' }
   }
   return { path, kind: 'changed' }
+}
+
+type WatchPolicyBaseline = {
+  readonly project: LoadedProjectConfig
+  readonly pluginWatches: readonly PluginPrepareWatch[]
+  readonly snapshots: ReadonlyMap<string, WatchedPathSnapshot>
 }
 
 type DiscoveryWatchOptions = {
@@ -382,6 +389,7 @@ export async function startDiscoveryWatch({
   writeWarning,
   deferred = false,
 }: DiscoveryWatchOptions): Promise<DiscoveryWatch> {
+  const startedAt = Math.floor(Date.now() / 1000) * 1000
   const canonicalProjectRoot = await realpath(projectRoot)
   let project = initialProject
   let pluginWatches: readonly PluginPrepareWatch[] = []
@@ -391,6 +399,8 @@ export async function startDiscoveryWatch({
   let closed = false
   let generation = 0
   const handles: WatchHandle[] = []
+  let watchedDirectories = new Set<string>()
+  let startupBaseline: WatchPolicyBaseline | undefined
   const warnedPlugins = new Set<string>()
   let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
   let probing = true
@@ -422,15 +432,19 @@ export async function startDiscoveryWatch({
     const observedSnapshot = eventType === 'rename' ? readWatchedPathSnapshot(resolve(projectRoot, path)) : undefined
     observe(async () => {
       const change = observedSnapshot
-        ? classifyWatchedPathChange(path, await observedSnapshot, snapshots)
+        ? classifyWatchedPathChange(path, await observedSnapshot, snapshots, snapshots.get(path))
         : { path, kind: 'changed' as const }
       return await unchanged ? [] : change
     })
   }
 
-  const classify = async (path: string, eventType: WatchEventType): Promise<HoloProjectPrepareChange> => eventType === 'rename'
-    ? classifyWatchedPathChange(path, await readWatchedPathSnapshot(resolve(projectRoot, path)), snapshots)
-    : { path, kind: 'changed' }
+  const startupSnapshotOf = (path: string, baseline: WatchPolicyBaseline | undefined): WatchedPathSnapshot | undefined => {
+    if (!baseline || isDiscoveryRelevantPath(path, baseline.project, baseline.pluginWatches)) {
+      return (baseline?.snapshots ?? snapshots).get(path)
+    }
+    const current = snapshots.get(path)
+    return current && current.createdAt > 0 && current.createdAt < startedAt ? current : undefined
+  }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
     if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return
@@ -489,6 +503,7 @@ export async function startDiscoveryWatch({
 
   const acquireDirectories = (directories: readonly string[]): void => {
     releaseHandles()
+    watchedDirectories = new Set(directories)
     try {
       for (const directory of directories) {
         if (closed || signal.aborted) return
@@ -504,20 +519,47 @@ export async function startDiscoveryWatch({
     }
   }
 
+  const deferStartupEdits = async (directories: readonly string[]): Promise<void> => {
+    const events = deferredEvents
+    if (!events) return
+    const edited = await Promise.all(directories.map(async (directory) => {
+      const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+      return await Promise.all(entries.filter(entry => entry.isFile()).map(async (entry) => {
+        const entryStats = await stat(join(directory, entry.name)).catch(() => undefined)
+        return entryStats && Math.max(entryStats.mtimeMs, entryStats.ctimeMs) >= startedAt
+          ? normalizeWatchedFilePath(projectRoot, directory, entry.name)
+          : undefined
+      }))
+    }))
+    if (closed || deferredEvents !== events) return
+    for (const path of edited.flat()) {
+      if (path) defer(events, path, 'rename')
+    }
+  }
+
   const refresh = async (nextProject: LoadedProjectConfig): Promise<void> => {
     const directories = await updatePolicy(nextProject)
-    if (recursive === false && !closed) acquireDirectories(directories)
+    if (recursive !== false || closed) return
+    const addedDirectories = directories.filter(directory => !watchedDirectories.has(directory))
+    acquireDirectories(directories)
+    await deferStartupEdits(addedDirectories)
   }
 
   const resume = (): void => {
     const events = deferredEvents
+    const baseline = startupBaseline
     deferredEvents = undefined
+    startupBaseline = undefined
     if (!events || closed || signal.aborted) return
-    const relevant = [...events].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+    const relevant = [...events]
+      .filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+      .map(([path, eventType]) => ({ path, eventType, previous: startupSnapshotOf(path, baseline) }))
     if (relevant.length === 0) return
     observe(async () => {
-      const changes = await Promise.all(relevant.map(async ([path, eventType]) => {
-        const change = await classify(path, eventType)
+      const changes = await Promise.all(relevant.map(async ({ path, eventType, previous }) => {
+        const change: HoloProjectPrepareChange = eventType === 'rename'
+          ? classifyWatchedPathChange(path, await readWatchedPathSnapshot(resolve(projectRoot, path)), snapshots, previous)
+          : { path, kind: 'changed' }
         return await isUnchangedWrittenOutput(resolve(projectRoot, path)) ? undefined : change
       }))
       return changes.filter(change => change !== undefined)
@@ -548,6 +590,7 @@ export async function startDiscoveryWatch({
   signal.addEventListener('abort', close, { once: true })
   try {
     const directories = await updatePolicy(project)
+    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots })
     try {
       acquire(projectRoot, true)
       recursive = true
