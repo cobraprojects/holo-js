@@ -85,6 +85,16 @@ describe('real database test support', () => {
     expect(testConnectionUrl(scheme, { host: 'db.test', port: 5433, user: 'tester', database: 'holo_scratch' }).toString()).toBe(`${scheme}://tester@db.test:5433/holo_scratch`)
   })
 
+  it.each([
+    ['postgresql', '127.0.0.1/postgres#', 5432],
+    ['mysql', '127.0.0.1/mysql#', 3306],
+    ['mysql', 'user@db.test', 3306],
+    ['postgresql', 'db.test?db=postgres', 5432],
+    ['postgresql', 'db.test', Number.NaN],
+  ] as const)('refuses to build a %s URL whose host %s or port %s could change the database', (scheme, host, port) => {
+    expect(() => testConnectionUrl(scheme, { host, port, user: 'tester', database: 'holo_scratch' })).toThrow('must be a plain host name and port')
+  })
+
   it('keeps only the drivers whose integration flag is on', () => {
     vi.stubEnv('HOLO_POSTGRES_INTEGRATION', '1')
     vi.stubEnv('HOLO_MYSQL_INTEGRATION', undefined)
