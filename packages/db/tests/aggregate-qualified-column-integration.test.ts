@@ -126,6 +126,15 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(Number(await query[kind]('parent.price'))).toBe(kind === 'sum' ? 90 : 30)
   })
 
+  it.each(kinds)('%s keeps every row of a distinct joined query without selections', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    await DB.table(name).insert({ id: 4, price: 10 })
+    await DB.table(ordersName).insert({ id: 4, product_id: 4, price: 100 })
+
+    const query = DB.table(name).join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).distinct()
+    expect(Number(await query[kind](`${name}.price`))).toBe({ max: 30, min: 10, sum: 70, avg: 17.5 }[kind])
+  })
+
   it.each(kinds)('%s rejects a column qualified with a table the query does not join', async (kind) => {
     const { name } = await createProducts(driver)
 
@@ -187,6 +196,17 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price`).distinct()
     expect(Number(await query[kind](`${name}.price`))).toBe(expected[kind])
     expect(Number(await query[kind]('price'))).toBe(expected[kind])
+  })
+
+  it.each(kinds)('%s on a joined model query keeps the attributes its accessor reads', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer(), parent_id: column.integer().nullable() }), {
+      timestamps: false,
+      accessors: { price: (value, entity) => Number(value) * Number(entity.toAttributes().parent_id) },
+    })
+
+    const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)
+    expect(await query[kind](`${name}.price`)).toBe(expected[kind] * 3)
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {

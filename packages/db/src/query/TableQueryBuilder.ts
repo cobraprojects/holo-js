@@ -167,6 +167,7 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
+export const selectAggregateColumn = Symbol('selectAggregateColumn')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -1899,6 +1900,13 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
+  [selectAggregateColumn](selection: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const implicitSelections = this.plan.selections.length > 0
+      ? []
+      : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(table => `${table}.*`)
+    return this.clone(appendSelections(this.plan, [...implicitSelections, selection]))
+  }
+
   [resolveAggregateSource](column: string): { readonly key: string, readonly source: string, readonly joined: boolean } {
     const root = column.split('->', 1)[0]!
     const qualifier = root.slice(0, root.lastIndexOf('.'))
@@ -3623,7 +3631,7 @@ export class TableQueryBuilder<
     if (this.plan.joins.length === 0) return { query: this, key, column: key }
 
     return {
-      query: this.clone(appendSelections(this.plan, [`${source}.${key} as ${aggregateValueKey}`])),
+      query: this[selectAggregateColumn](`${source}.${key} as ${aggregateValueKey}`),
       key: aggregateValueKey,
       column: joined ? column : key,
     }
