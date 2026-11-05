@@ -3342,7 +3342,7 @@ export class ModelRepository<
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
-      grouped.set(key, [bucket.length === 1 ? bucket[0]! : await this.selectOneOfManyWinner(relation, related, bucket, constraint)])
+      grouped.set(key, [await this.selectOneOfManyWinner(relation, related, parentColumn, bucket, constraint)])
     }
 
     return grouped
@@ -3351,12 +3351,25 @@ export class ModelRepository<
   private async selectOneOfManyWinner(
     relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
     related: ModelRepository,
-    candidates: readonly Entity[],
+    parentColumn: string,
+    bucket: readonly Entity[],
     constraint?: RelationConstraint,
   ): Promise<Entity> {
     const primaryKey = related.definition.primaryKey
+    const firstByStoredKey = new Map<unknown, Entity>()
+    for (const entity of bucket) {
+      const storedKey = canonicalStoredKey(entity.get(parentColumn as never))
+      if (!firstByStoredKey.has(storedKey)) firstByStoredKey.set(storedKey, entity)
+    }
+    const candidates = [...firstByStoredKey.values()]
+    if (candidates.length === 1 || candidates.some(candidate => candidate.get(primaryKey as never) == null)) {
+      return bucket[0]!
+    }
+
     const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
     const winner = await this.applyRelationConstraint(relation, related, constraint)
+      .limit()
+      .offset()
       .reorder(relation.aggregateColumn as never, direction)
       .orderBy(primaryKey as never, direction)
       .where(primaryKey as never, 'in', candidates.map(candidate => candidate.get(primaryKey as never)))

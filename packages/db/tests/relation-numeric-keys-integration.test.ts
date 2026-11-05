@@ -353,8 +353,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     onTestFinished(() => schema.dropTable(names.items))
     const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
     const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.string(), score: column.integer(), label: column.string() })
-    await DB.table(owners).insert([{ id: 1 }])
-    await DB.table(items).insert([{ id: 10, owner_id: '1', score: 10, label: 'Z' }, { id: 20, owner_id: '1.00', score: 20, label: 'a' }])
+    await DB.table(owners).insert([{ id: 1 }, { id: 2 }])
+    await DB.table(items).insert([{ id: 5, owner_id: '2', score: 1, label: 'b' }, { id: 10, owner_id: '1', score: 10, label: 'Z' }, { id: 20, owner_id: '1.00', score: 20, label: 'a' }])
     const Item = defineModel(items, { timestamps: false })
     const Owner = defineModel(owners, {
       timestamps: false,
@@ -366,12 +366,41 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       },
     })
 
-    const [owner] = await Owner.with('items', 'latestItem', 'topLabel').with({ topScore: query => query.select('id', 'owner_id').orderBy('id') }).get()
+    const [owner] = await Owner.with('items', 'latestItem', 'topLabel').with({ topScore: query => query.select('id', 'owner_id').orderBy('id') }).orderBy('id').get()
+    const [pagedOwner] = await Owner.with({ topScore: query => query.orderBy('id').offset(1).limit(10) }).orderBy('id').get()
     const loadedIds = ids(relation(owner, 'items'))
     const winner = async (column: 'id' | 'score' | 'label') => (await Item.where('id', 'in', loadedIds).orderBy(column, 'desc').first())?.get('id')
 
     expect(relation<Entity<TableDefinition>>(owner, 'latestItem').get('id' as never)).toBe(await winner('id'))
     expect(relation<Entity<TableDefinition>>(owner, 'topScore').get('id' as never)).toBe(await winner('score'))
     expect(relation<Entity<TableDefinition>>(owner, 'topLabel').get('id' as never)).toBe(await winner('label'))
+    expect(relation<Entity<TableDefinition>>(pagedOwner, 'topScore').get('id' as never)).toBe(await winner('score'))
+  })
+
+  it('loads tied one-of-many rows whose projection leaves out the primary key', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { owners: `tt_owners_${suffix}`, items: `tt_items_${suffix}` }
+    await schema.createTable(names.owners, (table) => {
+      table.integer('id').primaryKey()
+    })
+    onTestFinished(() => schema.dropTable(names.owners))
+    await schema.createTable(names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('owner_id')
+      table.integer('score')
+    })
+    onTestFinished(() => schema.dropTable(names.items))
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.integer(), score: column.integer() })
+    await DB.table(owners).insert([{ id: 1 }])
+    await DB.table(items).insert([{ id: 10, owner_id: 1, score: 20 }, { id: 20, owner_id: 1, score: 20 }])
+    const Item = defineModel(items, { timestamps: false })
+    const Owner = defineModel(owners, { timestamps: false, relations: { topScore: ofMany(() => Item, 'owner_id', 'score') } })
+
+    const [owner] = await Owner.with({ topScore: query => query.select('owner_id', 'score') }).get()
+
+    expect(relation<Entity<TableDefinition>>(owner, 'topScore').get('score' as never)).toBe(20)
   })
 })
