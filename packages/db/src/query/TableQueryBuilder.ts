@@ -2146,7 +2146,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn
+    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() !== 'mysql'
       ? await this.readGroupedAverageStates(groupedAggregate)
       : undefined
     const aggregateStates = (
