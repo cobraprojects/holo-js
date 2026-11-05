@@ -114,17 +114,38 @@ export type PivotTableColumnName<TPivotTable extends string | TableDefinition>
 type IsUntypedPivotTable<TPivotTable extends string | TableDefinition>
   = string extends ModelWritableAttributeKey<PivotTableDefinition<TPivotTable>> ? true : false
 
-export type PivotAttributes<TPivotTable extends string | TableDefinition>
-  = IsUntypedPivotTable<TPivotTable> extends true
+type LiteralColumn<TColumn> = TColumn extends string ? string extends TColumn ? never : TColumn : never
+
+type ReservedPivotColumn<TRelation>
+  = TRelation extends { readonly kind: 'belongsToMany', readonly foreignPivotKey: infer TForeign, readonly relatedPivotKey: infer TRelatedKey }
+    ? LiteralColumn<TForeign> | LiteralColumn<TRelatedKey>
+    : TRelation extends { readonly foreignPivotKey: infer TForeign, readonly morphTypeColumn: infer TType, readonly morphIdColumn: infer TId }
+      ? LiteralColumn<TForeign> | LiteralColumn<TType> | LiteralColumn<TId>
+      : never
+
+type DeclaredPivotColumn<TRelation>
+  = TRelation extends { readonly pivotColumns: readonly (infer TColumn)[] } ? TColumn : string
+
+type PivotUpdatePayloadOf<TRelation> = ModelUpdatePayload<PivotTableDefinition<PivotTableOfRelation<TRelation>>>
+
+type WritablePivotColumn<TRelation>
+  = Extract<keyof PivotUpdatePayloadOf<TRelation>, Exclude<DeclaredPivotColumn<TRelation>, ReservedPivotColumn<TRelation>>>
+
+export type PivotAttributes<TRelation>
+  = IsUntypedPivotTable<PivotTableOfRelation<TRelation>> extends true
     ? Record<string, unknown>
-    : ModelUpdatePayload<PivotTableDefinition<TPivotTable>>
+    : string extends DeclaredPivotColumn<TRelation>
+      ? Omit<PivotUpdatePayloadOf<TRelation>, ReservedPivotColumn<TRelation>>
+      : [WritablePivotColumn<TRelation>] extends [never]
+          ? Record<string, never>
+          : Pick<PivotUpdatePayloadOf<TRelation>, WritablePivotColumn<TRelation>>
 
-export type PivotRelatedKey = string | number | bigint | boolean
+export type PivotRelatedKey = string | number | bigint | boolean | Date | Uint8Array
 
-export type PivotRelatedIds<TPivotTable extends string | TableDefinition>
-  = IsUntypedPivotTable<TPivotTable> extends true
+export type PivotRelatedIds<TRelation>
+  = IsUntypedPivotTable<PivotTableOfRelation<TRelation>> extends true
     ? unknown
-    : PivotRelatedKey | readonly unknown[] | { readonly [id: string]: PivotAttributes<TPivotTable> | null | undefined } | null | undefined
+    : PivotRelatedKey | readonly unknown[] | { readonly [id: string]: PivotAttributes<TRelation> | null | undefined } | null | undefined
 
 export interface BelongsToRelationDefinition<TRelated extends ModelDefinitionLike = ModelDefinitionLike> extends ScopedRelationDefinition {
   readonly kind: 'belongsTo'
@@ -272,18 +293,26 @@ export type ConfiguredPivotRelation<
   & TOverrides
   & PivotRelationMethods<Omit<TRelation, keyof PivotRelationMethods<unknown> | keyof TOverrides> & TOverrides, TPivotTable>
 
-export type InitialPivotRelation<TRelation, TPivotTable extends string | TableDefinition>
+export type InitialPivotRelation<TRelation, TPivotTable extends string | TableDefinition, TKeys = unknown>
   = ConfiguredPivotRelation<TRelation, TPivotTable, {
     readonly pivotAccessor: 'pivot'
     readonly pivotModel: undefined
-  }>
+    readonly pivotColumns: readonly never[]
+  } & TKeys>
+
+type PivotColumnsOf<TRelation> = TRelation extends { readonly pivotColumns: readonly (infer TColumn)[] } ? TColumn : never
 
 export interface PivotRelationMethods<
   TRelation,
   TPivotTable extends string | TableDefinition = string | TableDefinition,
 > {
-  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): TRelation & PivotRelationMethods<TRelation, TPivotTable>
-  withTimestamps(): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotTimestamps: true }>
+  withPivot<const TColumns extends readonly PivotTableColumnName<TPivotTable>[]>(
+    ...columns: TColumns
+  ): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotColumns: readonly (PivotColumnsOf<TRelation> | TColumns[number])[] }>
+  withTimestamps(): ConfiguredPivotRelation<TRelation, TPivotTable, {
+    readonly pivotTimestamps: true
+    readonly pivotColumns: readonly (PivotColumnsOf<TRelation> | 'created_at' | 'updated_at')[]
+  }>
   wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): TRelation & PivotRelationMethods<TRelation, TPivotTable>
   orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): TRelation & PivotRelationMethods<TRelation, TPivotTable>
   as<const TAccessor extends string>(accessor: TAccessor): ConfiguredPivotRelation<TRelation, TPivotTable, { readonly pivotAccessor: TAccessor }>
@@ -387,7 +416,7 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
             : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
               ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
               : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
-                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
+                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
                   ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                   : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
@@ -395,9 +424,9 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
                     : TRelation extends MorphManyRelationDefinition<infer TRelated>
                       ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>>
                       : TRelation extends MorphToManyRelationDefinition<infer TRelated>
-                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
+                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
-                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<PivotTableOfRelation<TRelation>>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<PivotTableOfRelation<TRelation>>>
+                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, PivotAttributes<TRelation>, ModelInsertPayload<ModelDefinitionTable<TRelated>>, PivotRelatedIds<TRelation>>
                         : never
 
 export interface RelationMap {
@@ -757,7 +786,7 @@ export type EntityWithLoaded<
   toJSON(): SerializedEntityWithLoaded<TTable, TLoaded>
 }
 
-export type PivotTableOfRelation<TRelation extends RelationDefinition>
+export type PivotTableOfRelation<TRelation>
   = TRelation extends { readonly pivotTable: infer TPivotTable extends string | TableDefinition }
     ? TPivotTable
     : string
@@ -765,14 +794,14 @@ export type PivotTableOfRelation<TRelation extends RelationDefinition>
 export type PivotColumnNameOfRelation<TRelation extends RelationDefinition>
   = PivotTableColumnName<PivotTableOfRelation<TRelation>>
 
-type NamedRelationPivotTable<TRelations extends RelationMap, TName extends string>
-  = TName extends keyof TRelations ? PivotTableOfRelation<TRelations[TName]> : string
+type NamedRelation<TRelations extends RelationMap, TName extends string>
+  = TName extends keyof TRelations ? TRelations[TName] : RelationDefinition
 
 export type PivotAttributesOfRelation<TRelations extends RelationMap, TName extends string>
-  = PivotAttributes<NamedRelationPivotTable<TRelations, TName>>
+  = PivotAttributes<NamedRelation<TRelations, TName>>
 
 export type PivotRelatedIdsOfRelation<TRelations extends RelationMap, TName extends string>
-  = PivotRelatedIds<NamedRelationPivotTable<TRelations, TName>>
+  = PivotRelatedIds<NamedRelation<TRelations, TName>>
 
 export type EmptyScopeMap = Record<never, never>
 export type ModelScopesDefinition = Readonly<Record<string, unknown>>

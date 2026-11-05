@@ -117,6 +117,7 @@ describe('pivot mutation integration', () => {
     expect(await user.toggle('roles', [1, 1])).toEqual({ attached: [], detached: [1] })
     await other.load('roles')
     expect(other.getRelation<Entity<typeof roles>[]>('roles').map(role => role.get('id'))).toEqual([1, 2])
+    // @ts-expect-error reserved pivot key
     await expect(user.attach('roles', 4, { userId: 2 })).rejects.toThrow('reserved')
     // @ts-expect-error undeclared pivot column
     await expect(user.attach('roles', 4, { undeclared: true })).rejects.toThrow('withPivot')
@@ -222,6 +223,7 @@ describe('pivot mutation integration', () => {
     await team.load('roles')
     expect(person.getRelation('roles')).toEqual([])
     expect(team.getRelation<Entity<typeof roles>[]>('roles').map(role => role.get('id'))).toEqual([1, 2])
+    // @ts-expect-error reserved morph type column
     await expect(team.attach('roles', 3, { subjectType: 'people' })).rejects.toThrow('reserved')
   })
 

@@ -97,9 +97,12 @@ it('types pivot attribute writes from the pivot table columns', () => {
   const User = defineModel(users, {
     relations: {
       roles: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('approved', 'note'),
-      registered: belongsToMany(() => Role, { pivotTable: 'pivot_type_typed_writes', foreignPivotKey: 'user_id', relatedPivotKey: 'role_id' }),
-      morphRoles: morphToMany(() => Role, 'owner', typedPivotWrites, 'role_id'),
-      inverseMorphRoles: morphedByMany(() => Role, 'owner', typedPivotWrites, 'user_id'),
+      registered: belongsToMany(() => Role, { pivotTable: 'pivot_type_typed_writes', foreignPivotKey: 'user_id', relatedPivotKey: 'role_id' }).withPivot('approved'),
+      undeclared: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id'),
+      onlyApproved: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('approved').wherePivot('approved', true),
+      declaredKeys: belongsToMany(() => Role, typedPivotWrites, 'user_id', 'role_id').withPivot('user_id', 'role_id', 'note', 'score'),
+      morphRoles: morphToMany(() => Role, 'owner', typedPivotWrites, 'role_id').withPivot('approved', 'role_id'),
+      inverseMorphRoles: morphedByMany(() => Role, 'owner', typedPivotWrites, 'user_id').withPivot('approved', 'user_id'),
       untyped: belongsToMany(() => Role, 'pivot_type_untyped_writes', 'user_id', 'role_id'),
     },
   })
@@ -134,8 +137,9 @@ it('types pivot attribute writes from the pivot table columns', () => {
       await user.updateExistingPivot('roles', 1, { approved: false })
       UserFactory.hasAttached(RoleFactory, 'roles', { approved: true })
 
-      // @ts-expect-error a single binary id is read as an id map
       await user.roles().attach(new Uint8Array([1]))
+      await user.roles().detach(new Date())
+      await user.roles().toggle(new Date())
       // @ts-expect-error unknown pivot column
       await user.roles().attach(1, { aproved: true })
       // @ts-expect-error computed pivot column
@@ -168,8 +172,35 @@ it('types pivot attribute writes from the pivot table columns', () => {
       await user.updateExistingPivot('roles', 1, { approved: 'yes' })
       // @ts-expect-error unknown pivot column
       UserFactory.hasAttached(RoleFactory, 'roles', { aproved: true })
+      // @ts-expect-error foreign pivot key
+      await user.roles().attach(1, { user_id: 1 })
+      // @ts-expect-error related pivot key
+      await user.attach('roles', 1, { role_id: 1 })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.undeclared().attach(1, { approved: true })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.onlyApproved().sync({ 1: { note: 'x' } })
+      // @ts-expect-error pivot column not declared with withPivot
+      await user.registered().updateExistingPivot(1, { note: 'x' })
+      // @ts-expect-error pivot keys stay reserved after withPivot
+      await user.declaredKeys().attach(1, { user_id: 1 })
+      // @ts-expect-error computed pivot column stays unwritable after withPivot
+      await user.declaredKeys().attach(1, { score: 1 })
+      // @ts-expect-error related pivot key of a morphToMany relation
+      await user.morphRoles().attach(1, { role_id: 1 })
+      // @ts-expect-error morph columns of a morphToMany relation
+      await user.morphRoles().attach(1, { owner_id: 1 })
+      // @ts-expect-error foreign pivot key of a morphedByMany relation
+      await user.inverseMorphRoles().attach(1, { user_id: 1 })
+      // @ts-expect-error pivot column not declared with withPivot
+      UserFactory.hasAttached(RoleFactory, 'undeclared', { approved: true })
       // @ts-expect-error computed pivot column
       UserFactory.hasAttached(RoleFactory, 'roles', { score: 1 })
+
+      await user.undeclared().attach(1)
+      await user.undeclared().sync({ 1: {} })
+      await user.onlyApproved().attach(1, { approved: true })
+      await user.declaredKeys().attach(1, { note: null })
 
       await user.untyped().attach(1, { anything: 'goes' })
       await user.untyped().sync({ 1: { anything: 'goes' } })

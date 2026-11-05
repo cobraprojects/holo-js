@@ -19,6 +19,10 @@ type Context = {
 
 const bindingBudget = 900
 
+function isScalarObjectId(id: object): boolean {
+  return id instanceof Date || ArrayBuffer.isView(id)
+}
+
 export class PivotMutation {
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {}
 
@@ -152,7 +156,7 @@ export class PivotMutation {
   private normalize(ids: unknown, attributes: Attributes = {}): Entry[] {
     if (ids == null) return []
     if (Array.isArray(ids)) return ids.map(id => ({ id, attributes: { ...attributes } }))
-    if (typeof ids === 'object') {
+    if (typeof ids === 'object' && !isScalarObjectId(ids)) {
       return Object.entries(ids as Record<string, Attributes>).map(([id, value]) => ({
         id: /^-?\d+$/.test(id) ? Number(id) : id,
         attributes: { ...(value ?? {}) },

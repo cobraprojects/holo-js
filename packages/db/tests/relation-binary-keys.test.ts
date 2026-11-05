@@ -235,6 +235,47 @@ describe('relation loading over binary keys', () => {
     expect(loaded<Entity<TableDefinition>[]>(b, 'roles')).toEqual([])
   })
 
+  it('treats a single binary or date pivot id as one id, not an id map', async () => {
+    const db = openSQLite()
+    const owners = defineTable('owners', { key: column.blob().primaryKey(), name: column.string() })
+    const roles = defineTable('roles', { key: column.blob().primaryKey(), name: column.string() })
+    const ownerRole = defineTable('owner_role', { ownerKey: column.blob(), roleKey: column.blob(), note: column.string().nullable() })
+    const slots = defineTable('slots', { startsAt: column.timestamp().primaryKey() })
+    const ownerSlot = defineTable('owner_slot', { ownerKey: column.blob(), startsAt: column.timestamp() })
+    for (const table of [owners, roles, ownerRole, slots, ownerSlot]) await createTestTable(db, table)
+    const admin = Buffer.from('admin')
+    const startsAt = new Date('2026-01-02T03:04:05.000Z')
+    await db.table(owners).insert([{ key: keyA, name: 'A' }])
+    await db.table(roles).insert([{ key: admin, name: 'Admin' }])
+    await db.table(slots).insert([{ startsAt }])
+
+    const Role = defineModelFromTable(roles)
+    const Slot = defineModelFromTable(slots)
+    const Owner = defineModelFromTable(owners, {
+      relations: {
+        roles: belongsToMany(() => Role, ownerRole, 'ownerKey', 'roleKey', 'key', 'key').withPivot('note'),
+        slots: belongsToMany(() => Slot, ownerSlot, 'ownerKey', 'startsAt', 'key', 'startsAt'),
+      },
+    })
+    const owner = await Owner.findOrFail(keyA)
+    const pivotRows = async () => (await db.table(ownerRole).get()).map(row => ({ roleKey: Buffer.from(row.roleKey as Uint8Array).toString(), note: row.note }))
+
+    await owner.attach('roles', admin, { note: 'first' })
+    expect(await pivotRows()).toEqual([{ roleKey: 'admin', note: 'first' }])
+    expect(await owner.updateExistingPivot('roles', admin, { note: 'second' })).toBe(1)
+    expect(await pivotRows()).toEqual([{ roleKey: 'admin', note: 'second' }])
+    expect(await owner.toggle('roles', admin)).toEqual({ attached: [], detached: [admin] })
+    expect(await pivotRows()).toEqual([])
+    expect(await owner.sync('roles', admin)).toEqual({ attached: [admin], detached: [], updated: [] })
+    expect(await owner.detach('roles', admin)).toBe(1)
+    expect(await pivotRows()).toEqual([])
+
+    await owner.attach('slots', startsAt)
+    expect(await db.table(ownerSlot).count()).toBe(1)
+    expect(await owner.detach('slots', startsAt)).toBe(1)
+    expect(await db.table(ownerSlot).count()).toBe(0)
+  })
+
   it('attaches morphToMany and morphedByMany rows across blob keys', async () => {
     const db = openSQLite()
     const posts = defineTable('posts', { key: column.blob().primaryKey(), title: column.string() })

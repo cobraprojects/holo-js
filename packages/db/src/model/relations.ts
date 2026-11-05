@@ -59,6 +59,17 @@ function normalizeRelatedResolver(related: RegisteredModelName | (() => ModelDef
   return related
 }
 
+type BelongsToManyPivotKeys<TForeignPivotKey extends string, TRelatedPivotKey extends string> = {
+  readonly foreignPivotKey: TForeignPivotKey
+  readonly relatedPivotKey: TRelatedPivotKey
+}
+
+type MorphPivotKeys<TForeignPivotKey extends string, TMorphTypeColumn extends string, TMorphIdColumn extends string> = {
+  readonly foreignPivotKey: TForeignPivotKey
+  readonly morphTypeColumn: TMorphTypeColumn
+  readonly morphIdColumn: TMorphIdColumn
+}
+
 export const PIVOT_TIMESTAMP_COLUMNS = Object.freeze(['created_at', 'updated_at'] as const)
 
 function decoratePivotRelation<TBase extends {
@@ -349,37 +360,41 @@ export function oldestOfMany<TRelated extends ModelDefinitionLike<TableDefinitio
 export function belongsToMany<
   const TName extends RegisteredModelName,
   const TPivotTable extends string | TableDefinition,
+  const TForeignPivotKey extends string = string,
+  const TRelatedPivotKey extends string = string,
 >(
   related: TName,
   pivotTableOrOptions: TPivotTable | {
     pivotTable: TPivotTable
-    foreignPivotKey: string
-    relatedPivotKey: string
+    foreignPivotKey: TForeignPivotKey
+    relatedPivotKey: TRelatedPivotKey
     parentKey?: string
     relatedKey?: string
   },
-  foreignPivotKey?: string,
-  relatedPivotKey?: string,
+  foreignPivotKey?: TForeignPivotKey,
+  relatedPivotKey?: TRelatedPivotKey,
   parentKey?: string,
   relatedKey?: string,
-): InitialPivotRelation<BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable>, TPivotTable>
+): InitialPivotRelation<BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable>, TPivotTable, BelongsToManyPivotKeys<TForeignPivotKey, TRelatedPivotKey>>
 export function belongsToMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
   const TPivotTable extends string | TableDefinition,
+  const TForeignPivotKey extends string = string,
+  const TRelatedPivotKey extends string = string,
 >(
   related: () => TRelated,
   pivotTableOrOptions: TPivotTable | {
     pivotTable: TPivotTable
-    foreignPivotKey: string
-    relatedPivotKey: string
+    foreignPivotKey: TForeignPivotKey
+    relatedPivotKey: TRelatedPivotKey
     parentKey?: string
     relatedKey?: string
   },
-  foreignPivotKey?: string,
-  relatedPivotKey?: string,
+  foreignPivotKey?: TForeignPivotKey,
+  relatedPivotKey?: TRelatedPivotKey,
   parentKey?: string,
   relatedKey?: string,
-): InitialPivotRelation<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable>
+): InitialPivotRelation<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable, BelongsToManyPivotKeys<TForeignPivotKey, TRelatedPivotKey>>
 export function belongsToMany<const TPivotTable extends string | TableDefinition>(
   related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
   pivotTableOrOptions: TPivotTable | {
@@ -433,19 +448,23 @@ export function belongsToMany<const TPivotTable extends string | TableDefinition
 export function morphToMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
   TPivotTable extends string | TableDefinition,
+  const TMorphName extends string = string,
+  const TForeignPivotKey extends string = string,
+  const TMorphTypeColumn extends string = `${TMorphName}_type`,
+  const TMorphIdColumn extends string = `${TMorphName}_id`,
 >(
   related: () => TRelated,
-  name: string,
+  name: TMorphName,
   pivotTable: TPivotTable,
-  foreignPivotKey: string,
+  foreignPivotKey: TForeignPivotKey,
   parentKey = 'id',
   relatedKey = 'id',
-  type = defaultMorphTypeColumn(name),
-  id = defaultMorphIdColumn(name),
-): InitialPivotRelation<MorphToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
+  type: TMorphTypeColumn = defaultMorphTypeColumn(name) as TMorphTypeColumn,
+  id: TMorphIdColumn = defaultMorphIdColumn(name) as TMorphIdColumn,
+): InitialPivotRelation<MorphToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable, MorphPivotKeys<TForeignPivotKey, TMorphTypeColumn, TMorphIdColumn>> {
   return decoratePivotRelation<
     BareMorphToManyRelation,
-    InitialPivotRelation<MorphToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable>,
+    InitialPivotRelation<MorphToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable, MorphPivotKeys<TForeignPivotKey, TMorphTypeColumn, TMorphIdColumn>>,
     TPivotTable
   >(Object.freeze({
     kind: 'morphToMany',
@@ -468,19 +487,23 @@ export function morphToMany<
 export function morphedByMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
   TPivotTable extends string | TableDefinition,
+  const TMorphName extends string = string,
+  const TForeignPivotKey extends string = string,
+  const TMorphTypeColumn extends string = `${TMorphName}_type`,
+  const TMorphIdColumn extends string = `${TMorphName}_id`,
 >(
   related: () => TRelated,
-  name: string,
+  name: TMorphName,
   pivotTable: TPivotTable,
-  foreignPivotKey: string,
+  foreignPivotKey: TForeignPivotKey,
   parentKey = 'id',
   relatedKey = 'id',
-  type = defaultMorphTypeColumn(name),
-  id = defaultMorphIdColumn(name),
-): InitialPivotRelation<MorphedByManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
+  type: TMorphTypeColumn = defaultMorphTypeColumn(name) as TMorphTypeColumn,
+  id: TMorphIdColumn = defaultMorphIdColumn(name) as TMorphIdColumn,
+): InitialPivotRelation<MorphedByManyRelationDefinition<TRelated, TPivotTable>, TPivotTable, MorphPivotKeys<TForeignPivotKey, TMorphTypeColumn, TMorphIdColumn>> {
   return decoratePivotRelation<
     BareMorphedByManyRelation,
-    InitialPivotRelation<MorphedByManyRelationDefinition<TRelated, TPivotTable>, TPivotTable>,
+    InitialPivotRelation<MorphedByManyRelationDefinition<TRelated, TPivotTable>, TPivotTable, MorphPivotKeys<TForeignPivotKey, TMorphTypeColumn, TMorphIdColumn>>,
     TPivotTable
   >(Object.freeze({
     kind: 'morphedByMany',
