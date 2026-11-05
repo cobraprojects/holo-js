@@ -119,6 +119,18 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
   return values
 }
 
+function readSafeInteger(value: unknown): unknown {
+  if (!readsIntegerText(value)) return value
+  const integer = Number(value)
+  return Number.isSafeInteger(integer) ? integer : value
+}
+
+export function readIntegerColumns(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const columns = columnsOf(table).filter(([key, definition]) => readsAsInteger(definition!) && Object.hasOwn(row, key) && readsIntegerText(row[key]))
+  if (columns.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(columns.map(([key]) => [key, readSafeInteger(row[key])])) })
+}
+
 export function readInsertedKey(
   table: TableDefinition | undefined,
   column: string,
@@ -126,7 +138,5 @@ export function readInsertedKey(
 ): number | string | undefined {
   const definition = table && Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
   const readsInteger = table ? definition !== undefined && readsAsInteger(definition) : true
-  if (!readsInteger || !readsIntegerText(value)) return value
-  const integer = Number(value)
-  return Number.isSafeInteger(integer) ? integer : value
+  return readsInteger ? readSafeInteger(value) as number | string | undefined : value
 }
