@@ -176,6 +176,26 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     }
   }, 30_000)
 
+  it('creates the URL database as the user the connection resolves when pg normalizes the URL', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const role = `holo_role_${suffix}%2Fapp`
+    const database = `holo_role_db_${suffix}%prod`
+    const admin = createPostgresAdapter({ config: livePostgresConfig })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: `postgresql://${role}@${livePostgresConfig.host}:${livePostgresConfig.port}/${database}`,
+    })
+    try {
+      await admin.execute(`CREATE ROLE "${role}" LOGIN CREATEDB`)
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_user AS role, current_database() AS database')).rows).toEqual([{ role, database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.execute(`DROP ROLE IF EXISTS "${role}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
   it('reports real database creation permission failures', async () => {
     const role = `holo_denied_${randomUUID().replaceAll('-', '')}`
     const password = randomUUID()

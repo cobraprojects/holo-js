@@ -116,16 +116,6 @@ function withSessionStartupClient(base: NonNullable<PoolConfig['Client']>, schem
   return HoloClient as unknown as NonNullable<PoolConfig['Client']>
 }
 
-function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
-  const parsed = new URL(connectionString)
-  parsed.pathname = '/postgres'
-
-  return {
-    database: parseConnectionString(connectionString).database ?? undefined,
-    connectionString: parsed.toString(),
-  }
-}
-
 const openPoolSessions = new WeakMap<Pool, Set<PoolClient>>()
 
 function createHoloPool(config?: PoolConfig, schema?: string): Pool {
@@ -158,18 +148,19 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   }
 
   if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
-    const stripped = stripDatabaseFromConnectionString(config.connectionString)
-    if (!stripped.database || stripped.database === 'postgres') {
+    const { connectionString, database: _database, ...bootstrapConfig } = config
+    const resolved = parseConnectionString(connectionString)
+    if (!resolved.database || resolved.database === 'postgres') {
       return undefined
     }
 
-    const { database: _database, ...bootstrapConfig } = config
     return {
-      database: stripped.database,
+      database: resolved.database,
       config: {
         ...bootstrapConfig,
-        connectionString: stripped.connectionString,
-      },
+        ...resolved,
+        database: 'postgres',
+      } as PoolConfig,
     }
   }
 
