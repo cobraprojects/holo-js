@@ -251,6 +251,26 @@ describe('@holo-js/realtime relation query patching', () => {
     )).resolves.toBe(UNCHANGED_QUERY_RESULT)
   })
 
+  it('falls back for belongs-to-many pivot updates that change a pivot key', async () => {
+    const query = createBelongsToManyQuery()
+    const rows = Object.freeze([
+      createRelatedRow(1, 'First', 10),
+      createRelatedRow(2, 'Second', 20),
+    ])
+
+    for (const values of [{ post_id: 2 }, { tag_id: 3 }]) {
+      await expect(tryPatchQueryRelation(
+        query,
+        rows,
+        [{
+          ...createPivotMutation('update', [{ post_id: 2, tag_id: 2, position: 20 }, { post_id: 1, tag_id: 3, position: 10 }]),
+          values: Object.freeze(values),
+        }],
+        createBackfills(),
+      ), JSON.stringify(values)).resolves.toBe(UNPATCHED_RESULT)
+    }
+  })
+
   it('updates unordered belongs-to-many pivot rows without reordering', async () => {
     const query = createBelongsToManyQuery({
       pivotOrderBy: Object.freeze([]),

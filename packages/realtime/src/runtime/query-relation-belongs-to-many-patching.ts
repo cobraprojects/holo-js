@@ -6,6 +6,7 @@ import {
 } from './dependencies'
 import {
   matchesPredicates,
+  mutationChangesColumns,
 } from './predicate-matching'
 import {
   UNCHANGED_QUERY_RESULT,
@@ -39,6 +40,14 @@ export async function tryPatchBelongsToManyRelation(
   let changed = false
   for (const mutation of mutations) {
     if (!mutation.rows) {
+      return UNPATCHED_RESULT
+    }
+
+    if (
+      mutation.kind === 'update'
+      && !isRelatedRelationMutation(mutation, relation)
+      && mutationChangesColumns(mutation, [relation.foreignPivotKey, relation.relatedPivotKey])
+    ) {
       return UNPATCHED_RESULT
     }
 

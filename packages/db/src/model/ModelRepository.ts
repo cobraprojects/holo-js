@@ -893,7 +893,7 @@ export class ModelRepository<
         continue
       }
 
-      if (relation.constraint) {
+      if (relation.constraint || entry.constraint) {
         continue
       }
 
@@ -2534,7 +2534,10 @@ export class ModelRepository<
   ): Promise<void> {
     const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
     const { rows, related } = await this.retrievePivotRows(entities, relation, constraint)
-    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
+    if (typeof observationCount === 'number') {
+      if (constraint || relation.constraint) requireDatabaseQueryObservationRefreshFrom(observationCount)
+      else truncateDatabaseQueryObservations(observationCount)
+    }
     const grouped = this.groupPivotRows(rows, related, relation)
     for (const entity of entities) {
       const parentKey = entity.toAttributes()[relation.parentKey as keyof ReturnType<typeof entity.toAttributes>]
