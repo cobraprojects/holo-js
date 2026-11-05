@@ -7,8 +7,15 @@ import {
   createDatabase, defineModel, latestOfMany, resetDB,
   type Entity, type TableDefinition,
 } from '@holo-js/db'
-import { createPostgresAdapter } from '../src'
+import { createPostgresAdapter, postgresDatabaseDriverFactory } from '../src'
 import { postgresTestConnection, testConnectionUrl } from '../../../tests/support/real-database'
+
+function rawPathUrl(database: string, user?: string) {
+  const connection = postgresTestConnection()
+  const url = testConnectionUrl('postgresql', user ? { ...connection, user, password: undefined } : connection)
+  url.pathname = `/${database}`
+  return url.toString()
+}
 
 describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-postgres', () => {
   it.each([1, 4, 8])('completes overlapping transactions and ordinary queries with a four-client pool and %i admission slots', async maxConcurrentQueries => {
@@ -111,6 +118,81 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('@holo-js/db-post
     } finally {
       await adapter.disconnect()
       await admin.execute(`DROP DATABASE IF EXISTS "${database.replaceAll('"', '""')}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates and connects to the URL database when the database setting names another one', async () => {
+    const urlDatabase = `holo_url_${randomUUID().replaceAll('-', '')}`
+    const optionDatabase = `holo_option_${randomUUID().replaceAll('-', '')}`
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: rawPathUrl(urlDatabase),
+      database: optionDatabase,
+    })
+    try {
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database: urlDatabase }])
+      expect((await admin.query('SELECT datname FROM pg_database WHERE datname = $1', [optionDatabase])).rows).toEqual([])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${urlDatabase}"`)
+      await admin.execute(`DROP DATABASE IF EXISTS "${optionDatabase}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates the database the URL connects to when its path keeps a reserved escape', async () => {
+    const database = `holo_escape_${randomUUID().replaceAll('-', '')}%2Ftenant`
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
+    const adapter = createPostgresAdapter({
+      connectionString: rawPathUrl(database),
+    })
+    try {
+      await adapter.ensureDatabaseExists()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.execute(`DROP DATABASE IF EXISTS "${decodeURIComponent(database)}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates the database the URL connects to when its path has a literal percent sign', async () => {
+    const database = `holo_percent_${randomUUID().replaceAll('-', '')}%prod`
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: rawPathUrl(database),
+      database,
+    })
+    try {
+      await adapter.ensureDatabaseExists?.()
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_database() AS database')).rows).toEqual([{ database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.disconnect()
+    }
+  }, 30_000)
+
+  it('creates the URL database as the user the connection resolves when pg normalizes the URL', async () => {
+    const suffix = randomUUID().replaceAll('-', '')
+    const role = `holo_role_${suffix}%2Fapp`
+    const database = `holo_role_db_${suffix}%prod`
+    const admin = createPostgresAdapter({ config: postgresTestConnection() })
+    const adapter = postgresDatabaseDriverFactory.create({
+      url: rawPathUrl(database, role),
+    })
+    try {
+      await admin.execute(`CREATE ROLE "${role}" LOGIN CREATEDB`)
+      await adapter.ensureDatabaseExists?.()
+      expect((await adapter.query('SELECT current_user AS role, current_database() AS database')).rows).toEqual([{ role, database }])
+    } finally {
+      await adapter.disconnect()
+      await admin.execute(`DROP DATABASE IF EXISTS "${database}"`)
+      await admin.execute(`DROP ROLE IF EXISTS "${role}"`)
       await admin.disconnect()
     }
   }, 30_000)
