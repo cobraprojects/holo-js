@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { writeTextFile } from './project/atomic-file'
+import { lstat, readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { atomicFileInternals } from '@holo-js/core'
 
 export const PACKAGE_MANIFEST_DISCOVERY_PATHS = new Set([
   'package.json',
@@ -18,6 +18,7 @@ type WrittenOutputLedger = {
 }
 
 const WRITTEN_OUTPUT_LEDGER = Symbol.for('holo-js.cli.written-outputs')
+const DIRECTORY_CONTENT = 'directory'
 
 const ledger = ((globalThis as typeof globalThis & { [WRITTEN_OUTPUT_LEDGER]?: WrittenOutputLedger })[WRITTEN_OUTPUT_LEDGER] ??= {
   writtenContentHashes: new Map(),
@@ -35,45 +36,64 @@ function hashContents(contents: string | Uint8Array): string {
 }
 
 async function readContentHash(path: string): Promise<string | null> {
-  const contents = await readFile(path).catch(() => undefined)
-  return contents ? hashContents(contents) : null
+  try {
+    return hashContents(await readFile(path))
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EISDIR' ? DIRECTORY_CONTENT : null
+  }
+}
+
+async function findMissingAncestors(path: string): Promise<string[]> {
+  const missing: string[] = []
+  for (let directory = dirname(path); directory !== dirname(directory); directory = dirname(directory)) {
+    if (await lstat(directory).then(() => true, () => false)) break
+    missing.push(directory)
+  }
+  return missing
 }
 
 async function trackWrites<TResult>(
   paths: readonly string[],
   write: () => Promise<TResult>,
-  record: () => Promise<void>,
+  writtenContents: ReadonlyMap<string, string> = new Map(),
 ): Promise<TResult> {
   let release = (): void => {}
   const pending = new Promise<void>((resolvePromise) => { release = resolvePromise })
-  for (const path of paths) {
-    pendingWrites.set(path, pending)
-    writeGenerations.set(path, (writeGenerations.get(path) ?? 0) + 1)
+  const markPending = (key: string): void => {
+    pendingWrites.set(key, pending)
+    writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
   }
+  const targets = [...new Set(paths.map(path => resolve(path)))]
+  targets.forEach(markPending)
+  const keys = [...targets]
   try {
+    const ancestors = (await Promise.all(targets.map(findMissingAncestors))).flat()
+    for (const ancestor of new Set(ancestors)) {
+      if (keys.includes(ancestor)) continue
+      markPending(ancestor)
+      keys.push(ancestor)
+    }
     return await write()
   } finally {
-    await record()
-    for (const path of paths) {
-      if (pendingWrites.get(path) === pending) pendingWrites.delete(path)
+    const hashes = await Promise.all(keys.map(async (key) => {
+      const contents = writtenContents.get(key)
+      return contents === undefined ? await readContentHash(key) : hashContents(contents)
+    }))
+    keys.forEach((key, index) => writtenContentHashes.set(key, hashes[index] ?? null))
+    for (const key of keys) {
+      if (pendingWrites.get(key) === pending) pendingWrites.delete(key)
     }
     release()
   }
 }
 
 export async function trackOutputWrites<TResult>(paths: readonly string[], write: () => Promise<TResult>): Promise<TResult> {
-  const keys = [...new Set(paths.map(path => resolve(path)))]
-  return await trackWrites(keys, write, async () => {
-    const hashes = await Promise.all(keys.map(readContentHash))
-    keys.forEach((key, index) => writtenContentHashes.set(key, hashes[index] ?? null))
-  })
+  return await trackWrites(paths, write)
 }
 
 export async function writeOutputFile(path: string, contents: string): Promise<void> {
   const key = resolve(path)
-  await trackWrites([key], () => writeTextFile(key, contents), async () => {
-    writtenContentHashes.set(key, hashContents(contents))
-  })
+  await trackWrites([key], () => atomicFileInternals.writeTextFile(key, contents), new Map([[key, contents]]))
 }
 
 export async function trackPackageManifestWrites<TResult>(projectRoot: string, write: () => Promise<TResult>): Promise<TResult> {

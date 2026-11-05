@@ -8,6 +8,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
+import { writeTextFile } from '../src/project/atomic-file'
 import { isUnchangedWrittenOutput, trackOutputWrites, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
@@ -378,4 +379,33 @@ it('shares the written-output ledger between separately loaded copies of the CLI
   vi.resetModules()
   const copy = await import('../src/written-outputs')
   await expect(copy.isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
+})
+
+it('ignores events for files and new directories the CLI writes through its atomic writer', async () => {
+  const root = await createProject()
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    deferred: true,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('rename', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  await writeTextFile(join(root, 'config/plugin/nested/settings.ts'), 'export default {}')
+  emit('config/plugin')
+  emit('config/plugin/nested')
+  emit('config/plugin/nested/settings.ts')
+  watcher.resume()
+  await captured.settled()
+  expect(captured.changes).toEqual([])
 })
