@@ -6459,6 +6459,62 @@ export default defineModel('users', { name: 'User', fillable: ['email'] })
     }
   }, 60000)
 
+  it('prints the query log of a successful migrate when the connection enables logging', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './storage/database.sqlite',
+      logging: true,
+      security: { debugSqlInLogs: true },
+    },
+  },
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+    expect(migrated.stdout).toContain('2026_01_01_000001_create_users')
+    expect(migrated.stderr).toMatch(/\[holo:db\] .* sql=CREATE TABLE IF NOT EXISTS "users"/)
+  }, 60000)
+
+  it('reports a failed migrate once after its query log when the connection enables logging', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeSchemaSourceProject(projectRoot, { driver: 'sqlite', url: './storage/database.sqlite' })
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: { driver: 'sqlite', url: './storage/database.sqlite', logging: true },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_02_000001_explode.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up() {
+    throw new Error('migration exploded')
+  },
+})
+`)
+
+    const failed = runCliProcess(projectRoot, ['migrate'])
+
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain('[holo:db]')
+    expect(failed.stderr.split('migration exploded')).toHaveLength(2)
+  }, 60000)
+
   it('migrates, builds and queries the SQLite database a relative file: URL points at', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
