@@ -2728,9 +2728,9 @@ export class ModelRepository<
     const relatedCast = sourceKeyCast(pivotDefinition ? ownEntry(pivotDefinition.columns, relatedPivotColumn) : undefined, ownEntry(relatedTable.columns, relation.relatedKey))
     const pivotKeys = selectKeyColumn(this.whereParentKey(pivot, pivotDefinition, parentPivotColumn, relation.parentKey), relatedPivotColumn, relatedCast)
 
-    return this.applyRelationConstraint(relation, related, constraint)
-      .getTableQueryBuilder()
-      .whereInSub(relation.relatedKey, pivotKeys)
+    const relatedQuery = this.applyRelationConstraint(relation, related, constraint).getTableQueryBuilder()
+    const source = relatedQuery.getPlan().source
+    return relatedQuery.whereInSub(`${source.alias ?? source.tableName}.${relation.relatedKey}`, pivotKeys)
   }
 
   private resolveMorphExistenceReferences(

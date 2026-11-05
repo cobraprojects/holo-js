@@ -116,7 +116,7 @@ async function openKeyFixtures(driver: Driver, kind: KeyKind) {
       morphOwners: morphedByMany(() => Owner, 'taggable', taggables, 'tag_id'),
     },
   })
-  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts, tagsTable: names.tags, ownersTable: names.owners, pivotTable: names.pivot }
+  return { Owner, Item: ItemWithOwner, Note, Tag: TagWithOwners, partsTable: names.parts, tagsTable: names.tags, ownersTable: names.owners, pivotTable: names.pivot, itemsTable: names.items }
 }
 
 async function openDecimalOwnerFixtures(driver: Driver) {
@@ -213,9 +213,10 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     })
 
     it('filters and counts belongsToMany', async () => {
-      const { Owner, Tag, tagsTable, ownersTable, pivotTable } = await openKeyFixtures(driver, kind)
+      const { Owner, Tag, tagsTable, ownersTable, pivotTable, itemsTable } = await openKeyFixtures(driver, kind)
 
       expect(valuesOf(await Owner.has('tags').orderBy('id').get())).toEqual([1, 2])
+      expect(valuesOf(await Owner.whereHas('tags', query => query.leftJoin(itemsTable, `${itemsTable}.id`, '=', `${tagsTable}.id`)).orderBy('id').get())).toEqual([1, 2])
       expect(valuesOf(await Owner.whereHas('tags', query => query.from(`${tagsTable} as ${pivotTable}`).where(`${pivotTable}.name`, 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Owner.whereHas('tags', query => query.from(`${tagsTable} as t`).where('t.name', 'red')).orderBy('id').get())).toEqual([1])
       expect(valuesOf(await Tag.whereHas('owners', query => query.from(`${ownersTable} as o`).where('o.name', 'second')).orderBy('id').get())).toEqual([2])
