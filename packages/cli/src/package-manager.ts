@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readTextFile } from './project/runtime'
 import { terminateChildProcess } from './framework-run'
+import { recordWrittenPackageManifests } from './written-outputs'
 import type { IoStreams, PackageManagerCommand, SpawnProcessLike, SupportedScaffoldPackageManager } from './cli-types'
 
 export function resolvePackageManagerSpawn(
@@ -154,5 +155,6 @@ export async function installProjectDependencies(
   if (result.code !== 0) {
     throw new Error(stderr.trim() || stdout.trim() || 'Project dependency installation failed.')
   }
+  await recordWrittenPackageManifests(projectRoot)
 }
 

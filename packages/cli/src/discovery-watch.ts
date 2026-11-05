@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { realpathSync, watch, type WatchEventType } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -6,18 +5,12 @@ import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js
 import type { LoadedProjectConfig } from './types'
 import type { WatchFactory, WatchHandle } from './cli-types'
 import type { ObservedPrepareChange } from './framework-restart'
-import type { PreparedOutput } from './project-prepare'
+import { isUnchangedWrittenOutput, PACKAGE_MANIFEST_DISCOVERY_PATHS } from './written-outputs'
 import { resolveProjectPlugins } from './project/plugins'
 import { normalizeArtifactPath } from './project/plugin-prepare/paths'
 import { isIgnorableWatchError, isRecursiveWatchUnsupported, normalizeWatchedFilePath, toPosixSlashes } from './watch-paths'
 
-export const PACKAGE_MANIFEST_DISCOVERY_PATHS = new Set([
-  'package.json',
-  'bun.lock',
-  'package-lock.json',
-  'pnpm-lock.yaml',
-  'yarn.lock',
-])
+export { PACKAGE_MANIFEST_DISCOVERY_PATHS }
 
 export const DISCOVERY_WATCH_PROBE_PATH = '.holo-js/runtime/discovery-watch.probe'
 
@@ -365,15 +358,9 @@ type DiscoveryWatchOptions = {
 
 type DiscoveryWatch = {
   readonly ready: Promise<void>
-  recordPreparedOutputs(output: PreparedOutput): Promise<void>
   refresh(project: LoadedProjectConfig): Promise<void>
-  resume(): Promise<void>
+  resume(): void
   close(): void
-}
-
-async function readContentHash(path: string): Promise<string | undefined> {
-  const contents = await readFile(path).catch(() => undefined)
-  return contents && createHash('sha256').update(contents).digest('hex')
 }
 
 function waitForLivenessOrProbeInterval(liveness: Promise<void>): Promise<void> {
@@ -404,7 +391,6 @@ export async function startDiscoveryWatch({
   const handles: WatchHandle[] = []
   const warnedPlugins = new Set<string>()
   let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
-  const preparedOutputHashes = new Map<string, string | undefined>()
   let probing = true
   let stopProbing = (): void => {}
   const liveness = new Promise<void>((resolvePromise) => {
@@ -430,6 +416,11 @@ export async function startDiscoveryWatch({
 
   const dispatch = (path: string, eventType: WatchEventType): void => {
     if (!isDiscoveryRelevantPath(path, project, pluginWatches)) return
+    if (isAlwaysWatchedPath(path, project)) {
+      const unchanged = isUnchangedWrittenOutput(resolve(projectRoot, path))
+      observe(async () => await unchanged ? [] : classify(path, eventType))
+      return
+    }
     if (eventType !== 'rename') {
       observe({ path, kind: 'changed' })
       return
@@ -519,26 +510,19 @@ export async function startDiscoveryWatch({
     if (recursive === false && !closed) acquireDirectories(directories)
   }
 
-  const recordPreparedOutputs = async (output: PreparedOutput): Promise<void> => {
-    const paths = output === 'dependencies'
-      ? [...PACKAGE_MANIFEST_DISCOVERY_PATHS]
-      : [toPosixSlashes(resolveGeneratedSchemaPath(project))]
-    const hashes = await Promise.all(paths.map(path => readContentHash(resolve(projectRoot, path))))
-    paths.forEach((path, index) => preparedOutputHashes.set(path, hashes[index]))
-  }
-
-  const isUnchangedPreparedOutput = async (path: string): Promise<boolean> => preparedOutputHashes.has(path)
-    && preparedOutputHashes.get(path) === await readContentHash(resolve(projectRoot, path))
-
-  const resume = async (): Promise<void> => {
+  const resume = (): void => {
     const events = deferredEvents
     deferredEvents = undefined
-    const relevant = [...events ?? []].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
-    const unchanged = await Promise.all(relevant.map(([path]) => isUnchangedPreparedOutput(path)))
-    preparedOutputHashes.clear()
-    const changed = relevant.filter((_, index) => !unchanged[index])
-    if (changed.length === 0 || closed || signal.aborted) return
-    observe(async () => Promise.all(changed.map(([path, eventType]) => classify(path, eventType))))
+    if (!events || closed || signal.aborted) return
+    const relevant = [...events].filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches))
+    if (relevant.length === 0) return
+    observe(async () => {
+      const changes = await Promise.all(relevant.map(async ([path, eventType]) =>
+        isAlwaysWatchedPath(path, project) && await isUnchangedWrittenOutput(resolve(projectRoot, path))
+          ? undefined
+          : classify(path, eventType)))
+      return changes.filter(change => change !== undefined)
+    })
   }
 
   const probeLiveness = async (): Promise<void> => {
@@ -576,7 +560,7 @@ export async function startDiscoveryWatch({
       acquireDirectories(directories)
       stopProbing()
     }
-    return { ready: probeLiveness(), recordPreparedOutputs, refresh, resume, close }
+    return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {
     close()
     throw error

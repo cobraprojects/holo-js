@@ -7,7 +7,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import type { WatchFactory, WatchHandle } from '../src/cli-types'
 import { runProjectDevServer } from '../src/dev'
 import { DISCOVERY_WATCH_PROBE_PATH } from '../src/discovery-watch'
-import type { PreparedOutput } from '../src/project-prepare'
+import { recordWrittenOutput } from '../src/written-outputs'
 
 type WatchListener = (eventType: string, fileName: string) => void
 
@@ -55,7 +55,7 @@ async function runDev(
   root: string,
   watcher: ReturnType<typeof createFakeWatcher>,
   calls: string[],
-  prepare: (call: number, recordOutputs: (output: PreparedOutput) => Promise<void>) => Promise<void> | void,
+  prepare: (call: number) => Promise<void> | void,
 ): Promise<void> {
   let preparations = 0
   await runProjectDevServer(
@@ -63,10 +63,10 @@ async function runDev(
     root,
     createFakeSpawn(calls),
     watcher.createWatcher,
-    async (_projectRoot, _io, options) => {
+    async () => {
       preparations += 1
       calls.push('prepare')
-      await prepare(preparations, output => options?.recordOutputs?.(output) ?? Promise.resolve())
+      await prepare(preparations)
     },
   )
 }
@@ -132,21 +132,24 @@ it('does no extra prepare at startup when no discovery source changed', async ()
   expect(calls).toEqual(['live', 'prepare', 'spawn'])
 })
 
+async function writeOwnOutput(root: string, path: string, content: string): Promise<void> {
+  await write(root, path, content)
+  recordWrittenOutput(join(root, path), content)
+}
+
 it('does not re-prepare for the dependency manifests and Generated schema the initial prepare writes', async () => {
   const root = await createProject()
   const calls: string[] = []
   const watcher = createFakeWatcher(calls)
 
-  await runDev(root, watcher, calls, async (call, recordOutputs) => {
+  await runDev(root, watcher, calls, async (call) => {
     if (call !== 1) return
-    await write(root, '.holo-js/generated/schema.generated.ts', 'placeholder')
+    await writeOwnOutput(root, '.holo-js/generated/schema.generated.ts', 'placeholder')
     watcher.emit('rename', '.holo-js/generated/schema.generated.ts')
-    await recordOutputs('generated-schema')
-    await write(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","dependencies":{"better-sqlite3":"^12.0.0"}}')
-    await write(root, 'package-lock.json', '{}')
+    await writeOwnOutput(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","dependencies":{"better-sqlite3":"^12.0.0"}}')
+    await writeOwnOutput(root, 'package-lock.json', '{}')
     watcher.emit('change', 'package.json')
     watcher.emit('rename', 'package-lock.json')
-    await recordOutputs('dependencies')
   })
 
   expect(calls).toEqual(['live', 'prepare', 'spawn'])
@@ -157,12 +160,11 @@ it('re-prepares once when a dependency manifest or the Generated schema changes 
   const calls: string[] = []
   const watcher = createFakeWatcher(calls)
 
-  await runDev(root, watcher, calls, async (call, recordOutputs) => {
+  await runDev(root, watcher, calls, async (call) => {
     if (call !== 1) return
-    await recordOutputs('generated-schema')
-    await write(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","dependencies":{"better-sqlite3":"^12.0.0"}}')
+    await writeOwnOutput(root, '.holo-js/generated/schema.generated.ts', 'placeholder')
+    await writeOwnOutput(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","dependencies":{"better-sqlite3":"^12.0.0"}}')
     watcher.emit('change', 'package.json')
-    await recordOutputs('dependencies')
     await write(root, 'package.json', '{"name":"dev-watch-fixture","type":"module","dependencies":{"better-sqlite3":"^12.1.0"}}')
     watcher.emit('change', 'package.json')
     await write(root, '.holo-js/generated/schema.generated.ts', 'migrated')

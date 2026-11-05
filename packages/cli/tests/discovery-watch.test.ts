@@ -8,6 +8,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
+import { recordWrittenOutput } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
@@ -48,15 +49,22 @@ async function editAndObserve(root: string, path: string, waitForChange: (path: 
 
 function captureChanges() {
   const changes: HoloProjectPrepareChange[] = []
+  const pending: Promise<void>[] = []
   const events = new EventEmitter()
+  const record = async (change: ObservedPrepareChange): Promise<void> => {
+    const observed = typeof change === 'function' ? await change() : change
+    for (const item of Array.isArray(observed) ? observed : [observed]) {
+      changes.push(item)
+      events.emit(`${item.path}:${item.kind}`)
+    }
+  }
   return {
     changes,
-    async observe(change: ObservedPrepareChange): Promise<void> {
-      const observed = typeof change === 'function' ? await change() : change
-      for (const item of Array.isArray(observed) ? observed : [observed]) {
-        changes.push(item)
-        events.emit(`${item.path}:${item.kind}`)
-      }
+    observe(change: ObservedPrepareChange): void {
+      pending.push(record(change))
+    },
+    async settled(): Promise<void> {
+      await Promise.all(pending)
     },
     async waitForChange(path: string, kind: HoloProjectPrepareChange['kind']): Promise<void> {
       await once(events, `${path}:${kind}`)
@@ -157,11 +165,42 @@ it('defers observed edits until it is resumed and judges them by the policy in e
   emit('README.md')
   await watcher.refresh({ config: { ...config, paths: { ...config.paths, models: 'src/models' } } })
   expect(captured.changes).toEqual([])
-  await watcher.resume()
+  watcher.resume()
   emit('config/app.ts')
   await vi.waitFor(() => expect(captured.changes).toHaveLength(2))
   expect(captured.changes).toEqual(expect.arrayContaining([
     { path: 'src/models/User.ts', kind: 'changed' },
     { path: 'config/app.ts', kind: 'changed' },
   ]))
+})
+
+it('ignores events for a dependency manifest that still holds the content the CLI wrote', async () => {
+  const root = await createProject()
+  const listeners: ((eventType: string, fileName: string) => void)[] = []
+  const captured = captureChanges()
+  const watcher = await startDiscoveryWatch({
+    projectRoot: root,
+    signal: new AbortController().signal,
+    writeWarning: message => { throw new Error(message) },
+    project: { config: defaultProjectConfig() },
+    observe: captured.observe,
+    createWatcher: ((_path: string, _options: unknown, listener: (eventType: string, fileName: string) => void) => {
+      listeners.push(listener)
+      return { close() {} }
+    }) as unknown as NonNullable<Parameters<typeof startDiscoveryWatch>[0]['createWatcher']>,
+  })
+  onTestFinished(() => watcher.close())
+  const emit = (path: string) => listeners.forEach(listener => listener('change', path))
+  emit(DISCOVERY_WATCH_PROBE_PATH)
+  await watcher.ready
+  const written = '{"name":"watch-fixture","type":"module","private":true}'
+  await write(root, 'package.json', written)
+  recordWrittenOutput(join(root, 'package.json'), written)
+  emit('package.json')
+  await captured.settled()
+  expect(captured.changes).toEqual([])
+  await write(root, 'package.json', '{"name":"watch-fixture","type":"module"}')
+  emit('package.json')
+  await captured.settled()
+  expect(captured.changes).toEqual([{ path: 'package.json', kind: 'changed' }])
 })

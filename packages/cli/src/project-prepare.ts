@@ -17,8 +17,6 @@ import type { FrameworkDescriptor } from './project/frameworks'
 import { resolveFrameworkPreparation } from './project/framework-preparation'
 import { runPluginProjectPreparers } from './project/plugin-prepare/coordinator'
 
-export type PreparedOutput = 'generated-schema' | 'dependencies'
-
 type ProjectPrepareOptions = {
   readonly prepareSchema?: boolean
   readonly syncFramework?: boolean
@@ -26,7 +24,6 @@ type ProjectPrepareOptions = {
   readonly reason?: Extract<HoloProjectPrepareRun, { kind: 'full' }>['reason']
   readonly changes?: readonly HoloProjectPrepareChange[]
   readonly signal?: AbortSignal
-  readonly recordOutputs?: (output: PreparedOutput) => Promise<void>
 }
 
 async function prepareFrameworkPass(
@@ -71,7 +68,6 @@ export async function runProjectPrepare(
   const project = options.prepareSchema === false
     ? await ensureProjectConfig(projectRoot)
     : await prepareSchemaArtifacts(projectRoot, false, options.signal)
-  await options.recordOutputs?.('generated-schema')
   const command = options.command ?? 'prepare'
   const run: HoloProjectPrepareRun = options.changes && command === 'dev'
     ? { kind: 'incremental', command: 'dev', changes: options.changes }
@@ -79,15 +75,12 @@ export async function runProjectPrepare(
   await prepareFrameworkPass(projectRoot, project, run, io, options)
   options.signal?.throwIfAborted()
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
-  await options.recordOutputs?.('dependencies')
   if (!updatedDependencies || !io) return
   options.signal?.throwIfAborted()
   await installProjectDependencies(io, projectRoot, spawn, options.signal)
-  await options.recordOutputs?.('dependencies')
   options.signal?.throwIfAborted()
   const refreshedProject = await ensureProjectConfig(projectRoot)
   await prepareProjectDiscovery(projectRoot, refreshedProject.config, false)
-  await options.recordOutputs?.('generated-schema')
   await prepareFrameworkPass(projectRoot, refreshedProject, { kind: 'full', command, reason: 'dependencies-changed' }, io, options)
 }
 

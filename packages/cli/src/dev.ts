@@ -7,7 +7,7 @@ import { watch } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureProjectConfig } from './project'
-import { runProjectPrepare, type PreparedOutput } from './project-prepare'
+import { runProjectPrepare } from './project-prepare'
 import type {
   IoStreams,
   PackageManagerCommand,
@@ -136,7 +136,7 @@ export async function runProjectDevServer(
   projectRoot: string,
   spawnProcess: typeof spawn = spawn,
   createWatcher: WatchFactory = watch,
-  prepare: (projectRoot: string, io?: IoStreams, options?: { readonly recordOutputs?: (output: PreparedOutput) => Promise<void> }) => Promise<void> = runProjectPrepare,
+  prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
   passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   let project: LoadedProjectConfig
@@ -152,9 +152,8 @@ export async function runProjectDevServer(
       syncFramework = false,
       changes: readonly HoloProjectPrepareChange[] = [],
     ): Promise<void> => {
-      const recordOutputs = (output: PreparedOutput) => discoveryWatch?.recordPreparedOutputs(output) ?? Promise.resolve()
       if (prepare !== runProjectPrepare) {
-        await (syncFramework ? prepare(projectRoot, io, { recordOutputs }) : hotPrepare(projectRoot, io))
+        await (syncFramework ? prepare : hotPrepare)(projectRoot, io)
         return
       }
 
@@ -163,7 +162,6 @@ export async function runProjectDevServer(
           command: 'dev',
           reason: 'initial',
           signal: session.signal,
-          recordOutputs,
         })
         return
       }
@@ -221,7 +219,7 @@ export async function runProjectDevServer(
       io,
       prepare: changes => prepareDiscovery(false, changes),
     })
-    await discoveryWatch.resume()
+    discoveryWatch.resume()
 
     await restart.run()
   } catch (error) {

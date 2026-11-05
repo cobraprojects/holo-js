@@ -41,6 +41,7 @@ import {
   resolveFirstExistingPath,
 } from '../runtime'
 import { writeTextFile } from '../atomic-file'
+import { recordWrittenOutput } from '../../written-outputs'
 import { loadGeneratedProjectRegistry } from '../registry'
 import { isWorkspaceDependencyVersion, resolveHoloVersionPrefix, resolveManagedHoloPackageVersion } from '../dependency-versions'
 import { resolveWorkspacePackageNames } from '../workspaces'
@@ -164,7 +165,9 @@ async function writePackageJsonDependencyState(
     delete parsed.devDependencies
   }
 
-  await writeTextFile(packageJsonPath, `${JSON.stringify(parsed, null, 2)}\n`)
+  const packageJson = `${JSON.stringify(parsed, null, 2)}\n`
+  await writeTextFile(packageJsonPath, packageJson)
+  recordWrittenOutput(packageJsonPath, packageJson)
 }
 
 export function hasLoadedConfigFile(

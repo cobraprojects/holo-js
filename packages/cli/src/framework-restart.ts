@@ -57,6 +57,11 @@ export function createFrameworkRestart({ session, initialArgs, invocation, io, p
       })
   }
 
+  const enqueueObserved = (observed: ObservedChanges): void => {
+    if (Array.isArray(observed) && observed.length === 0) return
+    enqueue(observed)
+  }
+
   const drain = async (): Promise<void> => {
     for (;;) {
       const pendingClassification = classification
@@ -71,9 +76,9 @@ export function createFrameworkRestart({ session, initialArgs, invocation, io, p
       if (session.signal.aborted) return
 
       if (typeof change === 'function') {
-        classification = classification.then(async () => enqueue(await change()))
+        classification = classification.then(async () => enqueueObserved(await change()))
       } else {
-        enqueue(change)
+        enqueueObserved(change)
       }
     },
     async run() {
