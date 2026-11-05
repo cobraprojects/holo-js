@@ -54,6 +54,13 @@ test('architecture validator accepts real-database tests that connect through th
   await writeTestFile(root, 'tests/example-app-matrix.mjs', "const host = process.env.HOLO_MYSQL_HOST\n")
   await writeTestFile(root, 'packages/db/tests/support/database.ts', "function createTestAdapter(connection) {\n  return createPostgresAdapter({ config: connection })\n}\n")
   await writeTestFile(root, 'packages/db/tests/support-database.test.ts', "vi.stubEnv('HOLO_POSTGRES_DATABASE', 'holo_scratch')\n")
+  await writeTestFile(root, 'packages/kernel/tests/mocked-driver.test.ts', [
+    "vi.mock('mysql2/promise', () => ({ default: { createPool } }))",
+    'async function poolOptions(config: PoolOptions) {',
+    '  await createMySQLAdapter({ config }).initialize()',
+    '}',
+    '',
+  ].join('\n'))
   await writeTestFile(root, 'packages/kernel/tests/local-names.test.ts', [
     'function createConnection(logger?: Logger) {',
     "  return createDatabase({ adapter: createSQLiteAdapter({ filename: ':memory:' }) })",

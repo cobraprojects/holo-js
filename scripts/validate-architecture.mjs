@@ -209,7 +209,8 @@ function validateRealDatabaseTests(repoRoot) {
     for (const database of new Set([...source.matchAll(systemDatabaseName)].map(match => (match[1] ?? match[2]).toLowerCase()))) {
       failures.push(`${path} names the ${database} system database; use the scratch database from ${realDatabaseHelpers}.`)
     }
-    const calls = [
+    const driversMocked = /\bvi\.mock\(\s*['"](?:pg|mysql2(?:\/promise)?)['"]/.test(source)
+    const calls = driversMocked ? [] : [
       ...[...source.matchAll(adapterConstructor)].map(match => ({ match, raw: false })),
       ...[...source.matchAll(rawDriverConstructors(source) ?? /$^/g)].map(match => ({ match, raw: true })),
     ]
