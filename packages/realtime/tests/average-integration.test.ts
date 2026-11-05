@@ -109,4 +109,19 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
     expect(subscription.current.data).toBe(await handler())
     expect(subscription.current.data).toBe(0.07)
   })
+  it('keeps plain decimal averages read in opposite orders equal to their fresh queries', async () => {
+    const { db, scores } = await openScores(driver)
+    await db.table(scores).where('id', '>', 2).delete()
+    await db.table(scores).where('id', 1).update({ amount: '0.10' })
+    await db.table(scores).where('id', 2).update({ amount: '0.20' })
+    const handlers = [
+      () => db.table(scores).orderBy('id').avg('amount'),
+      () => db.table(scores).orderBy('id', 'desc').avg('amount'),
+    ]
+    const subscriptions = await Promise.all(handlers.map(handler => subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })))
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).insert({ id: 6, group_id: 1, points: 1, amount: '0.30' }) }))
+
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(await Promise.all(handlers.map(handler => handler())))
+  })
 })
