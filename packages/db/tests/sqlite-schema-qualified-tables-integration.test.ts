@@ -249,7 +249,7 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     })).rejects.toThrow('SQLite foreign key "product_id" on table "kids" cannot reference table "archive.products" in another database.')
     await expect(schema.table('products', (table) => {
       table.foreignId('parent_id').nullable().constrained('archive.parents')
-    })).rejects.toThrow('SQLite foreign key "parent_id" on table "products" cannot reference table "archive.parents" in another database.')
+    })).rejects.toThrow('SQLite foreign key "parent_id" on table "main.products" cannot reference table "archive.parents" in another database.')
   })
 
   it('rebuilds an attached table and keeps its rows, indexes, and autoincrement sequence', async () => {
@@ -362,6 +362,60 @@ describe('SQLite schema operations on schema-qualified tables', () => {
 
     expect(await indexesOf(schema, 'temp.items')).toEqual([{ name: 'new_idx', unique: true, columns: ['code'] }])
     expect(await indexesOf(schema, 'main.items')).toEqual([{ name: 'old_idx', unique: false, columns: ['name'] }])
+  })
+
+  it('checks references on the resolved table before a transactional rebuild', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "children" ("id" INTEGER PRIMARY KEY, "item_id" INTEGER REFERENCES "items" ("id") ON DELETE CASCADE)', source: 'schema' })
+    await DB.table('temp.items').insert({ id: 1, name: 'parent' })
+    await DB.table('temp.children').insert({ id: 1, item_id: 1 })
+
+    await expect(db.transaction(() => schema.table('items', (table) => {
+      table.string('name').nullable().change()
+    }))).rejects.toThrow('SQLite cannot rebuild table "items" inside a transaction while foreign-key enforcement is on, because table "children" references it.')
+
+    expect(await DB.table('temp.children').get()).toEqual([{ id: 1, item_id: 1 }])
+  })
+
+  it('rejects a foreign key from a shadowing temporary table to a main table', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."parents" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER)', source: 'schema' })
+
+    await expect(schema.table('items', (table) => {
+      table.foreign('parent_id').references('id').on('main.parents')
+    })).rejects.toThrow('SQLite foreign key "parent_id" on table "temp.items" cannot reference table "main.parents" in another database.')
+    expect(await schema.getForeignKeys('temp.items')).toEqual([])
+  })
+
+  it('refuses to change a table that a temporary view shadows', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE INDEX "main"."items_name" ON "items" ("name")', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP VIEW "items" AS SELECT 9 AS "id", 99 AS "name"', source: 'schema' })
+    const error = 'SQLite cannot change table "items" because SQLite resolves it to view "temp.items".'
+
+    await expect(schema.table('items', (table) => {
+      table.string('name').nullable().change()
+    })).rejects.toThrow(error)
+    await expect(schema.table('items', (table) => {
+      table.renameIndex('items_name', 'items_label')
+    })).rejects.toThrow(error)
+    expect((await schema.getColumns('main.items')).find(columnInfo => columnInfo.name === 'name')?.notNull).toBe(true)
+  })
+
+  it('creates the unique index of an added stored column on an unqualified attached table', async () => {
+    const { db, schema } = await openArchive()
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+
+    await schema.table('items', (table) => {
+      table.integer('doubled').storedAs('id * 2').unique()
+    })
+
+    expect(await indexesOf(schema, 'archive.items')).toEqual([{ name: 'items_doubled_unique', unique: true, columns: ['doubled'] }])
   })
 
   it('renames a table inside its attached database', async () => {

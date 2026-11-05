@@ -137,9 +137,15 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     columnName: string,
     reference: ForeignKeyReference,
     constraintName?: string,
+    ownerTablePath: string = tableName,
   ): { name: string, definition: string } {
     const name = this.resolveForeignKeyName(tableName, columnName, constraintName)
-    return { name, definition: this.compileForeignKeyConstraint(tableName, columnName, reference, name) }
+    return { name, definition: this.compileForeignKeyConstraint(ownerTablePath, columnName, reference, name) }
+  }
+
+  compileAddedColumnIndexesOn(tableName: string, targetTablePath: string, column: AnyColumnDefinition): DDLStatement[] {
+    return this.resolveStandaloneUniqueIndexes(this.resolveColumnUniqueIndexes(tableName, [column]))
+      .map(index => this.compileCreateIndex(targetTablePath, { ...index, name: this.resolveIndexName(tableName, index) }))
   }
 
   compileRebuildTable(
