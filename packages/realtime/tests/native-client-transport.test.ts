@@ -1,4 +1,5 @@
 import { once } from 'node:events'
+import { setTimeout as delay } from 'node:timers/promises'
 import { createServer } from 'node:http'
 import { createServer as createPortReservation } from 'node:net'
 import { expect, it, onTestFinished } from 'vitest'
@@ -8,6 +9,12 @@ import { defineRealtimeQuery, type RealtimeSubscriptionSnapshot } from '../src'
 import { configureRealtimeClientTransport, createBroadcastRealtimeTransport, getRealtimeQueryStore, hydrateRealtimeQuery, resetRealtimeClientRuntime } from '../src/client'
 import { executeRealtimeQuery, subscribeRealtimeQuery } from '../src/server'
 import { openRealtimeDatabase } from './helpers/native-database'
+
+async function until(signal: AbortSignal, condition: () => boolean | Promise<boolean>): Promise<void> {
+  while (!(await condition())) {
+    await delay(5, undefined, { signal })
+  }
+}
 
 async function startNativeQueryTransport() {
   const database = await openRealtimeDatabase()
@@ -79,38 +86,38 @@ async function startNativeQueryTransport() {
   }
 }
 
-it('shares a real worker connection, delivers committed database changes, and reconnects with the latest rows', async () => {
+it('shares a real worker connection, delivers committed database changes, and reconnects with the latest rows', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   const first: RealtimeSubscriptionSnapshot<readonly { id: number, score: number | null }[]>[] = []
   const second: typeof first = []
   const errors: unknown[] = []
   const leaveFirst = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => first.push(snapshot), error => errors.push(error))
   const leaveSecond = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => second.push(snapshot), error => errors.push(error))
-  await expect.poll(() => first.length + errors.length).toBeGreaterThan(0)
+  await until(signal, () => first.length + errors.length > 0)
   expect(errors, errors.map(error => error instanceof Error ? error.message : String(error)).join('; ')).toEqual([])
-  await expect.poll(() => first.length).toBe(1)
-  await expect.poll(() => second.length).toBe(1)
+  await until(signal, () => first.length === 1)
+  await until(signal, () => second.length === 1)
   expect(await native.connections()).toBe(1)
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
-  await expect.poll(() => first.at(-1)?.data[0]?.score).toBe(42)
-  await expect.poll(() => second.at(-1)?.data[0]?.score).toBe(42)
+  await until(signal, () => first.at(-1)?.data[0]?.score === 42)
+  await until(signal, () => second.at(-1)?.data[0]?.score === 42)
   leaveFirst()
   await native.database.db.table('records').where('id', 1).update({ score: 43 })
-  await expect.poll(() => second.at(-1)?.data[0]?.score).toBe(43)
+  await until(signal, () => second.at(-1)?.data[0]?.score === 43)
   expect(first.at(-1)?.data[0]?.score).toBe(42)
   expect(await native.connections()).toBe(1)
   leaveSecond()
-  await expect.poll(() => native.connections()).toBe(0)
+  await until(signal, async () => await native.connections() === 0)
   const reconnected: typeof first = []
   const leaveReconnected = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => reconnected.push(snapshot), error => errors.push(error))
-  await expect.poll(() => reconnected.at(-1)?.data[0]?.score).toBe(43)
+  await until(signal, () => reconnected.at(-1)?.data[0]?.score === 43)
   expect(await native.connections()).toBe(1)
   expect(errors, errors.map(error => error instanceof Error ? error.message : String(error)).join('; ')).toEqual([])
   leaveReconnected()
-  await expect.poll(() => native.connections()).toBe(0)
+  await until(signal, async () => await native.connections() === 0)
 })
 
-it('hydrates a public query store, shares unchanged rows across real patches, and releases its worker on reset', async () => {
+it('hydrates a public query store, shares unchanged rows across real patches, and releases its worker on reset', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   onTestFinished(resetRealtimeClientRuntime)
   configureRealtimeClientTransport(native.transport)
@@ -128,54 +135,56 @@ it('hydrates a public query store, shares unchanged rows across real patches, an
   store.connect()
   const ready: unknown[] = []
   const leaveBarrier = native.transport.subscribe('records.list', {}, snapshot => ready.push(snapshot), error => { throw error })
-  await expect.poll(() => ready.length).toBe(1)
-  await expect.poll(() => native.connections()).toBe(1)
+  await until(signal, () => ready.length === 1)
+  await until(signal, async () => await native.connections() === 1)
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
-  await expect.poll(() => store.snapshot?.data[0]?.score).toBe(42)
+  await until(signal, () => store.snapshot?.data[0]?.score === 42)
   expect(store.snapshot?.data[1]).toBe(unchangedRow)
   expect(notifications).toEqual([1, 2])
   leaveFirst()
   expect(await native.connections()).toBe(1)
   leaveBarrier()
   resetRealtimeClientRuntime()
-  await expect.poll(() => native.connections()).toBe(0)
+  await until(signal, async () => await native.connections() === 0)
   await native.database.db.table('records').where('id', 1).update({ score: 43 })
   expect(store.snapshot?.data[0]?.score).toBe(42)
   expect(notifications).toEqual([1, 2])
   leaveSecond()
 })
 
-it('reports native query rejection once with a generic message and continues delivering an independent valid subscription', async () => {
+it('reports native query rejection once with a generic message and continues delivering an independent valid subscription', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   const errors: string[] = []
   const rejected: unknown[] = []
   const leaveRejected = native.transport.subscribe('missing.query', {}, snapshot => rejected.push(snapshot), error => errors.push(error instanceof Error ? error.message : String(error)))
   const snapshots: RealtimeSubscriptionSnapshot<readonly { id: number, score: number | null }[]>[] = []
   const leaveValid = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => snapshots.push(snapshot), error => { throw error })
-  await expect.poll(() => errors).toEqual(['Realtime request failed.'])
-  await expect.poll(() => snapshots.length).toBe(1)
+  await until(signal, () => errors.length > 0)
+  expect(errors).toEqual(['Realtime request failed.'])
+  await until(signal, () => snapshots.length === 1)
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
-  await expect.poll(() => snapshots.at(-1)?.data[0]?.score).toBe(42)
+  await until(signal, () => snapshots.at(-1)?.data[0]?.score === 42)
   expect(rejected).toEqual([])
   expect(errors).toEqual(['Realtime request failed.'])
   leaveRejected()
   leaveValid()
-  await expect.poll(() => native.connections()).toBe(0)
+  await until(signal, async () => await native.connections() === 0)
 })
 
-it('reports an unavailable real worker once without fabricating a snapshot', async () => {
+it('reports an unavailable real worker once without fabricating a snapshot', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   await native.stop()
   const snapshots: unknown[] = []
   const errors: string[] = []
   const leave = native.transport.subscribe('records.list', {}, snapshot => snapshots.push(snapshot), error => errors.push(error instanceof Error ? error.message : String(error)))
-  await expect.poll(() => errors).toEqual(['Realtime live updates are unavailable because the broadcast worker is not reachable. Start the worker with "holo broadcast:work" to enable live updates.'])
+  await until(signal, () => errors.length > 0)
+  expect(errors).toEqual(['Realtime live updates are unavailable because the broadcast worker is not reachable. Start the worker with "holo broadcast:work" to enable live updates.'])
   expect(snapshots).toEqual([])
   leave()
   expect(errors).toHaveLength(1)
 })
 
-it('keeps each active subscription through a real worker shutdown without reporting an error and delivers rows changed while it was down', async () => {
+it('keeps each active subscription through a real worker shutdown without reporting an error and delivers rows changed while it was down', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   const first: RealtimeSubscriptionSnapshot<readonly { id: number, score: number | null }[]>[] = []
   const second: typeof first = []
@@ -183,20 +192,20 @@ it('keeps each active subscription through a real worker shutdown without report
   const onError = (error: unknown) => errors.push(error)
   const leaveFirst = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => first.push(snapshot), onError)
   const leaveSecond = native.transport.subscribe<readonly { id: number, score: number | null }[]>('records.list', {}, snapshot => second.push(snapshot), onError)
-  await expect.poll(() => first.length).toBe(1)
-  await expect.poll(() => second.length).toBe(1)
+  await until(signal, () => first.length === 1)
+  await until(signal, () => second.length === 1)
   await native.stop()
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
   await native.restart()
-  await expect.poll(() => first.at(-1)?.data[0]?.score, { timeout: 10_000 }).toBe(42)
-  await expect.poll(() => second.at(-1)?.data[0]?.score, { timeout: 10_000 }).toBe(42)
+  await until(signal, () => first.at(-1)?.data[0]?.score === 42)
+  await until(signal, () => second.at(-1)?.data[0]?.score === 42)
   expect(errors).toEqual([])
   leaveFirst()
   leaveSecond()
-  await expect.poll(() => native.connections()).toBe(0)
+  await until(signal, async () => await native.connections() === 0)
 }, 20_000)
 
-it('recovers a live query after the worker restarts at the same address and delivers rows changed while it was down', async () => {
+it('recovers a live query after the worker restarts at the same address and delivers rows changed while it was down', async ({ signal }) => {
   const native = await startNativeQueryTransport()
   onTestFinished(resetRealtimeClientRuntime)
   configureRealtimeClientTransport(native.transport)
@@ -207,15 +216,15 @@ it('recovers a live query after the worker restarts at the same address and deli
   await store.load()
   const leaveStore = store.subscribe(() => {})
   store.connect()
-  await expect.poll(() => native.connections()).toBe(1)
+  await until(signal, async () => await native.connections() === 1)
   await native.database.db.table('records').where('id', 1).update({ score: 42 })
-  await expect.poll(() => store.snapshot?.data[0]?.score).toBe(42)
+  await until(signal, () => store.snapshot?.data[0]?.score === 42)
 
   await native.stop()
   await native.database.db.table('records').where('id', 1).update({ score: 43 })
   await native.restart()
 
-  await expect.poll(() => native.connections(), { timeout: 10_000 }).toBe(1)
-  await expect.poll(() => store.snapshot?.data[0]?.score, { timeout: 10_000 }).toBe(43)
+  await until(signal, async () => await native.connections() === 1)
+  await until(signal, () => store.snapshot?.data[0]?.score === 43)
   leaveStore()
 }, 20_000)
