@@ -143,6 +143,6 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }
   const ordered = branches.flatMap(branch => orderedModelColumns(branch, modelColumns))
-  const leadingModelColumns = ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
+  const leadingModelColumns = driver === 'sqlite' && ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
   return projectUnionBranch(plan, driver, modelColumns, leadingModelColumns)
 }

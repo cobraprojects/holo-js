@@ -50,7 +50,7 @@ async function createFixture(driver: typeof drivers[number]) {
     accessors: { price: (value, entity) => Number(value) * Number(entity.toAttributes().parent_id) },
   })
   const joined = () => Product.query().join(orders, `${orders}.product_id`, '=', `${products}.id`)
-  return { products, orders, table, Product, joined }
+  return { schema, products, orders, table, Product, joined }
 }
 
 function attributes(entities: readonly { toAttributes(): Record<string, unknown> }[]) {
@@ -226,6 +226,43 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect(rows.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
     const wildcard = await joined().select(`${products}.*`).addSelectSub(parent as never, 'price').addSelect(`${orders}.*`).get()
     expect(wildcard.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
+  })
+
+  it('cursor paginates a joined query by the model key and by a joined column', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+    await DB.table(orders).where('id', 101).update({ product_id: 2 })
+    await DB.table(orders).where('id', 102).update({ product_id: 1 })
+
+    const pages = async (query: ReturnType<typeof joined>) => {
+      const seen: Record<string, unknown>[][] = []
+      let cursor: string | null = null
+      do {
+        const page = await query.cursorPaginate(1, cursor)
+        seen.push(attributes(page.data))
+        cursor = page.nextCursor
+      } while (cursor !== null && seen.length < 4)
+      return seen.map(rows => rows.map(row => [row.id, row.product_id]))
+    }
+    expect(await pages(joined())).toEqual([[[1, 1]], [[2, 2]]])
+    expect(await pages(joined().orderBy(`${orders}.id`))).toEqual([[[2, 2]], [[1, 1]]])
+    expect(await pages(joined().select(`${orders}.id as order_id` as never, `${orders}.product_id` as never, `${products}.*`).orderBy(`${orders}.id`, 'desc'))).toEqual([[[1, 1]], [[2, 2]]])
+  })
+
+  it('orders a union of joined queries by a model column a joined table does not have', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const labels = uniqueName('labels')
+    onTestFinished(async () => {
+      await schema.dropTable(labels)
+    })
+    await schema.createTable(labels, (table) => {
+      table.integer('product_id')
+      table.string('label')
+    })
+    await DB.table(labels).insert([{ product_id: 1, label: 'one' }, { product_id: 2, label: 'two' }])
+
+    const labelled = () => Product.query().join(labels, `${labels}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${labels}.*`)
+    const union = labelled().where(`${labels}.label` as never, 'two').union(labelled().where(`${labels}.label` as never, 'one')).orderBy('id')
+    expect((await union.get()).map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label])).toEqual([[1, 'one'], [2, 'two']])
   })
 
   it('accepts a joined column aliased to a name that is not a model column', async () => {

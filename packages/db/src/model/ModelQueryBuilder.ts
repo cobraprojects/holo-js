@@ -203,6 +203,23 @@ class ModelQueryBuilderBase<
     return query
   }
 
+  private selectJoinedCursorColumns(): {
+    readonly query: ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
+    readonly cursorColumns: readonly string[]
+  } {
+    const plan = this.tableQuery.getPlan()
+    const joinedOrders = plan.joins.length === 0
+      ? []
+      : plan.orderBy.flatMap(order => order.kind === 'column' && typeof resolveSourceColumnName(plan.source, order.column) === 'undefined' ? [order.column] : [])
+    if (joinedOrders.length === 0) return { query: this, cursorColumns: [] }
+    const cursorColumns = joinedOrders.map((_, index) => `__holo_cursor_${index}`)
+    const selected = plan.selections.length === 0 ? this.select('*' as never) : this
+    return {
+      query: selected.addSelect(...joinedOrders.map((column, index) => `${column} as ${cursorColumns[index]}`) as never[]) as ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>,
+      cursorColumns,
+    }
+  }
+
   private getModelRowsQuery(): TableQueryBuilder<TTable, Record<string, unknown>> {
     return this.getTableQueryBuilder()[projectModelRows]().query
   }
@@ -1578,13 +1595,15 @@ class ModelQueryBuilderBase<
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
     decodeValueCursor(cursor, message => new HydrationError(message))
-    const query = this.tableQuery.getPlan().orderBy.length === 0
-      ? this.getModelRowsQuery().orderBy(this.repository.definition.primaryKey)
-      : this.getModelRowsQuery()
-    const page = await query.cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
-    const rows = hiddenColumns.length === 0 ? page.data : page.data.map(row => {
+    const ordered = this.tableQuery.getPlan().orderBy.length === 0
+      ? this.orderBy(this.repository.definition.primaryKey as never)
+      : this
+    const { query, cursorColumns } = ordered.selectJoinedCursorColumns()
+    const page = await query.getModelRowsQuery().cursorPaginate<ModelRecord<TTable>>(perPage, cursor, options)
+    const omitted = [...hiddenColumns, ...cursorColumns]
+    const rows = omitted.length === 0 ? page.data : page.data.map(row => {
       const attributes = { ...row }
-      for (const column of hiddenColumns) delete attributes[column]
+      for (const column of omitted) delete attributes[column]
       return attributes
     })
     const collection = await this.hydrateRows(rows)

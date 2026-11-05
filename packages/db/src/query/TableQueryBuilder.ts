@@ -3692,7 +3692,7 @@ export class TableQueryBuilder<
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
-    const selection = this.plan.selections.find(selection => selection.kind === 'column' && selection.column === column)
+    const selection = this.plan.selections.find(selection => selection.kind === 'column' && selection.column === column && selection.alias)
     if (selection?.kind === 'column' && selection.alias) return row[selection.alias]
     if (column in row) {
       return row[column]
