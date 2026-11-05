@@ -199,7 +199,7 @@ export class SQLQueryCompiler {
 
           const allColumnsOf = readAllColumnsSelectionTable(selection.column)
           if (allColumnsOf !== undefined && !selection.alias) {
-            return `${this.compileTableReference(allColumnsOf)}.*`
+            return this.compileAllColumnsOf(allColumnsOf, plan)
           }
 
           const column = this.compileColumnReference(selection.column)
@@ -829,6 +829,10 @@ export class SQLQueryCompiler {
       .split('.')
       .map(part => this.quoteIdentifier(part))
       .join('.')
+  }
+
+  protected compileAllColumnsOf(tableReference: string, _plan: SelectQueryPlan): string {
+    return `${this.compileTableReference(tableReference)}.*`
   }
 
   protected compileTableReference(reference: string): string {

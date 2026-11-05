@@ -1,7 +1,12 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
 import { formatSQLiteDateTime } from '../sqliteDateTime'
 import type { CompiledStatement } from '../core/types'
-import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
+import { CompilerError } from '../core/errors'
+import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, SelectQueryPlan } from './ast'
+
+function readBareTableName(tableName: string): string {
+  return tableName.slice(tableName.lastIndexOf('.') + 1)
+}
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -107,6 +112,20 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
       bindings: [schemaName, table, table],
       source: `query:select:${tableName}`,
     }
+  }
+
+  protected override compileAllColumnsOf(tableReference: string, plan: SelectQueryPlan): string {
+    if (!tableReference.includes('.')) return super.compileAllColumnsOf(tableReference, plan)
+    const tableName = readBareTableName(tableReference)
+    const sourceNames = [
+      plan.source.alias ?? readBareTableName(plan.source.tableName),
+      ...plan.joins.map(join => join.alias ?? readBareTableName(join.table!)),
+    ]
+    const sameNamed = sourceNames.filter(name => name.toLowerCase() === tableName.toLowerCase())
+    if (sameNamed.length > 1) {
+      throw new CompilerError(`SQLite cannot select "${tableReference}.*" because more than one table in the query is named "${tableName}". Alias the tables and select "alias.*" instead.`)
+    }
+    return `${this.quoteIdentifier(tableName)}.*`
   }
 
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {

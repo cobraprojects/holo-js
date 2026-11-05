@@ -1,6 +1,6 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileColumnDefaultLiteral } from './defaultLiterals'
-import { assertValidIdentifierPath } from './identifiers'
+import { assertValidIdentifierPath, splitTablePath } from './identifiers'
 import { SchemaError } from '../core/errors'
 import { withIndexName, withSchemaQualifiedName } from './introspection/sqlDefinitions'
 import { resolveDialectColumnType } from './typeMapping'
@@ -43,6 +43,38 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     return [...indexes]
   }
 
+  protected override compileIndexTarget(tableName: string, indexName: string): string {
+    const { schema, table } = splitTablePath(tableName)
+    if (schema === undefined) return super.compileIndexTarget(tableName, indexName)
+    return `${this.compileIdentifierPath(`${schema}.${indexName}`)} ON ${this.quoteIdentifier(table)}`
+  }
+
+  protected override compileReferencedTable(tableName: string, columnName: string, referencedTable: string): string {
+    assertValidIdentifierPath(referencedTable, 'Referenced table name')
+    const referenced = splitTablePath(referencedTable)
+    if (referenced.schema === undefined) return this.quoteIdentifier(referenced.table)
+    const owningSchema = splitTablePath(tableName).schema ?? 'main'
+    if (referenced.schema.toLowerCase() !== owningSchema.toLowerCase()) {
+      throw new SchemaError(`SQLite foreign key "${columnName}" on table "${tableName}" cannot reference table "${referencedTable}" in another database.`)
+    }
+    return this.quoteIdentifier(referenced.table)
+  }
+
+  override compileRenameTable(fromTableName: string, toTableName: string): DDLStatement {
+    assertValidIdentifierPath(fromTableName, 'Table name')
+    assertValidIdentifierPath(toTableName, 'Table name')
+    const from = splitTablePath(fromTableName)
+    const to = splitTablePath(toTableName)
+    if (to.schema !== undefined && to.schema.toLowerCase() !== (from.schema ?? 'main').toLowerCase()) {
+      throw new SchemaError(`SQLite cannot move table "${fromTableName}" to another database as "${toTableName}".`)
+    }
+
+    return {
+      sql: `ALTER TABLE ${this.compileIdentifierPath(fromTableName)} RENAME TO ${this.quoteIdentifier(to.table)}`,
+      source: `schema:renameTable:${fromTableName}:${toTableName}`,
+    }
+  }
+
   compileForeignKeyEnforcementQuery(): DDLStatement {
     return { sql: 'PRAGMA foreign_keys', source: 'schema:sqliteRebuild:foreignKeys' }
   }
@@ -61,9 +93,12 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
 
   compileMoveAutoIncrementSequence(tableName: string, temporaryTableName: string): DDLStatement[] {
     const source = `schema:sqliteRebuild:sequence:${tableName}`
+    const { schema, table } = splitTablePath(tableName)
+    const temporaryTable = splitTablePath(temporaryTableName).table
+    const sequenceTable = schema === undefined ? 'sqlite_sequence' : `${this.compileIdentifierPath(schema)}.sqlite_sequence`
     return [
-      { sql: 'DELETE FROM sqlite_sequence WHERE name = ?', bindings: [temporaryTableName], source },
-      { sql: 'UPDATE sqlite_sequence SET name = ? WHERE name = ?', bindings: [temporaryTableName, tableName], source },
+      { sql: `DELETE FROM ${sequenceTable} WHERE name = ?`, bindings: [temporaryTable], source },
+      { sql: `UPDATE ${sequenceTable} SET name = ? WHERE name = ?`, bindings: [temporaryTable, table], source },
     ]
   }
 
@@ -85,7 +120,8 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
   }
 
   compileRecreateIndex(tableName: string, fromIndexName: string, toIndexName: string, createIndexSql: string): DDLStatement[] | undefined {
-    const renamedSql = withIndexName(createIndexSql, this.quoteIdentifier(toIndexName))
+    const { schema } = splitTablePath(tableName)
+    const renamedSql = withIndexName(createIndexSql, this.compileIdentifierPath(schema === undefined ? toIndexName : `${schema}.${toIndexName}`))
     if (renamedSql === undefined) return undefined
     return [
       this.compileDropIndex(tableName, fromIndexName),
@@ -100,7 +136,7 @@ export class SQLiteSchemaCompiler extends SQLSchemaCompiler {
     constraintName?: string,
   ): { name: string, definition: string } {
     const name = this.resolveForeignKeyName(tableName, columnName, constraintName)
-    return { name, definition: this.compileForeignKeyConstraint(columnName, reference, name) }
+    return { name, definition: this.compileForeignKeyConstraint(tableName, columnName, reference, name) }
   }
 
   compileRebuildTable(

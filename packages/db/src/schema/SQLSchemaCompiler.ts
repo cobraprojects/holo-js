@@ -223,18 +223,19 @@ export abstract class SQLSchemaCompiler {
     assertValidIdentifierPath(tableName, 'Table name')
     const resolvedConstraintName = this.resolveForeignKeyName(tableName, columnName, constraintName)
     return {
-      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compileForeignKeyConstraint(columnName, reference, resolvedConstraintName)}`,
+      sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} ADD ${this.compileForeignKeyConstraint(tableName, columnName, reference, resolvedConstraintName)}`,
       source: `schema:createForeignKey:${tableName}:${resolvedConstraintName}`,
     }
   }
 
   protected compileForeignKeyConstraint(
+    tableName: string,
     columnName: string,
     reference: ForeignKeyReference,
     constraintName: string,
   ): string {
     assertValidIdentifierSegment(columnName, 'Column name')
-    return `${this.compileNamedConstraint(constraintName)} FOREIGN KEY (${this.quoteIdentifier(columnName)}) ${this.compileReferencesClause(columnName, reference)}`
+    return `${this.compileNamedConstraint(constraintName)} FOREIGN KEY (${this.quoteIdentifier(columnName)}) ${this.compileReferencesClause(tableName, columnName, reference)}`
   }
 
   private compileColumnForeignKeyConstraint(tableName: string, column: AnyColumnDefinition): string | undefined {
@@ -243,7 +244,11 @@ export abstract class SQLSchemaCompiler {
     }
 
     const constraintName = this.resolveForeignKeyName(tableName, column.name, column.references.constraintName)
-    return `${this.compileNamedConstraint(constraintName)} ${this.compileReferencesClause(column.name, column.references)}`
+    return `${this.compileNamedConstraint(constraintName)} ${this.compileReferencesClause(tableName, column.name, column.references)}`
+  }
+
+  protected compileReferencedTable(_tableName: string, _columnName: string, referencedTable: string): string {
+    return this.compileIdentifierPath(referencedTable)
   }
 
   private compileNamedConstraint(constraintName: string, label = 'Foreign key name'): string {
@@ -251,7 +256,7 @@ export abstract class SQLSchemaCompiler {
     return `CONSTRAINT ${this.quoteIdentifier(constraintName)}`
   }
 
-  private compileReferencesClause(columnName: string, reference: ForeignKeyReference): string {
+  private compileReferencesClause(tableName: string, columnName: string, reference: ForeignKeyReference): string {
     assertValidIdentifierSegment(reference.column, 'Referenced column name')
     if (!reference.table) {
       throw new SchemaError(
@@ -260,7 +265,7 @@ export abstract class SQLSchemaCompiler {
     }
 
     const parts = [
-      `REFERENCES ${this.compileIdentifierPath(reference.table)} (${this.quoteIdentifier(reference.column)})`,
+      `REFERENCES ${this.compileReferencedTable(tableName, columnName, reference.table)} (${this.quoteIdentifier(reference.column)})`,
     ]
 
     if (reference.onDelete) {
@@ -309,9 +314,13 @@ export abstract class SQLSchemaCompiler {
     }).join(', ')
 
     return {
-      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)} (${quotedColumns})`,
+      sql: `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${this.compileIndexTarget(tableName, indexName)} (${quotedColumns})`,
       source: `schema:createIndex:${tableName}:${indexName}`,
     }
+  }
+
+  protected compileIndexTarget(tableName: string, indexName: string): string {
+    return `${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)}`
   }
 
   compileDropIndex(tableName: string, indexName: string): DDLStatement {

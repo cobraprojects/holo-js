@@ -1,13 +1,14 @@
 import { currentPinnedConnection } from '../concurrency/pinnedConnection'
 import { SchemaError } from '../core/errors'
 import { dropTableOperation, renameTableOperation } from './ddl'
-import { createSchemaReader, readTableStructure } from './introspection'
+import { readTableStructure } from './introspection'
 import { listSQLiteReferencingTables, readSQLiteCreateTableSql, readSQLiteDependentObjects, readSQLiteIndexKey, readSQLiteStoredTableName, readSQLiteTableObjects, SQLITE_AUTOINDEX_PREFIX } from './introspection/sqlite'
 import { findStoredColumn, findUnshadowedRowIdName, hasAutoIncrement, isGeneratedColumn, keepsRowIdOnlyAsHiddenColumn, readPreservedColumnConstraints, renderDefinitions, withAddedColumn, withChangedColumn, withoutForeignKeys, withoutPrimaryKeys, withoutUniquesBackingIndex } from './introspection/sqlDefinitions'
 import { parseCreateTableSql, type StoredTable } from './introspection/sqliteDefinitionGrammar'
 import { sameIdentifier, sameIdentifiers } from './introspection/sqliteTokens'
 import { createSQLiteSchemaCompiler } from './schemaCompilerFactory'
 import { executeStatements } from './ddlExecution'
+import { splitTablePath } from './identifiers'
 import type { DDLStatement } from './ddl'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { runInTransactionScope } from '../core/transactionScope'
@@ -199,8 +200,10 @@ export class SQLiteSchemaOperations {
       throw new SchemaError(`SQLite cannot rebuild table "${requestedTableName}" because it does not exist.`)
     }
 
-    const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
-    if ((await createSchemaReader(connection).listTables()).some(existing => sameIdentifier(existing, temporaryTableName))) {
+    const { schema } = splitTablePath(tableName)
+    const temporaryBaseName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
+    const temporaryTableName = schema === undefined ? temporaryBaseName : `${schema}.${temporaryBaseName}`
+    if (await readSQLiteStoredTableName(connection, temporaryTableName) !== undefined) {
       throw new SchemaError(
         `SQLite cannot rebuild table "${tableName}" because temporary table "${temporaryTableName}" already exists.`,
       )
