@@ -215,7 +215,7 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  const rows = readBackfilledRows(target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
+  const rows = readBackfilledRows(connection, target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )
@@ -251,7 +251,7 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  return readBackfilledRows(target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
+  return readBackfilledRows(connection, target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )

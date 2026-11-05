@@ -9,6 +9,7 @@ import {
 import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
+  readBackfilledValue,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -294,7 +295,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
+  const rows = readBackfilledRows(connection, hydration.relatedTable, await builder.get())
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
@@ -322,16 +323,18 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(readBackfilledRows(hydration.relatedTable, rows.rows), values)
+  return groupRelatedTopOneRows(connection, hydration, readBackfilledRows(connection, hydration.relatedTable, rows.rows), values)
 }
 
 function groupRelatedTopOneRows(
+  connection: DatabaseContext,
+  hydration: DatabaseQueryRelatedHydrationObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
   const rowsByLocalKey = new Map<unknown, BackfillRows>()
   for (const row of rows) {
-    const localKey = row[GROUPED_RELATED_ROW_ID_ALIAS]
+    const localKey = readBackfilledValue(connection, hydration.relatedTable, hydration.foreignKey, row[GROUPED_RELATED_ROW_ID_ALIAS])
     if (typeof localKey === 'undefined') {
       return undefined
     }
@@ -474,7 +477,7 @@ async function fetchRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder
+  const rows = readBackfilledRows(connection, hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
     .get())
   return validateRelatedHydrationRows(rows, hydration)

@@ -273,7 +273,7 @@ async function fetchRelatedRelationRow(
     return undefined
   }
 
-  const rows = readBackfilledRows(relation.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
+  const rows = readBackfilledRows(connection, relation.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
     relation.relatedTableName,
     connection,
   )
