@@ -76,7 +76,9 @@ export async function* queryBatches<
     if (traversal.column && sortRows) {
       const key = selectedColumn?.kind === 'column' ? selectedColumn.alias ?? selectedColumn.column.split('.').at(-1)! : traversal.column.split('.').at(-1)!
       const compare = traversal.direction === 'desc' ? compareChunkValuesDescending : compareChunkValuesAscending
-      const decimal = traversalColumnDefinition(plan, table, traversal.column, input.getConnectionName())?.kind === 'decimal'
+      const aliasedColumn = plan.selections.find(selection => selection.kind === 'column' && selection.alias === traversal.column)
+      const definitionColumn = aliasedColumn?.kind === 'column' ? aliasedColumn.column : traversal.column
+      const decimal = traversalColumnDefinition(plan, table, definitionColumn, input.getConnectionName())?.kind === 'decimal'
       rows.sort((left, right) => compare(left[key], right[key], decimal))
       rebindDatabaseQueryObservationResult(fetchedRows, rows)
     }

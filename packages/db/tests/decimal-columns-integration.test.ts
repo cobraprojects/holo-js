@@ -83,8 +83,14 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
       descending.push(...rows.map(row => String(row.amount)))
     }, 'amount')
 
+    const aliased: string[] = []
+    await DB.table(prices).select('amount as price').distinct().chunkById(2, (rows) => {
+      aliased.push(...rows.map(row => String(row.price)))
+    }, 'price')
+
     expect(ascending).toEqual(['-3.50', '2.00', '9.00', '10.00'])
     expect(descending).toEqual(['10.00', '9.00', '2.00', '-3.50'])
+    expect(aliased).toEqual(['-3.50', '2.00', '9.00', '10.00'])
   })
 
   it('chunks by a joined decimal column in numeric order', async () => {
