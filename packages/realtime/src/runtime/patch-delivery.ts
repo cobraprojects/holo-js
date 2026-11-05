@@ -15,6 +15,7 @@ import {
 } from './query-patching'
 import {
   readMutationValueKeys,
+  readPrimaryKey,
 } from './predicate-matching'
 import { collectRelevantMutationTargets } from './query-relevant-mutations'
 import type {
@@ -234,7 +235,7 @@ async function deliverPatchedQueryEntry(
       data,
       queries,
       shouldCreatePatchOperations
-        ? createReplacePatchOperations(path, previousValue, firstPatch.value)
+        ? createReplacePatchOperations(path, previousValue, firstPatch.value, readPrimaryKey(query))
         : EMPTY_PATCH_OPERATIONS,
     )
     return
@@ -297,10 +298,10 @@ async function deliverPatchedQueryEntry(
       shouldCreatePatchOperations
         ? compactPatchOperations(
             firstPathKey === secondPathKey
-              ? createReplacePatchOperations(firstPath, firstPreviousValue, firstPatch.value)
+              ? createReplacePatchOperations(firstPath, firstPreviousValue, firstPatch.value, readPrimaryKey(firstQuery))
               : [
-                  ...createReplacePatchOperations(firstPath, firstPreviousValue, firstPatch.value),
-                  ...createReplacePatchOperations(secondPath, secondPreviousValue, secondPatch.value),
+                  ...createReplacePatchOperations(firstPath, firstPreviousValue, firstPatch.value, readPrimaryKey(firstQuery)),
+                  ...createReplacePatchOperations(secondPath, secondPreviousValue, secondPatch.value, readPrimaryKey(secondQuery)),
                 ],
           )
         : EMPTY_PATCH_OPERATIONS,
@@ -338,7 +339,7 @@ async function deliverPatchedQueryEntry(
     if (patchOperations && patchedOperationPathKeys && !patchedOperationPathKeys.has(pathKey)) {
       const previousValue = target?.currentValue ?? (path.length === 0 ? data : getValueAtPath(data, path))
       patchedOperationPathKeys.add(pathKey)
-      patchOperations.push(...createReplacePatchOperations(path, previousValue, patch.value))
+      patchOperations.push(...createReplacePatchOperations(path, previousValue, patch.value, readPrimaryKey(query)))
     }
     if (canUseTopLevelReplacement) {
       if (canReplaceTopLevelPath(path)) {

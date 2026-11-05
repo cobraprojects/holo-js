@@ -1,10 +1,11 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import { formatSQLiteDateTime } from '../sqliteDateTime'
+import { compileSQLiteWallClock, formatSQLiteDateTime } from '../sqliteDateTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { CompiledStatement } from '../core/types'
 import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
-import type { InsertStatementOptions, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, SelectQueryPlan } from './ast'
+import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -224,14 +225,43 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     return expression
   }
 
+  private compileAppWallClock(column: string): string {
+    const timeZone = getApplicationTimezone()
+    if (timeZone === 'UTC') return column
+
+    const wallClock = compileSQLiteWallClock(column, this.createSqlStringLiteral(timeZone))
+    return `CASE WHEN ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN ${column} ELSE ${wallClock} END`
+  }
+
+  protected override compileColumnComparison(predicate: QueryColumnPredicate): string {
+    if (!predicate.dateOperands) return super.compileColumnComparison(predicate)
+
+    const column = this.compileWallClockOperand(predicate.column, predicate.dateOperands.column)
+    const compareTo = this.compileWallClockOperand(predicate.compareTo, predicate.dateOperands.compareTo)
+    return `${column} ${predicate.operator.toUpperCase()} ${compareTo}`
+  }
+
+  private compileWallClockOperand(column: string, isDate: boolean): string {
+    const wallClock = this.compileAppWallClock(this.compileColumnReference(column))
+    return isDate ? `(date(${wallClock}) || ' 00:00:00.000')` : `strftime('%Y-%m-%d %H:%M:%f', ${wallClock})`
+  }
+
+  protected override compileComparisonSubject(predicate: QueryPredicate): string {
+    const column = this.compileColumnReference(predicate.column)
+    return predicate.valueType === 'date' ? `date(${this.compileAppWallClock(column)})` : column
+  }
+
   protected override compileDatePredicate(
     predicate: QueryDatePredicate,
     placeholder: string,
   ): string {
-    const column = this.compileColumnReference(predicate.column)
+    const reference = this.compileColumnReference(predicate.column)
+    if (predicate.part === 'instant') {
+      return `julianday(${reference}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
+    }
+
+    const column = this.compileAppWallClock(reference)
     switch (predicate.part) {
-      case 'instant':
-        return `julianday(${column}) ${predicate.operator.toUpperCase()} julianday(${placeholder})`
       case 'date':
         return `date(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
       case 'time':

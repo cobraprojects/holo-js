@@ -16,6 +16,7 @@ export type DatabaseMutationEvent = {
   readonly predicateCount?: number
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
+  readonly primaryKey?: string
   readonly rows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
   readonly values?: Readonly<Record<string, unknown>>

@@ -61,6 +61,35 @@ describe('@holo-js/db-sqlite', () => {
     }
   }, 15000)
 
+  it('converts stored UTC datetime text to app-timezone wall-clock text on injected and opened databases', async () => {
+    const adapters = [createSQLiteAdapter({ database: new Database(':memory:') }), createSQLiteAdapter({ filename: ':memory:' })]
+    for (const adapter of adapters) {
+      try {
+        await adapter.execute('CREATE TABLE events (at TEXT)')
+        await adapter.execute('INSERT INTO events (at) VALUES (?), (?), (NULL)', ['2026-11-04 20:30:00', '2026-12-31 16:00:00.5'])
+        expect((await adapter.query(
+          'SELECT holo_wall_clock((julianday(at) - 2440587.5) * 86400000.0, ?) AS local FROM events',
+          ['Asia/Tokyo'],
+        )).rows).toEqual([{ local: '2026-11-05 05:30:00.000' }, { local: '2027-01-01 01:00:00.500' }, { local: null }])
+      } finally {
+        await adapter.disconnect()
+      }
+    }
+  })
+
+  it('names the function() requirement when an injected database cannot register holo_wall_clock', async () => {
+    const real = new Database(':memory:')
+    const adapter = createSQLiteAdapter({ database: { prepare: sql => real.prepare(sql), exec: sql => real.exec(sql), close: () => real.close() } })
+    try {
+      await adapter.execute('CREATE TABLE events (at TEXT)')
+      await expect(adapter.query('SELECT holo_wall_clock((julianday(at) - 2440587.5) * 86400000.0, ?) AS local FROM events', ['Asia/Tokyo']))
+        .rejects.toMatchObject({ code: 'CAPABILITY_ERROR', message: expect.stringContaining('function()') })
+      await expect(adapter.query('SELECT at FROM events')).resolves.toMatchObject({ rows: [] })
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
   it('uses a real injected database for bound writes and rollback in each transaction mode', async () => {
     const adapter = createSQLiteAdapter({ database: new Database(':memory:') })
     try {

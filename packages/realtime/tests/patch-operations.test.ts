@@ -162,45 +162,62 @@ describe('@holo-js/realtime patch operations', () => {
       id: 1,
       status: 'open',
       title: 'New',
-    })).toEqual([
+    }, 'id')).toEqual([
       createMergePatchOperation(['row'], {
         status: 'open',
         title: 'New',
       }),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [first, second], [first, updatedSecond])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [first, second], [first, updatedSecond], 'id')).toEqual([
       createReplacePatchOperation(['rows', 1, 'title'], 'Updated'),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [first, second, third], [second, { id: 1, title: 'Moved' }, third])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [first, second, third], [second, { id: 1, title: 'Moved' }, third], 'id')).toEqual([
       createMovePatchOperation(['rows'], 0, 1),
       createReplacePatchOperation(['rows', 1, 'title'], 'Moved'),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [first, second, third], [second, third, { id: 4, title: 'Fourth' }])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [first, second, third], [second, third, { id: 4, title: 'Fourth' }], 'id')).toEqual([
       createSplicePatchOperation(['rows'], 0, 1, []),
       createSplicePatchOperation(['rows'], 2, 0, [{ id: 4, title: 'Fourth' }]),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [first, second, third], [{ id: 0, title: 'Zero' }, first, second])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [first, second, third], [{ id: 0, title: 'Zero' }, first, second], 'id')).toEqual([
       createSplicePatchOperation(['rows'], 0, 0, [{ id: 0, title: 'Zero' }]),
       createSplicePatchOperation(['rows'], 3, 1, []),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [first, second], [first, second, third])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [first, second], [first, second, third], 'id')).toEqual([
       createSplicePatchOperation(['rows'], 2, 0, [third]),
     ])
 
-    expect(createReplacePatchOperations(['rows'], [1, 2, 3], [1, 4, 5, 3])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [1, 2, 3], [1, 4, 5, 3], 'id')).toEqual([
       createSplicePatchOperation(['rows'], 1, 1, [4, 5]),
     ])
   })
 
-  it('handles equivalent arrays, no-id records, and nested equivalent values while diffing replacements', () => {
-    expect(createReplacePatchOperations(['rows'], [1, 2], [1, 2])).toEqual([])
+  it('identifies rows by the given primary key while diffing replacements', () => {
+    const france = { code: 'FR', id: 1, name: 'France' }
+    const germany = { code: 'DE', id: 1, name: 'Germany' }
+    const italy = { code: 'IT', id: 2, name: 'Italy' }
 
-    expect(createReplacePatchOperations(['rows'], [{ title: 'Old' }], [{ title: 'New' }])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [france, germany, italy], [germany, { ...france, name: 'République' }, italy], 'code')).toEqual([
+      createMovePatchOperation(['rows'], 0, 1),
+      createReplacePatchOperation(['rows', 1, 'name'], 'République'),
+    ])
+    expect(createReplacePatchOperations(['rows'], [france, italy], [{ ...germany, id: 1 }, italy], 'code')).toEqual([
+      createReplacePatchOperation(['rows', 0], germany),
+    ])
+    expect(createReplacePatchOperations(['rows'], [france, italy], [{ ...france, id: 9, name: 'France' }, italy], 'code')).toEqual([
+      createReplacePatchOperation(['rows', 0, 'id'], 9),
+    ])
+  })
+
+  it('handles equivalent arrays, no-id records, and nested equivalent values while diffing replacements', () => {
+    expect(createReplacePatchOperations(['rows'], [1, 2], [1, 2], 'id')).toEqual([])
+
+    expect(createReplacePatchOperations(['rows'], [{ title: 'Old' }], [{ title: 'New' }], 'id')).toEqual([
       createReplacePatchOperation(['rows', 0, 'title'], 'New'),
     ])
 
@@ -210,11 +227,11 @@ describe('@holo-js/realtime patch operations', () => {
     ], [
       { id: 1, title: 'Same' },
       { id: 2, title: 'New' },
-    ])).toEqual([
+    ], 'id')).toEqual([
       createReplacePatchOperation(['rows', 1, 'title'], 'New'),
     ])
 
-    expect(createReplacePatchOperations(['row'], { id: 1 }, { id: 1 })).toEqual([])
+    expect(createReplacePatchOperations(['row'], { id: 1 }, { id: 1 }, 'id')).toEqual([])
 
     expect(createReplacePatchOperations(['row'], {
       id: 1,
@@ -224,7 +241,7 @@ describe('@holo-js/realtime patch operations', () => {
       id: 1,
       tags: ['realtime', 'patches'],
       title: 'New',
-    })).toEqual([
+    }, 'id')).toEqual([
       createReplacePatchOperation(['row', 'title'], 'New'),
     ])
   })
@@ -238,7 +255,7 @@ describe('@holo-js/realtime patch operations', () => {
       body: undefined,
       id: 1,
       title: 'New',
-    })).toEqual([
+    }, 'id')).toEqual([
       createReplacePatchOperation(['row', 'body'], undefined),
       createReplacePatchOperation(['row', 'title'], 'New'),
     ])
@@ -257,26 +274,26 @@ describe('@holo-js/realtime patch operations', () => {
       second,
       { id: 1, status: 'open', title: 'First' },
       third,
-    ])).toEqual([
+    ], 'id')).toEqual([
       createReplacePatchOperation(['rows', 0], second),
       createReplacePatchOperation(['rows', 1], { id: 1, status: 'open', title: 'First' }),
     ])
   })
 
   it('falls back to replace operations when values cannot be safely compacted', () => {
-    expect(createReplacePatchOperations(['value'], 'old', 'new')).toEqual([
+    expect(createReplacePatchOperations(['value'], 'old', 'new', 'id')).toEqual([
       createReplacePatchOperation(['value'], 'new'),
     ])
-    expect(createReplacePatchOperations(['rows'], [{ id: 1 }], [{ id: 2 }])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [{ id: 1 }], [{ id: 2 }], 'id')).toEqual([
       createReplacePatchOperation(['rows', 0], { id: 2 }),
     ])
-    expect(createReplacePatchOperations(['rows'], [{ id: 1, nested: [1, 2] }], [{ id: 1, nested: [1, 3] }])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [{ id: 1, nested: [1, 2] }], [{ id: 1, nested: [1, 3] }], 'id')).toEqual([
       createReplacePatchOperation(['rows', 0, 'nested'], [1, 3]),
     ])
-    expect(createReplacePatchOperations(['rows'], [{ title: 'Old' }], [{ title: 'New', status: 'open' }])).toEqual([
+    expect(createReplacePatchOperations(['rows'], [{ title: 'Old' }], [{ title: 'New', status: 'open' }], 'id')).toEqual([
       createReplacePatchOperation(['rows', 0], { status: 'open', title: 'New' }),
     ])
-    expect(createReplacePatchOperations(['row'], { title: 'Old' }, { status: 'open' })).toEqual([
+    expect(createReplacePatchOperations(['row'], { title: 'Old' }, { status: 'open' }, 'id')).toEqual([
       createReplacePatchOperation(['row'], { status: 'open' }),
     ])
   })

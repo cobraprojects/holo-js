@@ -14,6 +14,7 @@ import {
   invalidateQueryCacheDependencies,
   runQueryCacheOperation,
   createDatabaseMutationEvent,
+  resolveInsertIdKey,
   createTableCacheDependency,
   createTableRowWildcardCacheDependency,
   createDatabaseQueryFallbackObservation,
@@ -116,6 +117,8 @@ import type {
   SelectQueryPlan,
 } from './ast'
 import {
+  normalizeDateColumnPredicateValue,
+  normalizeDatePartPredicateValue,
   normalizeQueryPredicateValue,
   normalizeQueryUpdateValues,
   normalizeQueryWriteRecord,
@@ -273,10 +276,11 @@ export class TableQueryBuilder<
   }
 
   from(table: string): TableQueryBuilder<string, TSelectedRow> {
+    const source = createTableSource(table)
     return new TableQueryBuilder(
       table,
       this.connection,
-      withSource(this.plan, createTableSource(table)),
+      withSource(this.plan, this.sourceHasRowKey(source.tableName) ? Object.freeze({ ...source, primaryKey: this.source.primaryKey }) : source),
       this.queryCacheConfig,
       internalPlanHandoff,
     )
@@ -472,7 +476,8 @@ export class TableQueryBuilder<
     negated = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection)
+    const nestedPlan = { ...createSelectQueryPlan(this.source), joins: this.plan.joins }
+    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection, nestedPlan, undefined, internalPlanHandoff)
     const callbackResult = callback(nestedBuilder)
     const result = callbackResult instanceof TableQueryBuilder ? callbackResult : nestedBuilder
     const predicates = result.getPlan().predicates as readonly QueryPredicateNode[]
@@ -620,6 +625,7 @@ export class TableQueryBuilder<
     value?: unknown,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalized = this.normalizeOperatorValue(operator, value)
+    const partValue = normalizeDatePartPredicateValue(part, normalized.value)
 
     return this.clone(withPredicate(this.plan, {
       kind: 'date',
@@ -627,7 +633,7 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
+      value: partValue ?? this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
     }))
   }
 
@@ -653,6 +659,21 @@ export class TableQueryBuilder<
 
   private getColumnDefinition(column: string): AnyColumnDefinition | undefined {
     return this.source.table?.columns[column]
+  }
+
+  private isDateColumn(column: string): boolean {
+    return (this.getSourceColumnDefinition(column) ?? this.getJoinedColumnDefinition(column))?.kind === 'date'
+  }
+
+  private getJoinedColumnDefinition(column: string): AnyColumnDefinition | undefined {
+    const separator = column.lastIndexOf('.')
+    if (separator === -1) return undefined
+
+    const qualifier = column.slice(0, separator)
+    const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
+      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      : alias === qualifier))
+    return join?.definition?.columns[column.slice(separator + 1)]
   }
 
   private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
@@ -846,12 +867,15 @@ export class TableQueryBuilder<
     operatorOrCompareTo: string,
     compareTo?: string,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const comparedColumn = compareTo ?? operatorOrCompareTo
+    const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
     return this.clone(withPredicate(this.plan, {
       kind: 'column',
       boolean,
       column,
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
-      compareTo: compareTo ?? operatorOrCompareTo,
+      compareTo: comparedColumn,
+      ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
     }))
   }
 
@@ -1231,7 +1255,7 @@ export class TableQueryBuilder<
     const now = new Date()
     const today = formatCalendarDate(now, getApplicationTimezone())
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.getSourceColumnDefinition(column)?.kind === 'date'
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.isDateColumn(column)
         ? query.whereDatePart(boolean, 'date', column, operator, today)
         : query.whereDatePart(boolean, 'instant', column, operator, now), this)
   }
@@ -1248,7 +1272,7 @@ export class TableQueryBuilder<
     const startOfTomorrow = startOfDayInTimezone(now, timeZone, 1)
     return (typeof columns === 'string' ? [columns] : columns)
       .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => {
-        if (query.getSourceColumnDefinition(column)?.kind === 'date') {
+        if (query.isDateColumn(column)) {
           return query.whereDatePart(boolean, 'date', column, operator, today)
         }
 
@@ -3169,7 +3193,9 @@ export class TableQueryBuilder<
       previousRows.push(Object.freeze({ ...previousRow }))
     }
 
-    return Object.freeze(previousRows)
+    const hasUnpairedPossibleMatch = result.rows.some((candidate, index) => !usedResultIndexes.has(index)
+      && rows.some(row => uniqueBy.every(column => !valuesDiffer(candidate[column], row[column]))))
+    return hasUnpairedPossibleMatch ? undefined : Object.freeze(previousRows)
   }
 
   private rowsMatchUniqueBy(
@@ -3219,6 +3245,24 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
   ): readonly Readonly<Record<string, unknown>>[] {
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
+  }
+
+  private sourceHasRowKey(tableName: string): boolean {
+    const primaryKey = this.source.primaryKey
+    if (primaryKey === undefined) {
+      return false
+    }
+
+    if (tableName === this.source.tableName) {
+      return true
+    }
+
+    const table = getConnectionGeneratedTableDefinition(tableName, this.connection.getConnectionName())
+    return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey)
+  }
+
+  private resolveRowKeyColumns(): readonly string[] {
+    return this.source.primaryKey === undefined ? resolveTablePrimaryKeyColumns(this.source.table) : [this.source.primaryKey]
   }
 
   private resolveSinglePrimaryKeyColumn(): string | undefined {
@@ -3278,7 +3322,7 @@ export class TableQueryBuilder<
         createTableCacheDependency(connectionName, this.source.tableName),
         createTableRowWildcardCacheDependency(connectionName, this.source.tableName),
       ],
-      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source.tableName)] : [],
+      hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source)] : [],
     )
   }
 
@@ -3293,20 +3337,22 @@ export class TableQueryBuilder<
       return
     }
 
+    const primaryKey = resolveInsertIdKey(this.source, this.connection.getConnectionName())
     const mutations = hasInvalidationListeners
       ? [
           createDatabaseMutationEvent(
             kind,
             this.connection.getConnectionName(),
-            this.source.tableName,
+            this.source,
             [],
             undefined,
             rows.length === 1
               && typeof lastInsertId !== 'undefined'
-              && !Object.prototype.hasOwnProperty.call(rows[0], 'id')
+              && typeof primaryKey !== 'undefined'
+              && !Object.prototype.hasOwnProperty.call(rows[0], primaryKey)
               ? Object.freeze([Object.freeze({
                   ...rows[0],
-                  id: lastInsertId,
+                  [primaryKey]: lastInsertId,
                 })])
               : rows,
             previousRows,
@@ -3353,7 +3399,7 @@ export class TableQueryBuilder<
       : [createDatabaseMutationEvent(
           hasValues ? 'update' : 'delete',
           this.connection.getConnectionName(),
-          this.source.tableName,
+          this.source,
           this.plan.predicates,
           hasValues ? values : undefined,
           capturedRows?.rows,
@@ -3373,7 +3419,7 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
     previousRows: readonly Readonly<Record<string, unknown>>[],
   ): ReturnType<typeof createDatabaseMutationEvent>[] {
-    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const primaryKeys = this.resolveRowKeyColumns()
     const keyOf = (keyValues: readonly unknown[]): unknown => keyValues.length === 1
       ? keyValues[0]
       : JSON.stringify(keyValues, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
@@ -3387,7 +3433,7 @@ export class TableQueryBuilder<
       return createDatabaseMutationEvent(
         'update',
         this.connection.getConnectionName(),
-        this.source.tableName,
+        this.source,
         primaryKeys.map(key => ({ kind: 'comparison' as const, column: key, operator: '=', value: previousRow?.[key] ?? row[key] })),
         Object.freeze({ ...values, ...Object.fromEntries(numericColumns.map(column => [column, row[column]])) }),
         [row],
@@ -3424,7 +3470,7 @@ export class TableQueryBuilder<
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [...resolveTablePrimaryKeyColumns(this.source.table), ...columns] as never[]),
+      withSelections(this.plan, [...this.resolveRowKeyColumns(), ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
@@ -3445,7 +3491,7 @@ export class TableQueryBuilder<
       return this.update(values)
     }
 
-    const primaryKey = this.resolvePrimaryKeyColumn()
+    const primaryKey = this.source.primaryKey ?? this.resolvePrimaryKeyColumn()
     const plan = this.plan.predicates.length === 0
       ? this.plan
       : withPredicate(withoutPredicates(this.plan, () => true), { kind: 'group', predicates: this.plan.predicates })
@@ -3631,6 +3677,11 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    if (this.isDateColumn(columnName)) {
+      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+      return normalized.comparesCalendarDates ? { value: normalized.value, valueType: 'date' } : { value: normalized.value }
+    }
+
     return {
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
       ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),
@@ -3676,4 +3727,10 @@ export function whereColumnNotExpiredByDatabaseClock<
   }
 
   return append(`${quoted} > CURRENT_TIMESTAMP(3)`, [])
+}
+
+function valuesDiffer(left: unknown, right: unknown): boolean {
+  return left !== right
+    && typeof left === typeof right
+    && (typeof left === 'number' || typeof left === 'bigint' || typeof left === 'boolean')
 }
