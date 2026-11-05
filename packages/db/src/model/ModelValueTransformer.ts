@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarDateWriteValue, dateLikeWriteValue, storesDate, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredCalendarDate, parseStoredDate, readIntegerKey, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -189,6 +189,12 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return column ? storesText(column) || storesDate(column) : this.definition.untyped
   }
 
+  private holdsCalendarDate(key: string): boolean {
+    return ownEntry(this.definition.table.columns, key)?.kind === 'date'
+      && !ownEntry(this.definition.casts, key)
+      && this.isModelDateColumn(key)
+  }
+
   private hasBuiltInDateCast(key: string): boolean {
     const name = this.parseBuiltInCast(this.resolveCast(key))?.name
     return name === 'date' || name === 'datetime' || name === 'timestamp'
@@ -218,8 +224,8 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
 
   private applySchemaWriteNormalization(key: string, value: unknown): unknown {
     const column = ownEntry(this.definition.table.columns, key)
-    if (column ? column.kind === 'date' : this.parseBuiltInCast(this.resolveCast(key))?.name === 'date') {
-      return calendarDateWriteValue(this.getSchemaDialectName(), value)
+    if (this.holdsCalendarDate(key)) {
+      return calendarMidnightWriteValue(this.getSchemaDialectName(), value)
     }
 
     if (this.hasBuiltInDateCast(key)) {
@@ -268,7 +274,6 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
         case 'json':
           return typeof value === 'string' ? JSON.parse(value) : value
         case 'date':
-          return parseStoredCalendarDate(this.resolveDialect(), value)
         case 'datetime':
         case 'timestamp':
           return parseStoredDate(this.resolveDialect(), value)
