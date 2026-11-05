@@ -74,7 +74,7 @@ async function openFixture(driver: typeof drivers[number], statements: string[] 
     posts: hasMany(() => Post, 'group_id'),
     topPost: hasOne(() => Post, 'group_id'),
   } })
-  const Post = defineModel(posts, { timestamps: false, relations: { group: belongsTo(() => Group, 'group_id') } })
+  const Post = defineModel(posts, { timestamps: false, fillable: ['group_id', 'score', 'title'], relations: { group: belongsTo(() => Group, 'group_id') } })
   return { db, groups, groupTags, posts, Group, Post }
 }
 
@@ -200,5 +200,23 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     await expect(handler()).rejects.toThrow('9007199254740993')
     expect(runs).toBe(2)
     expect(String(errors[0])).toContain('9007199254740993')
+  })
+
+  it('hydrates a hasOne row for a new related insert the way a fresh model read does', async () => {
+    const { db, posts, Group, Post } = await openFixture(driver)
+    const expectFresh = await subscribeAll({
+      eager: () => db.model(Group).query().with('topPost').orderBy('id').getJson(),
+      ordered: () => db.model(Group).query().with('topPost', query => query.orderBy('score', 'desc')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(posts).insert({ id: 30, group_id: 2, score: 9, title: 'z' }))
+    await expectFresh()
+    if (driver === 'postgres') {
+      await db.executeCompiled({ sql: `SELECT setval(pg_get_serial_sequence('"${posts.tableName}"', 'id'), 40)`, source: 'schema' })
+    }
+    await mutate(() => db.model(Post).create({ group_id: 1, score: 10, title: 'y' }))
+    await expectFresh()
+    await mutate(() => db.table(posts.tableName).insert({ id: 50, group_id: 2, score: 11, title: 'x' }))
+    await expectFresh()
   })
 })
