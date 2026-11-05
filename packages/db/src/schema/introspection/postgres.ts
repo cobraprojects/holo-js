@@ -9,7 +9,7 @@ import type { DatabaseEnumCheckStructure, DialectSchemaReader, TableLocation } f
 type TableNameRow = { name: string }
 type TableRow = { schema: string }
 type TableLocationRow = { schema: string, table: string, oid: string }
-type RelationRow = { oid: string }
+type RelationRow = { oid: string | null }
 type ColumnRow = { name: string, data_type: string, full_type: string, not_null: boolean, default_value: string | null, is_identity: boolean, generated_kind: string, primary_key_position: number | null }
 type IndexRow = { name: string, is_unique: boolean, is_primary: boolean, is_constraint: boolean, representable: boolean, columns: string[] }
 type ForeignKeyRow = { name: string, owner_schema: string, table_schema: string, table_name: string, from_column: string, to_column: string, on_update: string, on_delete: string }
@@ -83,7 +83,7 @@ const CHECKS_SQL = `SELECT con.conname AS name,
   WHERE con.contype = 'c' AND cardinality(con.conkey) = 1 AND ${RELATION_ID_FILTER}
   ORDER BY con.conname`
 
-const RELATION_EXISTS_SQL = `SELECT t.oid::text AS oid FROM pg_catalog.pg_class t WHERE ${RELATION_ID_FILTER}`
+const CURRENT_RELATION_SQL = `SELECT pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $2::text))::oid::text AS oid`
 
 const REFERENTIAL_ACTIONS: Readonly<Record<string, string>> = {
   a: 'NO ACTION',
@@ -151,8 +151,8 @@ export function createPostgresSchemaReader(connection: DatabaseContext): Dialect
       const indexes = await introspect<IndexRow>(INDEXES_SQL, bindings, `schema:introspect:indexes:${tableName}`)
       const foreignKeys = await introspect<ForeignKeyRow>(FOREIGN_KEYS_SQL, bindings, `schema:introspect:foreignKeys:${tableName}`)
       const checks = await introspect<CheckRow>(CHECKS_SQL, bindings, `schema:introspect:checks:${tableName}`)
-      const relationAfterRead = await introspect<RelationRow>(RELATION_EXISTS_SQL, bindings, `schema:introspect:exists:${tableName}`)
-      if (relationAfterRead.rows.length === 0) return undefined
+      const relationAfterRead = await introspect<RelationRow>(CURRENT_RELATION_SQL, [relation.schema, relation.table], `schema:introspect:exists:${tableName}`)
+      if (relationAfterRead.rows[0]?.oid !== relation.oid) return undefined
 
       return {
         dialect: 'postgres',

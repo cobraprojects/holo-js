@@ -102,6 +102,18 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL schem
     expect(await readWhileDropCommits(tableName, () => reader.readTableStructure(tableName))).toBeUndefined()
   }, 30_000)
 
+  it('reads a table dropped during introspection inside a repeatable read transaction as missing', async () => {
+    const tableName = await createCheckedTable()
+
+    const structure = await connectToTestSchema().transaction(async (tx) => {
+      await tx.queryCompiled({ sql: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', source: 'query' })
+      const reader = holoRuntimeInternals.createSchemaReader(tx)
+      return readWhileDropCommits(tableName, () => reader.readTableStructure(tableName))
+    })
+
+    expect(structure).toBeUndefined()
+  }, 30_000)
+
   it('leaves a table dropped during introspection out of the generated schema', async () => {
     const kept = await createCheckedTable()
     const dropped = await createCheckedTable()
