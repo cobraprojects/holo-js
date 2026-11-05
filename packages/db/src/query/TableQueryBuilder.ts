@@ -3513,10 +3513,8 @@ export class TableQueryBuilder<
           [primaryKey]: lastInsertId,
         })])
       : rows
-    const hasWrittenDecimals = hasInvalidationListeners
-      && options.rowsAreWritten === true
-      && this.writesDecimalColumn(rows.flatMap(row => Object.keys(row)))
-    const databaseRows = !hasWrittenDecimals
+    const readsWrittenRows = hasInvalidationListeners && options.rowsAreWritten === true
+    const databaseRows = !readsWrittenRows
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
     const eventRows = databaseRows && this.readIntegerValues(databaseRows)
