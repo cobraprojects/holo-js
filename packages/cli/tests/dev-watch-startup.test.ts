@@ -130,3 +130,18 @@ it('does no extra prepare at startup when no discovery source changed', async ()
 
   expect(calls).toEqual(['live', 'prepare', 'spawn'])
 })
+
+it('does not re-prepare for the dependency manifests and Generated schema the initial prepare writes', async () => {
+  const root = await createProject()
+  const calls: string[] = []
+  const watcher = createFakeWatcher(calls)
+
+  await runDev(root, watcher, calls, (call) => {
+    if (call !== 1) return
+    watcher.emit('change', 'package.json')
+    watcher.emit('change', 'package-lock.json')
+    watcher.emit('rename', '.holo-js/generated/schema.generated.ts')
+  })
+
+  expect(calls).toEqual(['live', 'prepare', 'spawn'])
+})

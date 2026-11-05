@@ -434,7 +434,7 @@ export async function startDiscoveryWatch({
     : { path, kind: 'changed' }
 
   const defer = (events: Map<string, WatchEventType>, path: string, eventType: WatchEventType): void => {
-    if (isAlwaysExcludedWatchPath(path) && !isAlwaysWatchedPath(path, project)) return
+    if (isAlwaysExcludedWatchPath(path) || isAlwaysWatchedPath(path, project)) return
     if (events.get(path) !== 'rename') events.set(path, eventType)
   }
 
