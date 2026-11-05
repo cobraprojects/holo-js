@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { exampleApps } from './setup-example-apps.mjs'
 
 const contributingPage = 'apps/docs/docs/advanced/contributing.md'
 const setupHeading = '## Set up the repository'
+const postSetupTest = 'bun run --cwd packages/config test -- --reporter=json'
 
 export function documentedSetupCommands(markdown) {
   const start = markdown.indexOf(`${setupHeading}\n`)
@@ -21,13 +23,10 @@ export function documentedSetupCommands(markdown) {
 
 export function setupFailures(checkoutDir) {
   const failures = []
-  const appsDir = join(checkoutDir, 'apps')
-  for (const app of readdirSync(appsDir).sort()) {
-    const manifestPath = join(appsDir, app, 'package.json')
-    if (!existsSync(manifestPath)) continue
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-    if (!manifest.dependencies?.['@holo-js/cli'] && !manifest.devDependencies?.['@holo-js/cli']) continue
-    const envPath = join(appsDir, app, '.env')
+  const apps = exampleApps(checkoutDir)
+  if (apps.length === 0) failures.push('No example app defines a setup script.')
+  for (const app of apps) {
+    const envPath = join(checkoutDir, 'apps', app, '.env')
     const env = existsSync(envPath) ? readFileSync(envPath, 'utf8') : ''
     if (!/^APP_KEY=\S/m.test(env)) failures.push(`apps/${app}/.env has no APP_KEY.`)
     if (!/^BROADCAST_APP_KEY=\S/m.test(env)) failures.push(`apps/${app}/.env has no BROADCAST_APP_KEY.`)
@@ -50,6 +49,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     run(`git clone --quiet --no-local "${repoRoot}" "${checkoutDir}"`, workDir)
     for (const command of commands) run(command, checkoutDir)
+    run(postSetupTest, checkoutDir)
     const failures = setupFailures(checkoutDir)
     if (failures.length > 0) throw new Error(failures.join('\n'))
     console.log('The documented contributor setup works in a fresh clone.')
