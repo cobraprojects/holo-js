@@ -156,9 +156,9 @@ Objects you pass to `createMySQLAdapter()` as `client`, `pool`, or `createPool` 
 
 ### Large integers
 
-A MySQL `bigint` up to `Number.MAX_SAFE_INTEGER` comes back as a number. A larger one comes back as its exact text, such as `'9007199254740993'`, as PostgreSQL and SQLite return it, so raw queries and untyped models never lose digits. Models and table definitions that type the column as `number` throw a `HydrationError` for it instead. `DECIMAL` values come back as text, as before.
+A MySQL `bigint` up to `Number.MAX_SAFE_INTEGER` comes back as a number. A larger one comes back as its exact text, such as `'9007199254740993'`, as PostgreSQL and SQLite return it, so raw queries and untyped models never lose digits. Models and table definitions that type the column as `number` throw a `HydrationError` for it instead. `DECIMAL` values come back as text, and JSON values are parsed with `JSON.parse()`, both as before, so a number inside JSON is read as on PostgreSQL and SQLite.
 
-Holo turns on mysql2's `supportBigNumbers` and leaves `bigNumberStrings` off to do this. A `supportBigNumbers` or `bigNumberStrings` parameter in the connection URL replaces both settings.
+Holo turns on mysql2's `supportBigNumbers` and leaves `bigNumberStrings` off to do this. A `supportBigNumbers` or `bigNumberStrings` parameter in the connection URL replaces both settings, and a `jsonStrings=true` parameter returns JSON as text.
 
 ### Driver detection
 

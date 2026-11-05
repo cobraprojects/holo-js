@@ -15,20 +15,21 @@ async function openNumbersTable(connection: Parameters<typeof mysqlDatabaseDrive
   onTestFinished(async () => {
     try { await adapter.execute(`DROP TABLE IF EXISTS ${table}`) } finally { await adapter.disconnect() }
   })
-  await adapter.execute(`CREATE TABLE ${table} (id BIGINT AUTO_INCREMENT PRIMARY KEY, safe BIGINT, price DECIMAL(20, 2), wide DECIMAL(30, 0))`)
+  await adapter.execute(`CREATE TABLE ${table} (id BIGINT AUTO_INCREMENT PRIMARY KEY, safe BIGINT, price DECIMAL(20, 2), wide DECIMAL(30, 0), payload JSON)`)
   return { adapter, table }
 }
 
 describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql big numbers against a live server', () => {
-  it('returns a BIGINT beyond the safe integer range as its exact text and a safe one as a number', async () => {
+  it('returns a BIGINT beyond the safe integer range as its exact text, and parses DECIMAL and JSON as before', async () => {
     const { adapter, table } = await openNumbersTable({ host, port, username: user, password, database })
     const inserted = await adapter.execute(`INSERT INTO ${table} (id, safe, price, wide) VALUES (9007199254740993, 42, 12.50, 123456789012345678901234567890)`)
+    await adapter.execute(`UPDATE ${table} SET payload = CAST('{"big":9007199254740993}' AS JSON)`)
 
-    const raw = await adapter.query(`SELECT id, safe, price, wide FROM ${table}`)
-    const prepared = await adapter.query(`SELECT id, safe, price, wide FROM ${table} WHERE safe = ?`, [42])
+    const raw = await adapter.query(`SELECT id, safe, price, wide, payload FROM ${table}`)
+    const prepared = await adapter.query(`SELECT id, safe, price, wide, payload FROM ${table} WHERE safe = ?`, [42])
 
     expect(String(inserted.lastInsertId)).toBe('9007199254740993')
-    expect(raw.rows).toEqual([{ id: '9007199254740993', safe: 42, price: '12.50', wide: '123456789012345678901234567890' }])
+    expect(raw.rows).toEqual([{ id: '9007199254740993', safe: 42, price: '12.50', wide: '123456789012345678901234567890', payload: JSON.parse('{"big":9007199254740993}') as unknown }])
     expect(prepared.rows).toEqual(raw.rows)
   }, 30_000)
 
@@ -48,5 +49,14 @@ describe.skipIf(process.env.HOLO_MYSQL_INTEGRATION !== '1')('@holo-js/db-mysql b
     const result = await adapter.query(`SELECT id FROM ${table}`)
 
     expect(result.rows).toEqual([{ id: 9007199254740992 }])
+  }, 30_000)
+
+  it('returns JSON as text when the URL sets jsonStrings', async () => {
+    const { adapter, table } = await openNumbersTable({ url: `${url}?jsonStrings=true` })
+    await adapter.execute(`INSERT INTO ${table} (payload) VALUES (CAST('{"big":9007199254740993}' AS JSON))`)
+
+    const result = await adapter.query(`SELECT payload FROM ${table}`)
+
+    expect(result.rows).toEqual([{ payload: '{"big": 9007199254740993}' }])
   }, 30_000)
 })

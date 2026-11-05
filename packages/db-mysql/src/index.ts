@@ -84,10 +84,20 @@ function dateStringTypes(config: PoolOptions): ReadonlySet<string> {
   return new Set()
 }
 
+function readsJsonAsText(config: PoolOptions): boolean {
+  const uriOption = typeof config.uri === 'string' ? new URL(config.uri).searchParams.get('jsonStrings') : null
+  return config.jsonStrings ?? uriOption === 'true'
+}
+
 function applicationTypeCast(config: PoolOptions): MySQLTypeCast {
   const fallback = typeof config.typeCast === 'function' ? config.typeCast : config.typeCast === false ? rawTypeCast : undefined
   const stringTypes = dateStringTypes(config)
+  const jsonText = readsJsonAsText(config)
   return (field, next) => {
+    if (field.type === 'JSON' && !fallback && !jsonText) {
+      const text = field.string('utf8')
+      return text === null ? null : JSON.parse(text)
+    }
     if (field.type !== 'DATE' && field.type !== 'DATETIME' && field.type !== 'TIMESTAMP') {
       return fallback ? fallback(field, next) : next()
     }
