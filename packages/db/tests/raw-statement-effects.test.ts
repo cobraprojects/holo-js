@@ -11,6 +11,12 @@ describe('raw statement schema effects', () => {
     'DELETE FROM posts',
     'SHOW TABLES',
     'EXPLAIN SELECT 1',
+    'SET LOCAL statement_timeout = 5000',
+    'SET TIME ZONE \'UTC\'',
+    'SET NAMES utf8mb4',
+    'SAVEPOINT before_import',
+    'RELEASE SAVEPOINT before_import',
+    'LOCK TABLE posts IN SHARE MODE',
   ])('keeps the schema generation for %s', (sql) => {
     expect(isSchemaPreservingRawStatement(sql)).toBe(true)
   })
@@ -23,6 +29,15 @@ describe('raw statement schema effects', () => {
     'USE tenant',
     'ATTACH DATABASE \':memory:\' AS aux',
     'PRAGMA foreign_keys = ON',
+    'SET LOCAL search_path TO tenant',
+    'SET SCHEMA \'tenant\'',
+    'SET ROLE tenant_owner',
+    'SET SESSION AUTHORIZATION tenant_owner',
+    'RESET search_path',
+    'RESET ALL',
+    'EXPLAIN ANALYZE CREATE TABLE archived AS SELECT 1',
+    'ROLLBACK TO SAVEPOINT before_import',
+    'CALL rebuild_reports()',
     'SELECT set_config(\'search_path\', \'tenant\', false)',
     'SELECT * INTO archived_posts FROM posts',
     'SELECT 1; DROP TABLE posts',

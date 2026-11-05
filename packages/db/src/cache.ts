@@ -1304,7 +1304,7 @@ export async function invalidateReplacedTableIdentity(
   }
 
   const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
-  await invalidateQueryCacheDependencies(connection, [tableKey, `${tableKey}:row:*`])
+  await invalidateQueryCacheDependencies(getRootDatabaseContext(connection), [tableKey, `${tableKey}:row:*`])
 }
 
 export function normalizeQueryCacheDependencies(

@@ -14,14 +14,9 @@ type TableIdentityRow = {
   readonly bare_schema: string | null
 }
 
-type TableResolution = {
-  readonly identity: string
-  readonly target: string | undefined
-}
-
 type TableIdentityEntry = {
   readonly generation: number
-  readonly resolution: Promise<TableResolution>
+  readonly identity: Promise<string>
 }
 
 const resolvedIdentities = new WeakMap<object, Map<string, TableIdentityEntry>>()
@@ -63,41 +58,42 @@ function toCanonicalName(tableName: string, row: TableIdentityRow | undefined): 
   return row.schema === row.bare_schema ? table : `${row.schema}.${table}`
 }
 
-async function lookupTableResolution(connection: DatabaseContext, tableName: string): Promise<TableResolution> {
+async function lookupTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
+  if (splitTablePath(tableName).schema === undefined) return tableName
   const statement = createQueryCompiler(connection).compileTableIdentityLookup(tableName)
-  if (!statement) return { identity: tableName, target: undefined }
+  if (!statement) return tableName
   const { rows } = await connection.queryCompiled<TableIdentityRow>(statement)
-  const row = rows[0]
-  return {
-    identity: toCanonicalName(tableName, row),
-    target: row?.schema && row.name ? `${row.schema}.${row.name}` : undefined,
+  return toCanonicalName(tableName, rows[0])
+}
+
+async function refreshTableIdentity(connection: DatabaseContext, tableName: string, replaced: TableIdentityEntry | undefined): Promise<string> {
+  const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
+  const identity = fold(await lookupTableIdentity(connection, tableName))
+  if (replaced) {
+    const replacedIdentity = fold(await replaced.identity.catch(() => identity))
+    for (const expired of new Set([replacedIdentity, identity])) {
+      await invalidateReplacedTableIdentity(connection, expired)
+    }
   }
+  return identity
 }
 
 export async function resolveTableIdentity(connection: DatabaseContext, tableName: string): Promise<string> {
   await resolveTableNameFolding(connection)
-  const fold = (name: string) => foldTableName(connection.getConnectionName(), name)
   const identities = ownerIdentities(connection)
   const cached = identities.get(tableName)
-  const bare = splitTablePath(tableName).schema === undefined
-  const entry = cached?.generation === currentSchemaGeneration()
+  const generation = currentSchemaGeneration()
+  const entry = cached?.generation === generation
     ? cached
-    : { generation: currentSchemaGeneration(), resolution: bare ? Promise.resolve({ identity: tableName, target: undefined }) : lookupTableResolution(connection, tableName) }
+    : { generation, identity: refreshTableIdentity(connection, tableName, cached) }
   if (entry !== cached) {
     identities.set(tableName, entry)
-    entry.resolution.catch(() => {
+    entry.identity.catch(() => {
       if (identities.get(tableName) === entry) identities.delete(tableName)
     })
   }
-  const resolution = await entry.resolution
-  const identity = fold(resolution.identity)
+  const identity = await entry.identity
   rememberCanonicalTableName(connection.getConnectionName(), tableName, identity)
-  if (cached && entry !== cached) {
-    const replaced = await cached.resolution.catch(() => resolution)
-    const replacedIdentity = fold(replaced.identity)
-    if (replacedIdentity !== identity) await invalidateReplacedTableIdentity(connection, replacedIdentity)
-    else if (bare || replaced.target !== resolution.target) await invalidateReplacedTableIdentity(connection, identity)
-  }
   return identity
 }
 

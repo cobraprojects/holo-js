@@ -17,7 +17,7 @@ import {
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey } from '../query/TableQueryBuilder'
 import { getLoadedColumnListing, loadColumnListing } from '../schema/columnListing'
-import { isAwaitingGeneratedTableIdentity, getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
@@ -3898,7 +3898,7 @@ export class ModelRepository<
     const guarded = new Set(this.definition.guarded)
 
     if (guarded.has('*') || guarded.has(column)) return false
-    if (isAwaitingGeneratedTableIdentity(this.definition.table.tableName, this.definition.connectionName)) return false
+    if (isUnresolvedGeneratedPrimaryKey(this.definition.table.tableName, this.definition.connectionName, column)) return false
     if (fillable.has(column)) return true
     if (this.isAutomaticallyGuardedColumn(column)) return false
     if (fillable.has('*')) return true

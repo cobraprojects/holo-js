@@ -5,7 +5,7 @@ import type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 import type { TableColumnsShape, TableDefinition, TableIndexDefinition } from './types'
 import { column } from './columns'
 import { splitTablePath } from './identifiers'
-import { canonicalTableName, lastKnownCanonicalTableName } from './tableIdentityRegistry'
+import { canonicalTableName, isTableIdentityResolved, lastKnownCanonicalTableName } from './tableIdentityRegistry'
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface GeneratedSchemaTables {}
@@ -123,12 +123,27 @@ export function findGeneratedModelTableDefinition(tableName: string, connectionN
   return spelling === undefined ? undefined : generatedTables.get(spelling)
 }
 
-export function isAwaitingGeneratedTableIdentity(tableName: string, connectionName: string | undefined): boolean {
+function generatedSchemaConnectionFor(connectionName: string | undefined): string | undefined {
   const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
+  const source = generatedSchemaSource.connectionName
+  return source === undefined || source === schemaConnection ? schemaConnection : undefined
+}
+
+function hasOtherGeneratedSpelling(tableName: string): boolean {
+  return !generatedTables.has(tableName) && listGeneratedTableSpellings(tableName).length > 0
+}
+
+export function isAwaitingGeneratedTableIdentity(tableName: string, connectionName: string | undefined): boolean {
+  const schemaConnection = generatedSchemaConnectionFor(connectionName)
+  return schemaConnection !== undefined && hasOtherGeneratedSpelling(tableName) && !isTableIdentityResolved(schemaConnection, tableName)
+}
+
+export function isUnresolvedGeneratedPrimaryKey(tableName: string, connectionName: string | undefined, columnName: string): boolean {
+  const schemaConnection = generatedSchemaConnectionFor(connectionName)
   return schemaConnection !== undefined
-    && !generatedTables.has(tableName)
-    && listGeneratedTableSpellings(tableName).length > 0
+    && hasOtherGeneratedSpelling(tableName)
     && lastKnownCanonicalTableName(schemaConnection, tableName) === undefined
+    && listGeneratedTableSpellings(tableName).some(spelling => generatedTables.get(spelling)?.columns[columnName]?.primaryKey === true)
 }
 
 export function isGeneratedSchemaConnection(connectionName: string): boolean {

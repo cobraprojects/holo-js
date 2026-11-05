@@ -32,6 +32,11 @@ export function rememberCanonicalTableName(connectionName: string, tableName: st
   canonicalNames.set(connectionName, names)
 }
 
+export function isTableIdentityResolved(connectionName: string, tableName: string): boolean {
+  if (splitTablePath(tableName).schema === undefined) return foldings.has(connectionName)
+  return canonicalNames.get(connectionName)?.get(tableName)?.generation === currentSchemaGeneration()
+}
+
 export function lastKnownCanonicalTableName(connectionName: string, tableName: string): string | undefined {
   if (splitTablePath(tableName).schema === undefined) return foldings.has(connectionName) ? foldTableName(connectionName, tableName) : undefined
   return canonicalNames.get(connectionName)?.get(tableName)?.identity

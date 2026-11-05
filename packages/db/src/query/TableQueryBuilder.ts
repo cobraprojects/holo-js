@@ -131,6 +131,7 @@ import {
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
+import { currentRootTransaction } from '../core/openTransactions'
 import { applyDeferredPredicateNormalizations, copyDeferredPredicateNormalization, deferPredicateNormalization } from './deferredPredicateValues'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 
@@ -2051,7 +2052,7 @@ export class TableQueryBuilder<
       : createDatabaseQueryFallbackObservation
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
-    if (!cacheConfig || this.plan.lockMode || expired) {
+    if (!cacheConfig || this.plan.lockMode || expired || currentRootTransaction(this.connection)?.schemaChanged) {
       const rows = this.convertRows(convertColumns, await this.queryRows<TRow>(statement))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
