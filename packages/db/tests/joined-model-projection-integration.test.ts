@@ -270,6 +270,11 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const labelled = () => Product.query().join(labels, `${labels}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${labels}.*`)
     const union = labelled().where(`${labels}.label` as never, 'two').union(labelled().where(`${labels}.label` as never, 'one')).orderBy('id')
     expect((await union.get()).map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label])).toEqual([[1, 'one'], [2, 'two']])
+
+    const keyed = Product.query().join(labels, `${labels}.product_id`, '=', `${products}.id`).select('id as product_key' as never, 'price').orderBy('id')
+    const first = await keyed.cursorPaginate(1)
+    const second = await keyed.cursorPaginate(1, first.nextCursor)
+    expect([first, second].map(page => page.data.map(entity => Number((entity.toAttributes() as Record<string, unknown>).product_key)))).toEqual([[1], [2]])
   })
 
   it('accepts a joined column aliased to a name that is not a model column', async () => {
