@@ -298,6 +298,28 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     expect(await query.select(`${name}.id as id`, `${name}.price`, `${ordersName}.id`).distinct()[kind](`${name}.price`)).toBe(expectedWithId)
   })
 
+  it.each(kinds)('%s on a joined model query keeps an order by on a selected output column', async (kind) => {
+    const { name, ordersName } = await createProducts(driver)
+    await DB.table(ordersName).delete()
+    await DB.table(ordersName).insert([
+      { id: 103, product_id: 1, price: 100 },
+      { id: 102, product_id: 2, price: 200 },
+      { id: 101, product_id: 3, price: 300 },
+    ])
+    const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
+
+    const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.id`).orderBy('id').limit(1)
+    if (driver === 'sqlite') {
+      await expect(query.get()).rejects.toThrow('ambiguous column name: id')
+      await expect(query[kind](`${name}.price`)).rejects.toThrow('ambiguous column name: id')
+    }
+    else {
+      expect(await query[kind](`${name}.price`)).toBe(30)
+    }
+    await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`).orderBy('price')[kind](`${name}.price`))
+      .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
+  })
+
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {
     const { name } = await createProducts(driver)
     const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })

@@ -199,6 +199,11 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
 
+function selectionOutputName(selection: QuerySelection): string | undefined {
+  if (selection.kind === 'column') return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
+  return 'alias' in selection ? selection.alias : undefined
+}
+
 function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
   return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
 }
@@ -1952,9 +1957,7 @@ export class TableQueryBuilder<
       ? [...implicitSelections, `${source}.${key} as ${aggregateValueKey}`]
       : implicitSelections.length > 0
         ? [...implicitSelections, wildcard(source)]
-        : !this.plan.distinct && this.plan.groupBy.length === 0
-            ? [wildcard(source)]
-            : [...this.selectedSourceColumns().map(({ name, alias }) => name === '*' ? wildcard(source) : `${source}.${name}${alias ? ` as ${alias}` : ''}`), `${source}.${key}`]
+        : this.modelAggregateSelections(column, source, key, wildcard(source))
     return { key, joined: !!join, selections, cache: this.plan.joins.length > 0 ? this.projectAggregate(selections).queryCacheConfig : undefined }
   }
 
@@ -3692,6 +3695,27 @@ export class TableQueryBuilder<
       { ...cacheConfig, key },
       internalPlanHandoff,
     )
+  }
+
+  private modelAggregateSelections(column: string, source: string, key: string, sourceWildcard: string): readonly string[] {
+    const orderedNames = new Set(this.plan.orderBy.flatMap(order => order.kind === 'column' && !order.column.includes('.') ? [order.column] : []))
+    const keyOutput = this.plan.selections.find(selection => selectionOutputName(selection) === key)
+    const keyIsSelectedSourceColumn = keyOutput?.kind === 'column' && this.resolveSourceColumnName(keyOutput.column) === key
+    if (orderedNames.has(key) && keyOutput && !keyIsSelectedSourceColumn) {
+      throw new CompilerError(`Cannot aggregate column "${column}" while ordering by "${key}", which names another selected column. Qualify the order by column.`)
+    }
+
+    const definitionColumns = Object.keys(this.source.table?.columns ?? {})
+    const sourceColumns: readonly { readonly name: string, readonly alias?: string }[] = !this.plan.distinct && this.plan.groupBy.length === 0
+      ? [{ name: '*' }]
+      : this.selectedSourceColumns()
+    const columns = orderedNames.size === 0
+      ? sourceColumns
+      : sourceColumns
+          .flatMap((entry): readonly { readonly name: string, readonly alias?: string }[] => entry.name === '*' && definitionColumns.length > 0 ? definitionColumns.map(name => ({ name })) : [entry])
+          .filter(entry => !orderedNames.has(entry.alias ?? entry.name))
+    const selections = columns.map(({ name, alias }) => name === '*' ? sourceWildcard : `${source}.${name}${alias ? ` as ${alias}` : ''}`)
+    return orderedNames.has(key) && keyIsSelectedSourceColumn ? selections : [...selections, `${source}.${key}`]
   }
 
   private selectedSourceColumns(): readonly { readonly name: string, readonly alias?: string }[] {
