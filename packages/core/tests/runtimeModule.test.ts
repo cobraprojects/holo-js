@@ -1122,6 +1122,13 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     }
   })
 
+  it('prefers the importer of the exact missing file over its extensionless subpath', () => {
+    const bundlePath = join(tmpdir(), 'bundle-exact-file', 'create.mjs')
+    const failure = Object.assign(new Error(`Cannot find module '/app/node_modules/pkg/hidden.js' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    bundleSourceInternals.withBundleSources(failure, { path: bundlePath, importers: { 'pkg/hidden': 'server/support/helper.ts', 'pkg/hidden.js': 'server/db/migrations/create.ts' } })
+    expect(failure.message).toBe("Cannot find module '/app/node_modules/pkg/hidden.js' imported from server/db/migrations/create.ts")
+  })
+
   it('wraps a load error whose stack is read-only and keeps its code', () => {
     const bundlePath = join(tmpdir(), 'bundle-frozen', 'User.mjs')
     const failure = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })

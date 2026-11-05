@@ -879,6 +879,11 @@ function installedPackagePath(message: string, specifier: string): string | unde
   return message.slice(start + marker.length).split(/['\s]/, 1)[0]
 }
 
+function missingPackageFile(message: string, specifier: string): string | undefined {
+  if (specifierSubpath(specifier) === '' || !message.startsWith('Cannot find module')) return undefined
+  return installedPackagePath(message, specifier)
+}
+
 function loadErrorSource(message: string, sources: BundleSources): string | undefined {
   const normalizedMessage = message.replaceAll('\\', '/')
   const importers = Object.entries(sources.importers)
@@ -888,11 +893,8 @@ function loadErrorSource(message: string, sources: BundleSources): string | unde
       && normalizedMessage.includes(`Package subpath './${specifierSubpath(specifier)}'`),
     specifier => specifierSubpath(specifier) === '' && installedPackagePath(normalizedMessage, specifier) !== undefined
       && normalizedMessage.includes('No "exports" main defined in'),
-    specifier => {
-      const missingFile = installedPackagePath(normalizedMessage, specifier)
-      return specifierSubpath(specifier) !== '' && missingFile !== undefined && normalizedMessage.startsWith('Cannot find module')
-        && [missingFile, missingFile.replace(/\.[^./]+$/, '')].includes(specifierSubpath(specifier))
-    },
+    specifier => missingPackageFile(normalizedMessage, specifier) === specifierSubpath(specifier),
+    specifier => missingPackageFile(normalizedMessage, specifier)?.replace(/\.[^./]+$/, '') === specifierSubpath(specifier),
     specifier => specifierSubpath(specifier) === '' && normalizedMessage.includes(`'${specifier}'`),
     specifier => normalizedMessage.includes(`'${packageNameOf(specifier)}'`),
     specifier => specifierSubpath(specifier) === '' && installedPackagePath(normalizedMessage, specifier) !== undefined,
