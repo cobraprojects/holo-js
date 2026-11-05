@@ -88,6 +88,28 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     await expectFresh()
     await mutate(() => db.table(rates).where('id', 2).increment('rate', 1, { tag_id: '2' }))
     await expectFresh()
+    if (driver === 'postgres') {
+      await db.executeCompiled({ sql: `SELECT setval(pg_get_serial_sequence('"${rates.tableName}"', 'id'), 10)`, source: 'schema' })
+    }
+    await mutate(() => db.table(rates).insert([{ group_id: '1', tag_id: '1', rate: '0.5' }, { group_id: '2', tag_id: '2', rate: '1.255' }]))
+    await expectFresh()
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"4.50"')
+  })
+
+  it.runIf(driver === 'postgres')('re-runs subscriptions after an insert by a role that cannot read the written decimal back', async () => {
+    const { db, rates } = await openFixture(driver)
+    const role = `holo_insert_only_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await db.executeCompiled({ sql: `CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS; GRANT INSERT ON "${rates.tableName}" TO ${role}`, source: 'schema' })
+    onTestFinished(() => db.executeCompiled({ sql: `REVOKE ALL ON "${rates.tableName}" FROM ${role}; DROP ROLE IF EXISTS ${role}`, source: 'schema' }).then(() => undefined))
+    const handler = () => db.table(rates).orderBy('id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await mutate(() => db.transaction(async (transaction) => {
+      await transaction.executeCompiled({ sql: `SET LOCAL ROLE ${role}`, source: 'schema' })
+      await transaction.table(rates).insert({ id: 2, group_id: 2, tag_id: 1, rate: '9.5' })
+    }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"9.50"')
   })
 })
