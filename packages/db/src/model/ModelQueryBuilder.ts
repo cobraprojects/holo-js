@@ -2586,7 +2586,7 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (modelNeedsSerialization(relatedDefinition)) {
+        if (!this.repository.relatedRowsArePatchable(relation.related)) {
           return undefined
         }
 
@@ -2608,7 +2608,7 @@ class ModelQueryBuilderBase<
 
         const related = relation.related()
         const relatedDefinition = 'definition' in related ? related.definition : related
-        if (modelNeedsSerialization(relatedDefinition)) {
+        if (!this.repository.relatedRowsArePatchable(relation.related)) {
           return undefined
         }
 

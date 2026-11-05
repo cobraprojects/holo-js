@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { belongsToMany, column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
+import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -140,5 +140,28 @@ describe.each(drivers)('realtime decimal columns on %s', (driver) => {
     const current = JSON.stringify(subscription.current.data)
     expect({ current, fresh }).toEqual({ current: fresh, fresh })
     expect(current).toContain('"2.50"')
+  })
+
+  it.runIf(driver === 'sqlite')('keeps belongs-to decimal relations correct after a parent insert and a related update', async () => {
+    const { db, prices, schema } = await openPrices(driver)
+    const ordersName = `holo_live_orders_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ordersName, (table) => {
+      table.id()
+      table.integer('price_id')
+    })
+    onTestFinished(() => schema.dropTable(ordersName))
+    const orders = defineGeneratedTable(ordersName, { id: column.id(), price_id: column.integer() })
+    await db.table(orders).insert({ id: 1, price_id: 1 })
+    const Price = defineModel(prices, { timestamps: false })
+    const Order = defineModel(orders, { timestamps: false, relations: { price: belongsTo(() => Price, 'price_id') } })
+    const handler = () => db.model(Order).query().with('price').orderBy('id').getJson()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(orders).insert({ id: 2, price_id: 1 }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(prices).where('id', 1).update({ amount: '9.5' }) }))
+
+    const current = JSON.stringify(subscription.current.data)
+    expect(current).toBe(JSON.stringify(await handler()))
+    expect(current).toContain('"9.50"')
   })
 })

@@ -2463,6 +2463,10 @@ export class ModelRepository<
     }
   }
 
+  relatedRowsArePatchable(related: () => ModelDefinitionLike): boolean {
+    return relatedRowsArePatchable(this.resolveRelatedRepository(related))
+  }
+
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {
     return ModelRepository.from(related())
   }
