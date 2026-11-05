@@ -16,7 +16,7 @@ import {
 import type { FrameworkDescriptor } from './project/frameworks'
 import { resolveFrameworkPreparation } from './project/framework-preparation'
 import { runPluginProjectPreparers } from './project/plugin-prepare/coordinator'
-import { trackPackageManifestWrites } from './written-outputs'
+import { recordPackageManifestBaseline, trackPackageManifestWrites } from './written-outputs'
 
 type ProjectPrepareOptions = {
   readonly prepareSchema?: boolean
@@ -66,6 +66,7 @@ export async function runProjectPrepare(
   options: ProjectPrepareOptions = {},
 ): Promise<void> {
   options.signal?.throwIfAborted()
+  await recordPackageManifestBaseline(projectRoot)
   const project = options.prepareSchema === false
     ? await ensureProjectConfig(projectRoot)
     : await prepareSchemaArtifacts(projectRoot, false, options.signal)

@@ -148,6 +148,14 @@ export async function writeOutputFile(path: string, contents: string): Promise<v
   }, key => key === target ? contents : undefined)
 }
 
+export async function recordPackageManifestBaseline(projectRoot: string): Promise<void> {
+  await Promise.all(resolvePackageManifestPaths(projectRoot).map(async (path) => {
+    const key = await resolveTrackedPath(path)
+    const hash = await readContentHash(key)
+    if (!pendingWrites.has(key)) setEntry(key, { hash })
+  }))
+}
+
 export async function trackPackageManifestWrites<TResult>(projectRoot: string, write: () => Promise<TResult>): Promise<TResult> {
   return await trackOutputWrites(resolvePackageManifestPaths(projectRoot), write)
 }

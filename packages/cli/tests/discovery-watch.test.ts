@@ -9,7 +9,7 @@ import type { HoloProjectPrepareChange } from '@holo-js/kernel'
 import { DISCOVERY_WATCH_PROBE_PATH, startDiscoveryWatch } from '../src/discovery-watch'
 import { defaultProjectConfig } from '../src/project'
 import { writeTextFile } from '../src/project/atomic-file'
-import { isUnchangedWrittenOutput, trackOutputWrites, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
+import { isUnchangedWrittenOutput, recordPackageManifestBaseline, trackOutputWrites, trackPackageManifestWrites, writeOutputFile } from '../src/written-outputs'
 import type { ObservedPrepareChange } from '../src/framework-restart'
 
 async function write(root: string, path: string, content = 'original'): Promise<void> {
@@ -434,4 +434,19 @@ it('keeps a user edit to a manifest that a tracked CLI command leaves untouched'
   await write(root, 'package.json', '{"name":"watch-fixture","type":"module","private":true}')
   await trackPackageManifestWrites(root, async () => {})
   await expect(isUnchangedWrittenOutput(join(root, 'package.json'))).resolves.toBe(false)
+})
+
+it('treats a manifest a tracked command rewrites and restores as unchanged since the prepare started', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  const original = '{"name":"watch-fixture","type":"module"}'
+  await write(root, 'package.json', original)
+  await recordPackageManifestBaseline(root)
+  await trackPackageManifestWrites(root, async () => {
+    await writeFile(manifest, '{"name":"watch-fixture","type":"module","overlay":true}')
+    await writeFile(manifest, original)
+  })
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
+  await write(root, 'package.json', '{"name":"watch-fixture","type":"module","private":true}')
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
 })
