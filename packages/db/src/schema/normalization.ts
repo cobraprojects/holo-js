@@ -284,6 +284,10 @@ export function storesText(column: AnyColumnDefinition): boolean {
   return column.kind === 'string' || column.kind === 'text'
 }
 
+export function isDateColumn(column: AnyColumnDefinition): boolean {
+  return column.kind === 'date' || column.kind === 'datetime' || column.kind === 'timestamp'
+}
+
 export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
