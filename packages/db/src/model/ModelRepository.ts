@@ -21,9 +21,8 @@ import { normalizeDialectReadValue, storesJson, storesText } from '../schema/nor
 import { resolveModelRowKey } from './defineModelHelpers'
 import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
-import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
-import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
+import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
 import { StoredKeyMap, StoredKeySet, type StoredKeyOptions } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
@@ -3342,13 +3341,28 @@ export class ModelRepository<
     const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
-    const compare = relation.aggregate === 'max' ? compareChunkValuesDescending : compareChunkValuesAscending
-    const decimal = ownEntry(related.definition.table.columns, relation.aggregateColumn)?.kind === 'decimal'
     for (const [key, bucket] of groupRelation(latestEntities, parentColumn, options).entries()) {
-      grouped.set(key, [bucket.reduce((winner, entity) => compare(entity.get(relation.aggregateColumn as never), winner.get(relation.aggregateColumn as never), decimal) < 0 ? entity : winner)])
+      grouped.set(key, [bucket.length === 1 ? bucket[0]! : await this.selectOneOfManyWinner(relation, related, bucket, constraint)])
     }
 
     return grouped
+  }
+
+  private async selectOneOfManyWinner(
+    relation: Extract<RelationDefinition, { kind: 'hasOneOfMany' | 'morphOneOfMany' }>,
+    related: ModelRepository,
+    candidates: readonly Entity[],
+    constraint?: RelationConstraint,
+  ): Promise<Entity> {
+    const primaryKey = related.definition.primaryKey
+    const direction = relation.aggregate === 'max' ? 'desc' : 'asc'
+    const winner = await this.applyRelationConstraint(relation, related, constraint)
+      .reorder(relation.aggregateColumn as never, direction)
+      .orderBy(primaryKey as never, direction)
+      .where(primaryKey as never, 'in', candidates.map(candidate => candidate.get(primaryKey as never)))
+      .first()
+    const winnerKey = canonicalStoredKey(winner?.get(primaryKey as never))
+    return candidates.find(candidate => canonicalStoredKey(candidate.get(primaryKey as never)) === winnerKey) ?? candidates[0]!
   }
 
   private createOneOfManyQuery(
