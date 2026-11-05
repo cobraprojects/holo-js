@@ -544,6 +544,17 @@ export function readDatabaseQueryObservationCount(): number {
   return databaseDependencyCollector.getStore()?.queries.length ?? 0
 }
 
+export function requireDatabaseQueryObservationRefreshFrom(count: number): void {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return
+  }
+
+  for (let index = Math.max(0, count); index < state.queries.length; index += 1) {
+    state.queries[index] = serializedQueryObservation(state.queries[index]!)
+  }
+}
+
 export function truncateDatabaseQueryObservations(count: number): void {
   const state = databaseDependencyCollector.getStore()
   if (!state || count >= state.queries.length) {

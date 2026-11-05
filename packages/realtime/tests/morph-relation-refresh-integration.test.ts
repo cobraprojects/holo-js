@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { column, defineGeneratedTable, defineModel, latestMorphOne, morphedByMany, morphMany, morphOne, morphTo, morphToMany, resetMorphRegistry, type ModelDefinitionLike } from '@holo-js/db'
+import { column, defineGeneratedTable, defineModel, hasMany, latestMorphOne, morphedByMany, morphMany, morphOne, morphTo, morphToMany, resetMorphRegistry, type ModelDefinitionLike } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -66,6 +66,7 @@ async function openBlog(driver: typeof drivers[number]) {
     timestamps: false,
     relations: {
       comments: morphMany(() => Comment, 'commentable'),
+      plainComments: hasMany(() => Comment, 'commentable_id'),
       firstComment: morphOne(() => Comment, 'commentable'),
       latestComment: latestMorphOne(() => Comment, 'commentable'),
       morphTags: morphToMany(() => Tag, 'taggable', names.taggables, 'tag_id'),
@@ -81,6 +82,7 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
     const reads = {
       commentable: () => db.model(Comment).query().with('commentable').orderBy('id').getJson(),
       comments: () => db.model(Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
+      mixedComments: () => db.model(Post).query().with('comments', 'plainComments').orderBy('id').getJson(),
       morphTags: () => db.model(Post).query().with('morphTags').orderBy('id').getJson(),
       taggedPosts: () => db.model(Tag).query().with('taggedPosts').orderBy('id').getJson(),
     }
@@ -111,6 +113,14 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
     await mutate('inserting a comment', () => db.table(comments).insert({ id: 300, commentable_type: postType, commentable_id: 30, body: 'radio' }))
     await mutate('inserting a tag', () => db.table(tags).insert({ id: 3, label: 'radio' }))
     await mutate('inserting a pivot row', () => db.table(names.taggables).insert({ tag_id: 3, taggable_type: postType, taggable_id: 30 }))
+    await mutate('commenting on a missing post', () => db.table(comments).insert({ id: 400, commentable_type: postType, commentable_id: 40, body: 'early' }))
+    await mutate('tagging a missing post', () => db.table(names.taggables).insert({ tag_id: 1, taggable_type: postType, taggable_id: 40 }))
+    await mutate('tagging with a missing tag', () => db.table(names.taggables).insert({ tag_id: 4, taggable_type: postType, taggable_id: 10 }))
+    await mutate('inserting the missing post', () => db.table(posts).insert({ id: 40, title: 'Spread Spectrum' }))
+    expect((current.commentable!() as { id: number, commentable: unknown }[]).find(comment => comment.id === 400)?.commentable).toEqual({ id: 40, title: 'Spread Spectrum' })
+    expect(JSON.stringify(current.taggedPosts!())).toContain('Spread Spectrum')
+    await mutate('inserting the missing tag', () => db.table(tags).insert({ id: 4, label: 'signals' }))
+    expect(JSON.stringify(current.morphTags!())).toContain('signals')
     await mutate('updating a pivot row', () => db.table(names.taggables).where('tag_id', 2).update({ taggable_id: 30 }))
     await mutate('moving a comment', () => db.table(comments).where('id', 200).update({ commentable_id: 30 }))
     await mutate('deleting a pivot row', () => db.table(names.taggables).where('tag_id', 1).delete())
@@ -122,6 +132,6 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
     expect(JSON.stringify(current.taggedPosts!())).toContain('Frequency Hopping')
     await mutate('deleting a referenced post', () => db.table(posts).where('id', 30).delete())
     expect((current.commentable!() as { id: number, commentable: unknown }[]).find(comment => comment.id === 200)?.commentable).toBeNull()
-    expect(current.taggedPosts!()).toEqual([{ id: 1, label: 'mathematics', taggedPosts: [] }, { id: 2, label: 'code', taggedPosts: [] }])
+    expect(JSON.stringify(current.taggedPosts!())).not.toContain('Frequency Hopping')
   })
 })
