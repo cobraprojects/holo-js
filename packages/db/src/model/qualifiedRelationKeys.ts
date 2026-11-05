@@ -9,6 +9,7 @@ type KeyOwners = { readonly [TKind in RelationDefinition['kind']]: Readonly<Part
 const hasKeys = Object.freeze({ foreignKey: 'related', localKey: 'parent' } as const)
 const ofManyKeys = Object.freeze({ ...hasKeys, aggregateColumn: 'related' } as const)
 const morphHasKeys = Object.freeze({ morphTypeColumn: 'related', morphIdColumn: 'related', localKey: 'parent' } as const)
+const morphOfManyKeys = Object.freeze({ ...morphHasKeys, aggregateColumn: 'related' } as const)
 const morphPivotKeys = Object.freeze({ morphTypeColumn: 'pivot', morphIdColumn: 'pivot', foreignPivotKey: 'pivot', parentKey: 'parent', relatedKey: 'related' } as const)
 const throughKeys = Object.freeze({ firstKey: 'through', secondKey: 'related', localKey: 'parent', secondLocalKey: 'through' } as const)
 
@@ -19,7 +20,7 @@ const keyOwnersByKind: KeyOwners = Object.freeze({
   hasOneOfMany: ofManyKeys,
   morphOne: morphHasKeys,
   morphMany: morphHasKeys,
-  morphOneOfMany: Object.freeze({ ...morphHasKeys, aggregateColumn: 'related' } as const),
+  morphOneOfMany: morphOfManyKeys,
   morphTo: Object.freeze({ morphTypeColumn: 'parent', morphIdColumn: 'parent' } as const),
   belongsToMany: Object.freeze({ foreignPivotKey: 'pivot', relatedPivotKey: 'pivot', parentKey: 'parent', relatedKey: 'related' } as const),
   morphToMany: morphPivotKeys,

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOne, latestOfMany } from '@holo-js/db'
+import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOne, hasOneThrough, latestMorphOne, latestOfMany, morphMany, morphOne, morphTo, morphToMany, morphedByMany, resetMorphRegistry, type ModelDefinitionLike } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -7,126 +7,182 @@ import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime
 
 const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'])
 
+type Key = (table: string, column: string) => string
+
 async function openLibrary(driver: typeof drivers[number]) {
   const { db, schema } = await openDatabase(driver)
-  onTestFinished(() => resetRealtimeRuntime())
-  const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
-  const authorsName = `holo_qk_authors_${suffix}`
-  const postsName = `holo_qk_posts_${suffix}`
-  const tagsName = `holo_qk_tags_${suffix}`
-  const pivotName = `holo_qk_post_tag_${suffix}`
-  const reviewsName = `holo_qk_reviews_${suffix}`
-  onTestFinished(async () => {
-    await schema.dropTable(reviewsName)
-    await schema.dropTable(pivotName)
-    await schema.dropTable(tagsName)
-    await schema.dropTable(postsName)
-    await schema.dropTable(authorsName)
+  onTestFinished(() => {
+    resetRealtimeRuntime()
+    resetMorphRegistry()
   })
-  await schema.createTable(authorsName, (table) => {
-    table.id()
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+  const names = {
+    authors: `holo_qk_authors_${suffix}`,
+    posts: `holo_qk_posts_${suffix}`,
+    tags: `holo_qk_tags_${suffix}`,
+    postTag: `holo_qk_post_tag_${suffix}`,
+    reviews: `holo_qk_reviews_${suffix}`,
+    comments: `holo_qk_comments_${suffix}`,
+    taggables: `holo_qk_taggables_${suffix}`,
+  }
+  const created: string[] = []
+  onTestFinished(async () => {
+    for (const name of created.reverse()) await schema.dropTable(name)
+  })
+  const create = async (name: string, build: Parameters<typeof schema.createTable>[1]) => {
+    await schema.createTable(name, build)
+    created.push(name)
+  }
+  await create(names.authors, (table) => {
+    table.integer('id').primaryKey()
     table.string('name')
   })
-  await schema.createTable(postsName, (table) => {
-    table.id()
+  await create(names.posts, (table) => {
+    table.integer('id').primaryKey()
     table.integer('author_id')
     table.string('title')
   })
-  await schema.createTable(tagsName, (table) => {
-    table.id()
+  await create(names.tags, (table) => {
+    table.integer('id').primaryKey()
     table.string('label')
   })
-  await schema.createTable(pivotName, (table) => {
+  await create(names.postTag, (table) => {
     table.integer('post_id')
     table.integer('tag_id')
   })
-  await schema.createTable(reviewsName, (table) => {
-    table.id()
+  await create(names.reviews, (table) => {
+    table.integer('id').primaryKey()
     table.integer('post_id')
     table.string('body')
   })
-  const authors = defineGeneratedTable(authorsName, { id: column.id(), name: column.string() })
-  const posts = defineGeneratedTable(postsName, { id: column.id(), author_id: column.integer(), title: column.string() })
-  const tags = defineGeneratedTable(tagsName, { id: column.id(), label: column.string() })
-  const reviews = defineGeneratedTable(reviewsName, { id: column.id(), post_id: column.integer(), body: column.string() })
-  await db.table(authors).insert([{ id: 1, name: 'Ada' }, { id: 2, name: 'Grace' }])
+  await create(names.comments, (table) => {
+    table.integer('id').primaryKey()
+    table.string('commentable_type')
+    table.integer('commentable_id')
+    table.string('body')
+  })
+  await create(names.taggables, (table) => {
+    table.integer('tag_id')
+    table.string('taggable_type')
+    table.integer('taggable_id')
+  })
+  const authors = defineGeneratedTable(names.authors, { id: column.integer().primaryKey(), name: column.string() })
+  const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), author_id: column.integer(), title: column.string() })
+  const tags = defineGeneratedTable(names.tags, { id: column.integer().primaryKey(), label: column.string() })
+  const reviews = defineGeneratedTable(names.reviews, { id: column.integer().primaryKey(), post_id: column.integer(), body: column.string() })
+  const comments = defineGeneratedTable(names.comments, { id: column.integer().primaryKey(), commentable_type: column.string(), commentable_id: column.integer(), body: column.string() })
+  const postType = `HoloQkPost${suffix}`
+  await db.table(authors).insert([{ id: 1, name: 'Ada' }, { id: 2, name: 'Grace' }, { id: 3, name: 'Hedy' }])
   await db.table(posts).insert([{ id: 10, author_id: 1, title: 'Engines' }, { id: 20, author_id: 2, title: 'Compilers' }])
   await db.table(tags).insert([{ id: 100, label: 'math' }, { id: 200, label: 'code' }])
-  await db.table(pivotName).insert([{ post_id: 10, tag_id: 100 }, { post_id: 20, tag_id: 200 }])
+  await db.table(names.postTag).insert([{ post_id: 10, tag_id: 100 }, { post_id: 20, tag_id: 200 }])
   await db.table(reviews).insert([{ id: 1000, post_id: 10, body: 'great' }])
-  const Tag = defineModel(tags, { timestamps: false })
-  const Review = defineModel(reviews, { timestamps: false })
-  const defineLibrary = (key: (table: string, column: string) => string) => {
-    const Post = defineModel(posts, {
+  await db.table(comments).insert([{ id: 5000, commentable_type: postType, commentable_id: 10, body: 'first' }])
+  await db.table(names.taggables).insert([{ tag_id: 100, taggable_type: postType, taggable_id: 10 }])
+
+  const defineLibrary = (key: Key) => {
+    const Review = defineModel(reviews, { timestamps: false })
+    const Comment = defineModel(comments, {
+      timestamps: false,
+      relations: { commentable: morphTo('commentable', key(names.comments, 'commentable_type'), key(names.comments, 'commentable_id')) },
+    })
+    const Tag = defineModel(tags, {
       timestamps: false,
       relations: {
-        author: belongsTo(() => Author, key(postsName, 'author_id'), key(authorsName, 'id')),
-        tags: belongsToMany(() => Tag, pivotName, key(pivotName, 'post_id'), key(pivotName, 'tag_id'), key(postsName, 'id'), key(tagsName, 'id')),
+        taggedPosts: morphedByMany((): ModelDefinitionLike => Post, 'taggable', names.taggables, key(names.taggables, 'tag_id'), key(names.tags, 'id'), key(names.posts, 'id'), key(names.taggables, 'taggable_type'), key(names.taggables, 'taggable_id')),
+      },
+    })
+    const Post = defineModel(posts, {
+      morphClass: postType,
+      timestamps: false,
+      relations: {
+        author: belongsTo((): ModelDefinitionLike => Author, key(names.posts, 'author_id'), key(names.authors, 'id')),
+        tags: belongsToMany(() => Tag, names.postTag, key(names.postTag, 'post_id'), key(names.postTag, 'tag_id'), key(names.posts, 'id'), key(names.tags, 'id')),
+        comments: morphMany(() => Comment, 'commentable', key(names.comments, 'commentable_type'), key(names.comments, 'commentable_id'), key(names.posts, 'id')),
+        firstComment: morphOne(() => Comment, 'commentable', key(names.comments, 'commentable_type'), key(names.comments, 'commentable_id'), key(names.posts, 'id')),
+        latestComment: latestMorphOne(() => Comment, 'commentable', key(names.comments, 'id'), key(names.comments, 'commentable_type'), key(names.comments, 'commentable_id'), key(names.posts, 'id')),
+        morphTags: morphToMany(() => Tag, 'taggable', names.taggables, key(names.taggables, 'tag_id'), key(names.posts, 'id'), key(names.tags, 'id'), key(names.taggables, 'taggable_type'), key(names.taggables, 'taggable_id')),
       },
     })
     const Author = defineModel(authors, {
       timestamps: false,
       relations: {
-        topPost: hasOne(() => Post, key(postsName, 'author_id'), key(authorsName, 'id')),
-        posts: hasMany(() => Post, key(postsName, 'author_id'), key(authorsName, 'id')),
-        latestPost: latestOfMany(() => Post, key(postsName, 'author_id'), key(authorsName, 'id'), key(postsName, 'id')),
-        reviews: hasManyThrough(() => Review, () => Post, key(postsName, 'author_id'), key(reviewsName, 'post_id'), key(authorsName, 'id'), key(postsName, 'id')),
+        topPost: hasOne(() => Post, key(names.posts, 'author_id'), key(names.authors, 'id')),
+        posts: hasMany(() => Post, key(names.posts, 'author_id'), key(names.authors, 'id')),
+        latestPost: latestOfMany(() => Post, key(names.posts, 'author_id'), key(names.authors, 'id'), key(names.posts, 'id')),
+        reviews: hasManyThrough(() => Review, () => Post, key(names.posts, 'author_id'), key(names.reviews, 'post_id'), key(names.authors, 'id'), key(names.posts, 'id')),
+        firstReview: hasOneThrough(() => Review, () => Post, key(names.posts, 'author_id'), key(names.reviews, 'post_id'), key(names.authors, 'id'), key(names.posts, 'id')),
       },
     })
-    return { Author, Post }
+    return { Author, Post, Comment, Tag }
   }
-  const { Author, Post } = defineLibrary((table, column) => `${table}.${column}`)
-  const plainLibrary = defineLibrary((_table, column) => column)
+  const plainLibrary = defineLibrary((_table, name) => name)
+  const qualifiedLibrary = defineLibrary((table, name) => `${table}.${name}`)
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { db, Author, Post, PlainAuthor: plainLibrary.Author, PlainPost: plainLibrary.Post, posts, pivotName, reviews }
+  return { db, qualifiedLibrary, plainLibrary, names, posts, reviews, comments, postType }
 }
 
-describe.each(drivers)('relations with table-qualified keys on %s', (driver) => {
-  it('patches realtime hydration on those relations like unqualified keys and the same as a fresh read', async () => {
-    const { db, Author, Post, PlainAuthor, PlainPost, posts, pivotName, reviews } = await openLibrary(driver)
-    const readsOf = (author: typeof Author | typeof PlainAuthor, post: typeof Post | typeof PlainPost) => [
-      () => db.model(author).query().with('topPost').orderBy('id').getJson(),
-      () => db.model(author).query().with('posts').orderBy('id').getJson(),
-      () => db.model(post).query().with('author').orderBy('id').getJson(),
-      () => db.model(post).query().with('tags').orderBy('id').getJson(),
-      () => db.model(author).query().with('latestPost').orderBy('id').getJson(),
-      () => db.model(author).query().with('reviews').orderBy('id').getJson(),
-    ]
-    const queries = readsOf(Author, Post)
-    const plainQueries = readsOf(PlainAuthor, PlainPost)
-    const subscribe = (reads: typeof queries) => {
-      const runs = reads.map(() => 0)
-      const subscriptions = Promise.all(reads.map((handler, index) => subscribeRealtimeQuery(
-        defineRealtimeQuery({ access: 'public', handler: () => {
-          runs[index]! += 1
-          return handler()
-        } }),
-        {},
-        { onData: () => {}, onError: (error) => { throw error } },
-      )))
-      return { runs, subscriptions }
+type Library = Awaited<ReturnType<typeof openLibrary>>['qualifiedLibrary']
+
+describe.each(drivers)('realtime relations with table-qualified keys on %s', (driver) => {
+  it('patches every relation kind like unqualified keys and the same as a fresh read', async () => {
+    const { db, qualifiedLibrary, plainLibrary, names, posts, reviews, comments, postType } = await openLibrary(driver)
+    const readsOf = (library: Library) => ({
+      topPost: () => db.model(library.Author).query().with('topPost').orderBy('id').getJson(),
+      posts: () => db.model(library.Author).query().with('posts').orderBy('id').getJson(),
+      latestPost: () => db.model(library.Author).query().with('latestPost').orderBy('id').getJson(),
+      reviews: () => db.model(library.Author).query().with('reviews').orderBy('id').getJson(),
+      firstReview: () => db.model(library.Author).query().with('firstReview').orderBy('id').getJson(),
+      author: () => db.model(library.Post).query().with('author').orderBy('id').getJson(),
+      tags: () => db.model(library.Post).query().with('tags').orderBy('id').getJson(),
+      comments: () => db.model(library.Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
+    })
+    const subscribe = async (reads: ReturnType<typeof readsOf>) => {
+      const runs: Record<string, number> = {}
+      const current: Record<string, () => unknown> = {}
+      for (const [name, handler] of Object.entries(reads)) {
+        runs[name] = 0
+        const subscription = await subscribeRealtimeQuery(
+          defineRealtimeQuery({ access: 'public', handler: () => {
+            runs[name]! += 1
+            return handler()
+          } }),
+          {},
+          { onData: () => {}, onError: (error) => { throw error } },
+        )
+        current[name] = () => subscription.current.data
+      }
+      return { runs, current }
     }
-    const qualified = subscribe(queries)
-    const plain = subscribe(plainQueries)
-    const subscriptions = await qualified.subscriptions
-    const plainSubscriptions = await plain.subscriptions
-    const expectCurrent = async () => {
-      const fresh = await Promise.all(queries.map(handler => handler()))
-      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
-      expect(plainSubscriptions.map(subscription => subscription.current.data)).toEqual(fresh)
+    const qualifiedReads = readsOf(qualifiedLibrary)
+    const qualified = await subscribe(qualifiedReads)
+    const plain = await subscribe(readsOf(plainLibrary))
+    const expectCurrent = async (skipped: readonly string[] = []) => {
+      for (const [name, handler] of Object.entries(qualifiedReads).filter(([name]) => !skipped.includes(name))) {
+        const fresh = await handler()
+        expect(qualified.current[name]!(), name).toEqual(fresh)
+        expect(plain.current[name]!(), name).toEqual(fresh)
+      }
+    }
+    const mutate = async (handler: () => Promise<unknown>, skipped: readonly string[] = []) => {
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+      await expectCurrent(skipped)
     }
 
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }) }))
-    await expectCurrent()
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).insert({ id: 30, author_id: 2, title: 'Debugging' }) }))
-    await expectCurrent()
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(pivotName).insert({ post_id: 30, tag_id: 100 }) }))
-    await expectCurrent()
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }) }))
-    await expectCurrent()
-    expect(JSON.stringify(subscriptions[5]!.current.data)).toContain('clear')
-    expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('Analytical Engines')
-    expect(qualified.runs[0]).toBe(1)
+    await mutate(() => db.table(posts).where('id', 10).update({ title: 'Analytical Engines' }))
+    await mutate(() => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' }))
+    await mutate(() => db.table(names.postTag).insert({ post_id: 30, tag_id: 100 }))
+    await mutate(() => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }))
+    expect(JSON.stringify(qualified.current.reviews!())).toContain('clear')
+    await mutate(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
+    await mutate(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
+    await mutate(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
+    await mutate(() => db.table(posts).where('id', 20).delete())
+    await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }), ['reviews', 'firstReview'])
+
+    expect(JSON.stringify(qualified.current.topPost!())).toContain('Analytical Engines')
+    expect(JSON.stringify(qualified.current.comments!())).toContain('edited')
+    expect(qualified.runs.topPost).toBe(1)
     expect(qualified.runs).toEqual(plain.runs)
   })
 })
