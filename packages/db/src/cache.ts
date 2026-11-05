@@ -12,6 +12,8 @@ import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
 import { NumericAdjustment } from './query/NumericAdjustment'
+import { readColumnResult } from './query/resultColumns'
+import type { SchemaDialectName } from './schema/typeMapping'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -2212,34 +2214,32 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
-function readBooleanColumns(
-  table: TableDefinition | undefined,
-  row: Readonly<Record<string, unknown>>,
-  selections: readonly DatabaseQuerySelectionObservation[],
-  reads: (value: unknown) => boolean,
-): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const booleanKeys = Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
-  })
-  if (booleanKeys.length === 0) return row
-  return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
-}
-
 function readMutationRow(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  return readBooleanColumns(table, row, [], isStoredBoolean)
+  if (!table) return row
+  const booleanKeys = Object.keys(row).filter(key => isStoredBoolean(row[key]) && isBooleanColumn(table, key))
+  if (booleanKeys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
 function readFetchedRow(
+  connection: DatabaseContext,
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[] = [],
 ): Readonly<Record<string, unknown>> {
-  return readBooleanColumns(table, row, selections, isDriverScalar)
+  if (!table) return row
+  const dialect = connection.getDriver() as SchemaDialectName
+  const read = Object.keys(row).flatMap((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    const column = selection ? selection.column : key
+    if (!Object.hasOwn(table.columns, column)) return []
+    const value = readColumnResult(dialect, table.columns[column], row[key])
+    return value === row[key] ? [] : [[key, value] as const]
+  })
+  return read.length === 0 ? row : Object.freeze({ ...row, ...Object.fromEntries(read) })
 }
 
 function readMutationRows(

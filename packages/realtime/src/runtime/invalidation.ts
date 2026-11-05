@@ -180,7 +180,7 @@ async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
+  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills)).catch(() => false)) {
     return
   }
 

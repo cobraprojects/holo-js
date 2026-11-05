@@ -1,12 +1,12 @@
-import { TableQueryBuilder, type TableDefinition } from '@holo-js/db'
+import type { TableDefinition } from '@holo-js/db'
 import {
   createMutationIndexKey,
   type DatabaseMutationEvent,
   type MutationIndex,
 } from './dependencies'
 import {
+  createBackfillQuery,
   getBackfillDatabaseConnection,
-  readBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -215,12 +215,9 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  const rows = readBackfilledRows(target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
-    connection,
-  )
+  const rows = await createBackfillQuery({ table: target.relatedTable, tableName: target.relatedTableName }, connection)
     .where(target.ownerKey, 'in', values)
-    .get())
+    .get()
 
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
@@ -251,13 +248,10 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  return readBackfilledRows(target.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
-    target.relatedTableName,
-    connection,
-  )
+  return await createBackfillQuery({ table: target.relatedTable, tableName: target.relatedTableName }, connection)
     .where(target.ownerKey, foreignKey)
     .limit(1)
-    .get())
+    .get()
 }
 
 function createBelongsToRelatedBackfillKey(

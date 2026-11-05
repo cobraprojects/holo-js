@@ -54,7 +54,7 @@ async function fetchLimitedQueryBackfillRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  return readBackfilledRows(query.table, await builder
+  return readBackfilledRows(connection, query.table, await builder
     .offset(offset)
     .limit(limit)
     .get(), selections)

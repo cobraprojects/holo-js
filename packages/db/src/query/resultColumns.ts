@@ -31,6 +31,11 @@ function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | 
   return readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
+export function readColumnResult(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined, value: unknown): unknown {
+  const read = columnReader(dialect, column)
+  return read ? read(value) : value
+}
+
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
   return Object.entries(table?.columns ?? {})
 }

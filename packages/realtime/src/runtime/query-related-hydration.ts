@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import type { CompiledStatement, DatabaseContext } from '@holo-js/db'
 import type {
   DatabaseMutationEvent,
   MutationIndex,
@@ -7,8 +7,10 @@ import {
   createMutationIndexKey,
 } from './dependencies'
 import {
+  createBackfillQuery,
   getBackfillDatabaseConnection,
   readBackfilledRows,
+  readBackfilledValue,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -283,10 +285,7 @@ async function fetchGroupedRelatedHydrationRows(
     }
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
-    connection,
-  ).where(hydration.foreignKey, 'in', values)
+  let builder = createBackfillQuery({ table: hydration.relatedTable, tableName: hydration.relatedTableName }, connection).where(hydration.foreignKey, 'in', values)
   for (const predicate of hydration.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -294,7 +293,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
+  const rows = await builder.get()
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
@@ -322,16 +321,18 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(readBackfilledRows(hydration.relatedTable, rows.rows), values)
+  return groupRelatedTopOneRows(connection, hydration, readBackfilledRows(connection, hydration.relatedTable, rows.rows), values)
 }
 
 function groupRelatedTopOneRows(
+  connection: DatabaseContext,
+  hydration: DatabaseQueryRelatedHydrationObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
   const rowsByLocalKey = new Map<unknown, BackfillRows>()
   for (const row of rows) {
-    const localKey = row[GROUPED_RELATED_ROW_ID_ALIAS]
+    const localKey = readBackfilledValue(connection, hydration.relatedTable, hydration.foreignKey, row[GROUPED_RELATED_ROW_ID_ALIAS])
     if (typeof localKey === 'undefined') {
       return undefined
     }
@@ -463,10 +464,7 @@ async function fetchRelatedHydrationRows(
     return undefined
   }
 
-  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
-    hydration.relatedTableName,
-    connection,
-  ).where(hydration.foreignKey, localKey)
+  let builder = createBackfillQuery({ table: hydration.relatedTable, tableName: hydration.relatedTableName }, connection).where(hydration.foreignKey, localKey)
   for (const predicate of hydration.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -474,9 +472,9 @@ async function fetchRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder
+  const rows = await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
-    .get())
+    .get()
   return validateRelatedHydrationRows(rows, hydration)
 }
 

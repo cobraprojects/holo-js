@@ -34,19 +34,20 @@ export function createBackfillQuery(
 }
 
 export function readBackfilledRows(
+  connection: DatabaseContext,
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
 ): Readonly<Record<string, unknown>>[] {
-  return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
+  return rows.map(row => queryCacheInternals.readFetchedRow(connection, table, row, selections))
 }
 
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {
   return query.table ? `typed:${query.tableName}` : query.tableName
 }
 
-export function readBackfilledValue(table: TableDefinition | undefined, column: string, value: unknown): unknown {
-  return queryCacheInternals.readFetchedRow(table, { [column]: value })[column]
+export function readBackfilledValue(connection: DatabaseContext, table: TableDefinition | undefined, column: string, value: unknown): unknown {
+  return queryCacheInternals.readFetchedRow(connection, table, { [column]: value })[column]
 }
 
 function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, TableDefinition> {

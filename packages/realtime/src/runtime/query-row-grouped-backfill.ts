@@ -210,7 +210,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
+    rowsById.set(id, Object.freeze(readBackfilledRows(connection, query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
   }
 
   for (const value of values) {
@@ -369,10 +369,11 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(query, rows.rows, values)
+  return groupWindowRows(connection, query, rows.rows, values)
 }
 
 function groupWindowRows(
+  connection: DatabaseContext,
   query: DatabaseQueryObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
@@ -392,7 +393,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
+    group.push(...readBackfilledRows(connection, query.table, [Object.freeze(result)], query.selections))
     rowsByGroup.set(groupValue, group)
   }
 
