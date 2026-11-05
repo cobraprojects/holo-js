@@ -36,21 +36,19 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefined>, name: string): AnyColumnDefinition | undefined {
   const definitions = [...tables.values()]
   if (definitions.some(table => table === undefined)) return undefined
-  const columns = definitions.flatMap(table => Object.hasOwn(table!.columns, name) ? [table!.columns[name]!] : [])
-  const [first] = columns
-  return first && columns.every(column => column.kind === first.kind && column.idStrategy === first.idStrategy) ? first : undefined
+  const owners = definitions.filter(table => Object.hasOwn(table!.columns, name))
+  return owners.length === 1 ? owners[0]!.columns[name] : undefined
 }
 
-function unambiguousColumns(tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
-  const names = new Set([...tables.values()].flatMap(table => Object.keys(table?.columns ?? {})))
-  return [...names].map(name => [name, unambiguousColumn(tables, name)])
+function projectedColumns(tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+  return [...tables.values()].flatMap(table => table ? columnsOf(table) : [[UNKNOWN_COLUMNS, undefined] as const])
 }
 
 function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
   const separator = selection.column.lastIndexOf('.')
   const name = selection.column.slice(separator + 1)
   if (separator < 0) {
-    return name === '*' ? unambiguousColumns(tables) : [[selection.alias ?? name, unambiguousColumn(tables, name)]]
+    return name === '*' ? projectedColumns(tables) : [[selection.alias ?? name, unambiguousColumn(tables, name)]]
   }
   const table = tables.get(selection.column.slice(0, separator))
   if (name === '*') return table ? columnsOf(table) : [[UNKNOWN_COLUMNS, undefined]]
@@ -60,7 +58,7 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
 function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
   const tables = queryTables(plan)
   const selected: readonly SelectedColumn[] = plan.selections.length === 0
-    ? unambiguousColumns(tables)
+    ? projectedColumns(tables)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
       ? selectedColumns(selection, tables)
       : 'alias' in selection ? [[selection.alias, undefined]] : [])

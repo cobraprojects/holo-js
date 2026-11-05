@@ -134,6 +134,9 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     const row = await DB.table(prices).crossJoin(legacyName).select(`${prices.tableName}.*`, `${legacyName}.*`).first()
 
     expect(row?.amount).toBe(7)
+    const legacy = defineGeneratedTable(legacyName, { id: column.id(), amount: column.integer() })
+    expect((await DB.table(legacy).crossJoin(prices).first())?.amount).toBe('12.30')
+    expect((await DB.table(prices).crossJoin(legacy).first())?.amount).toBe(7)
   })
 
   it('chunks by a decimal column in numeric order when the rows are sorted in memory', async () => {
