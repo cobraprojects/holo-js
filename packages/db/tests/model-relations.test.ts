@@ -99,9 +99,17 @@ describe('relation helper keys', () => {
         author: belongsTo(() => Author, 'app.posts.author_id', 'authors.id'),
       },
     })
+    const Comment = defineModelFromTable(defineTable('comments', { id: column.id(), post_id: column.integer() }), {
+      relations: {
+        post: belongsTo(() => Post, 'public.comments.post_id', 'app.posts.id'),
+        strayPost: belongsTo(() => Post, 'other.posts.post_id', 'id'),
+      },
+    })
 
     expect(Post.getRepository().getRelationDefinition('author')).toMatchObject({ foreignKey: 'author_id', ownerKey: 'id' })
     expect(Post.getRepository().getRelationDefinition('author')).toBe(Post.getRepository().getRelationDefinition('author'))
+    expect(Comment.getRepository().getRelationDefinition('post')).toMatchObject({ foreignKey: 'post_id', ownerKey: 'id' })
+    expect(() => Comment.getRepository().getRelationDefinition('strayPost')).toThrow(RelationError)
   })
 })
 

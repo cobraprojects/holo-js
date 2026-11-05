@@ -2,22 +2,36 @@ import { RelationError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, ModelDefinitionLike, RelationDefinition } from './types'
 
-type KeyOwner = 'parent' | 'related' | 'pivot'
+type KeyOwner = 'parent' | 'related' | 'pivot' | 'through'
+
+type KeyOwners = { readonly [TKind in RelationDefinition['kind']]: Readonly<Partial<Record<keyof Extract<RelationDefinition, { kind: TKind }>, KeyOwner>>> }
 
 const hasKeys = Object.freeze({ foreignKey: 'related', localKey: 'parent' } as const)
+const ofManyKeys = Object.freeze({ ...hasKeys, aggregateColumn: 'related' } as const)
+const morphHasKeys = Object.freeze({ morphTypeColumn: 'related', morphIdColumn: 'related', localKey: 'parent' } as const)
+const morphPivotKeys = Object.freeze({ morphTypeColumn: 'pivot', morphIdColumn: 'pivot', foreignPivotKey: 'pivot', parentKey: 'parent', relatedKey: 'related' } as const)
+const throughKeys = Object.freeze({ firstKey: 'through', secondKey: 'related', localKey: 'parent', secondLocalKey: 'through' } as const)
 
-const keyOwnersByKind: Partial<Record<RelationDefinition['kind'], Readonly<Record<string, KeyOwner>>>> = Object.freeze({
+const keyOwnersByKind: KeyOwners = Object.freeze({
+  belongsTo: Object.freeze({ foreignKey: 'parent', ownerKey: 'related' } as const),
   hasOne: hasKeys,
   hasMany: hasKeys,
-  hasOneOfMany: hasKeys,
-  belongsTo: Object.freeze({ foreignKey: 'parent', ownerKey: 'related' } as const),
+  hasOneOfMany: ofManyKeys,
+  morphOne: morphHasKeys,
+  morphMany: morphHasKeys,
+  morphOneOfMany: Object.freeze({ ...morphHasKeys, aggregateColumn: 'related' } as const),
+  morphTo: Object.freeze({ morphTypeColumn: 'parent', morphIdColumn: 'parent' } as const),
   belongsToMany: Object.freeze({ foreignPivotKey: 'pivot', relatedPivotKey: 'pivot', parentKey: 'parent', relatedKey: 'related' } as const),
+  morphToMany: morphPivotKeys,
+  morphedByMany: morphPivotKeys,
+  hasOneThrough: throughKeys,
+  hasManyThrough: throughKeys,
 })
 
 const normalizedRelations = new WeakMap<AnyModelDefinition, WeakMap<RelationDefinition, RelationDefinition>>()
 
-function relatedTableName(relation: RelationDefinition): string {
-  const reference = (relation as { related: () => ModelDefinitionLike }).related()
+function tableOf(resolve: () => ModelDefinitionLike): string {
+  const reference = resolve()
   const definition = 'definition' in reference ? reference.definition : reference
   return definition.table.tableName
 }
@@ -28,15 +42,27 @@ function ownerTableName(owner: KeyOwner, parent: AnyModelDefinition, relation: R
   }
 
   if (owner === 'related') {
-    return relatedTableName(relation)
+    return tableOf((relation as { related: () => ModelDefinitionLike }).related)
+  }
+
+  if (owner === 'through') {
+    return tableOf((relation as { through: () => ModelDefinitionLike }).through)
   }
 
   const pivotTable = (relation as { pivotTable: string | TableDefinition }).pivotTable
   return typeof pivotTable === 'string' ? pivotTable : pivotTable.tableName
 }
 
+function bareName(name: string): string {
+  return name.slice(name.lastIndexOf('.') + 1)
+}
+
 function qualifierMatches(qualifier: string, tableName: string): boolean {
-  return qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)
+  if (qualifier === tableName) {
+    return true
+  }
+
+  return bareName(qualifier) === bareName(tableName) && (!qualifier.includes('.') || !tableName.includes('.'))
 }
 
 export function normalizeQualifiedRelationKeys(
@@ -44,13 +70,12 @@ export function normalizeQualifiedRelationKeys(
   name: string,
   relation: RelationDefinition,
 ): RelationDefinition {
-  const owners = keyOwnersByKind[relation.kind]
-  if (!owners) {
-    return relation
-  }
-
+  const owners: Readonly<Record<string, KeyOwner>> = keyOwnersByKind[relation.kind]
   const values = relation as unknown as Readonly<Record<string, unknown>>
-  const qualifiedKeys = Object.keys(owners).filter(key => typeof values[key] === 'string' && (values[key] as string).includes('.'))
+  const qualifiedKeys = Object.keys(owners).filter((key) => {
+    const value = values[key]
+    return typeof value === 'string' && value.includes('.')
+  })
   if (qualifiedKeys.length === 0) {
     return relation
   }
