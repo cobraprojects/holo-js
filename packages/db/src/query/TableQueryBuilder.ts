@@ -47,7 +47,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
+import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -2034,7 +2034,7 @@ export class TableQueryBuilder<
     }
     const readsDecimal = (column: string): boolean => {
       const separator = column.lastIndexOf('.')
-      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tables.get(column.slice(0, separator))
+      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tableForQualifier(tables, column.slice(0, separator))
       const name = column.slice(separator + 1)
       const columns = Object.entries(table?.columns ?? {})
       return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')

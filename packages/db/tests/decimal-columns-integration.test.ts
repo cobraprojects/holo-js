@@ -79,11 +79,21 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
   })
 
   it('reads a decimal column through its schema-qualified table by the bare table name', async () => {
-    const { prices, name } = await openPrices(driver)
+    const { prices, name, schema } = await openPrices(driver)
     const qualified = defineGeneratedTable(`${defaultSchema(driver)}.${name}`, { id: column.id(), label: column.string(), amount: column.decimal() })
     await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
 
     expect(await DB.table(qualified).select(`${name}.amount` as never).first()).toEqual({ amount: '12.30' })
+    const ordersName = `holo_qualified_orders_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(ordersName, (table) => {
+      table.id()
+      table.integer('price_id')
+    })
+    onTestFinished(() => schema.dropTable(ordersName))
+    const orders = defineGeneratedTable(ordersName, { id: column.id(), price_id: column.integer() })
+    const { id } = (await DB.table(prices).first())!
+    await DB.table(orders).insert({ price_id: id })
+    expect(await DB.table(orders).join(qualified, `${ordersName}.price_id` as never, '=', `${name}.id` as never).select(`${name}.amount` as never).first()).toEqual({ amount: '12.30' })
   })
 
   it('leaves a raw selection that reuses a decimal or integer key as the driver returns it', async () => {
