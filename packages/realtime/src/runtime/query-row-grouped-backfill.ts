@@ -202,7 +202,7 @@ async function fetchGroupedExactRowBackfill(
   const rowsById = new Map<unknown, BackfillRows>()
   for (const row of rows) {
     const id = usesHiddenIdentity ? row[GROUPED_ROW_ID_ALIAS] : row[primaryKey]
-    if (typeof id === 'undefined') {
+    if (typeof id === 'undefined' || !values.some(value => Object.is(value, id))) {
       return undefined
     }
 
