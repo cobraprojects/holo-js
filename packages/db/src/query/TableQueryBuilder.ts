@@ -2893,7 +2893,7 @@ export class TableQueryBuilder<
     }
 
     await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId, {
-      canReadRows,
+      canReadRows: canReadRows && (captureReturningRows || result.affectedRows === rows.length),
       rowsAreWritten: !captureReturningRows,
     })
     return insertResult
@@ -3347,7 +3347,8 @@ export class TableQueryBuilder<
       (current, key) => current.whereIn(key, [...new Set(rows.map(row => row[key]))]),
       new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection),
     )
-    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan()))
+    const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
+    if (!result) return undefined
     const keyOf = (row: Readonly<Record<string, unknown>>) => {
       const readRow = this.readIntegerValue(row)
       return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))
@@ -3513,8 +3514,8 @@ export class TableQueryBuilder<
           [primaryKey]: lastInsertId,
         })])
       : rows
-    const readsWrittenRows = hasInvalidationListeners && options.rowsAreWritten === true
-    const databaseRows = !readsWrittenRows
+    const needsStoredRows = hasInvalidationListeners && options.rowsAreWritten === true
+    const databaseRows = !needsStoredRows
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
     const eventRows = databaseRows && this.readIntegerValues(databaseRows)
