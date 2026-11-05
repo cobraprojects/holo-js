@@ -279,6 +279,35 @@ describe('a model whose primaryKey option differs from the table schema key', ()
     expect(live.reads()).toBe(1)
   })
 
+  it('patches each incremented row of a model list subscription by the model primary key', async () => {
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+    const live = await subscribe(db => db.model(Entry).query().orderBy('entry_no').get())
+    await mutate(async ({ db }) => {
+      await db.model(Entry).query().where('amount', '<', 30).increment('amount', 1)
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([
+      { id: 1, entry_no: 'A', amount: 11 },
+      { id: 1, entry_no: 'B', amount: 21 },
+      { id: 2, entry_no: 'C', amount: 30 },
+    ])
+  })
+
+  it('keeps the model primary key when a model query names its table with from()', async () => {
+    const Entry = defineModel('ledger', { timestamps: false, primaryKey: 'entry_no', fillable: ['amount'] })
+    const live = await subscribe(db => db.model(Entry).query().from('ledger').orderBy('entry_no').get())
+    await mutate(async ({ db }) => {
+      await db.model(Entry).query().where('entry_no', 'B').update({ amount: 25 })
+    })
+
+    expect(JSON.parse(JSON.stringify(live.snapshots.at(-1)))).toEqual([
+      { id: 1, entry_no: 'A', amount: 10 },
+      { id: 1, entry_no: 'B', amount: 25 },
+      { id: 2, entry_no: 'C', amount: 30 },
+    ])
+    expect(live.reads()).toBe(1)
+  })
+
   it('re-runs a DB.table() list subscription on the same keyless table', async () => {
     const live = await subscribe(db => db.table('ledger').orderBy('entry_no').get())
     await mutate(async ({ db }) => {

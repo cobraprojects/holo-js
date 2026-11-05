@@ -261,10 +261,11 @@ export class TableQueryBuilder<
   }
 
   from(table: string): TableQueryBuilder<string, TSelectedRow> {
+    const source = createTableSource(table)
     return new TableQueryBuilder(
       table,
       this.connection,
-      withSource(this.plan, createTableSource(table)),
+      withSource(this.plan, this.source.primaryKey === undefined ? source : Object.freeze({ ...source, primaryKey: this.source.primaryKey })),
       this.queryCacheConfig,
       internalPlanHandoff,
     )
@@ -3204,6 +3205,10 @@ export class TableQueryBuilder<
     return Object.freeze(rows.map(row => Object.freeze({ ...row })))
   }
 
+  private resolveRowKeyColumns(): readonly string[] {
+    return this.source.primaryKey === undefined ? resolveTablePrimaryKeyColumns(this.source.table) : [this.source.primaryKey]
+  }
+
   private resolveSinglePrimaryKeyColumn(): string | undefined {
     const [primaryKey, ...otherPrimaryKeys] = resolveTablePrimaryKeyColumns(this.source.table)
     return otherPrimaryKeys.length === 0 ? primaryKey : undefined
@@ -3358,7 +3363,7 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
     previousRows: readonly Readonly<Record<string, unknown>>[],
   ): ReturnType<typeof createDatabaseMutationEvent>[] {
-    const primaryKeys = resolveTablePrimaryKeyColumns(this.source.table)
+    const primaryKeys = this.resolveRowKeyColumns()
     const keyOf = (keyValues: readonly unknown[]): unknown => keyValues.length === 1
       ? keyValues[0]
       : JSON.stringify(keyValues, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
@@ -3408,7 +3413,7 @@ export class TableQueryBuilder<
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
       (this.source.table ?? this.source.tableName) as TTableOrName,
       this.connection,
-      withSelections(this.plan, [...resolveTablePrimaryKeyColumns(this.source.table), ...columns] as never[]),
+      withSelections(this.plan, [...this.resolveRowKeyColumns(), ...columns] as never[]),
       undefined,
       internalPlanHandoff,
     )
