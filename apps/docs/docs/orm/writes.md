@@ -195,7 +195,7 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
-The rows may carry the model's primary key, such as the auto-increment `id`, which is the usual unique column, even when `fillable` doesn't list it or `guarded` names it. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators apply to each value. This only works on a query with no global scopes, `where` clauses or joins; on a scoped query, the primary key must be fillable, as for `create()`:
+The rows may carry the model's primary key, such as the auto-increment `id`, which is the usual unique column, even when `fillable` doesn't list it or `guarded` names it. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators apply to each value. This only works on a query that doesn't filter rows, with no `where` or `having` clauses, joins, grouping, unions, limit or offset, written on it or added by a global scope; on a scoped query, the primary key must be fillable, as for `create()`:
 
 ```ts
 await Product.query().upsert(
@@ -421,7 +421,7 @@ Inside the callback, mass assignment rules are off for every model, not only `Us
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
 :::
 
-A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted in the rows when it isn't fillable, because it's the column upserts usually match on, and only on a query with no global scopes, `where` clauses or joins. Among the update columns only `updated_at` is exempt, so a conflict can't rewrite a protected primary key. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
+A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted in the rows when it isn't fillable, because it's the column upserts usually match on, and only on a query that doesn't filter rows, with no `where` or `having` clauses, joins, grouping, unions, limit or offset, written on it or added by a global scope. Among the update columns only `updated_at` is exempt, so a conflict can't rewrite a protected primary key. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
 
 ## Method reference
 

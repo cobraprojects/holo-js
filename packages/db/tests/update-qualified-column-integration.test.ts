@@ -379,6 +379,27 @@ describe.each(drivers)('model upsert accepts a non-fillable key only on an unsco
     expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
   })
 
+  it('rejects a non-fillable key on a query a having clause or a limit scopes, before any SQL runs', async () => {
+    const { statements, accounts, read } = await createAccounts()
+    const Grouped = defineModelFromTable(accounts, {
+      fillable: ['tenant_id', 'slug', 'status'],
+      timestamps: false,
+      globalScopes: { tenant: query => query.groupBy('id').having('tenant_id', '=', 1) },
+    })
+    const Limited = defineModelFromTable(accounts, {
+      fillable: ['tenant_id', 'slug', 'status'],
+      timestamps: false,
+      globalScopes: { first: query => query.limit(1) },
+    })
+    const notWritable = `Column "id" is not writable on model "${Grouped.definition.name}".`
+
+    statements.length = 0
+    await expect(Grouped.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
+    await expect(Limited.query().upsert([{ id: 2, tenant_id: 2, slug: 'foreign', status: 'hacked' }], ['id'], ['status'])).rejects.toThrow(notWritable)
+    expect(statements).toEqual([])
+    expect(await read()).toEqual([[1, 1, 'pending'], [2, 2, 'pending']])
+  })
+
   it('upserts with a non-fillable key on an unscoped and a soft-deleting model', async () => {
     const { accounts, read } = await createAccounts()
     const Account = defineModelFromTable(accounts, { fillable: ['tenant_id', 'slug', 'status'], timestamps: false })
