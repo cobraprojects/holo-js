@@ -42,15 +42,19 @@ export function readBackfilledValue(table: TableDefinition | undefined, column: 
   return queryCacheInternals.readFetchedRow(table, { [column]: value })[column]
 }
 
+function connectionTableKey(connectionName: string, tableName: string): string {
+  return `${connectionName}\0${tableName}`
+}
+
 function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, TableDefinition> {
   const tables = new Map<string, TableDefinition>()
-  const add = (tableName: string, table: TableDefinition | undefined) => {
-    if (table) tables.set(tableName, table)
+  const add = (connectionName: string, tableName: string, table: TableDefinition | undefined) => {
+    if (table) tables.set(connectionTableKey(connectionName, tableName), table)
   }
-  add(query.tableName, query.table)
-  if (query.relation) add(query.relation.relatedTableName, query.relation.relatedTable)
-  for (const hydration of query.belongsToHydrations ?? []) add(hydration.relatedTableName, hydration.relatedTable)
-  for (const hydration of query.relatedHydrations ?? []) add(hydration.relatedTableName, hydration.relatedTable)
+  add(query.connectionName, query.tableName, query.table)
+  if (query.relation) add(query.relation.relatedConnectionName, query.relation.relatedTableName, query.relation.relatedTable)
+  for (const hydration of query.belongsToHydrations ?? []) add(hydration.relatedConnectionName, hydration.relatedTableName, hydration.relatedTable)
+  for (const hydration of query.relatedHydrations ?? []) add(hydration.relatedConnectionName, hydration.relatedTableName, hydration.relatedTable)
   return tables
 }
 
@@ -83,10 +87,10 @@ export function readMutationsForQuery(
 ): readonly DatabaseMutationEvent[] | undefined {
   const tables = observedTables(query)
   if (tables.size === 0) return mutations
-  if (mutations.some(mutation => hasUnreadMutationBoolean(tables.get(mutation.tableName), mutation))) return undefined
+  if (mutations.some(mutation => hasUnreadMutationBoolean(tables.get(connectionTableKey(mutation.connectionName, mutation.tableName)), mutation))) return undefined
   let changed = false
   const read = mutations.map((mutation) => {
-    const table = tables.get(mutation.tableName)
+    const table = tables.get(connectionTableKey(mutation.connectionName, mutation.tableName))
     const next = table ? readMutation(table, mutation) : mutation
     if (next !== mutation) {
       changed = true
