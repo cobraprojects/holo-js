@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne } from '@holo-js/db'
+import { belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasOne } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -69,12 +69,12 @@ async function openFixture(driver: typeof drivers[number], statements: string[] 
   ])
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
   const Tag = defineModel(tags, { timestamps: false })
+  const Owner = defineModel(groups, { timestamps: false })
+  const Post = defineModel(posts, { timestamps: false, fillable: ['group_id', 'score', 'title'], relations: { group: belongsTo(() => Owner, 'group_id') } })
   const Group = defineModel(groups, { timestamps: false, relations: {
     tags: belongsToMany(() => Tag, groupTags, 'group_id', 'tag_id').withPivot('position').orderByPivot('position'),
-    posts: hasMany(() => Post, 'group_id'),
     topPost: hasOne(() => Post, 'group_id'),
   } })
-  const Post = defineModel(posts, { timestamps: false, fillable: ['group_id', 'score', 'title'], relations: { group: belongsTo(() => Group, 'group_id') } })
   return { db, groups, groupTags, posts, Group, Post }
 }
 
@@ -193,7 +193,9 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => {
       runs += 1
       return handler()
-    } }), {}, { onData: () => {}, onError: error => errors.push(error) })
+    } }), {}, { onData: () => {}, onError: (error) => {
+      errors.push(error)
+    } })
 
     await mutate(() => db.table(posts).insert({ id: 4, group_id: 3, score: 1, title: 'd' }))
 

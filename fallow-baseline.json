@@ -664,6 +664,7 @@
     "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:compileExists",
     "unused-class-member:packages/db/src/query/SQLQueryCompiler.ts:SQLQueryCompiler:compilePaginationCount",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:addSelectAvg",
+    "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:addSelectCount",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:addSelectMax",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:addSelectMin",
     "unused-class-member:packages/db/src/query/TableQueryBuilder.ts:TableQueryBuilder:addSelectSum",
