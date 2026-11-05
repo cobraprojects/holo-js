@@ -166,6 +166,7 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+export const resolveSourceColumn = Symbol('resolveSourceColumn')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -1895,6 +1896,10 @@ export class TableQueryBuilder<
     return this.queryCacheConfig !== undefined
   }
 
+  [resolveSourceColumn](column: string, operation: 'aggregate'): string {
+    return Object.keys(this.resolveSourceColumnKeys([[column, column]], operation))[0]!
+  }
+
   cache(
     config: QueryCacheTtlInput | QueryCacheConfig,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
@@ -2661,8 +2666,9 @@ export class TableQueryBuilder<
     return this.avg(column)
   }
 
-  async avg(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async avg(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
@@ -2670,7 +2676,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'avg')
+    const values = this.extractNumericValues(rows, key, 'avg', requestedColumn)
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
@@ -2679,8 +2685,9 @@ export class TableQueryBuilder<
     return result
   }
 
-  async min(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async min(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, kind: 'min' }))
@@ -2688,7 +2695,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'min')
+    const values = this.extractNumericValues(rows, key, 'min', requestedColumn)
     const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
@@ -2701,8 +2708,9 @@ export class TableQueryBuilder<
     return result
   }
 
-  async max(column: string): Promise<number | null> {
-    const rows = await this.get<Record<string, unknown>>()
+  async max(requestedColumn: string): Promise<number | null> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
         rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, kind: 'max' }))
@@ -2710,7 +2718,7 @@ export class TableQueryBuilder<
       return null
     }
 
-    const values = this.extractNumericValues(rows, column, 'max')
+    const values = this.extractNumericValues(rows, key, 'max', requestedColumn)
     const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({
@@ -3450,7 +3458,7 @@ export class TableQueryBuilder<
 
   private resolveSourceColumnKeys<TValue>(
     values: Readonly<Record<string, TValue>> | readonly (readonly [string, TValue])[],
-    operation: 'update' | 'upsert' | 'increment/decrement',
+    operation: 'update' | 'upsert' | 'increment/decrement' | 'aggregate',
   ): Readonly<Record<string, TValue>> {
     const resolved: Record<string, TValue> = {}
     for (const [column, value] of Array.isArray(values) ? values : Object.entries(values)) {
@@ -3579,24 +3587,48 @@ export class TableQueryBuilder<
     return row[column.split('.').at(-1)!]
   }
 
-  private async aggregateNumeric(column: string, kind: 'sum'): Promise<number> {
-    const rows = await this.get<Record<string, unknown>>()
+  private async aggregateNumeric(requestedColumn: string, kind: 'sum'): Promise<number> {
+    const { query, key, column } = this.resolveAggregateColumn(requestedColumn)
+    const rows = await query.get<Record<string, unknown>>()
     const result = rows.length === 0
       ? 0
-      : this.extractNumericValues(rows, column, kind).reduce((sum, value) => sum + value, 0)
+      : this.extractNumericValues(rows, key, kind, requestedColumn).reduce((sum, value) => sum + value, 0)
     if (hasActiveDatabaseDependencyCollector()) {
       rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ column, kind }))
     }
     return result
   }
 
+  private resolveAggregateColumn(column: string): {
+    readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>
+    readonly key: string
+    readonly column: string
+  } {
+    if (!column.includes('.')) return { query: this, key: column, column }
+
+    if (typeof this.resolveSourceColumnName(column) === 'undefined' && this.isJoinedColumn(column)) {
+      return { query: this.scalarQuery(column), key: column.slice(column.lastIndexOf('.') + 1), column }
+    }
+
+    const key = this[resolveSourceColumn](column, 'aggregate')
+    return { query: this.plan.joins.length === 0 ? this : this.scalarQuery(column), key, column: key }
+  }
+
+  private isJoinedColumn(column: string): boolean {
+    const qualifier = column.slice(0, column.lastIndexOf('.'))
+    return this.plan.joins.some(join => typeof join.alias === 'string'
+      ? join.alias === qualifier
+      : typeof join.table === 'string' && [join.table, join.table.slice(join.table.lastIndexOf('.') + 1)].includes(qualifier))
+  }
+
   private extractNumericValues(
     rows: readonly Record<string, unknown>[],
-    column: string,
+    key: string,
     kind: 'sum' | 'avg' | 'min' | 'max',
+    column: string,
   ): number[] {
     return rows.flatMap((row) => {
-      const value = row[column]
+      const value = row[key]
       if (value === null) return []
       const numericValue = this.normalizeNumericResult(value)
       if (numericValue === undefined) {

@@ -24,7 +24,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, resolveSourceColumn } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
@@ -1763,7 +1763,8 @@ class ModelQueryBuilderBase<
     return value
   }
 
-  async sum(column: ModelColumnName<TTable>): Promise<number> {
+  async sum(requestedColumn: ModelColumnName<TTable>): Promise<number> {
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1783,7 +1784,8 @@ class ModelQueryBuilderBase<
     return this.avg(column)
   }
 
-  async avg(column: ModelColumnName<TTable>): Promise<number | null> {
+  async avg(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1801,7 +1803,8 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async min(column: ModelColumnName<TTable>): Promise<number | null> {
+  async min(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
@@ -1823,7 +1826,8 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async max(column: ModelColumnName<TTable>): Promise<number | null> {
+  async max(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+    const column = this.tableQuery[resolveSourceColumn](requestedColumn, 'aggregate')
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
