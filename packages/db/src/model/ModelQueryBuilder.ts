@@ -26,6 +26,7 @@ import {
 import { queryBatches, visitRows } from '../query/traversal'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
+import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
 import { modelNeedsSerialization } from './serialize'
 import type { ModelCollection } from './collection'
@@ -770,7 +771,7 @@ class ModelQueryBuilderBase<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | TJoinedTable> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | JoinedTableName<TJoinedTable>> {
     return this.clone(this.tableQuery.join(table, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -779,7 +780,7 @@ class ModelQueryBuilderBase<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | TJoinedTable> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | JoinedTableName<TJoinedTable>> {
     return this.clone(this.tableQuery.leftJoin(table, leftColumn as never, operator, rightColumn as never))
   }
 
@@ -788,11 +789,11 @@ class ModelQueryBuilderBase<
     leftColumn: ModelColumnReference<TTable>,
     operator: '!=' | '=' | '>' | '>=' | '<' | '<=' | 'like',
     rightColumn: ModelColumnReference<TTable>,
-  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | TJoinedTable> {
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | JoinedTableName<TJoinedTable>> {
     return this.clone(this.tableQuery.rightJoin(table, leftColumn as never, operator, rightColumn as never))
   }
 
-  crossJoin<const TJoinedTable extends string>(table: TJoinedTable): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | TJoinedTable> {
+  crossJoin<const TJoinedTable extends string>(table: TJoinedTable): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables | JoinedTableName<TJoinedTable>> {
     return this.clone(this.tableQuery.crossJoin(table))
   }
 
