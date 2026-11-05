@@ -91,25 +91,39 @@ function qualifyModelOrders(plan: SelectQueryPlan, modelColumns: readonly string
     : order))
 }
 
+function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
+  return [plan, ...plan.unions.flatMap(union => unionBranches(union.query))]
+}
+
+function ordersByModelColumn(plan: SelectQueryPlan, modelColumns: readonly string[]): boolean {
+  const aliases = new Set(plan.selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
+  return plan.orderBy.some(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column))
+}
+
+function projectUnionBranch(branch: SelectQueryPlan, driver: string, leadingModelColumns: boolean): SelectQueryPlan {
+  const selections = orderModelColumnsLast(branch, expandSelections(branch, driver))
+  const leading = leadingModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
+  return Object.freeze({
+    ...branch,
+    selections: Object.freeze([...leading, ...selections]),
+    unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: projectUnionBranch(union.query, driver, leadingModelColumns) }))),
+  })
+}
+
 export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joinedColumns: JoinedColumns): SelectQueryPlan {
-  const branches = [plan, ...plan.unions.map(union => union.query)]
+  const branches = unionBranches(plan)
   if (branches.every(branch => branch.joins.length === 0)) return plan
 
   const modelColumns = Object.keys(plan.source.table?.columns ?? {})
   for (const branch of branches) assertBranchSelections(branch, plan.source, modelColumns, joinedColumns)
 
-  const expanded = branches.map(branch => expandSelections(branch, driver))
   if (plan.unions.length === 0) {
-    return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: orderModelColumnsLast(plan, expanded[0] ?? []) })
+    return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: orderModelColumnsLast(plan, expandSelections(plan, driver)) })
   }
 
-  const roles = branches.map((branch, index) => (expanded[index] ?? []).map(selection => selectionRole(branch.source, selection)).join())
+  const roles = branches.map(branch => expandSelections(branch, driver).map(selection => selectionRole(branch.source, selection)).join())
   if (roles.some(role => role !== roles[0])) {
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }
-  const project = (branch: SelectQueryPlan, index: number) => Object.freeze({ ...branch, selections: orderModelColumnsLast(branch, expanded[index] ?? []) })
-  return Object.freeze({
-    ...project(plan, 0),
-    unions: Object.freeze(plan.unions.map((union, index) => Object.freeze({ ...union, query: project(union.query, index + 1) }))),
-  })
+  return projectUnionBranch(plan, driver, branches.some(branch => ordersByModelColumn(branch, modelColumns)))
 }

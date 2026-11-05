@@ -188,6 +188,30 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     await expect(joined().select(`${products}.*`).union(joined().select(`${products}.price`, `${orders}.id`)).get()).rejects.toThrow(collision(`${orders}.id`, 'id', products))
   })
 
+  it('keeps the model columns across nested unions of joined queries', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const nested = joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)
+      .union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 102).union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)))
+    expect(attributes(await nested.get())).toEqual(ownRows)
+    await expect(joined().select(`${products}.*`, `${orders}.*`).union(joined().select(`${products}.*`, `${orders}.*`).union(joined().select(`${orders}.*`, `${products}.*`))).get())
+      .rejects.toThrow(`Cannot combine a joined "${products}" model query with a union whose selections don't line up with its own.`)
+  })
+
+  it('orders a union of joined queries by the model column', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+    await DB.table(orders).where('id', 101).update({ id: 103 })
+
+    const union = joined().where(`${orders}.id`, 102).union(joined().where(`${orders}.id`, 103)).orderBy('id')
+    if (driver !== 'sqlite') {
+      await expect(union.get()).rejects.toThrow(driver === 'postgres' ? 'ORDER BY "id" is ambiguous' : `Column 'id' in order clause is ambiguous`)
+      return
+    }
+    expect((await union.get()).map(entity => Number(entity.toAttributes().id))).toEqual([1, 2])
+    expect(attributes(await union.limit(1).get())).toEqual([ownRows[0]])
+    expect(await DB.table(products).count()).toBe(2)
+  })
+
   it('accepts a joined column aliased to a name that is not a model column', async () => {
     const { products, orders, joined } = await createFixture(driver)
 
