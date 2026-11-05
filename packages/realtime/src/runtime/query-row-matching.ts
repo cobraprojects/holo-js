@@ -13,7 +13,7 @@ export function matchesExactRowIdentity(
   identity: unknown,
   primaryKey: string,
 ): boolean | undefined {
-  return hasRecordKey(row, primaryKey) ? rowIdentity(row, primaryKey) === identity : undefined
+  return hasRecordKey(row, primaryKey) ? equalValues(rowIdentity(row, primaryKey), identity) : undefined
 }
 
 export function matchesPatchedExactRowIdentity(
