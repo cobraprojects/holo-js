@@ -1852,17 +1852,30 @@ export class ModelRepository<
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
   ): ModelUpdatePayload<TTable> {
-    return this.sanitizeWriteValues(values, mode, true) as ModelUpdatePayload<TTable>
+    return this.sanitizeWriteValues(values, mode, { massAssignment: true, mutate: true, rejected: 'generated' }) as ModelUpdatePayload<TTable>
+  }
+
+  sanitizeUpsertRow(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, acceptsPrimaryKey: boolean): ModelUpdatePayload<TTable> {
+    return this.sanitizeWriteValues(values, 'create', { massAssignment: true, mutate: true, rejected: 'computed', unguarded: acceptsPrimaryKey ? [this.definition.primaryKey] : [] }) as ModelUpdatePayload<TTable>
+  }
+
+  assertUpsertUpdateColumns(columns: readonly string[]): void {
+    for (const column of columns) {
+      const { columnName } = findWriteColumn(this.definition, column, 'computed')
+      if (columnName !== this.definition.updatedAtColumn) {
+        this.assertWritableColumn(columnName, column)
+      }
+    }
   }
 
   private sanitizeStoredValues(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, mode: WriteMode): Partial<ModelRecord<TTable>> {
-    return this.sanitizeWriteValues(values, mode, false) as Partial<ModelRecord<TTable>>
+    return this.sanitizeWriteValues(values, mode, { massAssignment: false, mutate: false, rejected: 'generated' }) as Partial<ModelRecord<TTable>>
   }
 
   private sanitizeWriteValues(
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
-    applyWriteRules: boolean,
+    rules: { readonly massAssignment: boolean, readonly mutate: boolean, readonly rejected: RejectedGeneratedColumns, readonly unguarded?: readonly string[] },
   ): Record<string, unknown> {
     const entries = Object.entries(values)
 
@@ -1871,13 +1884,13 @@ export class ModelRepository<
     }
 
     return Object.fromEntries(entries.map(([key, value]) => {
-      const { columnName, column } = findWriteColumn(this.definition, key, 'generated')
+      const { columnName, column } = findWriteColumn(this.definition, key, rules.rejected)
 
       if (typeof value === 'undefined') {
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
       }
 
-      if (applyWriteRules) {
+      if (rules.massAssignment && !rules.unguarded?.includes(columnName)) {
         this.assertWritableColumn(columnName, key)
       }
 
@@ -1889,7 +1902,7 @@ export class ModelRepository<
         return [key, value]
       }
 
-      return [columnName, applyWriteRules ? this.normalizeForStorage(columnName, value) : this.castForStorage(columnName, value)]
+      return [columnName, rules.mutate ? this.normalizeForStorage(columnName, value) : this.castForStorage(columnName, value)]
     }))
   }
 

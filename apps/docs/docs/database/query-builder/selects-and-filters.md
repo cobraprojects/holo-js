@@ -646,7 +646,7 @@ const firstOfMonth = await DB.table('orders').whereDay('created_at', 1).get()
 const afterHours = await DB.table('orders').whereTime('created_at', '>', '18:00:00').get()
 ```
 
-Each method accepts an optional operator, like `where()`. Each also has an `OR` form: `orWhereDate()`, `orWhereMonth()`, `orWhereDay()`, `orWhereYear()`, and `orWhereTime()`.
+Each method accepts an optional operator, like `where()`. Each also has an `OR` form: `orWhereDate()`, `orWhereMonth()`, `orWhereDay()`, `orWhereYear()`, and `orWhereTime()`. The parts are read in the application timezone (`app.timezone`) on every database. A `Date` value is compared by its date, time, year, month or day in `app.timezone`, so `whereDate('created_at', new Date())` matches today's rows. `where()`, `whereIn()` and `whereBetween()` compare a `Date` with a `column.date()` column by its calendar date in `app.timezone`.
 
 ### whereDate()
 

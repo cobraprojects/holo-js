@@ -195,7 +195,30 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
-The update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
+The rows may carry the model's primary key, such as the auto-increment `id`, which is the usual unique column, even when `fillable` doesn't list it or `guarded` names it. A row whose `id` exists updates that record, and a row with a new `id` is inserted under it. Casts and mutators apply to each value. This only works on a query that doesn't filter rows, with no `where` or `having` clauses, joins, grouping, unions, limit, offset or `onlyTrashed()`, written on it or added by a global scope; on a scoped query, the primary key must be fillable, as for `create()`:
+
+```ts
+await Product.query().upsert(
+  [
+    { id: 1, name: 'T-Shirt S', price: 1999 },
+    { id: 2, name: 'T-Shirt M', price: 1999 },
+  ],
+  ['id'],
+  ['name', 'price'],
+)
+```
+
+On PostgreSQL, an `id` you write yourself with `upsert()` or `insert()` doesn't advance the table's identity sequence, as in Laravel. The next `create()` then takes an `id` from the sequence that may already exist and fails on the primary key. After writing explicit ids, move the sequence past the largest `id` with [`unsafeQuery()`](/database/#unsafequery):
+
+```ts
+await DB.unsafeQuery(DB.raw(
+  `select setval(pg_get_serial_sequence('products', 'id'), coalesce(max(id), 0) + 1, false) from products`,
+))
+```
+
+As in Laravel, an upsert finds its conflicting row with the unique columns alone. Global scopes, such as a tenant scope, `where` clauses and joins don't limit which row it updates. On a scoped model, put the scope column in the unique columns, such as `['tenant_id', 'slug']` backed by a unique index on both, or use [`updateOrCreate()`](#updateorcreate), which finds the record through the scoped query. A soft-deleting model's query hides trashed rows, but an upsert can still match one and update it, as in Laravel, because soft deletes aren't an access boundary. MySQL updates the row on a conflict with any unique index of the table, whatever unique columns you pass, so there every unique index of a scoped table must include the scope column: a separate unique index on `slug` alone would let a row update another tenant's record.
+
+The rows' keys and the update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes
 
@@ -397,6 +420,8 @@ Inside the callback, mass assignment rules are off for every model, not only `Us
 ::: danger
 Never pass request input straight into `unguarded()`. Validate it and pick the exact fields first.
 :::
+
+A query's `upsert()` applies these rules too, to every column of its rows and to its update columns, and throws the same `SecurityError` as `create()` before any SQL runs. Only the model's primary key is accepted in the rows when it isn't fillable, because it's the column upserts usually match on, and only on a query that doesn't filter rows, with no `where` or `having` clauses, joins, grouping, unions, limit, offset or `onlyTrashed()`, written on it or added by a global scope. Among the update columns only `updated_at` is exempt, so a conflict can't rewrite a protected primary key. This deliberately differs from Laravel, whose `upsert()` skips mass assignment rules, so that rows built from request input can't set a protected column such as `role`.
 
 ## Method reference
 
