@@ -10,7 +10,13 @@ The monorepo uses [Bun](https://bun.sh) for installs and scripts.
 git clone https://github.com/cobraprojects/holo-js.git
 cd holo-js
 bun install
+bun run build
+bun run setup:examples
 ```
+
+`bun install` only installs dependencies. The example apps run the `holo` CLI, so `bun run build` builds every package first. `bun run setup:examples` then runs each example app's `setup` script, which generates its `.env` keys, installs broadcast support, and prepares its framework files. Pass app names to set up only some of them, for example `bun run setup:examples blog-next`. Run it again after a rebuild or a `git clean` that removes the generated files.
+
+`bun run test:contributor-setup` clones your current commit into a temporary folder and runs these steps there, the same way CI does.
 
 ### Services the test suite needs
 
@@ -61,6 +67,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 | Command | What it does |
 | --- | --- |
+| `bun run build` | Build every library package. |
+| `bun run setup:examples` | Set up the example apps once the packages are built. |
 | `bun run typecheck` | Typecheck every library package and the tests. |
 | `bun run lint` | Run ESLint across the repo. |
 | `bun run lint:fix` | Lint and auto-fix. |
