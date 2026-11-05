@@ -7,6 +7,7 @@ import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
+import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import { NumericAdjustment } from './query/NumericAdjustment'
 import { canonicalTableName } from './query/tableIdentity'
@@ -344,6 +345,8 @@ type DatabaseDependencyInvalidationPlan = {
   readonly metadata?: DatabaseDependencyInvalidationMetadata
 }
 
+type LiteralExpansion = (column: string, value: unknown) => readonly unknown[]
+
 type DatabaseDependencyPredicateEntry = {
   readonly dependency: string
   readonly metadata: DatabaseDependencyPredicateMetadata
@@ -361,6 +364,10 @@ const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
+const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
+const PREDICATE_WILDCARD_VALUE = '*'
+const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
+const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 
@@ -1105,8 +1112,23 @@ export function createTablePredicateCacheDependency(
   tableName: string,
   columnName: string,
   value: unknown,
+  textMatchesAnyNumber = false,
 ): string | undefined {
-  return createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return mayEqualNumber(value, textMatchesAnyNumber)
+    ? createTablePredicateWildcardCacheDependency(connectionName, tableName, columnName)
+    : createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
+}
+
+function createTablePredicateWildcardCacheDependency(
+  connectionName: string,
+  tableName: string,
+  columnName: string,
+): string {
+  return `${createTableCacheDependency(connectionName, tableName)}:${WHERE_DEPENDENCY_PREFIX}${getColumnName(columnName)}:${PREDICATE_WILDCARD_VALUE}`
 }
 
 function createTableMutationCacheDependency(
@@ -1335,17 +1357,144 @@ function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, c
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
 }
 
-function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string): string | undefined {
+function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): string | undefined {
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
-  return primaryKey === undefined
+  if (primaryKey === undefined) {
+    return undefined
+  }
+
+  const value = findExactPrimaryKeyValue(plan.predicates, primaryKey)
+  return mayEqualNumber(value, textMatchesAnyNumber)
     ? undefined
-    : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
+    : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
+}
+
+function isNumericText(value: unknown): boolean {
+  return typeof value === 'string' && NUMERIC_TEXT_PATTERN.test(value)
+}
+
+function mayEqualOtherLiteral(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
+  return typeof readLiteralDependencyValues(column, value, caseInsensitiveColumns) === 'undefined'
+}
+
+function createLiteralExpansion(caseInsensitiveColumns: CaseInsensitiveColumns): LiteralExpansion {
+  return (column, value) => readLiteralDependencyValues(column, value, caseInsensitiveColumns) ?? [value]
+}
+
+function readLiteralDependencyValues(
+  column: string,
+  value: unknown,
+  caseInsensitiveColumns: CaseInsensitiveColumns,
+): readonly unknown[] | undefined {
+  if (Array.isArray(value)) {
+    return value.some(element => Array.isArray(element)
+      ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
+      : typeof element === 'string' && (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column) || isNumericText(element)))
+      ? undefined
+      : [value]
+  }
+
+  if (typeof value !== 'string') {
+    return [value]
+  }
+
+  if (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column)) {
+    return undefined
+  }
+
+  if (!isNumericText(value)) {
+    return [value]
+  }
+
+  const number = Number(value)
+  return Number.isFinite(number) && String(number) === value && (!Number.isInteger(number) || Number.isSafeInteger(number))
+    ? [value, number]
+    : undefined
+}
+
+function createRowDependencies(
+  connectionName: string,
+  tableName: string,
+  primaryKey: string,
+  value: unknown,
+  caseInsensitiveColumns: CaseInsensitiveColumns,
+): readonly string[] | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return readLiteralDependencyValues(primaryKey, value, caseInsensitiveColumns)
+    ?.map(rowValue => createTableRowCacheDependency(connectionName, tableName, primaryKey, rowValue)!)
+}
+
+function collectLooseColumns(
+  predicates: readonly QueryPredicateNode[],
+  records: readonly Readonly<Record<string, unknown>>[],
+  isLoose: (column: string, value: unknown) => boolean,
+  columns = new Set<string>(),
+): ReadonlySet<string> {
+  for (const predicate of predicates) {
+    if (predicate.kind === 'comparison') {
+      const column = getColumnName(predicate.column)
+      if (readExactPredicateValues(predicate).some(value => isLoose(column, value))) {
+        columns.add(column)
+      }
+      continue
+    }
+
+    if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
+      collectLooseColumns(predicate.predicates, [], isLoose, columns)
+    }
+  }
+
+  for (const record of records) {
+    for (const [columnName, value] of Object.entries(record)) {
+      const column = getColumnName(columnName)
+      if (isLoose(column, value)) {
+        columns.add(column)
+      }
+    }
+  }
+
+  return columns
+}
+
+function collectMutationLooseColumns(
+  predicates: readonly QueryPredicateNode[],
+  records: readonly Readonly<Record<string, unknown>>[],
+  caseInsensitiveColumns: CaseInsensitiveColumns,
+): ReadonlySet<string> {
+  return collectLooseColumns(predicates, records, (column, value) => mayEqualOtherLiteral(column, value, caseInsensitiveColumns))
+}
+
+function mayEqualNumber(value: unknown, textMatchesAnyNumber: boolean): boolean {
+  if (Array.isArray(value)) {
+    return value.some(element => mayEqualNumber(element, textMatchesAnyNumber))
+  }
+
+  return typeof value === 'string' && (textMatchesAnyNumber || isNumericText(value))
+}
+
+function containsText(value: unknown): boolean {
+  return typeof value === 'string' || (Array.isArray(value) && value.some(element => containsText(element)))
+}
+
+function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatchesAnyNumber: boolean): ReadonlySet<string> {
+  return collectLooseColumns(predicates, [], (_column, value) => mayEqualNumber(value, textMatchesAnyNumber))
+}
+
+export function writesTextLiterals(
+  predicates: readonly QueryPredicateNode[],
+  records: readonly Readonly<Record<string, unknown>>[],
+): boolean {
+  return collectLooseColumns(predicates, records, (_column, value) => containsText(value)).size > 0
 }
 
 function createMutationRowDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>>,
+  caseInsensitiveColumns: CaseInsensitiveColumns,
 ): readonly string[] {
   const wildcard = createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
@@ -1353,19 +1502,22 @@ function createMutationRowDependencies(
     return [wildcard]
   }
 
-  const current = createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
+  const createRowDependency = (value: unknown) => createRowDependencies(connectionName, plan.source.tableName, primaryKey, value, caseInsensitiveColumns)
+  const current = createRowDependency(findExactPrimaryKeyValue(plan.predicates, primaryKey))
   const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
   if (assignedKeys.length === 0) {
-    return [current ?? wildcard]
+    return current ?? [wildcard]
   }
 
   if (current === undefined || assignedKeys.some(([, value]) => value instanceof NumericAdjustment)) {
     return [wildcard]
   }
 
-  const dependencies = new Set([current])
+  const dependencies = new Set(current)
   for (const [, value] of assignedKeys) {
-    dependencies.add(createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value) ?? wildcard)
+    for (const dependency of createRowDependency(value) ?? [wildcard]) {
+      dependencies.add(dependency)
+    }
   }
 
   return [...dependencies]
@@ -1410,12 +1562,18 @@ function collectExactPredicateDependencies(
   connectionName: string,
   tableName: string,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
+  expandValue: LiteralExpansion = IDENTITY_EXPANSION,
 ): readonly string[] {
   const dependencies = new Set<string>()
   for (const predicate of predicates) {
     const values = readExactPredicateValues(predicate)
     if (values.length > 0 && predicate.kind === 'comparison') {
-      for (const value of values) {
+      if (excludedColumns.has(getColumnName(predicate.column))) {
+        continue
+      }
+
+      for (const value of values.flatMap(value => expandValue(getColumnName(predicate.column), value))) {
         const dependency = exact
           ? createTableExactPredicateCacheDependency(
               connectionName,
@@ -1437,7 +1595,7 @@ function collectExactPredicateDependencies(
     }
 
     if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
-      for (const dependency of collectExactPredicateDependencies(predicate.predicates, connectionName, tableName, exact)) {
+      for (const dependency of collectExactPredicateDependencies(predicate.predicates, connectionName, tableName, exact, excludedColumns, expandValue)) {
         dependencies.add(dependency)
       }
     }
@@ -1452,11 +1610,17 @@ function appendExactPredicateDependencyEntries(
   connectionName: string,
   tableName: string,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
+  expandValue: LiteralExpansion = IDENTITY_EXPANSION,
 ): void {
   for (const predicate of predicates) {
     const values = readExactPredicateValues(predicate)
     if (values.length > 0 && predicate.kind === 'comparison') {
-      for (const value of values) {
+      if (excludedColumns.has(getColumnName(predicate.column))) {
+        continue
+      }
+
+      for (const value of values.flatMap(value => expandValue(getColumnName(predicate.column), value))) {
         const entry = createPredicateDependencyEntry(
           connectionName,
           tableName,
@@ -1472,7 +1636,7 @@ function appendExactPredicateDependencyEntries(
     }
 
     if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
-      appendExactPredicateDependencyEntries(target, predicate.predicates, connectionName, tableName, exact)
+      appendExactPredicateDependencyEntries(target, predicate.predicates, connectionName, tableName, exact, excludedColumns, expandValue)
     }
   }
 }
@@ -1482,14 +1646,23 @@ function collectRecordPredicateDependencies(
   tableName: string,
   record: Readonly<Record<string, unknown>>,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
+  expandValue: LiteralExpansion = IDENTITY_EXPANSION,
 ): readonly string[] {
   const dependencies = new Set<string>()
-  for (const [columnName, value] of Object.entries(record)) {
-    const dependency = exact
-      ? createTableExactPredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
-      : createTablePredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
-    if (dependency) {
-      dependencies.add(dependency)
+  for (const [columnName, recordValue] of Object.entries(record)) {
+    const column = getColumnName(columnName)
+    if (excludedColumns.has(column)) {
+      continue
+    }
+
+    for (const value of expandValue(column, recordValue)) {
+      const dependency = exact
+        ? createTableExactPredicateCacheDependency(connectionName, tableName, column, value)
+        : createTablePredicateCacheDependency(connectionName, tableName, column, value)
+      if (dependency) {
+        dependencies.add(dependency)
+      }
     }
   }
 
@@ -1502,11 +1675,20 @@ function appendRecordPredicateDependencyEntries(
   tableName: string,
   record: Readonly<Record<string, unknown>>,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
+  expandValue: LiteralExpansion = IDENTITY_EXPANSION,
 ): void {
-  for (const [columnName, value] of Object.entries(record)) {
-    const entry = createPredicateDependencyEntry(connectionName, tableName, getColumnName(columnName), value, exact)
-    if (entry) {
-      target.set(entry.dependency, entry)
+  for (const [columnName, recordValue] of Object.entries(record)) {
+    const column = getColumnName(columnName)
+    if (excludedColumns.has(column)) {
+      continue
+    }
+
+    for (const value of expandValue(column, recordValue)) {
+      const entry = createPredicateDependencyEntry(connectionName, tableName, column, value, exact)
+      if (entry) {
+        target.set(entry.dependency, entry)
+      }
     }
   }
 }
@@ -2015,13 +2197,14 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 export function inferAutomaticQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
+  textMatchesAnyNumber = false,
 ): readonly string[] | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName)
+    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatchesAnyNumber)
     if (primaryKeyDependency) {
       return Object.freeze([
         primaryKeyDependency,
@@ -2031,11 +2214,17 @@ export function inferAutomaticQueryCacheDependencies(
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const predicateDependencies = collectExactPredicateDependencies(
-      plan.predicates,
-      connectionName,
-      plan.source.tableName,
-    )
+    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber)
+    const predicateDependencies = [
+      ...collectExactPredicateDependencies(
+        plan.predicates,
+        connectionName,
+        plan.source.tableName,
+        false,
+        numberLikeColumns,
+      ),
+      ...[...numberLikeColumns].map(column => createTablePredicateWildcardCacheDependency(connectionName, plan.source.tableName, column)),
+    ]
     if (predicateDependencies.length > 0) {
       return Object.freeze([
         createTableCacheDependency(connectionName, plan.source.tableName),
@@ -2053,8 +2242,9 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
+  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
 ): readonly string[] {
-  return inferAutomaticQueryCacheInvalidationPlan(plan, connectionName, values).dependencies
+  return inferAutomaticQueryCacheInvalidationPlan(plan, connectionName, values, false, caseInsensitiveColumns).dependencies
 }
 
 export function inferAutomaticQueryCacheInvalidationPlan(
@@ -2062,6 +2252,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
   includeMetadata = false,
+  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
 ): DatabaseDependencyInvalidationPlan {
   const tableKey = createTableCacheDependency(connectionName, plan.source.tableName)
   const dependencies = [tableKey]
@@ -2087,9 +2278,11 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   const mutationDependency = createTableMutationCacheDependency(connectionName, plan.source.tableName)
   dependencies.push(mutationDependency)
   directDependencies.push(mutationDependency)
-  const rowDependencies = createMutationRowDependencies(plan, connectionName, values)
+  const rowDependencies = createMutationRowDependencies(plan, connectionName, values, caseInsensitiveColumns)
   dependencies.push(...rowDependencies)
   directDependencies.push(...rowDependencies)
+  const looseColumns = collectMutationLooseColumns(plan.predicates, [values], caseInsensitiveColumns)
+  const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
 
   if (includeMetadata) {
     const predicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
@@ -2101,7 +2294,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
     }
 
     const exactPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-    appendExactPredicateDependencyEntries(exactPredicateEntries, plan.predicates, connectionName, plan.source.tableName, true)
+    appendExactPredicateDependencyEntries(exactPredicateEntries, plan.predicates, connectionName, plan.source.tableName, true, looseColumns, literalExpansion)
     for (const entry of exactPredicateEntries.values()) {
       dependencies.push(entry.dependency)
       directDependencies.push(entry.dependency)
@@ -2117,7 +2310,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
     }
 
     const exactRecordPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-    appendRecordPredicateDependencyEntries(exactRecordPredicateEntries, connectionName, plan.source.tableName, values, true)
+    appendRecordPredicateDependencyEntries(exactRecordPredicateEntries, connectionName, plan.source.tableName, values, true, looseColumns, literalExpansion)
     for (const entry of exactRecordPredicateEntries.values()) {
       dependencies.push(entry.dependency)
       directDependencies.push(entry.dependency)
@@ -2137,9 +2330,9 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   }
 
   dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName))
-  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true))
+  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true, looseColumns, literalExpansion))
   dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values))
-  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values, true))
+  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values, true, looseColumns, literalExpansion))
   return Object.freeze({
     dependencies: Object.freeze(dependencies),
   })
@@ -2150,8 +2343,9 @@ export function inferAutomaticInsertCacheInvalidationDependencies(
   source: Pick<QuerySource, 'tableName' | 'table'>,
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
+  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
 ): readonly string[] {
-  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId).dependencies
+  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId, false, caseInsensitiveColumns).dependencies
 }
 
 export function inferAutomaticInsertCacheInvalidationPlan(
@@ -2160,12 +2354,15 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
   includeMetadata = false,
+  caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
   const primaryKey = resolveRowDependencyKey(source, connectionName)
+  const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
+  const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined
     ? undefined
-    : createTableRowCacheDependency(connectionName, tableName, primaryKey, value)
+    : createRowDependencies(connectionName, tableName, primaryKey, value, caseInsensitiveColumns)
   const tableKey = createTableCacheDependency(connectionName, tableName)
   const dependencies = new Set<string>([
     tableKey,
@@ -2175,10 +2372,12 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   const predicates = new Map<string, DatabaseDependencyPredicateEntry>()
   let hasUnknownRowKey = primaryKey === undefined
   for (const row of rows) {
-    const dependency = primaryKey === undefined ? undefined : createRowDependency(row[primaryKey])
-    if (dependency) {
-      dependencies.add(dependency)
-      directDependencies.add(dependency)
+    const rowDependencies = primaryKey === undefined ? undefined : createRowDependency(row[primaryKey])
+    if (rowDependencies) {
+      for (const dependency of rowDependencies) {
+        dependencies.add(dependency)
+        directDependencies.add(dependency)
+      }
     } else {
       hasUnknownRowKey = true
     }
@@ -2193,7 +2392,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
       }
 
       const rowExactPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-      appendRecordPredicateDependencyEntries(rowExactPredicateEntries, connectionName, tableName, row, true)
+      appendRecordPredicateDependencyEntries(rowExactPredicateEntries, connectionName, tableName, row, true, looseColumns, literalExpansion)
       for (const entry of rowExactPredicateEntries.values()) {
         dependencies.add(entry.dependency)
         directDependencies.add(entry.dependency)
@@ -2205,19 +2404,19 @@ export function inferAutomaticInsertCacheInvalidationPlan(
     for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row)) {
       dependencies.add(dependency)
     }
-    for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row, true)) {
+    for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row, true, looseColumns, literalExpansion)) {
       dependencies.add(dependency)
     }
   }
-  const lastInsertDependency = rows.length === 1 && primaryKey !== undefined && hasAutoIncrementKey(source, connectionName, primaryKey)
+  const lastInsertDependencies = rows.length === 1 && primaryKey !== undefined && hasAutoIncrementKey(source, connectionName, primaryKey)
     ? createRowDependency(lastInsertId)
     : undefined
-  if (lastInsertDependency) {
-    dependencies.add(lastInsertDependency)
-    directDependencies.add(lastInsertDependency)
+  for (const dependency of lastInsertDependencies ?? []) {
+    dependencies.add(dependency)
+    directDependencies.add(dependency)
   }
 
-  if (hasUnknownRowKey && !lastInsertDependency) {
+  if (hasUnknownRowKey && !lastInsertDependencies) {
     const rowWildcardDependency = createTableRowWildcardCacheDependency(connectionName, tableName)
     dependencies.add(rowWildcardDependency)
     directDependencies.add(rowWildcardDependency)
@@ -2241,12 +2440,13 @@ export function resolveQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   explicit?: readonly string[],
+  textMatchesAnyNumber = false,
 ): readonly string[] | undefined {
   if (explicit && explicit.length > 0) {
     return normalizeQueryCacheDependencies(connectionName, explicit)
   }
 
-  return inferAutomaticQueryCacheDependencies(plan, connectionName)
+  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatchesAnyNumber)
 }
 
 export async function invalidateQueryCacheDependencies(
