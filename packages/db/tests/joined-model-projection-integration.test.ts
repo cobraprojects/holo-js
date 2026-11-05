@@ -218,6 +218,16 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect(await DB.table(products).count()).toBe(2)
   })
 
+  it('keeps a computed selection that replaces a model column after the model columns', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const parent = DB.table(`${products} as inner_products`).select('inner_products.parent_id').whereColumn('inner_products.id', `${products}.id`)
+    const rows = await joined().select(`${products}.*`).addSelectSub(parent as never, 'price').addSelect(`${orders}.id as order_id` as never).get()
+    expect(rows.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
+    const wildcard = await joined().select(`${products}.*`).addSelectSub(parent as never, 'price').addSelect(`${orders}.*`).get()
+    expect(wildcard.map(row => [Number(row.toAttributes().id), Number(row.toAttributes().price)]).sort((left, right) => left[0]! - right[0]!)).toEqual([[1, 3], [2, 3]])
+  })
+
   it('accepts a joined column aliased to a name that is not a model column', async () => {
     const { products, orders, joined } = await createFixture(driver)
 
