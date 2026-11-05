@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createPostgresAdapter, postgresDatabaseDriverFactory } from '@holo-js/db-postgres'
 import {
   column,
@@ -19,7 +19,23 @@ const host = process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1'
 const port = Number(process.env.HOLO_POSTGRES_PORT ?? 5432)
 const username = process.env.HOLO_POSTGRES_USER ?? 'postgres'
 const password = process.env.HOLO_POSTGRES_PASSWORD
-const database = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
+const scratchDatabase = process.env.HOLO_POSTGRES_DATABASE ?? 'postgres'
+const database = `holo_search_path_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+const postgresIntegration = process.env.HOLO_POSTGRES_INTEGRATION === '1'
+
+beforeAll(async () => {
+  if (!postgresIntegration) return
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: scratchDatabase } })
+  await admin.execute(`CREATE DATABASE ${database}`)
+  await admin.disconnect()
+})
+
+afterAll(async () => {
+  if (!postgresIntegration) return
+  const admin = createPostgresAdapter({ config: { host, port, user: username, password, database: scratchDatabase } })
+  await admin.execute(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
+  await admin.disconnect()
+})
 
 function connectionUrl(searchPath?: string): string {
   const url = new URL(`postgresql://${host}:${port}/${database}`)
@@ -66,7 +82,7 @@ async function bodiesThroughQueriesAndModels(connection: Record<string, unknown>
   return (await Note.query().orderBy('id').get()).map(note => note.get('body'))
 }
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL search_path from the configured schema', () => {
+describe.skipIf(!postgresIntegration)('PostgreSQL search_path from the configured schema', () => {
   it.each([
     { mode: 'url', connection: (schema: string) => ({ url: connectionUrl(), schema }) },
     { mode: 'structured', connection: (schema: string) => ({ host, port, username, password, database, schema }) },
@@ -159,7 +175,7 @@ async function readSchemaAfterUnqualifiedCreate(connection: Record<string, unkno
   }
 }
 
-describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('PostgreSQL schema reads follow the schema unqualified statements use', () => {
+describe.skipIf(!postgresIntegration)('PostgreSQL schema reads follow the schema unqualified statements use', () => {
   const written = { generatedColumns: ['id', 'written_by_migration'], listed: true, columns: ['id', 'written_by_migration'] }
 
   it('reads public when the search_path names a missing configured schema before public', async () => {
