@@ -2610,6 +2610,7 @@ class ModelQueryBuilderBase<
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: relatedDefinition.table.tableName,
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }
@@ -2635,6 +2636,7 @@ class ModelQueryBuilderBase<
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: relatedDefinition.table.tableName,
+          relatedTable: relatedDefinition.table,
         }))
         continue
       }

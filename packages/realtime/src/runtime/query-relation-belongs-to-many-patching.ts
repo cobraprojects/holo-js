@@ -11,7 +11,7 @@ import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
 } from './query-patch-results'
-import { getBackfillDatabaseConnection } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledRows } from './query-backfill'
 import type {
   DatabaseQueryBelongsToManyRelationObservation,
   DatabaseQueryObservation,
@@ -268,13 +268,13 @@ async function fetchRelatedRelationRow(
     return undefined
   }
 
-  const rows = await new TableQueryBuilder<string, Record<string, unknown>>(
+  const rows = readBackfilledRows(relation.relatedTable, await new TableQueryBuilder<string, Record<string, unknown>>(
     relation.relatedTableName,
     connection,
   )
     .where(relation.relatedKey, relatedId)
     .limit(1)
-    .get()
+    .get())
 
   return rows[0]
 }

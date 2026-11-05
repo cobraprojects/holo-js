@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { clearGeneratedTables, column, defineGeneratedTable, defineModel, hasMany, registerGeneratedTables } from '@holo-js/db'
+import { belongsTo, clearGeneratedTables, column, defineGeneratedTable, defineModel, hasMany, hasOne, registerGeneratedTables } from '@holo-js/db'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
@@ -57,6 +57,9 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
       disabledRows: () => db.table(flags).where('enabled', false).orderBy('id').get(),
       orderedByFlag: () => db.table(flags).select('id', 'enabled').orderBy('enabled').orderBy('id').get(),
       groupedByFlag: () => db.table(flags).select('enabled').addSelectCount('total').groupBy('enabled').orderBy('enabled').get(),
+      ...(driver === 'sqlite' ? { averagedByFlag: () => db.table(flags).select('enabled').addSelectAvg('average', 'group_id').groupBy('enabled').orderBy('enabled').get() } : {}),
+      summedByFlag: () => db.table(flags).select('enabled').addSelectSum('total', 'group_id').groupBy('enabled').orderBy('enabled').get(),
+      window: () => db.table(flags).orderBy('id').limit(2).get(),
     })
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
@@ -67,7 +70,9 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await expectPatched()
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('enabled', true).update({ group_id: 5 }) }))
     await expectPatched()
-    expect(subscriptions[0]!.current.data).toEqual([{ id: 1, enabled: false }, { id: 2, enabled: true }, { id: 3, enabled: true }])
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
+    await expectPatched()
+    expect(subscriptions[0]!.current.data).toEqual([{ id: 2, enabled: true }, { id: 3, enabled: true }])
   })
 
   it('re-runs a name-only subscription over a boolean column, which reads the values the driver returns', async () => {
@@ -88,6 +93,20 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(handlerRuns).toBe(3)
   })
 
+  it('re-runs a name-only subscription over a table whose columns are unknown', async () => {
+    const { db, flags } = await openFlags(driver)
+    let handlerRuns = 0
+    const handler = () => db.table(flags.tableName).select('id', 'enabled').orderBy('id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: () => {
+      handlerRuns += 1
+      return handler()
+    } }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('keeps an aggregate subscription over a boolean column equal to a fresh read', async () => {
     const { db, flags } = await openFlags(driver)
     const handler = () => db.table(flags).sum('enabled')
@@ -106,20 +125,26 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await schema.createTable(groupsName, (table) => {
       table.id()
       table.string('name')
+      table.boolean('visible')
     })
     onTestFinished(() => schema.dropTable(groupsName))
-    const groups = defineGeneratedTable(groupsName, { id: column.id(), name: column.string() })
-    await db.table(groups).insert([{ id: 1, name: 'first' }, { id: 2, name: 'second' }])
-    const Flag = defineModel(flags, { timestamps: false })
-    const Group = defineModel(groups, { timestamps: false, relations: { flags: hasMany(() => Flag, 'group_id') } })
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), name: column.string(), visible: column.boolean() })
+    await db.table(groups).insert([{ id: 1, name: 'first', visible: true }, { id: 2, name: 'second', visible: false }])
+    const Group = defineModel(groups, { timestamps: false })
+    const Flag = defineModel(flags, { timestamps: false, relations: { group: belongsTo(() => Group, 'group_id') } })
+    const GroupWithFlags = defineModel(groups, { timestamps: false, relations: { flags: hasMany(() => Flag, 'group_id'), latestFlag: hasOne(() => Flag, 'group_id') } })
     const { subscriptions, expectPatched } = await subscribeCounted({
       models: () => db.model(Flag).query().orderBy('id').getJson(),
-      eager: () => db.model(Group).query().with({ flags: query => query.orderBy('id') }).orderBy('id').getJson(),
+      eager: () => db.model(GroupWithFlags).query().with({ flags: query => query.orderBy('id') }).orderBy('id').getJson(),
+      parents: () => db.model(Flag).query().with('group').orderBy('id').getJson(),
+      latest: () => db.model(GroupWithFlags).query().with({ latestFlag: query => query.orderBy('id', 'desc') }).orderBy('id').getJson(),
     })
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
     await expectPatched()
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).update({ enabled: true }) }))
+    await expectPatched()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 2, enabled: false }) }))
     await expectPatched()
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"id":3,"group_id":1,"enabled":true')
   })

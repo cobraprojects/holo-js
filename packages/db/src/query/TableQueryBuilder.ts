@@ -98,7 +98,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
-import { readsAsCoercedBoolean, readsAsSQLiteDecimal, storesJson } from '../schema/normalization'
+import { storesJson } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -2053,26 +2053,23 @@ export class TableQueryBuilder<
     })
   }
 
-  private observesUnpatchableColumn(): boolean {
-    const dialect = this.connection.getDriver() as SchemaDialectName
-    const source = this.source.table
-    const unpatchable = this.plan.source.table
-      ? (definition: AnyColumnDefinition) => readsAsSQLiteDecimal(dialect, definition)
-      : (definition: AnyColumnDefinition) => readsAsCoercedBoolean(dialect, definition)
-    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, source]])
+  private observesSQLiteDecimalColumn(): boolean {
+    if (this.connection.getDriver() !== 'sqlite') return false
+    const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
     for (const join of this.plan.joins) {
       if (join.table) tables.set(join.alias ?? join.table, join.definition ?? getConnectionGeneratedTableDefinition(join.table, this.connection.getConnectionName()))
     }
-    const readsUnpatchable = (column: string): boolean => {
+    const readsDecimal = (column: string): boolean => {
       const separator = column.lastIndexOf('.')
-      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? source : tableForQualifier(tables, column.slice(0, separator))
+      const table = separator < 0 || this.resolveSourceColumnName(column) !== undefined ? this.source.table : tableForQualifier(tables, column.slice(0, separator))
       const name = column.slice(separator + 1)
-      return Object.entries(table?.columns ?? {}).some(([key, definition]) => (name === '*' || key === name) && unpatchable(definition))
+      const columns = Object.entries(table?.columns ?? {})
+      return name === '*' ? columns.some(([, definition]) => definition.kind === 'decimal') : columns.some(([key, definition]) => key === name && definition.kind === 'decimal')
     }
-    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsUnpatchable(`${table}.*`)))
-      || this.plan.selections.some(selection => selection.kind === 'column' && readsUnpatchable(selection.column))
-      || this.plan.groupBy.some(readsUnpatchable)
-      || this.plan.orderBy.some(order => order.kind === 'column' && readsUnpatchable(order.column))
+    return (this.plan.selections.length === 0 && [...tables.keys()].some(table => readsDecimal(`${table}.*`)))
+      || this.plan.selections.some(selection => selection.kind === 'column' && readsDecimal(selection.column))
+      || this.plan.groupBy.some(readsDecimal)
+      || this.plan.orderBy.some(order => order.kind === 'column' && readsDecimal(order.column))
   }
 
   private async recordCollectedQueryObservation<TRow extends Record<string, unknown>>(
@@ -2092,7 +2089,7 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
-    if (observation?.patchable && this.observesUnpatchableColumn()) {
+    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }
@@ -2131,6 +2128,12 @@ export class TableQueryBuilder<
       : observation)
   }
 
+  private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
+    const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
+    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
+    return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
+  }
+
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
@@ -2151,9 +2154,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
       const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
       const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
@@ -2198,9 +2201,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const states: DatabaseQueryGroupedAggregateStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const aggregateValue = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
@@ -2255,9 +2258,9 @@ export class TableQueryBuilder<
         this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_COUNT_KEY, '*'),
       ]),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const groups: DatabaseQueryGroupedAggregateValueCountGroupObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const groupValue = row[GROUPED_AGGREGATE_GROUP_KEY]
       const value = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
@@ -2336,6 +2339,10 @@ export class TableQueryBuilder<
   private normalizeNumericResult(value: unknown): number | undefined {
     if (value === null) {
       return 0
+    }
+
+    if (typeof value === 'boolean') {
+      return Number(value)
     }
 
     if (typeof value === 'number') {
@@ -3683,7 +3690,7 @@ export class TableQueryBuilder<
     return rows.flatMap((row) => {
       const value = row[column]
       if (value === null) return []
-      const numericValue = this.normalizeNumericResult(typeof value === 'boolean' ? Number(value) : value)
+      const numericValue = this.normalizeNumericResult(value)
       if (numericValue === undefined) {
         throw new CompilerError(`Query aggregate "${kind}" requires numeric values for column "${column}".`)
       }

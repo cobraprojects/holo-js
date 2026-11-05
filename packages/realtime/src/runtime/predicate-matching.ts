@@ -54,13 +54,13 @@ export function rowValuesChanged(
   return false
 }
 
-function readsAsBooleanNumber(left: unknown, right: unknown): boolean {
+function comparesBooleanWithNumber(left: unknown, right: unknown): boolean {
   return (typeof left === 'boolean' && (typeof right === 'boolean' || typeof right === 'number'))
     || (typeof right === 'boolean' && typeof left === 'number')
 }
 
 export function compareValues(left: unknown, right: unknown): number | undefined {
-  if (readsAsBooleanNumber(left, right)) {
+  if (comparesBooleanWithNumber(left, right)) {
     return compareValues(Number(left), Number(right))
   }
 
@@ -88,7 +88,7 @@ function comparesAsText(value: unknown): boolean {
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
-  if (readsAsBooleanNumber(left, right)) return Number(left) === Number(right)
+  if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }

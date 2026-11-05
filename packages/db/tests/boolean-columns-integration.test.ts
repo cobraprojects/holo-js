@@ -135,6 +135,22 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
     expect(flagsOnly.map(row => row.enabled).sort()).toEqual([false, true])
   })
 
+  it.runIf(driver !== 'postgres')('reads union columns by position, whatever each branch names them', async () => {
+    const { flags } = await openFlags(driver)
+    await DB.table(flags).insert([{ id: 1, label: 'on', enabled: true }, { id: 2, label: 'off', enabled: false }])
+
+    const swapped = await DB.table(flags).select('enabled as flag', 'id as number').where('label', 'on')
+      .unionAll(DB.table(flags).select('id as number', 'enabled as flag').where('label', 'off'))
+      .get()
+    const renamed = await DB.table(flags).select('enabled as flag').where('label', 'on')
+      .unionAll(DB.table(flags).select('enabled as other').where('label', 'off'))
+      .get()
+
+    expect(swapped.map(row => [Number(row.flag), Number(row.number)]).sort()).toEqual([[1, 1], [2, 0]])
+    expect(swapped.some(row => typeof row.flag === 'boolean')).toBe(false)
+    expect(renamed.map(row => row.flag).sort()).toEqual([false, true])
+  })
+
   it('reads cached boolean rows as booleans', async () => {
     const { flags } = await openFlags(driver)
     configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })

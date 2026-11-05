@@ -916,6 +916,7 @@ export class ModelRepository<
         primaryKey,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }))
     }
@@ -973,6 +974,7 @@ export class ModelRepository<
           value: parentKey,
         })]),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }), resultPath))
     }
@@ -1041,6 +1043,7 @@ export class ModelRepository<
           value: ownerKey,
         })]),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }), resultPath))
     }
@@ -1088,12 +1091,14 @@ export class ModelRepository<
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: related.definition.table.tableName,
+        relatedTable: related.definition.table,
       }),
       resultPath,
       selections: Object.freeze([Object.freeze({
         column: relation.foreignKey,
         resultKey: relation.foreignKey,
       })]),
+      table: this.definition.table,
       tableName: this.definition.table.tableName,
     })
   }
@@ -1202,6 +1207,8 @@ export class ModelRepository<
   ): void {
     const related = this.resolveRelatedRepository(relation.related)
     const pivotTableName = this.resolvePivotTableName(relation.pivotTable)
+    const resolvedPivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
+    const pivotTable = typeof resolvedPivotTable === 'string' ? undefined : resolvedPivotTable
     for (let index = 0; index < entities.length; index += 1) {
       const entity = entities[index]
       if (!entity || !entity.hasRelation(relationName)) {
@@ -1237,6 +1244,7 @@ export class ModelRepository<
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
         relatedTableName: related.definition.table.tableName,
+        relatedTable: related.definition.table,
       })
 
       recordDatabaseQueryObservation(Object.freeze({
@@ -1253,6 +1261,7 @@ export class ModelRepository<
         relation: relationObservation,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: pivotTable,
         tableName: pivotTableName,
       }))
 
@@ -1277,6 +1286,7 @@ export class ModelRepository<
         relation: relationObservation,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }))
     }

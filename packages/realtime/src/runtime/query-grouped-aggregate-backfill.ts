@@ -5,7 +5,7 @@ import {
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { getBackfillDatabaseConnection } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledValue } from './query-backfill'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
@@ -232,7 +232,7 @@ async function fetchGroupedAggregateValues(
     .get<Record<string, unknown>>()
   const results = new Map<unknown, GroupedAggregateValueBackfillResult>()
   for (const row of rows) {
-    const groupValue = row[groupedAggregate.groupColumn]
+    const groupValue = readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn])
     const value = normalizeAggregateValue(row[GROUPED_AGGREGATE_VALUE_KEY])
     const rowCount = normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
     if (typeof value === 'undefined') {
@@ -395,7 +395,7 @@ async function fetchGroupedAggregateValueCounts(
       return undefined
     }
 
-    pushGroupedAggregateValueCount(groups, row[groupedAggregate.groupColumn], Object.freeze({ count, value }))
+    pushGroupedAggregateValueCount(groups, readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn]), Object.freeze({ count, value }))
   }
 
   const results = new Map<unknown, readonly GroupedAggregateValueCountBackfillResult[]>()

@@ -73,13 +73,17 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
-function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
+function selectedResultColumns(plan: SelectQueryPlan): readonly SelectedColumn[] {
   const tables = queryTables(plan)
-  const selected: readonly SelectedColumn[] = plan.selections.length === 0
+  return plan.selections.length === 0
     ? projectedColumns(tables)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
       ? selectedColumns(selection, tables)
       : 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]])
+}
+
+function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
+  const selected = selectedResultColumns(plan)
   const definitions = new Map<string, AnyColumnDefinition>()
   for (const [key, definition] of selected) {
     if (key === UNKNOWN_COLUMNS) definitions.clear()
@@ -104,12 +108,32 @@ export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyC
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
+function knowsEveryPosition(columns: readonly SelectedColumn[]): boolean {
+  return columns.every(([key]) => key !== UNKNOWN_COLUMNS)
+}
+
+function unionBranchesRead(
+  dialect: SchemaDialectName,
+  plan: SelectQueryPlan,
+): (key: string, reader: ColumnReader) => boolean {
+  if (plan.unions.length === 0) return () => true
+  const selected = selectedResultColumns(plan)
+  const branches = plan.unions.map(union => selectedResultColumns(union.query))
+  if (!knowsEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !knowsEveryPosition(branch))) {
+    return () => false
+  }
+  return (key, reader) => {
+    const position = selected.map(([selectedKey]) => selectedKey).lastIndexOf(key)
+    return branches.every(branch => columnReader(dialect, branch[position]![1]) === reader)
+  }
+}
+
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
-  const unions = plan.unions.map(union => resultColumnDefinitions(union.query))
+  const branchesRead = unionBranchesRead(dialect, plan)
   for (const [key, definition] of resultColumnDefinitions(plan)) {
     const reader = columnReader(dialect, definition)
-    if (reader && unions.every(union => columnReader(dialect, union.get(key)) === reader)) columns.set(key, reader)
+    if (reader && branchesRead(key, reader)) columns.set(key, reader)
   }
   return columns
 }

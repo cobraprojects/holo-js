@@ -64,6 +64,10 @@ export async function tryPatchObservedQuery(
 
   const { aggregatePatchMode, currentValue, query } = target
 
+  if (readsConvertedColumnsAsDriverValues(query, mutations)) {
+    return UNPATCHED_RESULT
+  }
+
   if (query.relation) {
     return await tryPatchQueryRelation(query, currentValue, mutations, backfills)
   }
@@ -147,6 +151,24 @@ export async function tryPatchObservedQuery(
   }
 
   return UNPATCHED_RESULT
+}
+
+function readsColumns(query: DatabaseQueryObservation, columns: readonly string[]): boolean {
+  const selections = query.selections ?? []
+  return selections.length === 0
+    || selections.some(selection => columns.includes(selection.column))
+    || [query.scalarColumn, query.scalarListColumn, query.aggregate?.column, query.groupedAggregate?.groupColumn, query.groupedAggregate?.aggregateColumn]
+      .some(column => column !== undefined && columns.includes(column))
+}
+
+function readsConvertedColumnsAsDriverValues(
+  query: DatabaseQueryObservation,
+  mutations: readonly DatabaseMutationEvent[],
+): boolean {
+  return query.table === undefined && mutations.some(mutation => mutation.connectionName === query.connectionName
+    && mutation.tableName === query.tableName
+    && mutation.convertedColumns !== undefined
+    && readsColumns(query, mutation.convertedColumns))
 }
 
 function insertsRowsWithUnknownPrimaryKey(
