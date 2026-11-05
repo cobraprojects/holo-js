@@ -657,3 +657,18 @@ it('accepts configured discovery paths written with a leading dot or a trailing 
   await captured.settled()
   expect(captured.changes).toEqual([{ path: 'app/events', kind: 'changed' }])
 })
+
+it('replays no change at resume when the watch policy keeps a root and its exclusions during startup', async () => {
+  const root = await createProject()
+  await installWatchPlugin(root)
+  const manifest = JSON.stringify({ watch: { roots: ['resources'], excludes: ['resources/generated'] } })
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), manifest)
+  await write(root, 'resources/demo/Existing.ts')
+  const config = defaultProjectConfig()
+  const { watcher, changes, settled } = await startDeferredWatch(root, false)
+  await writeOutputFile(join(root, '.holo-js/generated/.plugins/demo.json'), manifest)
+  await watcher.refresh({ config })
+  watcher.resume()
+  await settled()
+  expect(changes).toEqual([])
+})
