@@ -14,6 +14,7 @@ The release also brings Laravel's [`primary()`](/database/migrations#primary-col
 2. If you run `npx holo migrate --isolated`, make every server use the same `redis` or `database` default cache store before you deploy. See [`migrate --isolated` uses a cache lock](#migrate-isolated-uses-a-cache-lock).
 3. Run this one deploy's `npx holo migrate` from a single replica.
 4. Once every replica runs 0.6.0, drop the `_holo_migration_locks` table.
+5. On SQLite, rewrite numbers and booleans that earlier releases stored in text columns as `'0.0'` or `'42.0'`. See [SQLite binds booleans and whole numbers as integers](#sqlite-binds-booleans-and-whole-numbers-as-integers).
 
 ### `holo build` reads your database
 
@@ -311,6 +312,17 @@ Models and table definitions that type such a column as `number` throw a `Hydrat
 ### PostgreSQL connections use `app.timezone` as their session time zone
 
 Holo now sets each PostgreSQL connection's session `TimeZone` to `app.timezone`, as it already did on MySQL. Before, the server's time zone applied, so on a server whose time zone isn't `app.timezone`, `defaultNow()` and `timestamps()` defaults on `timestamp` columns were written in the server's wall-clock time and read back off by the difference. Rows written that way keep their values; Holo doesn't rewrite them. To keep the server's time zone, set `TimeZone` in the URL's `options` parameter, in the pg `options` you pass to `createPostgresAdapter()`, or in `PGOPTIONS`. See [PostgreSQL dates and time zones](/database/#postgresql-dates-and-time-zones).
+
+### SQLite binds booleans and whole numbers as integers
+
+On SQLite, Holo now binds `true`, `false` and whole numbers as integers, as Laravel does through PDO. Before, it bound every number as a real, so a `TEXT` or `varchar` column stored `false` as `'0.0'`, `true` as `'1.0'` and `42` as `'42.0'`. A `'boolean'` cast reads those old values correctly, but `where('flag', false)` or `where('code', 42)` compares against `'0'` or `'42'` and doesn't match rows still holding `'0.0'` or `'42.0'`. Once, for each text column that Holo wrote booleans or numbers to, rewrite the old values:
+
+```sql
+UPDATE my_table SET my_column = CAST(my_column AS INTEGER)
+WHERE my_column GLOB '*.0' AND CAST(my_column AS INTEGER) || '.0' = my_column
+```
+
+The statement only changes text that is a whole number followed by `.0`, so running it twice is safe. Integer, boolean, real and date columns need no change. A raw `? / ?` with whole-number bindings now divides as integers. See [SQLite](/database/#sqlite).
 
 ## Upgrading from 0.5.5 to 0.5.6
 
