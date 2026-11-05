@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, hasManyThrough, hasOneThrough, resetDB } from '@holo-js/db'
+import { DB, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOneThrough, resetDB } from '@holo-js/db'
 import { integrationDrivers, openDatabase } from '../../db/tests/support/database'
 import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime, subscribeRealtimeQuery } from '../src/server'
@@ -57,11 +57,12 @@ async function openLibrary(driver: ReturnType<typeof integrationDrivers<'sqlite'
     relations: {
       reviews: hasManyThrough(() => Review, () => Post, 'author_id', 'post_id'),
       review: hasOneThrough(() => Review, () => Post, 'author_id', 'post_id'),
+      posts: hasMany(() => Post, 'author_id'),
     },
   })
 
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { names, Author }
+  return { names, Author, Post, Review }
 }
 
 type Library = Awaited<ReturnType<typeof openLibrary>>
@@ -93,11 +94,21 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'])) {
         .map(author => ({ ...author, reviews: [...author.reviews].sort((left, right) => Number(left.id) - Number(right.id)) })),
       'related existence': (Author: Library['Author']) => Author.query().whereHas('reviews').orderBy('id').getJson(),
       'related count': (Author: Library['Author']) => Author.query().withCount('reviews').orderBy('id').getJson(),
+      'counted through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withCount('posts').orderBy('id').getJson(),
+      'summed through rows': (Author: Library['Author']) => Author.query().with(bothOrdered).withSum('posts', 'id').orderBy('id').getJson(),
+      'composed with the through table': async (Author: Library['Author'], Post: Library['Post']) => ({
+        authors: await Author.query().with(bothOrdered).orderBy('id').getJson(),
+        posts: await Post.query().orderBy('id').getJson(),
+      }),
+      'composed with the related table': async (Author: Library['Author'], _Post: Library['Post'], Review: Library['Review']) => ({
+        authors: await Author.query().with(bothOrdered).orderBy('id').getJson(),
+        reviews: await Review.query().orderBy('id').getJson(),
+      }),
     }
     for (const [name, readWith] of Object.entries(reads)) {
       it(`keeps ${name} subscriptions equal to a fresh read across through row and key writes`, async () => {
-        const { names, Author } = await openLibrary(driver)
-        const read = async () => JSON.parse(JSON.stringify(await readWith(Author)))
+        const { names, Author, Post, Review } = await openLibrary(driver)
+        const read = async () => JSON.parse(JSON.stringify(await readWith(Author, Post, Review)))
         const live = await subscribe(read)
         const expectFresh = async () => {
           expect(live.current.data).toEqual(await read())

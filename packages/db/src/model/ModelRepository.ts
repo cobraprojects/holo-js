@@ -3397,12 +3397,34 @@ export class ModelRepository<
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
     const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-    const grouped = await this.groupThroughEntitiesByParentKey(entities, relation, constraint)
-    if (typeof observationCount === 'number') truncateDatabaseQueryObservations(observationCount)
+    const grouped = await this.queryThroughEntitiesByParentKey(entities, relation, constraint)
+    if (typeof observationCount === 'number') {
+      truncateDatabaseQueryObservations(observationCount)
+      this.recordThroughRelationObservations(relation)
+    }
     return grouped
   }
 
-  private async groupThroughEntitiesByParentKey(
+  private recordThroughRelationObservations(
+    relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
+  ): void {
+    for (const repository of [this.resolveThroughRepository(relation.through), this.resolveRelatedRepository(relation.related)]) {
+      const connectionName = repository.getConnectionName()
+      const tableName = repository.definition.table.tableName
+      recordDatabaseQueryObservation(Object.freeze({
+        connectionName,
+        dependencies: Object.freeze([createTableCacheDependency(connectionName, tableName)]),
+        orderBy: [],
+        patchable: false,
+        predicates: [],
+        selections: [],
+        serialized: true,
+        tableName,
+      }))
+    }
+  }
+
+  private async queryThroughEntitiesByParentKey(
     entities: readonly Entity<TTable>[],
     relation: Extract<RelationDefinition, { kind: 'hasOneThrough' | 'hasManyThrough' }>,
     constraint?: RelationConstraint,
