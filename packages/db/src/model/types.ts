@@ -124,7 +124,7 @@ export type PivotRelatedKey = string | number | bigint
 export type PivotRelatedIds<TPivotTable extends string | TableDefinition>
   = IsUntypedPivotTable<TPivotTable> extends true
     ? unknown
-    : PivotRelatedKey | readonly (PivotRelatedKey | Uint8Array)[] | { readonly [id: string]: PivotAttributes<TPivotTable> | null | undefined } | null | undefined
+    : PivotRelatedKey | readonly unknown[] | { readonly [id: string]: PivotAttributes<TPivotTable> | null | undefined } | null | undefined
 
 export interface BelongsToRelationDefinition<TRelated extends ModelDefinitionLike = ModelDefinitionLike> extends ScopedRelationDefinition {
   readonly kind: 'belongsTo'
