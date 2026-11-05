@@ -1,5 +1,6 @@
 import { ConfigurationError, DatabaseError } from './errors'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { transactionScopeIdentity, type TransactionScopeIdentity } from './transactionScope'
 import type { ConcurrencyOptions, DriverAdapter } from './types'
 
 export type SchedulingMode = 'concurrent' | 'serialized' | 'worker'
@@ -78,21 +79,43 @@ class ExclusiveGate {
   }
 }
 
-const adapterGates = new WeakMap<DriverAdapter, ExclusiveGate>()
+const objectGates = new WeakMap<object, ExclusiveGate>()
+const namedGates = new Map<string, WeakRef<ExclusiveGate>>()
+const namedGateCleanup = new FinalizationRegistry<{ name: string, gate: WeakRef<ExclusiveGate> }>(({ name, gate }) => {
+  if (namedGates.get(name) === gate) namedGates.delete(name)
+})
 
-let shareAdapterGate: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
+function namedGate(name: string): ExclusiveGate {
+  const existing = namedGates.get(name)?.deref()
+  if (existing) return existing
+  const gate = new ExclusiveGate()
+  const reference = new WeakRef(gate)
+  namedGates.set(name, reference)
+  namedGateCleanup.register(gate, { name, gate: reference })
+  return gate
+}
+
+function objectGate(identity: object): ExclusiveGate {
+  let gate = objectGates.get(identity)
+  if (!gate) {
+    gate = new ExclusiveGate()
+    objectGates.set(identity, gate)
+  }
+  return gate
+}
+
+function sharedGate(identity: TransactionScopeIdentity): ExclusiveGate {
+  return typeof identity === 'string' ? namedGate(identity) : objectGate(identity)
+}
+
+let bindGateAdapter: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
 
 let readGate: (scheduler: QueryScheduler) => ExclusiveGate
 
 export class QueryScheduler {
   static {
-    shareAdapterGate = (scheduler, adapter) => {
-      const gate = adapterGates.get(adapter)
-      if (gate) {
-        scheduler.gate = gate
-      } else {
-        adapterGates.set(adapter, scheduler.gate)
-      }
+    bindGateAdapter = (scheduler, adapter) => {
+      scheduler.gateAdapter = adapter
     }
     readGate = scheduler => scheduler.gate
   }
@@ -104,7 +127,9 @@ export class QueryScheduler {
   private readonly concurrentState: QueueState
   private readonly serializedState: QueueState
   private readonly workerState: QueueState
-  private gate = new ExclusiveGate()
+  private gateAdapter?: DriverAdapter
+  private boundGate?: { readonly identity: TransactionScopeIdentity, readonly gate: ExclusiveGate }
+  private readonly ownGate = new ExclusiveGate()
   private readonly transactionScope = new AsyncLocalStorage<QueueState>()
 
   constructor(options: QuerySchedulerOptions) {
@@ -146,6 +171,13 @@ export class QueryScheduler {
     }
   }
 
+  private get gate(): ExclusiveGate {
+    if (!this.gateAdapter) return this.ownGate
+    const identity = transactionScopeIdentity(this.gateAdapter)
+    if (this.boundGate?.identity !== identity) this.boundGate = { identity, gate: sharedGate(identity) }
+    return this.boundGate.gate
+  }
+
   async schedule<T>(
     options: {
       transactional: boolean
@@ -155,9 +187,10 @@ export class QueryScheduler {
     callback: (schedulingMode: SchedulingMode) => Promise<T>,
   ): Promise<{ result: T, schedulingMode: SchedulingMode }> {
     const transactionState = this.transactionScope.getStore()
-    const withinExclusive = options.withinExclusive || this.gate.isWithinExclusive() || !!transactionState
+    const gate = this.gate
+    const withinExclusive = options.withinExclusive || gate.isWithinExclusive() || !!transactionState
     if (!withinExclusive) {
-      const operationWait = this.gate.acquireOperation()
+      const operationWait = gate.acquireOperation()
       if (operationWait) await operationWait
     }
     const schedulingMode = this.preview(options)
@@ -168,7 +201,7 @@ export class QueryScheduler {
     if (state.active >= state.limit) {
       if (state.queued >= this.queueLimit) {
         if (!withinExclusive) {
-          this.gate.releaseOperation()
+          gate.releaseOperation()
         }
         throw new DatabaseError(
           `Query scheduler queue limit exceeded for connection "${this.connectionName}".`,
@@ -193,7 +226,7 @@ export class QueryScheduler {
       state.active -= 1
       this.wakeNext(state)
       if (!withinExclusive) {
-        this.gate.releaseOperation()
+        gate.releaseOperation()
       }
     }
   }
@@ -274,7 +307,7 @@ export function createQueryScheduler(options: QuerySchedulerOptions): QuerySched
 
 export function createAdapterQueryScheduler(options: QuerySchedulerOptions, adapter: DriverAdapter): QueryScheduler {
   const scheduler = new QueryScheduler(options)
-  shareAdapterGate(scheduler, adapter)
+  bindGateAdapter(scheduler, adapter)
   return scheduler
 }
 
