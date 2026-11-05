@@ -9,13 +9,13 @@ import { test } from 'node:test'
 import { closeWriteStream, exampleAppRunVariable, stopTaggedProcesses } from './example-app-process.mjs'
 import { createExampleAppFixture } from './support/example-app-fixture.mjs'
 import { watchExampleAppFiles } from './support/example-app-file-watch.mjs'
-import { exampleAppServerProvisioning } from './support/example-app-databases.mjs'
+import { exampleAppDrivers, exampleAppServerProvisioning } from './support/example-app-databases.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const pg = createRequire(join(root, 'packages/db-postgres/package.json'))('pg')
 const mysql = createRequire(join(root, 'packages/db-mysql/package.json'))('mysql2/promise')
 const frameworks = process.env.HOLO_TEST_FRAMEWORK ? [process.env.HOLO_TEST_FRAMEWORK] : ['next', 'nuxt', 'sveltekit']
-const drivers = process.env.HOLO_TEST_DRIVER ? [process.env.HOLO_TEST_DRIVER] : ['sqlite', 'postgres', 'mysql']
+const drivers = process.env.HOLO_TEST_DRIVER ? [process.env.HOLO_TEST_DRIVER] : exampleAppDrivers
 const compiledMarker = 'Compiled in'
 const postgresServer = {
   host: process.env.HOLO_POSTGRES_HOST ?? '127.0.0.1',
@@ -51,7 +51,7 @@ async function withMysqlAdmin(task) {
 
 async function runApp(framework, driver) {
   assert.ok(['next', 'nuxt', 'sveltekit'].includes(framework))
-  assert.ok(['sqlite', 'postgres', 'mysql'].includes(driver))
+  assert.ok(exampleAppDrivers.includes(driver))
   const fixture = await createExampleAppFixture(root, framework)
   const { projectRoot } = fixture
   const name = `holo_app_${randomUUID().replaceAll('-', '')}`
@@ -157,7 +157,7 @@ async function runApp(framework, driver) {
     await writeFile(join(root, 'coverage', `app-${framework}-${driver}-files.log`), fileWatch.log())
   })
   if (log) await attempt(() => closeWriteStream(log))
-  for (const drop of provisioning.drops()) await attempt(drop)
+  for (const drop of provisioning.cleanups()) await attempt(drop)
   await attempt(() => Promise.all(['', '-wal', '-shm'].map(suffix => rm(`${filename}${suffix}`, { force: true }))))
   await attempt(() => rm(fixture.directory, { recursive: true, force: true }))
   if (failure && cleanupErrors.length > 0) throw new AggregateError([failure, ...cleanupErrors], failure.message)

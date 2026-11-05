@@ -19,7 +19,7 @@ async function provisionAndClean(driver, failing) {
   const calls = []
   const provisioning = exampleAppServerProvisioning(driver, recordingServers(calls, failing))
   const created = await provisioning.create().then(() => undefined, error => error)
-  for (const drop of provisioning.drops()) await drop()
+  for (const drop of provisioning.cleanups()) await drop()
   return { calls, created }
 }
 

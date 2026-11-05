@@ -1,4 +1,4 @@
-const exampleAppDrivers = ['sqlite', 'postgres', 'mysql']
+export const exampleAppDrivers = ['sqlite', 'postgres', 'mysql']
 
 export function exampleAppConnections(driver) {
   if (!exampleAppDrivers.includes(driver)) throw new Error(`Unknown example app database driver: ${driver}. Expected one of ${exampleAppDrivers.join(', ')}.`)
@@ -7,14 +7,14 @@ export function exampleAppConnections(driver) {
 
 export function exampleAppServerProvisioning(driver, servers) {
   const selected = exampleAppConnections(driver).filter(name => servers[name]).map(name => servers[name])
-  const started = []
+  const attempted = []
   return {
     async create() {
       for (const server of selected) {
-        started.push(server)
+        attempted.push(server)
         await server.create()
       }
     },
-    drops: () => started.map(server => server.drop),
+    cleanups: () => attempted.map(server => server.drop),
   }
 }

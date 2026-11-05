@@ -34,7 +34,7 @@ function withNumericIds(rows) {
 export async function assertExampleAppDatabaseBehavior(DB, createSchemaService, projectRoot) {
   const require = createRequire(join(projectRoot, 'package.json'))
   const modelApi = await import(pathToFileURL(require.resolve('@holo-js/db')).href)
-  for (const name of exampleAppConnections(process.env.DB_DRIVER ?? 'sqlite')) {
+  for (const name of exampleAppConnections(process.env.DB_DRIVER || 'sqlite')) {
     const connection = DB.connection(name)
     await assert.rejects(connection.unsafeQuery(DB.raw('SELECT 1')), /unsafe/i)
     const schema = createSchemaService(connection)
