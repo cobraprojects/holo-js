@@ -7,7 +7,7 @@ import { configureRealtimeRuntime, executeRealtimeMutation, resetRealtimeRuntime
 
 const drivers = integrationDrivers(['sqlite', 'mysql'] as const)
 
-type Driver = typeof drivers[number]
+type Driver = 'sqlite' | 'postgres' | 'mysql'
 
 async function openFlags(driver: Driver) {
   const { db, schema } = await openDatabase(driver)
@@ -120,18 +120,6 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     expect(subscription.current.data).toEqual(await handler())
   })
 
-  it('keeps an aggregate subscription over a boolean column equal to a fresh read', async () => {
-    const { db, flags } = await openFlags(driver)
-    const handler = () => db.table(flags).sum('enabled')
-    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
-
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
-    expect(subscription.current.data).toEqual(await handler())
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).update({ enabled: true }) }))
-    expect(subscription.current.data).toEqual(await handler())
-    expect(subscription.current.data).toBe(3)
-  })
-
   it('patches model and eager-loaded subscriptions over a boolean column to equal fresh reads', async () => {
     const { db, flags, schema } = await openFlags(driver)
     const groupsName = `holo_live_flag_groups_${randomUUID().replaceAll('-', '').slice(0, 12)}`
@@ -160,5 +148,67 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 2, enabled: false }) }))
     await expectPatched()
     expect(JSON.stringify(subscriptions[0]!.current.data)).toContain('"id":3,"group_id":1,"enabled":true')
+  })
+})
+
+describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('realtime boolean aggregates on %s', (driver) => {
+  it('keeps aggregate subscriptions over a boolean column equal to fresh reads', async () => {
+    const { db, flags, schema } = await openFlags(driver)
+    const groupsName = `holo_live_flag_totals_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(groupsName, (table) => {
+      table.id()
+      table.string('name')
+    })
+    onTestFinished(() => schema.dropTable(groupsName))
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), name: column.string() })
+    await db.table(groups).insert([{ id: 1, name: 'first' }, { id: 2, name: 'second' }])
+    const Flag = defineModel(flags, { timestamps: false })
+    const Group = defineModel(groups, { timestamps: false, relations: { flags: hasMany(() => Flag, 'group_id') } })
+    const queries: Record<string, () => Promise<unknown>> = {
+      sum: () => db.table(flags).sum('enabled'),
+      max: () => db.table(flags).where('group_id', 2).max('enabled'),
+      modelSum: () => db.model(Flag).query().sum('enabled'),
+      relationSum: () => db.model(Group).query().withSum('flags', 'enabled').orderBy('id').getJson(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectCurrent = async () => {
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(await Promise.all(Object.values(queries).map(handler => handler())))
+    }
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
+    await expectCurrent()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).update({ enabled: true }) }))
+    await expectCurrent()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).delete() }))
+    await expectCurrent()
+    expect(subscriptions[0]!.current.data).toBe(2)
+  })
+
+  it.runIf(driver !== 'postgres')('keeps subscriptions equal to fresh reads when a name-only write stores a value other than one or zero', async () => {
+    const { db, flags } = await openFlags(driver)
+    const queries: Record<string, () => Promise<unknown>> = {
+      rows: () => db.table(flags).orderBy('id').get(),
+      enabledRows: () => db.table(flags).where('enabled', true).orderBy('id').get(),
+      sum: () => db.table(flags).sum('enabled'),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    const expectCurrent = async () => {
+      expect(subscriptions.map(subscription => subscription.current.data)).toEqual(await Promise.all(Object.values(queries).map(handler => handler())))
+    }
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).where('id', 1).update({ enabled: 2 }) }))
+    await expectCurrent()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 2 }) }))
+    await expectCurrent()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 1, enabled: true }) }))
+    await expectCurrent()
   })
 })

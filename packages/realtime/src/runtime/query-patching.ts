@@ -65,6 +65,9 @@ export async function tryPatchObservedQuery(
 
   const { aggregatePatchMode, currentValue, query } = target
   const mutations = readMutationsForQuery(query, observedMutations, backfills)
+  if (!mutations) {
+    return UNPATCHED_RESULT
+  }
 
   if (readsConvertedColumnsAsDriverValues(query, mutations)) {
     return UNPATCHED_RESULT

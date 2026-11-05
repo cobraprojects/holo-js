@@ -71,13 +71,19 @@ function readMutation(table: TableDefinition, mutation: DatabaseMutationEvent): 
   return Object.freeze({ ...mutation, rows, previousRows, values })
 }
 
+function holdsUnreadBoolean(table: TableDefinition, mutation: DatabaseMutationEvent): boolean {
+  return [...mutation.rows ?? [], ...mutation.previousRows ?? [], ...mutation.values ? [mutation.values] : []]
+    .some(row => queryCacheInternals.holdsUnreadBoolean(table, row))
+}
+
 export function readMutationsForQuery(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
   backfills: BackfillCache,
-): readonly DatabaseMutationEvent[] {
+): readonly DatabaseMutationEvent[] | undefined {
   const tables = observedTables(query)
   if (tables.size === 0) return mutations
+  if (mutations.some(mutation => tables.has(mutation.tableName) && holdsUnreadBoolean(tables.get(mutation.tableName)!, mutation))) return undefined
   let changed = false
   const read = mutations.map((mutation) => {
     const table = tables.get(mutation.tableName)

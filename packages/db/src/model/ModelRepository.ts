@@ -91,6 +91,7 @@ type RelationAggregateObservationTarget = {
   readonly column: string
   readonly connectionName: string
   readonly primaryKey: string | undefined
+  readonly table: TableDefinition
   readonly tableName: string
   readonly value: unknown
 }
@@ -802,7 +803,7 @@ export class ModelRepository<
           connectionName: target.connectionName,
           dependencies,
           orderBy: [],
-          patchable: primaryKey !== undefined,
+          patchable: primaryKey !== undefined && (aggregate.column === undefined || target.table.columns[aggregate.column]?.kind !== 'boolean'),
           ...serializedFlag(modelNeedsSerialization(this.definition)),
           predicates: Object.freeze([Object.freeze({
             column: target.column,
@@ -1387,6 +1388,7 @@ export class ModelRepository<
           column: relation.ownerKey,
           connectionName: related.getConnectionName(),
           primaryKey: resolveModelRowKey(related.definition),
+          table: related.definition.table,
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -1399,6 +1401,7 @@ export class ModelRepository<
           column: relation.foreignKey,
           connectionName: related.getConnectionName(),
           primaryKey: resolveModelRowKey(related.definition),
+          table: related.definition.table,
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }

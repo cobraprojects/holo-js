@@ -828,7 +828,7 @@ function rebindDatabaseQueryObservation(
       limit: query.limit,
       offset: query.offset,
       orderBy: query.orderBy,
-      patchable: query.patchable,
+      patchable: query.patchable && !(aggregate?.column !== undefined && readsBooleanColumn(query.table, aggregate.column)),
       pagination: query.pagination,
       predicates: query.predicates,
       primaryKey: query.primaryKey,
@@ -2016,6 +2016,10 @@ function isDriverScalar(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
 }
 
+function isStoredBoolean(value: unknown): boolean {
+  return value === 0 || value === 1 || value === 0n || value === 1n || value === '0' || value === '1'
+}
+
 function readsBooleanColumn(table: TableDefinition | undefined, column: string): boolean {
   return table !== undefined && Object.hasOwn(table.columns, column) && table.columns[column]!.kind === 'boolean'
 }
@@ -2026,6 +2030,10 @@ function convertedBooleanColumns(table: TableDefinition | undefined, records: re
     && records.some(record => Object.hasOwn(record, column) && isDriverScalar(record[column]))))
 }
 
+function holdsUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return table !== undefined && Object.keys(row).some(key => readsBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
+}
+
 function readObservedRow(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
@@ -2034,7 +2042,7 @@ function readObservedRow(
   if (!table) return row
   const booleanKeys = Object.keys(row).filter((key) => {
     const selection = selections.find(candidate => candidate.resultKey === key)
-    return isDriverScalar(row[key]) && readsBooleanColumn(table, selection ? selection.column : key)
+    return isStoredBoolean(row[key]) && readsBooleanColumn(table, selection ? selection.column : key)
   })
   if (booleanKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
@@ -2346,6 +2354,7 @@ export async function invalidateQueryCacheDependencies(
 
 export const queryCacheInternals = {
   getRootDatabaseContext,
+  holdsUnreadBoolean,
   readObservedRow,
   setMutationPreviousRowsRequirement,
   requiresMutationPreviousRows,
