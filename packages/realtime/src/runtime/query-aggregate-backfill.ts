@@ -499,8 +499,12 @@ async function backfillAverageAggregate(
   aggregate: DatabaseQueryAggregateObservation,
 ): Promise<AggregateBackfillResult | undefined> {
   const column = aggregate.column
-  let builder = column ? createAggregateBackfillBuilder(query) : undefined
-  if (!column || !builder) {
+  if (!column) {
+    return undefined
+  }
+
+  let builder = createAggregateBackfillBuilder(query)
+  if (!builder) {
     return undefined
   }
 
