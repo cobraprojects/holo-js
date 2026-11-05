@@ -504,10 +504,7 @@ function resolveHoloPackageFromRuntime(specifier: string): string {
   try {
     return import.meta.resolve(specifier)
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error(`[@holo-js/core] "${specifier}" is imported by app code but is not installed alongside the Holo runtime, so it cannot share the runtime's instances. Install it in the same node_modules as @holo-js/core.`, { cause: error })
-    }
-
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') return specifier
     throw error
   }
 }

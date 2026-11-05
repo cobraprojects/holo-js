@@ -135,6 +135,24 @@ it('dispatches jobs and events added or removed since the last prepare without r
   }
 }, 60000)
 
+it('dispatches a discovered job from a command that imports a Holo package installed only in the application', async () => {
+  const { root, write } = await createProject()
+  try {
+    await rm(join(root, 'node_modules/@holo-js'))
+    await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+    for (const name of await readdir(join(repoRoot, 'packages'))) await symlink(join(repoRoot, 'packages', name), join(root, 'node_modules/@holo-js', name))
+    await write('node_modules/@holo-js/app-only-fixture/package.json', JSON.stringify({ name: '@holo-js/app-only-fixture', type: 'module', exports: { '.': './index.mjs' } }))
+    await write('node_modules/@holo-js/app-only-fixture/index.mjs', "export const label = 'app only'")
+    await write('config/queue.ts', "import { defineQueueConfig } from '@holo-js/queue'; export default defineQueueConfig({ default: 'sync', failed: false, connections: { sync: { driver: 'sync' } } })")
+    await write('server/jobs/plain.ts', "import { defineJob } from '@holo-js/queue'\nexport default defineJob({ async handle(payload: { label: string }) { console.log('handled ' + payload.label) } })")
+    await write('server/commands/app-only.ts', "import { defineCommand } from '@holo-js/cli'\nimport { label } from '@holo-js/app-only-fixture'\nimport Plain from '../jobs/plain'\nexport default defineCommand({ description: 'Dispatch with an app-only package', async run({ withRuntime }) { await withRuntime(async () => { await Plain.dispatch({ label }) }) } })")
+    const { stdout } = await execute(process.execPath, [cli, 'app-only'], { cwd: root })
+    expect(stdout.trim()).toBe('handled app only')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
 it('resolves import.meta.url to the command source when the command loads with discovered jobs', async () => {
   const { root, write } = await createProject()
   try {

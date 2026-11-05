@@ -194,11 +194,11 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(source).toContain('/packages/media/')
   })
 
-  it('fails loudly when app code imports a holo package the runtime cannot resolve', async () => {
+  it('fails loudly when app code imports a holo package that is installed nowhere', async () => {
     const projectRoot = await createTempProject()
     await writeFile(join(projectRoot, 'model.ts'), "export { nothing } from '@holo-js/not-installed-anywhere'\n")
 
-    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/alongside the Holo runtime/)
+    await expect(importBundledRuntimeModule(projectRoot, join(projectRoot, 'model.ts'))).rejects.toThrow(/Cannot find package '@holo-js\/not-installed-anywhere'/)
   })
 
   it('binds each runtime copy to the instances that copy registered', async () => {
@@ -825,6 +825,19 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(loaded.url).toBe(sourceUrl)
     expect(loaded.read('parameter')).toEqual(['parameter', sourceUrl])
     expect(loaded.bindings).toEqual(['binding', 'other'])
+  })
+
+  it('loads Holo packages installed only in the application from the application', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const packageRoot = join(projectRoot, 'node_modules/@holo-js/app-only-fixture')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@holo-js/app-only-fixture', type: 'module', exports: { '.': './index.mjs' } }))
+    await writeFile(join(packageRoot, 'index.mjs'), "export const origin = 'application'\n")
+    const entryPath = join(projectRoot, 'server/jobs/app-only.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, "import { origin } from '@holo-js/app-only-fixture'\nexport default { origin }\n")
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { default: { origin: string } }
+    expect(loaded.default).toEqual({ origin: 'application' })
   })
 
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
