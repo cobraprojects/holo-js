@@ -81,6 +81,7 @@ export async function diffSchema(
   tables: readonly TableDefinition[],
 ): Promise<SchemaDiff> {
   const actualTables = await schema.getTables()
+  const resolveTableSchema = createTableSchemaResolver(schema)
   const unqualifiedNames = new Set(tables.map(table => table.tableName).filter(name => splitTablePath(name).schema === undefined))
   const qualifiedLocations: { readonly table: string, readonly schema: string }[] = []
   const existingTables: TableDefinition[] = []
@@ -93,7 +94,7 @@ export async function diffSchema(
       continue
     }
 
-    const resolvedSchema = (await readSchemaServiceTableStructure(schema, table.tableName))?.schema
+    const resolvedSchema = await resolveTableSchema(table.tableName)
     if (resolvedSchema === undefined) {
       missingTables.push(table.tableName)
       continue
@@ -107,13 +108,13 @@ export async function diffSchema(
   for (const name of actualTables) {
     if (unqualifiedNames.has(name)) continue
     const candidates = qualifiedLocations.filter(location => location.table === name)
-    const resolvedSchema = candidates.length > 0 ? (await readSchemaServiceTableStructure(schema, name))?.schema : undefined
+    const resolvedSchema = candidates.length > 0 ? await resolveTableSchema(name) : undefined
     if (!candidates.some(location => location.schema === resolvedSchema)) extraTables.push(name)
   }
 
   const tableDiffs: TableSchemaDiff[] = []
   for (const table of existingTables) {
-    tableDiffs.push(await diffTable(schema, table))
+    tableDiffs.push(await diffTable(schema, table, resolveTableSchema))
   }
 
   return {
@@ -124,9 +125,39 @@ export async function diffSchema(
   }
 }
 
+type TableSchemaResolver = (tableName: string) => Promise<string | undefined>
+
+function createTableSchemaResolver(schema: SchemaService): TableSchemaResolver {
+  const resolved = new Map<string, Promise<string | undefined>>()
+  return (tableName) => {
+    const cached = resolved.get(tableName)
+    if (cached) return cached
+    const pending = readSchemaServiceTableStructure(schema, tableName).then(structure => structure?.schema)
+    resolved.set(tableName, pending)
+    return pending
+  }
+}
+
+async function resolveReferencedTable(
+  schema: SchemaService,
+  resolveTableSchema: TableSchemaResolver,
+  ownerTableName: string,
+  referencedTableName: string,
+): Promise<string> {
+  const owner = splitTablePath(ownerTableName)
+  const referenced = splitTablePath(referencedTableName)
+  if (owner.schema === undefined && referenced.schema === undefined) return referencedTableName
+  const ownerSchema = await resolveTableSchema(ownerTableName)
+  const referencedSchema = referenced.schema
+    ?? (/^postgres/.test(schema.getDialectName()) ? await resolveTableSchema(referencedTableName) : ownerSchema)
+  if (referencedSchema === undefined) return referencedTableName
+  return referencedSchema === ownerSchema ? referenced.table : `${referencedSchema}.${referenced.table}`
+}
+
 async function diffTable(
   schema: SchemaService,
   table: TableDefinition,
+  resolveTableSchema: TableSchemaResolver,
 ): Promise<TableSchemaDiff> {
   const [actualColumns, actualIndexes, actualForeignKeys] = await Promise.all([
     schema.getColumns(table.tableName),
@@ -213,9 +244,9 @@ async function diffTable(
       }]
     })
 
-  const expectedForeignKeys = expectedColumns
+  const expectedForeignKeys = await Promise.all(expectedColumns
     .filter((column): column is AnyColumnDefinition & { references: ForeignKeyReference & { table: string } } => Boolean(column.references?.table))
-    .map(column => normalizeExpectedForeignKey(column))
+    .map(async column => normalizeExpectedForeignKey(column, await resolveReferencedTable(schema, resolveTableSchema, table.tableName, column.references.table))))
   const expectedForeignKeyByName = new Map(expectedForeignKeys.map(foreignKey => [foreignKey.name, foreignKey]))
   const actualForeignKeyByName = new Map(actualForeignKeys.map(foreignKey => [normalizeActualForeignKeyName(foreignKey), foreignKey]))
   const missingForeignKeys = expectedForeignKeys
@@ -320,6 +351,7 @@ function normalizeExpectedIndex(
 
 function normalizeExpectedForeignKey(
   column: AnyColumnDefinition & { references: ForeignKeyReference & { table: string } },
+  referencedTable: string,
 ): {
   name: string
   table: string
@@ -329,8 +361,8 @@ function normalizeExpectedForeignKey(
   onDelete: string
 } {
   return {
-    name: `${column.name}->${column.references.table}.${column.references.column}`,
-    table: column.references.table,
+    name: `${column.name}->${referencedTable}.${column.references.column}`,
+    table: referencedTable,
     from: column.name,
     to: column.references.column,
     onUpdate: (column.references.onUpdate ?? 'NO ACTION').toUpperCase(),

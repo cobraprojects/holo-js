@@ -154,6 +154,35 @@ describe('native schema diff', () => {
     })
   })
 
+  it.each(['postgres', 'mysql'] as const)('compares foreign keys of a qualified table by the schema they reference on %s', async driver => {
+    const { schema, adapter, table } = await openDatabase(driver)
+    const qualifiedHome = table.tableName
+    const home = qualifiedHome.split('.').at(-1)!
+    const tenant = `holo_tenant_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const quote = (identifier: string) => driver === 'postgres' ? `"${identifier}"` : `\`${identifier}\``
+    onTestFinished(async () => { await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(tenant)}${driver === 'postgres' ? ' CASCADE' : ''}`) })
+    await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(tenant)}`)
+    await schema.createTable(`${tenant}.customers`, table => { table.id() })
+    await schema.createTable(`${tenant}.orders`, table => {
+      table.id()
+      table.foreignId('customer_id').constrained(`${tenant}.customers`)
+      table.integer('home_id')
+      table.foreign('home_id').references('id').on(qualifiedHome)
+    })
+    const customers = defineTable(`${tenant}.customers`, { id: column.id() })
+    const orders = defineTable(`${tenant}.orders`, {
+      id: column.id(),
+      customer_id: column.foreignId().constrained(`${tenant}.customers`),
+      home_id: column.integer().references('id').on(driver === 'postgres' ? home : qualifiedHome),
+    })
+
+    const diff = await diffSchema(schema, [customers, orders])
+
+    expect(diff.tables.find(entry => entry.table === `${tenant}.orders`)).toMatchObject({
+      missingForeignKeys: [], extraForeignKeys: [], mismatchedForeignKeys: [],
+    })
+  })
+
   it('compares tables qualified with the main schema on sqlite', async () => {
     const { db, schema } = openSQLiteSchema()
     await createTestTable(db, defineTable('teams', { id: column.id() }))
