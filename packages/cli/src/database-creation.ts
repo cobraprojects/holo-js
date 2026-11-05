@@ -1,11 +1,12 @@
-import type {
-  CompiledStatement,
-  DatabaseDriverFactory,
-  DatabaseOperationOptions,
-  DatabaseTransactionOptions,
-  DriverAdapter,
-  DriverExecutionResult,
-  DriverQueryResult,
+import {
+  holoRuntimeInternals,
+  type CompiledStatement,
+  type DatabaseDriverFactory,
+  type DatabaseOperationOptions,
+  type DatabaseTransactionOptions,
+  type DriverAdapter,
+  type DriverExecutionResult,
+  type DriverQueryResult,
 } from '@holo-js/db'
 
 class DatabaseCreatingAdapter implements DriverAdapter {
@@ -15,6 +16,10 @@ class DatabaseCreatingAdapter implements DriverAdapter {
 
   get supportsConcurrentTransactionScopes(): boolean | undefined {
     return this.adapter.supportsConcurrentTransactionScopes
+  }
+
+  get [holoRuntimeInternals.driverConnectionKey](): DriverAdapter {
+    return holoRuntimeInternals.driverConnection(this.adapter)
   }
 
   private createDatabaseOnFirstUse(): Promise<void> {
