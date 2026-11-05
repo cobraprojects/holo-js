@@ -9,6 +9,7 @@ import {
   matchesPredicates,
   readMutationValueKeys,
   readMutationExactIdPredicateValue,
+  readPrimaryKey,
   readQueryExactIdPredicateValue,
   valueKeysChangeColumns,
 } from './predicate-matching'
@@ -22,7 +23,7 @@ import {
   UNPATCHED_RESULT,
 } from './query-patch-results'
 import {
-  exactIdsDiffer,
+  mutationCannotReachExactId,
   matchesExactRowIdentity,
   mutationRowsContainExactId,
   rowsContainExactId,
@@ -105,7 +106,7 @@ function readScalarMutationValue(
   exactQueryId: unknown,
   column: string,
 ): ScalarMutationValueResult {
-  if (exactIdsDiffer(exactQueryId, readMutationExactIdPredicateValue(mutation))) {
+  if (mutationCannotReachExactId(exactQueryId, readMutationExactIdPredicateValue(mutation, readPrimaryKey(query)), mutation.values, readPrimaryKey(query))) {
     return { patched: false, unchanged: true }
   }
 
@@ -114,7 +115,7 @@ function readScalarMutationValue(
   }
 
   if (mutation.kind === 'delete') {
-    const deletedRowsContainId = mutationRowsContainExactId(mutation.rows, exactQueryId)
+    const deletedRowsContainId = mutationRowsContainExactId(mutation.rows, exactQueryId, readPrimaryKey(query))
     if (typeof deletedRowsContainId === 'undefined') {
       return UNPATCHED_RESULT
     }
@@ -160,7 +161,7 @@ function readScalarMutationValue(
     }
   }
 
-  const previousRowsContainId = rowsContainExactId(mutation.previousRows ?? [], exactQueryId)
+  const previousRowsContainId = rowsContainExactId(mutation.previousRows ?? [], exactQueryId, readPrimaryKey(query))
   if (previousRowsContainId === true && mutation.kind === 'update') {
     return UNPATCHED_RESULT
   }
@@ -207,13 +208,13 @@ function readScalarPredicateOnlyMutationValue(
     return UNPATCHED_RESULT
   }
 
-  const mutationExactId = readMutationExactIdPredicateValue(mutation)
+  const mutationExactId = readMutationExactIdPredicateValue(mutation, readPrimaryKey(query))
   if (mutationExactId === NO_EXACT_ID_PREDICATE) {
     if (!mutation.previousRows || mutation.previousRows.length === 0) {
       return matchesQuery ? undefined : UNPATCHED_RESULT
     }
 
-    const previousRowsContainId = rowsContainExactId(mutation.previousRows, exactQueryId)
+    const previousRowsContainId = rowsContainExactId(mutation.previousRows, exactQueryId, readPrimaryKey(query))
     if (typeof previousRowsContainId === 'undefined') {
       return UNPATCHED_RESULT
     }
@@ -260,7 +261,7 @@ function readScalarMutationRowValue(
   }
 
   for (const row of rows) {
-    const matchesIdentity = matchesExactRowIdentity(row, exactQueryId)
+    const matchesIdentity = matchesExactRowIdentity(row, exactQueryId, readPrimaryKey(query))
     if (typeof matchesIdentity === 'undefined') {
       return UNPATCHED_RESULT
     }

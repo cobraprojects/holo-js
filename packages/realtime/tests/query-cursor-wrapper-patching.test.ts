@@ -257,6 +257,19 @@ describe('@holo-js/realtime cursor wrapper patching', () => {
     })
   })
 
+  it('re-reads the cursor window when an update changes a row key', async () => {
+    const query = createQuery({ cursorRowCountKnown: true })
+
+    await expect(tryPatchCursorWrapperDataRows(query, [
+      createMutation({
+        kind: 'update',
+        predicates: [{ column: 'id', operator: '=', value: 2 }],
+        rows: [{ id: 9, status: 1, title: 'Second' }],
+        values: { id: 9 },
+      }),
+    ], createBackfills())).resolves.toEqual({ patched: false })
+  })
+
   it('falls back for malformed cursor wrapper mutations', async () => {
     const query = createQuery()
     const malformedMutations: readonly DatabaseMutationEvent[] = [
