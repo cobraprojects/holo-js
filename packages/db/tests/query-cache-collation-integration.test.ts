@@ -202,6 +202,25 @@ describe.skipIf(process.env.HOLO_POSTGRES_INTEGRATION !== '1')('query cache inva
     }
   })
 
+  it('refreshes a cached read by a citext array key after an update matched by a case-differing array', async () => {
+    await ensureCitext()
+    const { adapter } = await openDatabase('postgres')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    await adapter.execute(`CREATE TABLE ${name} (id citext[] PRIMARY KEY, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (id, label) VALUES ('{FR}', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('id', ['FR']).cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).where('id', ['fr']).update({ label: 'République' })
+
+    expect(await cachedLabel()).toBe('République')
+  })
+
   it('refreshes a cached read by a key with a nondeterministic collation after an update matched by a case-differing key', async () => {
     await ensureCaseInsensitiveCollation()
     const countries = await createCountries('postgres', 'VARCHAR(16) COLLATE holo_case_insensitive')

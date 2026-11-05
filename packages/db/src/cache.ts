@@ -1371,6 +1371,14 @@ function readLiteralDependencyValues(
   value: unknown,
   caseInsensitiveColumns: CaseInsensitiveColumns,
 ): readonly unknown[] | undefined {
+  if (Array.isArray(value)) {
+    return value.some(element => Array.isArray(element)
+      ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
+      : typeof element === 'string' && (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column) || isNumericText(element)))
+      ? undefined
+      : [value]
+  }
+
   if (typeof value !== 'string') {
     return [value]
   }
@@ -1445,7 +1453,15 @@ function collectMutationLooseColumns(
 }
 
 function mayEqualNumber(value: unknown, textMatchesAnyNumber: boolean): boolean {
+  if (Array.isArray(value)) {
+    return value.some(element => mayEqualNumber(element, textMatchesAnyNumber))
+  }
+
   return typeof value === 'string' && (textMatchesAnyNumber || isNumericText(value))
+}
+
+function containsText(value: unknown): boolean {
+  return typeof value === 'string' || (Array.isArray(value) && value.some(element => containsText(element)))
 }
 
 function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatchesAnyNumber: boolean): ReadonlySet<string> {
@@ -1456,7 +1472,7 @@ export function writesTextLiterals(
   predicates: readonly QueryPredicateNode[],
   records: readonly Readonly<Record<string, unknown>>[],
 ): boolean {
-  return collectLooseColumns(predicates, records, (_column, value) => typeof value === 'string').size > 0
+  return collectLooseColumns(predicates, records, (_column, value) => containsText(value)).size > 0
 }
 
 function createMutationRowDependencies(
