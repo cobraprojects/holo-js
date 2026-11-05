@@ -95,15 +95,23 @@ function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
   return [plan, ...plan.unions.flatMap(union => unionBranches(union.query))]
 }
 
-function ordersByModelColumn(plan: SelectQueryPlan, modelColumns: readonly string[]): boolean {
+function orderedModelColumns(plan: SelectQueryPlan, modelColumns: readonly string[]): readonly string[] {
   const aliases = new Set(plan.selections.flatMap(selection => 'alias' in selection && selection.alias ? [selection.alias] : []))
-  return plan.orderBy.some(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column))
+  return plan.orderBy.flatMap(order => order.kind === 'column' && modelColumns.includes(order.column) && !aliases.has(order.column) ? [order.column] : [])
+}
+
+function sharesOrderedName(branch: SelectQueryPlan, selection: QuerySelection, ordered: readonly string[], joinedColumns: JoinedColumns): boolean {
+  if (selection.kind !== 'column' || selectionRole(branch.source, selection) !== 'joined') return false
+  if (!selection.column.endsWith('.*')) return !selection.alias && ordered.includes(columnOutputName(selection))
+  const qualifier = selection.column.slice(0, -2)
+  const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+  const columns = join ? joinedColumns(join) : undefined
+  return !columns || columns.some(column => ordered.includes(column))
 }
 
 function projectUnionBranch(branch: SelectQueryPlan, driver: string, leadingModelColumns: boolean): SelectQueryPlan {
   const selections = orderModelColumnsLast(branch, expandSelections(branch, driver))
-  const selectsJoinedColumns = selections.some(selection => selectionRole(branch.source, selection) === 'joined')
-  const leading = leadingModelColumns && selectsJoinedColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
+  const leading = leadingModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
   return Object.freeze({
     ...branch,
     selections: Object.freeze([...leading, ...selections]),
@@ -126,5 +134,7 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
   if (roles.some(role => role !== roles[0])) {
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }
-  return projectUnionBranch(plan, driver, branches.some(branch => ordersByModelColumn(branch, modelColumns)))
+  const ordered = branches.flatMap(branch => orderedModelColumns(branch, modelColumns))
+  const leadingModelColumns = ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
+  return projectUnionBranch(plan, driver, leadingModelColumns)
 }

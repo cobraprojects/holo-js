@@ -204,6 +204,9 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     const ownOnly = joined().select(`${products}.*`).where(`${orders}.id`, 102).union(joined().select(`${products}.*`).where(`${orders}.id`, 103)).orderBy('id')
     expect(attributes(await ownOnly.get()).map(({ id, price }) => [id, price])).toEqual([[1, 10], [2, 20]])
+    const aliased = joined().select(`${products}.*`, `${orders}.id as order_id` as never).where(`${orders}.id`, 102)
+      .union(joined().select(`${products}.*`, `${orders}.id as order_id` as never).where(`${orders}.id`, 103)).orderBy('id')
+    expect((await aliased.get()).map(entity => [Number(entity.toAttributes().id), Number((entity.toAttributes() as Record<string, unknown>).order_id)])).toEqual([[1, 103], [2, 102]])
 
     const union = joined().where(`${orders}.id`, 102).union(joined().where(`${orders}.id`, 103)).orderBy('id')
     if (driver !== 'sqlite') {
