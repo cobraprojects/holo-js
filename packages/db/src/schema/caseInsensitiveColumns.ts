@@ -21,7 +21,6 @@ export type TextColumnCollations = {
 export type CaseInsensitiveColumns = ReadonlySet<string> | 'all' | TextColumnCollations
 
 type MySQLColumnRow = { Field: string, Type: string, Collation: string | null }
-type MySQLPadRow = { name: string, pad_attribute: string | null }
 type MySQLCreateTableRow = { 'Create Table'?: string }
 type SQLiteIndexColumnRow = { name: string, coll: string | null }
 type ColumnReader = (reader: DatabaseContext) => Promise<CaseInsensitiveColumns>
@@ -59,8 +58,7 @@ WHERE il."unique" = 1 AND ii."key" = 1 AND ii.name IS NOT NULL`
 
 const MYSQL_EXACT_COLLATION_PATTERN = /_bin$/i
 const MYSQL_PERMANENT_TABLE_PATTERN = /^\s*CREATE\s+TABLE\b/i
-const MYSQL_NO_PAD = 'NO PAD'
-const MYSQL_PADDED_TYPE_PATTERN = /^char\b/i
+const MYSQL_MEMBER_TYPE_PATTERN = /^(?:enum|set)\b/i
 const LOOSE_TEXT_COLUMN: TextColumn = { exact: false, padSpace: true }
 
 export const UNKNOWN_TEXT_COLUMNS: TextColumnCollations = {
@@ -124,19 +122,6 @@ function createSQLiteReader(tableName: string): ColumnReader {
   }
 }
 
-async function readMySQLPadAttributes(reader: DatabaseContext, tableName: string, collations: readonly string[]): Promise<ReadonlyMap<string, string | null>> {
-  if (collations.length === 0) {
-    return new Map()
-  }
-
-  const result = await reader.introspectCompiled<MySQLPadRow>({
-    sql: `SELECT collation_name AS name, pad_attribute AS pad_attribute FROM information_schema.collations WHERE collation_name IN (${collations.map(() => '?').join(', ')})`,
-    bindings: [...collations],
-    source: `schema:introspect:collationPadding:${tableName}`,
-  })
-  return new Map(result.rows.map(row => [row.name.toLowerCase(), row.pad_attribute]))
-}
-
 function createMySQLReader(connection: DatabaseContext, tableName: string): ColumnReader {
   const { schema, table } = splitTablePath(tableName)
   const dialect = connection.getDialect()
@@ -161,14 +146,12 @@ function createMySQLReader(connection: DatabaseContext, tableName: string): Colu
       return 'all'
     }
 
-    const collations = [...new Set(result.rows.flatMap(row => row.Collation === null ? [] : [row.Collation]))]
-    const padAttributes = await readMySQLPadAttributes(reader, tableName, collations)
     const columns = new Map<string, TextColumn>()
     for (const row of result.rows) {
       if (row.Collation !== null) {
         columns.set(row.Field.toLowerCase(), {
-          exact: MYSQL_EXACT_COLLATION_PATTERN.test(row.Collation),
-          padSpace: MYSQL_PADDED_TYPE_PATTERN.test(row.Type) || padAttributes.get(row.Collation.toLowerCase())?.toUpperCase() !== MYSQL_NO_PAD,
+          exact: MYSQL_EXACT_COLLATION_PATTERN.test(row.Collation) && !MYSQL_MEMBER_TYPE_PATTERN.test(row.Type),
+          padSpace: true,
         })
       }
     }

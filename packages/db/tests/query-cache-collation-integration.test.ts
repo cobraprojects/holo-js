@@ -90,7 +90,7 @@ function registerExactCollationScenarios(driver: Exclude<Driver, 'postgres'>, co
     expect(await countries.cachedLabel('DE')).toBe('Germany')
   })
 
-  it('keeps a cached read by another key after an upsert of an exact key', async () => {
+  it.skipIf(driver === 'mysql')('keeps a cached read by another key after an upsert of an exact key', async () => {
     const countries = await createCountries(driver, codeType)
     expect(await countries.cachedLabel('DE')).toBe('Germany')
     await countries.writeBehindTheCache('DE', 'Hidden')
@@ -298,14 +298,46 @@ describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_bin ke
 describe.skipIf(!mysqlIntegration)('query cache invalidation by a utf8mb4_0900_bin key on mysql', () => {
   registerExactCollationScenarios('mysql', 'VARCHAR(16) COLLATE utf8mb4_0900_bin')
 
-  it('keeps a cached read by key after an update of the key with trailing spaces', async () => {
-    const countries = await createCountries('mysql', 'VARCHAR(16) COLLATE utf8mb4_0900_bin')
+  it('refreshes a cached read by key after an upsert of the key with trailing spaces mysql truncates on store', async () => {
+    const countries = await createCountries('mysql', 'VARCHAR(2) COLLATE utf8mb4_0900_bin')
     expect(await countries.cachedLabel('FR')).toBe('France')
-    await countries.writeBehindTheCache('FR', 'Hidden')
 
-    await countries.update('FR  ', 'République')
+    await countries.upsert('FR ', 'République')
 
+    expect(await countries.cachedLabel('FR')).toBe('République')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by a binary-collated ENUM key on mysql', () => {
+  it('refreshes a cached read by key after an upsert by the member index as text', async () => {
+    const countries = await createCountries('mysql', "ENUM('FR', 'DE') COLLATE utf8mb4_bin")
     expect(await countries.cachedLabel('FR')).toBe('France')
+
+    await countries.upsert('1', 'République')
+
+    expect(await countries.cachedLabel('FR')).toBe('République')
+  })
+})
+
+describe.skipIf(!mysqlIntegration)('query cache invalidation by an upsert on mysql', () => {
+  it('refreshes a cached read by key after an upsert by the key that mysql matched through another unique column', async () => {
+    const { adapter } = await openDatabase('mysql')
+    const name = `countries_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    registerGeneratedTables({ countries: defineTable(name, { code: column.string().primaryKey(), region: column.string(), label: column.string() }) })
+    await adapter.execute(`CREATE TABLE ${name} (code VARCHAR(16) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL, region VARCHAR(16) NOT NULL UNIQUE, label VARCHAR(64) NOT NULL)`)
+    onTestFinished(async () => {
+      clearGeneratedTables()
+      resetCacheRuntime()
+      await adapter.execute(`DROP TABLE IF EXISTS ${name}`)
+    })
+    await adapter.execute(`INSERT INTO ${name} (code, region, label) VALUES ('FR', 'Europe', 'France')`)
+    const cachedLabel = async () => (await DB.table(name).where('code', 'FR').cache(60).first())?.label
+    expect(await cachedLabel()).toBe('France')
+
+    await DB.table(name).upsert({ code: 'DE', region: 'Europe', label: 'Changed' }, ['code'], ['label'])
+
+    expect(await cachedLabel()).toBe('Changed')
   })
 })
 
