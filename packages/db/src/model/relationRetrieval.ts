@@ -118,11 +118,11 @@ export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, 
   return definition !== undefined && readsAsInteger(definition) && readFractionalDecimalKey(value) !== undefined
 }
 
-export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
+export function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined, driver: string): unknown[] {
   if (isTextKeyColumn(definition)) return distinctStoredKeys(keys.map(key => typeof key === 'number' || typeof key === 'bigint' ? String(key) : key))
   if (!definition || !isNumericKeyColumn(definition)) return [...keys]
   const columnKeys = readsAsInteger(definition)
-    ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey).filter(key => fitsIntegerColumn(definition, key))
+    ? keys.filter(key => !isFractionalKeyFor(definition, key)).map(readIntegralDecimalKey).filter(key => fitsIntegerColumn(definition, driver, key))
     : keys.filter(isDecimalKey)
   return [...new StoredKeySet(columnKeys, { numeric: true })]
 }
@@ -136,9 +136,9 @@ function readBigIntKey(key: unknown): bigint | undefined {
   return isCanonicalIntegerText(key) ? BigInt(key) : undefined
 }
 
-function fitsIntegerColumn(definition: AnyColumnDefinition, key: unknown): boolean {
+function fitsIntegerColumn(definition: AnyColumnDefinition, driver: string, key: unknown): boolean {
   const integer = readBigIntKey(key)
-  const range = definition.kind === 'integer' ? INTEGER_COLUMN_RANGE : BIG_INTEGER_COLUMN_RANGE
+  const range = definition.kind === 'integer' && driver !== 'sqlite' ? INTEGER_COLUMN_RANGE : BIG_INTEGER_COLUMN_RANGE
   return integer !== undefined && integer >= range.min && integer <= range.max
 }
 
@@ -181,7 +181,7 @@ export async function retrieveRelation(
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
-  const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column))
+  const columnKeys = keysForColumn(keys, definition ?? columnDefinition(probe.getTableQueryBuilder(), column), probe.getTableQueryBuilder().getConnection().getDriver())
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
   for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
@@ -221,7 +221,7 @@ export async function retrievePivotRelation(
   if (parentKeys.length === 0) return { rows: [], related: new StoredKeyMap() }
   const pivotQuery = createPivotQuery()
   const pivotParentKey = columnDefinition(pivotQuery, parentColumn)
-  const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey)
+  const pivotKeys = keysForColumn(parentKeys, pivotParentKey ?? keyDefinitions.parentKey, pivotQuery.getConnection().getDriver())
   const rows = await loadRelationKeyChunks(pivotKeys, false, async chunk => readPivotRows(await createPivotQuery()
     .select(...pivotSelection)
     .where(parentColumn, 'in', chunk)

@@ -23,7 +23,7 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileTextKey(expression: string): string {
-    return `CONCAT(${expression})`
+    return `CONCAT(${expression}) COLLATE utf8mb4_0900_bin`
   }
 
   protected override compileIntegerKey(expression: string): string {

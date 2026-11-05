@@ -316,6 +316,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
         { id: 60, noteable_type: ownerType, noteable_id: '2' },
         { id: 70, noteable_type: ownerType, noteable_id: '2x' },
         { id: 80, noteable_type: ownerType, noteable_id: '1\n' },
+        { id: 90, noteable_type: ownerType, noteable_id: '３' },
       ])
       const Note = defineModel(notes, { timestamps: false, relations: { noteable: morphTo('noteable') } })
       const Owner = defineModel(owners, { morphClass: ownerType, timestamps: false, relations: { notes: morphMany(() => Note, 'noteable') } })
@@ -327,14 +328,40 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
       const loaded = await Note.with('noteable').orderBy('id').get()
 
-      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined, undefined])
+      expect(loaded.map(note => (note.getRelation<Loaded | null>('noteable') ?? undefined)?.get('name' as never))).toEqual(['first', 'third', undefined, undefined, undefined, 'second', undefined, undefined, undefined])
       expect(valuesOf(await Note.has('noteable').orderBy('id').get())).toEqual([10, 20, 60])
-      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70, 80])
-      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0, 0])
+      expect(valuesOf(await Note.whereDoesntHave('noteable').orderBy('id').get())).toEqual([30, 40, 50, 70, 80, 90])
+      expect(valuesOf(await Note.withCount('noteable').orderBy('id').get(), 'noteable_count')).toEqual([1, 1, 0, 0, 0, 1, 0, 0, 0])
       expect((await Owner.with('notes').orderBy('id').get()).map(owner => valuesOf(owner.getRelation<Loaded[]>('notes') ?? []))).toEqual([[10], [60], []])
       expect(valuesOf(await Owner.has('notes').orderBy('id').get())).toEqual([1, 2])
       expect(valuesOf(await Owner.whereDoesntHave('notes').orderBy('id').get())).toEqual([3])
       expect(valuesOf(await Owner.withCount('notes').orderBy('id').get(), 'notes_count')).toEqual([1, 1, 0])
     })
+  })
+
+  it.runIf(driver === 'sqlite')('matches 64-bit keys stored in an integer column', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const tag = suffix()
+    const names = { owners: `fw_owners_${tag}`, items: `fw_items_${tag}` }
+    await createTable(schema, names.owners, (table) => {
+      table.integer('id').primaryKey()
+      table.string('name')
+    })
+    await createTable(schema, names.items, (table) => {
+      table.integer('id').primaryKey()
+      table.string('owner_id')
+    })
+    const owners = defineGeneratedTable(names.owners, { id: column.integer().primaryKey(), name: column.string() })
+    const items = defineGeneratedTable(names.items, { id: column.integer().primaryKey(), owner_id: column.string() })
+    await DB.table(owners).insert([{ id: 3000000000, name: 'wide' }])
+    await DB.table(items).insert([{ id: 10, owner_id: '3000000000' }])
+    const Owner = defineModel(owners, { timestamps: false })
+    const Item = defineModel(items, { timestamps: false, relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+
+    const [item] = await Item.with('owner').get()
+
+    expect(item?.getRelation<Loaded | null>('owner')?.get('name' as never)).toBe('wide')
+    expect(valuesOf(await Item.has('owner').get())).toEqual([10])
   })
 })

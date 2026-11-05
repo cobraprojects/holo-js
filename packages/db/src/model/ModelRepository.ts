@@ -3244,7 +3244,7 @@ export class ModelRepository<
 
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
-    const relatedEntities = await loadRelationKeyChunks(keysForColumn(localKeys, ownEntry(related.definition.table.columns, relation.morphIdColumn)), paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
+    const relatedEntities = await loadRelationKeyChunks(keysForColumn(localKeys, ownEntry(related.definition.table.columns, relation.morphIdColumn), related.getConnection().getDriver()), paginated, chunk => this.applyRelationConstraint(relation, related, constraint)
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', chunk)
       .get())
@@ -3283,7 +3283,7 @@ export class ModelRepository<
       const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, group.repository, constraint))
       const relatedKey = group.repository.definition.primaryKey
       const relatedKeyDefinition = ownEntry(group.repository.definition.table.columns, relatedKey)
-      const relatedEntities = await loadRelationKeyChunks(keysForColumn(distinctStoredKeys(group.ids), relatedKeyDefinition), paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
+      const relatedEntities = await loadRelationKeyChunks(keysForColumn(distinctStoredKeys(group.ids), relatedKeyDefinition, group.repository.getConnection().getDriver()), paginated, chunk => this.applyRelationConstraint(relation, group.repository, constraint)
         .where(relatedKey, 'in', chunk)
         .get())
       const relatedMap = indexRelation(relatedEntities, relatedKey, this.keyOptionsFor(group.repository, relation.morphIdColumn, relatedKey))
@@ -3384,7 +3384,7 @@ export class ModelRepository<
     const parentColumn = relation.kind === 'morphOneOfMany' ? relation.morphIdColumn : relation.foreignKey
     const related = this.resolveRelatedRepository(relation.related)
     const paginated = isPaginatedRelationQuery(this.applyRelationConstraint(relation, related, constraint))
-    const latestEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(related.definition.table.columns, parentColumn)), paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
+    const latestEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(related.definition.table.columns, parentColumn), related.getConnection().getDriver()), paginated, chunk => this.createOneOfManyQuery(relation, related, parentColumn, chunk, constraint).get())
     const options = this.keyOptionsFor(related, relation.localKey, parentColumn)
     const grouped = new StoredKeyMap<Entity[]>([], options)
 
@@ -3458,7 +3458,7 @@ export class ModelRepository<
     }
 
     const through = this.resolveThroughRepository(relation.through)
-    const throughEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(through.definition.table.columns, relation.firstKey)), false, chunk => through.query()
+    const throughEntities = await loadRelationKeyChunks(keysForColumn(parentKeys, ownEntry(through.definition.table.columns, relation.firstKey), through.getConnection().getDriver()), false, chunk => through.query()
       .where(relation.firstKey, 'in', chunk)
       .get())
 
