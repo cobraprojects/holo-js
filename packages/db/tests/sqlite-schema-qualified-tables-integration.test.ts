@@ -487,6 +487,19 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await DB.table(documents).orderByVectorSimilarity('embedding', [1, 0]).count()).toBe(2)
   })
 
+  it('rejects a foreign key column from a shadowing temporary table to a main table', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."parents" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "parents" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TEMP TABLE "items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+
+    await expect(schema.table('items', (table) => {
+      table.foreignId('parent_id').nullable().constrained('main.parents')
+    })).rejects.toThrow('SQLite foreign key "parent_id" on table "temp.items" cannot reference table "main.parents" in another database.')
+    expect(await schema.getForeignKeys('temp.items')).toEqual([])
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {
