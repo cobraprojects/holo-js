@@ -2379,7 +2379,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   const primaryKey = resolveRowDependencyKey(source, connectionName)
   const conflictsBeyondPrimaryKey = conflictColumns === 'any'
     || (conflictColumns !== undefined && (primaryKey === undefined || conflictColumns.some(column => getColumnName(column) !== primaryKey)))
-    || updatedColumns.some(column => getColumnName(column) === primaryKey)
+    || updatedColumns.some(column => primaryKey === undefined || getColumnName(column).toLowerCase() === primaryKey.toLowerCase())
   const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
   const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined

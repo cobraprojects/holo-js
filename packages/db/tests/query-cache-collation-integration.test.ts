@@ -223,6 +223,27 @@ describe('query cache invalidation by an upsert that changes the key on sqlite',
   })
 })
 
+describe('query cache invalidation by an upsert that changes a key spelled in another case on sqlite', () => {
+  it('refreshes a cached read by the previous key after an upsert moves the key through a column name in another case', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `users_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    queryCacheInternals.onDatabaseDependencyInvalidated(() => {})
+    onTestFinished(() => {
+      resetDatabaseDependencyInvalidationListeners()
+      resetCacheRuntime()
+    })
+    await adapter.execute(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)`)
+    await adapter.execute(`INSERT INTO ${name} (id, email) VALUES (1, 'a')`)
+    const cachedEmail = async () => (await DB.table(name).where('id', 1).cache(60).first())?.email
+    expect(await cachedEmail()).toBe('a')
+
+    await DB.table(name).upsert({ ID: 2, email: 'a' }, ['email'], ['ID'])
+
+    expect(await cachedEmail()).toBeUndefined()
+  })
+})
+
 describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
   it('refreshes a cached read by key after an update matched by a case-differing key on a temporary table that shadows a BINARY one', async () => {
     const { adapter } = await openDatabase('sqlite')
