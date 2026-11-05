@@ -295,7 +295,7 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     if (builtInCast) {
       switch (builtInCast.name) {
         case 'boolean':
-          return value == null ? value : Boolean(value)
+          return coerceBoolean(value)
         case 'number':
           return value == null ? value : Number(value)
         case 'string':
