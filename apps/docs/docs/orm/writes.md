@@ -195,6 +195,23 @@ await Product.query().upsert(
 
 On a model with timestamps, new rows get `created_at` and `updated_at`. When you list columns to update on conflict, `updated_at` is added to them, so a conflicting row's `updated_at` changes. With no update columns, a conflicting row is left as it is.
 
+Rows may carry the auto-increment `id`, which is the usual unique column, as in Laravel. Rows that carry it update the record with that `id` and insert the rest under the `id` they give. The model's `fillable` must list `id`, because the primary key isn't mass assignable by default:
+
+```ts
+const Product = defineModel('products', { fillable: ['id', 'name', 'price'] })
+
+await Product.query().upsert(
+  [
+    { id: 1, name: 'T-Shirt S', price: 1999 },
+    { id: 2, name: 'T-Shirt M', price: 1999 },
+  ],
+  ['id'],
+  ['name', 'price'],
+)
+```
+
+A computed column made with `storedAs()` or `virtualAs()` can't appear in the rows: it is a type error, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs.
+
 The update columns must be columns the model can write. A computed column made with `storedAs()` or `virtualAs()` is a type error there, and passing one anyway throws `Column "total" is generated and cannot be written directly.` before any SQL runs. The same applies to the destination columns of `insertUsing()` and `insertOrIgnoreUsing()` called on a model query.
 
 ## Track changes

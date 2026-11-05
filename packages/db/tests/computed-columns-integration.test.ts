@@ -217,6 +217,37 @@ describe.each(drivers)('computed columns on %s', (driver) => {
     expect((await Product.findOrFail(product.get('id'))).get('price')).toBe(2)
   })
 
+  it('upserts rows that carry the auto-increment id as the conflict target', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['id', 'price', 'quantity', 'name'], timestamps: false })
+    const existingId = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+    const newId = existingId + 100
+
+    await Product.query().upsert([
+      { id: existingId, price: 5, quantity: 3, name: 'Ink' },
+      { id: newId, price: 1, quantity: 4, name: 'Pen' },
+    ], ['id'], ['price'])
+
+    expect((await Product.query().orderBy('id').get()).toJSON().map(row => [Number(row.id), row.price, row.name, Number(row.total)])).toEqual([
+      [existingId, 5, 'Ink', 15],
+      [newId, 1, 'Pen', 4],
+    ])
+  })
+
+  it('rejects a computed column in the upsert rows before any SQL runs', async () => {
+    const { db, names } = await openComputedDatabase(driver)
+    await reloadGeneratedSchema(await readTables(db, [names.products]))
+    const Product = defineModel(names.products, { fillable: ['id', 'price', 'quantity', 'name'], timestamps: false })
+    const id = Number((await Product.create({ price: 2, quantity: 3, name: 'Ink' })).get('id'))
+
+    await expect(Product.query().upsert([
+      { id, price: 5, quantity: 3, name: 'Ink' },
+      { id: id + 100, price: 1, quantity: 4, name: 'Pen', total: 1 } as never,
+    ], ['id'], ['price'])).rejects.toThrow('Column "total" is generated and cannot be written directly.')
+    expect((await Product.query().get()).toJSON().map(row => [Number(row.id), row.price])).toEqual([[id, 2]])
+  })
+
   it('rejects computed pivot columns among pivot attributes and timestamps before writing any pivot row', async () => {
     const { db, schema, names } = await openComputedDatabase(driver)
     const pivotName = `computed_product_tags_${driver}`

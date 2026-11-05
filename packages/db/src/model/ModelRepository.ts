@@ -1839,6 +1839,10 @@ export class ModelRepository<
     return this.sanitizeWriteValues(values, mode, true) as ModelUpdatePayload<TTable>
   }
 
+  sanitizeUpsertRow(values: Partial<ModelRecord<TTable>> | Record<string, unknown>): ModelUpdatePayload<TTable> {
+    return this.sanitizeWriteValues(values, 'create', true, 'computed') as ModelUpdatePayload<TTable>
+  }
+
   private sanitizeStoredValues(values: Partial<ModelRecord<TTable>> | Record<string, unknown>, mode: WriteMode): Partial<ModelRecord<TTable>> {
     return this.sanitizeWriteValues(values, mode, false) as Partial<ModelRecord<TTable>>
   }
@@ -1847,6 +1851,7 @@ export class ModelRepository<
     values: Partial<ModelRecord<TTable>> | Record<string, unknown>,
     mode: WriteMode,
     applyWriteRules: boolean,
+    rejected: RejectedGeneratedColumns = 'generated',
   ): Record<string, unknown> {
     const entries = Object.entries(values)
 
@@ -1855,7 +1860,7 @@ export class ModelRepository<
     }
 
     return Object.fromEntries(entries.map(([key, value]) => {
-      const { columnName, column } = findWriteColumn(this.definition, key, 'generated')
+      const { columnName, column } = findWriteColumn(this.definition, key, rejected)
 
       if (typeof value === 'undefined') {
         throw new SecurityError(`${mode === 'create' ? 'Create' : 'Update'} value for column "${key}" cannot be undefined.`)
