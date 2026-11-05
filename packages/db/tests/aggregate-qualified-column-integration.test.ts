@@ -318,6 +318,8 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     }
     await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`).orderBy('price')[kind](`${name}.price`))
       .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
+    await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price as price`, `${ordersName}.price`).orderBy('price')[kind](`${name}.price`))
+      .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
   })
 
   it.each(kinds)('%s on a model rejects a column qualified with another table', async (kind) => {

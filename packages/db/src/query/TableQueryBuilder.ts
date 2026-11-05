@@ -3699,7 +3699,7 @@ export class TableQueryBuilder<
 
   private modelAggregateSelections(column: string, source: string, key: string, sourceWildcard: string): readonly string[] {
     const orderedNames = new Set(this.plan.orderBy.flatMap(order => order.kind === 'column' && !order.column.includes('.') ? [order.column] : []))
-    const keyOutput = this.plan.selections.find(selection => selectionOutputName(selection) === key)
+    const keyOutput = [...this.plan.selections].reverse().find(selection => selectionOutputName(selection) === key)
     const keyIsSelectedSourceColumn = keyOutput?.kind === 'column' && this.resolveSourceColumnName(keyOutput.column) === key
     if (orderedNames.has(key) && keyOutput && !keyIsSelectedSourceColumn) {
       throw new CompilerError(`Cannot aggregate column "${column}" while ordering by "${key}", which names another selected column. Qualify the order by column.`)
