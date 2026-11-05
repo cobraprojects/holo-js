@@ -1,6 +1,6 @@
 import { realpathSync, watch, type WatchEventType } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type { HoloProjectPrepareChange, HoloProjectPrepareWatch } from '@holo-js/kernel'
 import type { LoadedProjectConfig } from './types'
 import type { WatchFactory, WatchHandle } from './cli-types'
@@ -137,7 +137,7 @@ function resolveConfiguredRealtimePath(project: LoadedProjectConfig): string {
 function resolveConfiguredDiscoveryRoots(project: LoadedProjectConfig): readonly string[] {
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
-  return [
+  return Object.freeze([
     project.config.paths.models,
     project.config.paths.migrations,
     project.config.paths.seeders,
@@ -151,7 +151,7 @@ function resolveConfiguredDiscoveryRoots(project: LoadedProjectConfig): readonly
     resolveConfiguredChannelsPath(project),
     resolveConfiguredRealtimePath(project),
     'config',
-  ]
+  ].map(root => toPosixSlashes(normalize(root)).replace(/\/+$/, '') || '.'))
 }
 
 function resolveGeneratedSchemaPath(project: LoadedProjectConfig): string {
@@ -193,31 +193,6 @@ function isDiscoveryRelevantPath(
     const excluded = watch.excludes.some(exclude => pathIsWithin(normalized, exclude))
     return included && !excluded
   })
-}
-
-type WatchPolicyRoot = {
-  readonly root: string
-  readonly excludes: readonly string[]
-}
-
-function collectWatchPolicyRoots(
-  projectRoot: string,
-  project: LoadedProjectConfig,
-  pluginWatches: readonly PluginPrepareWatch[],
-): readonly WatchPolicyRoot[] {
-  return [
-    ...resolveConfiguredDiscoveryRoots(project).map(root => ({
-      root: toPosixSlashes(relative(projectRoot, resolve(projectRoot, root))) || '.',
-      excludes: [],
-    })),
-    ...pluginWatches.flatMap(watch => watch.roots.map(root => ({ root, excludes: watch.excludes }))),
-  ]
-}
-
-function isWatchedThroughout(current: WatchPolicyRoot, policyRoots: readonly WatchPolicyRoot[]): boolean {
-  return policyRoots.some(policyRoot => pathIsWithin(current.root, policyRoot.root)
-    && policyRoot.excludes.every(exclude => !pathIsWithin(current.root, exclude)
-      && (!pathIsWithin(exclude, current.root) || current.excludes.some(currentExclude => pathIsWithin(exclude, currentExclude)))))
 }
 
 async function collectDirectoryTree(
@@ -378,7 +353,10 @@ type WatchPolicyBaseline = {
   readonly project: LoadedProjectConfig
   readonly pluginWatches: readonly PluginPrepareWatch[]
   readonly snapshots: ReadonlyMap<string, WatchedPathSnapshot>
+  readonly directories: ReadonlySet<string>
 }
+
+const DELETED_BEFORE_REFRESH: WatchedPathSnapshot = Object.freeze({ modifiedAt: 0, size: 0, createdAt: 0 })
 
 type DiscoveryWatchOptions = {
   readonly projectRoot: string
@@ -424,6 +402,7 @@ export async function startDiscoveryWatch({
   let closed = false
   let generation = 0
   const handles: WatchHandle[] = []
+  let watchedDirectories: readonly string[] = []
   let startupBaseline: WatchPolicyBaseline | undefined
   const warnedPlugins = new Set<string>()
   let deferredEvents: Map<string, WatchEventType> | undefined = deferred ? new Map() : undefined
@@ -467,14 +446,16 @@ export async function startDiscoveryWatch({
       return (baseline?.snapshots ?? snapshots).get(path)
     }
     const current = snapshots.get(path)
-    return current && Math.floor(current.createdAt) <= startedAt ? current : undefined
+    if (!current) return DELETED_BEFORE_REFRESH
+    return Math.floor(current.createdAt) <= startedAt ? current : undefined
   }
 
-  const findGainedWatchRoots = (baseline: WatchPolicyBaseline): readonly string[] => {
-    const startupRoots = collectWatchPolicyRoots(projectRoot, baseline.project, baseline.pluginWatches)
-    return [...new Set(collectWatchPolicyRoots(projectRoot, project, pluginWatches)
-      .filter(current => !isWatchedThroughout(current, startupRoots))
-      .map(({ root }) => root))]
+  const findGainedDirectories = (baseline: WatchPolicyBaseline): readonly string[] => {
+    const gained = watchedDirectories.filter(directory => !baseline.directories.has(directory))
+    return gained
+      .filter(directory => !gained.some(other => other !== directory && directory.startsWith(`${other}${sep}`)))
+      .map(directory => toPosixSlashes(relative(projectRoot, directory)))
+      .filter(path => isDiscoveryRelevantPath(path, project, pluginWatches))
   }
 
   const classify = async (
@@ -542,6 +523,7 @@ export async function startDiscoveryWatch({
 
   const acquireDirectories = (directories: readonly string[]): void => {
     releaseHandles()
+    watchedDirectories = directories
     try {
       for (const directory of directories) {
         if (closed || signal.aborted) return
@@ -568,7 +550,7 @@ export async function startDiscoveryWatch({
     deferredEvents = undefined
     startupBaseline = undefined
     if (!events || closed || signal.aborted) return
-    const gainedRoots = baseline ? findGainedWatchRoots(baseline) : []
+    const gainedRoots = baseline && recursive === false ? findGainedDirectories(baseline) : []
     const relevant = [...events]
       .filter(([path]) => isDiscoveryRelevantPath(path, project, pluginWatches) && !gainedRoots.includes(path))
       .map(([path, eventType]) => ({ path, eventType, previous: findStartupSnapshot(path, baseline) }))
@@ -609,7 +591,6 @@ export async function startDiscoveryWatch({
   signal.addEventListener('abort', close, { once: true })
   try {
     const directories = await updatePolicy(project)
-    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots })
     try {
       acquire(projectRoot, true)
       recursive = true
@@ -621,6 +602,7 @@ export async function startDiscoveryWatch({
       acquireDirectories(directories)
       stopProbing()
     }
+    if (deferred) startupBaseline = Object.freeze({ project, pluginWatches, snapshots, directories: new Set(watchedDirectories) })
     return { ready: probeLiveness(), refresh, resume, close }
   } catch (error) {
     close()
