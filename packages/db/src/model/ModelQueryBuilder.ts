@@ -1,4 +1,5 @@
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import { readNumericValue } from '../schema/normalization'
 import {
   createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
@@ -2462,11 +2463,12 @@ class ModelQueryBuilderBase<
     return entities.flatMap((entity) => {
       const value = entity.get(column as never)
       if (value === null) return []
-      if (typeof value !== 'number' || Number.isNaN(value)) {
+      const numericValue = readNumericValue(value)
+      if (numericValue === undefined) {
         throw new HydrationError(`Model aggregate "${kind}" requires numeric values for column "${column}".`)
       }
 
-      return [value]
+      return [numericValue]
     })
   }
 

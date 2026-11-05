@@ -1,4 +1,5 @@
 import { readIntegerColumnValue, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
@@ -67,6 +68,15 @@ function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, Any
     else definitions.delete(key)
   }
   return definitions
+}
+
+export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: string): SelectQueryPlan {
+  return {
+    ...plan,
+    joins: plan.joins.map(join => join.table && !join.definition
+      ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
+      : join),
+  }
 }
 
 export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyColumnDefinition | undefined {

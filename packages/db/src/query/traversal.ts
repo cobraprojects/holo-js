@@ -3,20 +3,10 @@ import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
-import { resultColumnDefinition } from './resultColumns'
-import type { QueryDirection, SelectQueryPlan } from './ast'
+import { resultColumnDefinition, withResolvedDefinitions } from './resultColumns'
+import type { QueryDirection } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
-
-function withResolvedDefinitions(plan: SelectQueryPlan, table: TableDefinition | undefined, connectionName: string): SelectQueryPlan {
-  return {
-    ...plan,
-    source: { ...plan.source, table },
-    joins: plan.joins.map(join => join.table && !join.definition
-      ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
-      : join),
-  }
-}
 
 type QueryTraversal = {
   readonly column?: string
@@ -71,7 +61,7 @@ export async function* queryBatches<
     if (traversal.column && sortRows) {
       const key = selectedColumn?.kind === 'column' ? selectedColumn.alias ?? selectedColumn.column.split('.').at(-1)! : traversal.column.split('.').at(-1)!
       const compare = traversal.direction === 'desc' ? compareChunkValuesDescending : compareChunkValuesAscending
-      const decimal = resultColumnDefinition(withResolvedDefinitions(plan, table, input.getConnectionName()), key)?.kind === 'decimal'
+      const decimal = resultColumnDefinition(withResolvedDefinitions({ ...plan, source: { ...plan.source, table } }, input.getConnectionName()), key)?.kind === 'decimal'
       rows.sort((left, right) => compare(left[key], right[key], decimal))
       rebindDatabaseQueryObservationResult(fetchedRows, rows)
     }

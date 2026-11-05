@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
-import { DB, column, defineGeneratedTable, defineModel, resetDB } from '../src'
+import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
+import { DB, column, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 const drivers = [
@@ -47,6 +48,42 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
     expect(readPadded.get('amount')).toBe('12.30')
     expect(readPadded.get('discount')).toBeNull()
     expect((await Price.where('amount', '>', '12.31').get()).map(price => price.get('label'))).toEqual(['exact'])
+  })
+
+  it('converts cached rows for the builder that reads them', async () => {
+    const { prices } = await openPrices(driver)
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await DB.table(prices).insert({ label: 'padded', amount: '12.30' })
+
+    const named = await DB.table(prices.tableName).select('amount').cache(60).first()
+    const typed = await DB.table(prices).select('amount').cache(60).first()
+
+    expect(typed).toEqual({ amount: '12.30' })
+    expect(named).toEqual(await DB.table(prices.tableName).select('amount').first())
+  })
+
+  it('aggregates decimal columns through models and relations', async () => {
+    const { prices, schema } = await openPrices(driver)
+    const linesName = `holo_lines_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(linesName, (table) => {
+      table.id()
+      table.integer('price_id')
+      table.decimal('total')
+    })
+    onTestFinished(() => schema.dropTable(linesName))
+    const lines = defineGeneratedTable(linesName, { id: column.id(), price_id: column.integer(), total: column.decimal() })
+    const Line = defineModel(lines, { timestamps: false })
+    const Price = defineModel(prices, { timestamps: false, relations: { lines: hasMany(() => Line, 'price_id') } })
+    await DB.table(prices).insert([{ id: 1, label: 'low', amount: '1.25' }, { id: 2, label: 'high', amount: '2.50' }])
+    await DB.table(lines).insert([{ price_id: 1, total: '0.50' }, { price_id: 1, total: '1.00' }])
+
+    expect(await Price.sum('amount')).toBe(3.75)
+    expect(await Price.avg('amount')).toBe(1.875)
+    expect(await Price.min('amount')).toBe(1.25)
+    expect(await Price.max('amount')).toBe(2.5)
+    const withTotals = await Price.withSum('lines', 'total').orderBy('id').get()
+    expect(withTotals.map(price => (price.toJSON() as Record<string, unknown>).lines_sum_total)).toEqual([1.5, 0])
   })
 
   it('round-trips decimal text through the query builder', async () => {

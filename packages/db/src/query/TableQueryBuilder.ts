@@ -46,7 +46,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns } from './resultColumns'
+import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -1935,7 +1935,7 @@ export class TableQueryBuilder<
     recordDatabaseQueryDependencies(observationDependencies)
     const expired = cacheConfig?.ttl instanceof Date && cacheConfig.ttl.getTime() <= Date.now()
     if (!cacheConfig || this.plan.lockMode || expired) {
-      const rows = await this.queryRows<TRow>(statement)
+      const rows = this.convertRows(await this.queryRows<TRow>(statement))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -1956,7 +1956,7 @@ export class TableQueryBuilder<
 
     const flexible = cacheConfig.flexible
     if (flexible) {
-      const rows = await runQueryCacheOperation(runSource => bridge.flexible(
+      const rows = this.convertRows(await runQueryCacheOperation(runSource => bridge.flexible(
         cacheKey,
         flexible,
         () => runSource(() => this.queryRows<TRow>(statement)),
@@ -1964,7 +1964,7 @@ export class TableQueryBuilder<
           driver: cacheConfig.driver,
           dependencies,
         },
-      ))
+      )))
       await this.recordCollectedQueryObservation(
         activeDependencyCollector && collectObservation,
         observationDependencies,
@@ -1979,7 +1979,7 @@ export class TableQueryBuilder<
     }
 
     const ttl = normalizeAtomicQueryCacheTtl(cacheConfig.ttl)
-    const rows = await runQueryCacheOperation(runSource => bridge.flexible(
+    const rows = this.convertRows(await runQueryCacheOperation(runSource => bridge.flexible(
       cacheKey,
       ttl,
       () => runSource(() => this.queryRows<TRow>(statement)),
@@ -1987,7 +1987,7 @@ export class TableQueryBuilder<
         driver: cacheConfig.driver,
         dependencies,
       },
-    ))
+    )))
     await this.recordCollectedQueryObservation(
       activeDependencyCollector && collectObservation,
       observationDependencies,
@@ -1997,13 +1997,18 @@ export class TableQueryBuilder<
     return rows
   }
 
+  private convertRows<TRow extends Record<string, unknown>>(rows: TRow[]): TRow[] {
+    const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
+    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
+    return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+  }
+
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
     const { rows } = await this.connection.queryCompiled<TRow>(statement)
-    const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, this.plan)
     const aggregates = this.plan.selections.filter(selection => selection.kind === 'aggregate')
-    if (aggregates.length === 0 && convertedColumns.size === 0) return rows
+    if (aggregates.length === 0) return rows
     return rows.map(row => {
-      const values: Record<string, unknown> = readConvertedResultColumns(row, convertedColumns)
+      const values: Record<string, unknown> = { ...row }
       for (const selection of aggregates) {
         const value = row[selection.alias]
         if (value == null) continue

@@ -354,6 +354,13 @@ export function readsAsInteger(column: AnyColumnDefinition): boolean {
   return column.kind === 'integer' || column.kind === 'bigInteger' || (column.kind === 'id' && column.idStrategy === 'autoIncrement')
 }
 
+const DECIMAL_NUMBER_TEXT = /^-?\d+(?:\.\d+)?$/
+
+export function readNumericValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isNaN(value) ? undefined : value
+  return typeof value === 'string' && DECIMAL_NUMBER_TEXT.test(value) ? Number(value) : undefined
+}
+
 export function readsAsSQLiteDecimal(dialect: SchemaDialectName, column: AnyColumnDefinition): boolean {
   return dialect === 'sqlite' && column.kind === 'decimal'
 }
