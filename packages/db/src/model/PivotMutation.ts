@@ -1,8 +1,10 @@
 import { SecurityError } from '../core/errors'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { TableDefinition } from '../schema/types'
-import { assertColumnWritable, ownEntry } from './entityRuntime'
+import { normalizeDialectWriteValue, parseStoredDate } from '../schema/normalization'
+import type { SchemaDialectName } from '../schema/typeMapping'
+import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
+import { assertColumnWritable, canonicalStoredKey, ownEntry } from './entityRuntime'
 
 type Attributes = Record<string, unknown>
 type Entry = { id: unknown, attributes: Attributes }
@@ -12,12 +14,22 @@ type Context = {
   table: string | TableDefinition
   scope: Attributes
   relatedColumn: string
+  relatedKey: AnyColumnDefinition | undefined
+  dialect: SchemaDialectName
   allowedColumns: readonly string[]
   timestamps: boolean
   relationName: string
 }
 
 const bindingBudget = 900
+
+function bindableId(id: unknown): unknown {
+  return ArrayBuffer.isView(id) && !(id instanceof Uint8Array) ? new Uint8Array(id.buffer, id.byteOffset, id.byteLength) : id
+}
+
+function isScalarObjectId(id: unknown): id is Date | ArrayBufferView {
+  return id instanceof Date || ArrayBuffer.isView(id)
+}
 
 export class PivotMutation {
   constructor(private readonly context: Context, private readonly connection: DatabaseContext) {}
@@ -46,11 +58,12 @@ export class PivotMutation {
   async update(id: unknown, attributes: Attributes): Promise<number> {
     this.validate(attributes)
     if (Object.keys(attributes).length === 0) return 0
-    const [existing] = await this.read(this.connection, [id])
+    const key = bindableId(id)
+    const [existing] = await this.read(this.connection, [key])
     if (!existing || !this.changed(existing, attributes)) return 0
     const values = this.timestampAttributes(attributes, false)
     this.assertColumnsWritable(Object.keys(values))
-    await this.query(this.connection).where(this.context.relatedColumn, id).update(values)
+    await this.query(this.connection).where(this.context.relatedColumn, key).update(values)
     return 1
   }
 
@@ -64,10 +77,10 @@ export class PivotMutation {
 
     await this.connection.transaction(async connection => {
       const rows = await this.read(connection, kind === 'sync' ? undefined : entries.map(entry => entry.id))
-      const current = new Map(rows.map(row => [String(row[this.context.relatedColumn]), row]))
+      const current = new Map(rows.map(row => [this.keyIdentity(this.readKey(row[this.context.relatedColumn])), row]))
       const actions: Action[] = []
       for (const entry of entries) {
-        const existing = current.get(String(entry.id))
+        const existing = current.get(this.incomingKeyIdentity(entry.id))
         if (kind === 'toggle' && existing) {
           actions.push({ ...entry, kind: 'delete' })
           result.detached.push(entry.id)
@@ -80,12 +93,12 @@ export class PivotMutation {
         }
       }
       if (detachMissing) {
-        const desired = new Set(entries.map(entry => String(entry.id)))
-        for (const [key, row] of current) {
+        const desired = new Set(entries.map(entry => this.incomingKeyIdentity(entry.id)))
+        for (const row of rows) {
           const id = row[this.context.relatedColumn]
-          if (!desired.has(key) && typeof id !== 'undefined') {
+          if (!desired.has(this.keyIdentity(this.readKey(id))) && typeof id !== 'undefined') {
             actions.push({ kind: 'delete', id, attributes: {} })
-            result.detached.push(id)
+            result.detached.push(this.readKey(id))
           }
         }
       }
@@ -151,18 +164,42 @@ export class PivotMutation {
 
   private normalize(ids: unknown, attributes: Attributes = {}): Entry[] {
     if (ids == null) return []
-    if (Array.isArray(ids)) return ids.map(id => ({ id, attributes: { ...attributes } }))
-    if (typeof ids === 'object') {
+    if (Array.isArray(ids)) return ids.map(id => ({ id: bindableId(id), attributes: { ...attributes } }))
+    if (typeof ids === 'object' && !isScalarObjectId(ids)) {
       return Object.entries(ids as Record<string, Attributes>).map(([id, value]) => ({
         id: /^-?\d+$/.test(id) ? Number(id) : id,
         attributes: { ...(value ?? {}) },
       }))
     }
-    return [{ id: ids, attributes: { ...attributes } }]
+    return [{ id: bindableId(ids), attributes: { ...attributes } }]
+  }
+
+  private incomingKeyIdentity(value: unknown): unknown {
+    return this.keyIdentity(this.readKey(this.writeKey(value)))
+  }
+
+  private writeKey(value: unknown): unknown {
+    const column = this.dateKeyColumn()
+    return column ? normalizeDialectWriteValue(this.context.dialect, column, value) : value
+  }
+
+  private keyIdentity(key: unknown): unknown {
+    return isScalarObjectId(key) ? canonicalStoredKey(key) : `value:${String(key)}`
+  }
+
+  private readKey(value: unknown): unknown {
+    if (!this.dateKeyColumn() || this.context.dialect === 'sqlite') return value
+    const parsed = parseStoredDate(this.context.dialect, value)
+    return parsed instanceof Date && Number.isNaN(parsed.getTime()) ? value : parsed
+  }
+
+  private dateKeyColumn(): AnyColumnDefinition | undefined {
+    const column = this.context.relatedKey
+    return column?.kind === 'date' || column?.kind === 'datetime' || column?.kind === 'timestamp' ? column : undefined
   }
 
   private dedupe(entries: readonly Entry[]): Entry[] {
-    return [...new Map(entries.map(entry => [String(entry.id), entry])).values()]
+    return [...new Map(entries.map(entry => [this.keyIdentity(this.writeKey(entry.id)), entry])).values()]
   }
 
   private validate(attributes: Attributes): void {
