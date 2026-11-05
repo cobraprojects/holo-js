@@ -97,13 +97,13 @@ function sharedGate(identity: TransactionScopeIdentity): ExclusiveGate {
   return typeof identity === 'string' ? gateFor(namedGates, identity) : gateFor(objectGates, identity)
 }
 
-let shareAdapterGate: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
+let bindGateAdapter: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
 
 let readGate: (scheduler: QueryScheduler) => ExclusiveGate
 
 export class QueryScheduler {
   static {
-    shareAdapterGate = (scheduler, adapter) => {
+    bindGateAdapter = (scheduler, adapter) => {
       scheduler.gateAdapter = adapter
     }
     readGate = scheduler => scheduler.gate
@@ -292,7 +292,7 @@ export function createQueryScheduler(options: QuerySchedulerOptions): QuerySched
 
 export function createAdapterQueryScheduler(options: QuerySchedulerOptions, adapter: DriverAdapter): QueryScheduler {
   const scheduler = new QueryScheduler(options)
-  shareAdapterGate(scheduler, adapter)
+  bindGateAdapter(scheduler, adapter)
   return scheduler
 }
 
