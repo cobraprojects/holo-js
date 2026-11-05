@@ -170,6 +170,7 @@ export function createAggregateBackfillKey(query: DatabaseQueryObservation): str
     + stableStringify(query.aggregate)
     + ',"connectionName":'
     + stableStringify(query.connectionName)
+    + (query.aggregate?.kind === 'avg' ? ',"orderBy":' + stableStringify(query.orderBy) : '')
     + ',"predicates":'
     + stableStringify(query.predicates)
     + ',"tableName":'

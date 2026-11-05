@@ -15,6 +15,7 @@ import {
   createBackfillSelection,
   getBackfillDatabaseConnection,
   observedTableKey,
+  quoteTableReference,
   readBackfilledRows,
   readBackfilledValue,
 } from './query-backfill'
@@ -432,7 +433,7 @@ function compileGroupedWindowBackfillStatement(
   const upperBoundPlaceholder = placeholder(windowUpperBound)
   const derivedAlias = quote('__holo_grouped_rows')
   const rowNumberColumn = quote(GROUPED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quote(query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quoteTableReference(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,
