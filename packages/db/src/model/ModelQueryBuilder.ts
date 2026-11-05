@@ -54,6 +54,7 @@ import type {
   ModelWritableAttributeKey,
   ModelWritableColumnName,
   ModelWritableJsonColumnPath,
+  ModelAggregateColumn,
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
@@ -1763,7 +1764,7 @@ class ModelQueryBuilderBase<
     return value
   }
 
-  async sum(requestedColumn: ModelColumnName<TTable>): Promise<number> {
+  async sum(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number> {
     const { query, column } = this.resolveAggregateTarget(requestedColumn)
     if (query !== this) return query.sum(column as never)
     const entities = await this.get()
@@ -1781,11 +1782,11 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  average(column: ModelColumnName<TTable>): Promise<number | null> {
+  average(column: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
     return this.avg(column)
   }
 
-  async avg(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+  async avg(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
     const { query, column } = this.resolveAggregateTarget(requestedColumn)
     if (query !== this) return query.avg(column as never)
     const entities = await this.get()
@@ -1805,7 +1806,7 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async min(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+  async min(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
     const { query, column } = this.resolveAggregateTarget(requestedColumn)
     if (query !== this) return query.min(column as never)
     const entities = await this.get()
@@ -1829,7 +1830,7 @@ class ModelQueryBuilderBase<
     return result
   }
 
-  async max(requestedColumn: ModelColumnName<TTable>): Promise<number | null> {
+  async max(requestedColumn: ModelAggregateColumn<TTable, TJoinedTables>): Promise<number | null> {
     const { query, column } = this.resolveAggregateTarget(requestedColumn)
     if (query !== this) return query.max(column as never)
     const entities = await this.get()
