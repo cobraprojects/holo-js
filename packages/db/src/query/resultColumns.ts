@@ -7,7 +7,7 @@ const INTEGER_TEXT = /^-?\d+$/
 
 type ColumnReader = (value: unknown) => unknown
 
-type SelectedColumn = readonly [key: string, reader: ColumnReader | undefined]
+type SelectedColumn = readonly [key: string, definition: AnyColumnDefinition | undefined]
 
 function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
@@ -18,8 +18,8 @@ function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | 
   return column && readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
-function columnsOf(dialect: SchemaDialectName, table: TableDefinition | undefined): SelectedColumn[] {
-  return Object.entries(table?.columns ?? {}).map(([name, column]) => [name, columnReader(dialect, column)])
+function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
+  return Object.entries(table?.columns ?? {})
 }
 
 function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undefined> {
@@ -37,40 +37,48 @@ function unambiguousColumn(tables: ReadonlyMap<string, TableDefinition | undefin
   return owners.length === 1 ? owners[0]!.columns[name] : undefined
 }
 
-function unambiguousColumns(dialect: SchemaDialectName, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
+function unambiguousColumns(tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
   const names = new Set([...tables.values()].flatMap(table => Object.keys(table?.columns ?? {})))
-  return [...names].map(name => [name, columnReader(dialect, unambiguousColumn(tables, name))])
+  return [...names].map(name => [name, unambiguousColumn(tables, name)])
 }
 
-function selectedColumns(
-  dialect: SchemaDialectName,
-  selection: QueryColumnSelection,
-  tables: ReadonlyMap<string, TableDefinition | undefined>,
-): SelectedColumn[] {
+function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<string, TableDefinition | undefined>): SelectedColumn[] {
   const separator = selection.column.lastIndexOf('.')
   const name = selection.column.slice(separator + 1)
   if (separator < 0) {
-    return name === '*' ? unambiguousColumns(dialect, tables) : [[selection.alias ?? name, columnReader(dialect, unambiguousColumn(tables, name))]]
+    return name === '*' ? unambiguousColumns(tables) : [[selection.alias ?? name, unambiguousColumn(tables, name)]]
   }
   const table = tables.get(selection.column.slice(0, separator))
-  if (name === '*') return columnsOf(dialect, table)
-  const column = table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined
-  return [[selection.alias ?? name, columnReader(dialect, column)]]
+  if (name === '*') return columnsOf(table)
+  return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
+}
+
+function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
+  const tables = queryTables(plan)
+  const selected: readonly SelectedColumn[] = plan.selections.length === 0
+    ? unambiguousColumns(tables)
+    : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
+      ? selectedColumns(selection, tables)
+      : 'alias' in selection ? [[selection.alias, undefined]] : [])
+  const definitions = new Map<string, AnyColumnDefinition>()
+  for (const [key, definition] of selected) {
+    if (definition) definitions.set(key, definition)
+    else definitions.delete(key)
+  }
+  return definitions
+}
+
+export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyColumnDefinition | undefined {
+  return resultColumnDefinitions(plan).get(key)
 }
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
-  const tables = queryTables(plan)
-  const selected: readonly SelectedColumn[] = plan.selections.length === 0
-    ? unambiguousColumns(dialect, tables)
-    : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
-      ? selectedColumns(dialect, selection, tables)
-      : 'alias' in selection ? [[selection.alias, undefined]] : [])
   const columns = new Map<string, ColumnReader>()
-  for (const [key, reader] of selected) {
+  for (const [key, definition] of resultColumnDefinitions(plan)) {
+    const reader = columnReader(dialect, definition)
     if (reader) columns.set(key, reader)
-    else columns.delete(key)
   }
   return columns
 }

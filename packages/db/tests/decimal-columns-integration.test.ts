@@ -118,6 +118,14 @@ describe.each(drivers)('decimal columns on %s', (driver) => {
       }, `${prices.tableName}.amount`)
 
     expect(amounts).toEqual(['2.00', '9.00', '10.00'])
+    const projected: string[] = []
+    await DB.table(orders)
+      .join(prices, `${ordersName}.price_id`, '=', `${prices.tableName}.id`)
+      .select(`${prices.tableName}.amount`)
+      .chunkByIdDesc(2, (rows) => {
+        projected.push(...rows.map(row => String(row.amount)))
+      }, 'amount')
+    expect(projected).toEqual(['10.00', '9.00', '2.00'])
     const joined = () => DB.table(prices).join(orders, `${ordersName}.price_id`, '=', `${prices.tableName}.id`).where(`${prices.tableName}.label`, 'two')
     expect(await joined().select('amount').first()).toEqual({ amount: '2.00' })
     expect(await joined().first()).toMatchObject({ amount: '2.00', label: 'two', price_id: 2 })

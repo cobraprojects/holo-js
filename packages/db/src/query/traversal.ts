@@ -1,26 +1,21 @@
 import { rebindDatabaseQueryObservationResult } from '../cache'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
-import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
+import type { TableDefinition } from '../schema/types'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
+import { resultColumnDefinition } from './resultColumns'
 import type { QueryDirection, SelectQueryPlan } from './ast'
 import type { TableQueryBuilder } from './TableQueryBuilder'
 import type { CursorPaginatedResult } from './types'
 
-function traversalColumnDefinition(
-  plan: SelectQueryPlan,
-  table: TableDefinition | undefined,
-  column: string,
-  connectionName: string,
-): AnyColumnDefinition | undefined {
-  const separator = column.lastIndexOf('.')
-  const name = column.slice(separator + 1)
-  const qualifier = separator < 0 ? undefined : column.slice(0, separator)
-  const join = qualifier === undefined || qualifier === (plan.source.alias ?? plan.source.tableName)
-    ? undefined
-    : plan.joins.find(candidate => candidate.table !== undefined && (candidate.alias ?? candidate.table) === qualifier)
-  const definition = join ? join.definition ?? getConnectionGeneratedTableDefinition(join.table!, connectionName) : table
-  return definition && Object.hasOwn(definition.columns, name) ? definition.columns[name] : undefined
+function withResolvedDefinitions(plan: SelectQueryPlan, table: TableDefinition | undefined, connectionName: string): SelectQueryPlan {
+  return {
+    ...plan,
+    source: { ...plan.source, table },
+    joins: plan.joins.map(join => join.table && !join.definition
+      ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
+      : join),
+  }
 }
 
 type QueryTraversal = {
@@ -76,9 +71,7 @@ export async function* queryBatches<
     if (traversal.column && sortRows) {
       const key = selectedColumn?.kind === 'column' ? selectedColumn.alias ?? selectedColumn.column.split('.').at(-1)! : traversal.column.split('.').at(-1)!
       const compare = traversal.direction === 'desc' ? compareChunkValuesDescending : compareChunkValuesAscending
-      const aliasedColumn = plan.selections.find(selection => selection.kind === 'column' && selection.alias === traversal.column)
-      const definitionColumn = aliasedColumn?.kind === 'column' ? aliasedColumn.column : traversal.column
-      const decimal = traversalColumnDefinition(plan, table, definitionColumn, input.getConnectionName())?.kind === 'decimal'
+      const decimal = resultColumnDefinition(withResolvedDefinitions(plan, table, input.getConnectionName()), key)?.kind === 'decimal'
       rows.sort((left, right) => compare(left[key], right[key], decimal))
       rebindDatabaseQueryObservationResult(fetchedRows, rows)
     }
