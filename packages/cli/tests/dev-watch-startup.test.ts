@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -7,7 +7,8 @@ import { expect, it, onTestFinished } from 'vitest'
 import type { WatchFactory, WatchHandle } from '../src/cli-types'
 import { runProjectDevServer } from '../src/dev'
 import { DISCOVERY_WATCH_PROBE_PATH } from '../src/discovery-watch'
-import { writeOutputFile } from '../src/written-outputs'
+import { isUnchangedWrittenOutput, writeOutputFile } from '../src/written-outputs'
+import { runProjectPrepare } from '../src/project-prepare'
 
 type WatchListener = (eventType: string, fileName: string) => void
 
@@ -186,3 +187,15 @@ it('re-prepares once when the user edits a dependency manifest the initial prepa
 
   expect(calls).toEqual(['live', 'prepare', 'prepare', 'spawn'])
 })
+
+it('keeps a dependency manifest edit for a full prepare when an incremental prepare runs first', async () => {
+  const root = await createProject()
+  const manifest = join(root, 'package.json')
+  await rm(join(root, 'server/models/User.ts'))
+  await runProjectPrepare(root, undefined, { command: 'dev' })
+  await writeFile(manifest, JSON.stringify({ ...JSON.parse(await readFile(manifest, 'utf8')), private: true }, null, 2))
+  await runProjectPrepare(root, undefined, { command: 'dev', changes: [{ path: 'config/app.mjs', kind: 'changed' }] })
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(false)
+  await runProjectPrepare(root, undefined, { command: 'dev', reason: 'dependencies-changed' })
+  await expect(isUnchangedWrittenOutput(manifest)).resolves.toBe(true)
+}, 60_000)

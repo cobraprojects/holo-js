@@ -66,14 +66,14 @@ export async function runProjectPrepare(
   options: ProjectPrepareOptions = {},
 ): Promise<void> {
   options.signal?.throwIfAborted()
-  await recordPackageManifestBaseline(projectRoot)
-  const project = options.prepareSchema === false
-    ? await ensureProjectConfig(projectRoot)
-    : await prepareSchemaArtifacts(projectRoot, false, options.signal)
   const command = options.command ?? 'prepare'
   const run: HoloProjectPrepareRun = options.changes && command === 'dev'
     ? { kind: 'incremental', command: 'dev', changes: options.changes }
     : { kind: 'full', command, reason: options.reason ?? (command === 'prepare' ? 'explicit' : 'initial') }
+  if (run.kind === 'full') await recordPackageManifestBaseline(projectRoot)
+  const project = options.prepareSchema === false
+    ? await ensureProjectConfig(projectRoot)
+    : await prepareSchemaArtifacts(projectRoot, false, options.signal)
   await prepareFrameworkPass(projectRoot, project, run, io, options)
   options.signal?.throwIfAborted()
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
