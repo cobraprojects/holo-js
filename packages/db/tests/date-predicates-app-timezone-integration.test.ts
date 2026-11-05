@@ -32,8 +32,8 @@ function useAppTimezoneAt(now: Date, timezone = 'Asia/Tokyo'): void {
   })
 }
 
-async function createEventsTable(driver: typeof drivers[number]) {
-  const { schema } = await openDatabase(driver)
+async function createEventsTable(driver: typeof drivers[number], opened?: Awaited<ReturnType<typeof openDatabase>>) {
+  const { schema } = opened ?? await openDatabase(driver)
   const name = `date_events_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   onTestFinished(async () => {
     await schema.dropTable(name)
@@ -130,6 +130,19 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
     await expect(titles(DB.table(events).whereTime('at', '23:30:00'))).resolves.toEqual(['summer'])
     await expect(titles(DB.table(events).whereTime('at', '12:30:00'))).resolves.toEqual(['model'])
     await expect(titles(DB.table(events).whereMonth('at', 6))).resolves.toEqual(['summer'])
+  })
+
+  it('compares Date values with a joined DATE column as app-timezone calendar dates', async () => {
+    useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
+    const opened = await openDatabase(driver)
+    const { events } = await createEventsTable(driver, opened)
+    const { events: others } = await createEventsTable(driver, opened)
+    const joined = () => DB.table(events).join(others, `${events.tableName}.id`, '=', `${others.tableName}.id`).orderBy(`${events.tableName}.id`)
+    const losAngelesNoonNov5 = new Date('2026-11-05T20:00:00Z')
+
+    await expect(joined().whereDate(`${others.tableName}.day`, '2026-11-05').pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
+    await expect(joined().where(`${others.tableName}.day`, losAngelesNoonNov5).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
+    await expect(joined().whereIn(`${others.tableName}.day`, [losAngelesNoonNov5]).pluck(`${events.tableName}.title` as never)).resolves.toEqual(['calendar'])
   })
 
   it('matches calendar text by its own day on a table without a column definition', async () => {

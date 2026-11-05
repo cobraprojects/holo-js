@@ -658,7 +658,18 @@ export class TableQueryBuilder<
   }
 
   private isDateColumn(column: string): boolean {
-    return this.getSourceColumnDefinition(column)?.kind === 'date'
+    return (this.getSourceColumnDefinition(column) ?? this.getJoinedColumnDefinition(column))?.kind === 'date'
+  }
+
+  private getJoinedColumnDefinition(column: string): AnyColumnDefinition | undefined {
+    const separator = column.lastIndexOf('.')
+    if (separator === -1) return undefined
+
+    const qualifier = column.slice(0, separator)
+    const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
+      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      : alias === qualifier))
+    return join?.definition?.columns[column.slice(separator + 1)]
   }
 
   private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
