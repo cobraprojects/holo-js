@@ -1,16 +1,13 @@
-import { isCanonicalIntegerText } from '../schema/normalization'
+import { canonicalNumericText } from '../schema/normalization'
 import { canonicalStoredKey } from './entityRuntime'
 
-function integerIdentity(value: unknown): unknown {
-  if (isCanonicalIntegerText(value)) {
-    return Number.isSafeInteger(Number(value)) ? Number(value) : BigInt(value)
+function dictionaryKey(value: unknown): unknown {
+  if (value instanceof Date) {
+    return value
   }
 
-  return typeof value === 'bigint' && Number.isSafeInteger(Number(value)) ? Number(value) : value
-}
-
-function dictionaryKey(value: unknown): unknown {
-  return value instanceof Date ? value : canonicalStoredKey(integerIdentity(value))
+  const numeric = canonicalNumericText(value)
+  return numeric === undefined ? canonicalStoredKey(value) : `numeric:${numeric}`
 }
 
 export class StoredKeyMap<TValue> {

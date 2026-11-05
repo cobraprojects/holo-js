@@ -331,6 +331,23 @@ describe('bounded relation loading', () => {
     expect(canonicalStoredKey(circular)).toBe(circular)
   })
 
+  it('matches relation dictionary numeric keys by value across integer, bigint, decimal and numeric text', () => {
+    const parents = new StoredKeyMap<string>([[1, 'one'], ['2.50', 'two and a half'], [9007199254740993n, 'big'], [0, 'zero']])
+    expect(parents.get('1.00')).toBe('one')
+    expect(parents.get('1')).toBe('one')
+    expect(parents.get(1n)).toBe('one')
+    expect(parents.get('1.50')).toBeUndefined()
+    expect(parents.get('2.5')).toBe('two and a half')
+    expect(parents.get(2.5)).toBe('two and a half')
+    expect(parents.get('2')).toBeUndefined()
+    expect(parents.get('9007199254740993.00')).toBe('big')
+    expect(parents.get('9007199254740992')).toBeUndefined()
+    expect(parents.get('-0.00')).toBe('zero')
+    expect(parents.get('01')).toBeUndefined()
+    expect(parents.get('1e0')).toBeUndefined()
+    expect(parents.get(true)).toBeUndefined()
+  })
+
   it('matches relation dictionary Date keys by instance so millisecond-truncated timestamps never attach unrelated parents', () => {
     const parents = new StoredKeyMap<string>([[new Date(1000), 'first']])
     expect(parents.get(new Date(1000))).toBeUndefined()

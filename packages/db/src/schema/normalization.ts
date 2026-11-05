@@ -107,6 +107,23 @@ function plainNumberText(value: number): string {
   return point >= digits.length ? `${sign}${digits.padEnd(point, '0')}` : `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
 }
 
+const DECIMAL_TEXT = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/
+
+export function canonicalNumericText(value: unknown): string | undefined {
+  const text = typeof value === 'number' && Number.isFinite(value)
+    ? plainNumberText(value)
+    : typeof value === 'bigint' ? String(value) : value
+  const match = typeof text === 'string' ? DECIMAL_TEXT.exec(text) : null
+  if (!match) {
+    return undefined
+  }
+
+  const [, sign = '', integer = '', fraction = ''] = match
+  const significant = fraction.replace(/0+$/, '')
+  const magnitude = significant === '' ? integer : `${integer}.${significant}`
+  return magnitude === '0' ? magnitude : `${sign}${magnitude}`
+}
+
 export function readSQLiteDecimal(value: unknown): unknown {
   const text = typeof value === 'number' && Number.isFinite(value)
     ? plainNumberText(value)

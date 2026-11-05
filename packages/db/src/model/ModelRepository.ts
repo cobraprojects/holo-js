@@ -26,7 +26,7 @@ import { assertAttributeNameAllowed, assertColumnWritable, ownEntry, type Reject
 import { StoredKeyMap, StoredKeySet } from './storedKeyCollections'
 import { PivotMutation } from './PivotMutation'
 import { PIVOT_TIMESTAMP_COLUMNS } from './relations'
-import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
+import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractionalKeyFor, isKeySeparableQuery, isPaginatedRelationQuery, loadRelationKeyChunks, retrieveRelation, retrievePivotRelation, indexRelation, groupRelation, singleStatementRelationKeys } from './relationRetrieval'
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -3724,7 +3724,9 @@ export class ModelRepository<
     })
     return rows.map(row => {
       const read = { ...row }
-      for (const [pivotColumn, definition] of columns) read[pivotColumn] = normalizeDialectReadValue(dialect, definition, row[pivotColumn])
+      for (const [pivotColumn, definition] of columns) {
+        if (!isFractionalKeyFor(definition, row[pivotColumn])) read[pivotColumn] = normalizeDialectReadValue(dialect, definition, row[pivotColumn])
+      }
       return read
     })
   }

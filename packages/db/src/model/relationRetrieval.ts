@@ -1,10 +1,11 @@
 import { hasActiveDatabaseDependencyCollector, readDatabaseQueryObservationCount, truncateDatabaseQueryObservations } from '../cache'
 import { isInlineIntegerValue } from '../query/ast'
 import { hasQueryCache } from '../query/TableQueryBuilder'
-import { canonicalStoredKey } from './entityRuntime'
+import { canonicalNumericText, readIntegerKey } from '../schema/normalization'
+import { canonicalStoredKey, ownEntry } from './entityRuntime'
 import { StoredKeyMap } from './storedKeyCollections'
 import type { TableQueryBuilder } from '../query/TableQueryBuilder'
-import type { ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
+import type { AnyColumnDefinition, ColumnDefinition, LogicalColumnKind, TableDefinition } from '../schema/types'
 import type { QueryPredicateNode, SelectQueryPlan } from '../query/ast'
 import type { Entity } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
@@ -113,6 +114,25 @@ export async function loadRelationKeyChunks<TRow>(
   return rows
 }
 
+export function isIntegerKeyColumn(definition: AnyColumnDefinition | undefined): boolean {
+  return definition?.kind === 'integer'
+    || definition?.kind === 'bigInteger'
+    || (definition?.kind === 'id' && definition.idStrategy === 'autoIncrement')
+}
+
+function keysForColumn(keys: readonly unknown[], definition: AnyColumnDefinition | undefined): unknown[] {
+  if (!isIntegerKeyColumn(definition)) return [...keys]
+  return distinctStoredKeys(keys.flatMap((key) => {
+    const numeric = canonicalNumericText(key)
+    if (numeric === undefined || typeof key === 'number' || typeof key === 'bigint') return [key]
+    return numeric.includes('.') ? [] : [readIntegerKey(numeric)]
+  }))
+}
+
+export function isFractionalKeyFor(definition: AnyColumnDefinition | undefined, value: unknown): boolean {
+  return isIntegerKeyColumn(definition) && canonicalNumericText(value)?.includes('.') === true
+}
+
 export async function retrieveRelation(
   keys: readonly unknown[],
   createQuery: () => ModelQueryBuilder,
@@ -124,9 +144,11 @@ export async function retrieveRelation(
   let plan: SelectQueryPlan | undefined
   const entities: Entity[] = []
   const probe = createQuery()
+  const table = probe.getTableQueryBuilder().getPlan().source.table
+  const columnKeys = keysForColumn(keys, table ? ownEntry(table.columns, column) : undefined)
   const paginated = isPaginatedRelationQuery(probe)
   if (typeof observationCount === 'number') plan = probe.getTableQueryBuilder().getPlan()
-  for (const [index, chunk] of chunkRelationKeys(keys, paginated).entries()) {
+  for (const [index, chunk] of chunkRelationKeys(columnKeys, paginated).entries()) {
     const query = index === 0 ? probe : createQuery()
     for (const entity of await query.where(column, 'in', chunk).get()) entities.push(entity)
   }
