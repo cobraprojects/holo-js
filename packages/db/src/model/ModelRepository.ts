@@ -1055,13 +1055,13 @@ export class ModelRepository<
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: typeof ownerPredicates !== 'undefined',
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.ownerKey,
           operator: '=' as const,
           value: ownerKey,
-        })]),
+        }), ...(ownerPredicates ?? [])]),
         selections: [],
         tableName: related.definition.table.tableName,
       }), resultPath))
