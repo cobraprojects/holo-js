@@ -9,7 +9,6 @@ import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
-import { NumericAdjustment } from './query/NumericAdjustment'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -1532,7 +1531,7 @@ function createMutationRowDependencies(
     return current ?? [wildcard]
   }
 
-  if (current === undefined || assignedKeys.some(([, value]) => value instanceof NumericAdjustment)) {
+  if (current === undefined || assignedKeys.some(([, value]) => typeof value === 'object' && value !== null)) {
     return [wildcard]
   }
 

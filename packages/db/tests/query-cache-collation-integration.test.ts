@@ -276,6 +276,21 @@ describe('query cache invalidation by an upsert that changes a key spelled in an
 
     expect(await cachedEmail()).toBe('a')
   })
+
+  it('refreshes a cached read by the new key after a JSON update of the key', async () => {
+    const { adapter } = await openDatabase('sqlite')
+    const name = `documents_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await adapter.execute(`CREATE TABLE ${name} (id TEXT PRIMARY KEY, label TEXT NOT NULL)`)
+    await adapter.execute(`INSERT INTO ${name} (id, label) VALUES ('{"k":1}', 'first')`)
+    const cachedLabel = async () => (await DB.table(name).where('id', '{"k":2}').cache(60).first())?.label
+    expect(await cachedLabel()).toBeUndefined()
+
+    await DB.table(name).where('id', '{"k":1}').updateJson('id->k', 2)
+
+    expect(await cachedLabel()).toBe('first')
+  })
 })
 
 describe('query cache invalidation by a temporary NOCASE key on sqlite', () => {
