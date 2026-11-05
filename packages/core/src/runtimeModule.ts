@@ -696,14 +696,17 @@ function sameWidthReplacement(functionName: string, original: string, parenthesi
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
-const sourceModuleResolver = [
-  '(specifier, parentURL, meta) => {',
-  'if (globalThis.Bun) return meta.resolve(specifier, parentURL);',
-  `const request = ${JSON.stringify(importerResolutionRequest)};`,
-  'const hooks = globalThis.process.getBuiltinModule(\'node:module\').registerHooks({ resolve: (next, context, nextResolve) => next === request ? nextResolve(specifier, { ...context, parentURL }) : nextResolve(next, context) });',
-  'try { return meta.resolve(request) } finally { hooks.deregister() }',
-  '}',
-].join(' ')
+function sourceModuleResolveSource(parentURL: string): string {
+  return [
+    'specifier => {',
+    'const target = `${specifier}`;',
+    `if (globalThis.Bun) return import.meta.resolve(target, ${parentURL});`,
+    `const marker = ${JSON.stringify(importerResolutionRequest)};`,
+    `const hooks = globalThis.process.getBuiltinModule('node:module').registerHooks({ resolve: (request, context, nextResolve) => request === marker ? nextResolve(target, { ...context, parentURL: ${parentURL} }) : nextResolve(request, context) });`,
+    'try { return import.meta.resolve(marker) } finally { hooks.deregister() }',
+    '}',
+  ].join(' ')
+}
 
 function createSourceModuleUrlPlugin(): Plugin {
   return {
@@ -812,7 +815,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: specifier => (${sourceModuleResolver})(\`\${specifier}\`, ${sourceValues.url}, import.meta) } }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: ${sourceModuleResolveSource(sourceValues.url)} } }\n`)
         return { contents: fragments.join(''), loader }
       })
     },
