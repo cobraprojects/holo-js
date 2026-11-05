@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
@@ -316,6 +318,7 @@ async function discoverProjectRegistry(
   const failedCommands: GeneratedCommandRegistryEntry[] = []
   for (const filePath of commandFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const sourceHash = await hashSourceFile(filePath)
     const bundleError = commandBundleErrors.get(filePath)
     const loaded = bundleError === undefined ? await importCommandModule(modules, filePath) : { loadError: bundleError }
     if ('loadError' in loaded) {
@@ -325,6 +328,7 @@ async function discoverProjectRegistry(
         aliases: [],
         description: `Failed to load: ${loaded.loadError}`,
         loadFailed: true,
+        ...(sourceHash ? { sourceHash } : {}),
       })
       continue
     }
@@ -341,6 +345,7 @@ async function discoverProjectRegistry(
       aliases,
       description: command.description,
       ...(command.usage ? { usage: command.usage } : {}),
+      ...(sourceHash ? { sourceHash } : {}),
     })
   }
   assertUniqueEntries('command', commands)
@@ -680,9 +685,20 @@ async function isCommandRegistryCurrent(
   if (registry.paths.commands !== config.paths.commands) return false
 
   const commandFiles = await collectFiles(resolve(projectRoot, config.paths.commands))
-  const registeredPaths = new Set(registry.commands.map(entry => entry.sourcePath))
-  return commandFiles.length === registeredPaths.size
-    && commandFiles.every(filePath => registeredPaths.has(makeProjectRelativePath(projectRoot, filePath)))
+  const registeredHashes = new Map(registry.commands.map(entry => [entry.sourcePath, entry.sourceHash]))
+  if (commandFiles.length !== registeredHashes.size) return false
+
+  for (const filePath of commandFiles) {
+    const registeredHash = registeredHashes.get(makeProjectRelativePath(projectRoot, filePath))
+    if (registeredHash === undefined || registeredHash !== await hashSourceFile(filePath)) return false
+  }
+
+  return true
+}
+
+async function hashSourceFile(filePath: string): Promise<string | undefined> {
+  const contents = await readFile(filePath).catch(() => undefined)
+  return contents === undefined ? undefined : createHash('sha256').update(contents).digest('hex')
 }
 
 export async function discoverAppCommands(
