@@ -492,7 +492,7 @@ All database errors extend `DatabaseError` and carry a `code` string. Import the
 | `SchemaError` | `SCHEMA_ERROR` | A schema or migration operation is invalid |
 | `RelationError` | `RELATION_ERROR` | A relationship is misconfigured |
 | `ModelNotFoundException` | `MODEL_NOT_FOUND` | `findOrFail()` and similar methods find nothing. Has `statusCode: 404` |
-| `HydrationError`, `SerializationError`, `CompilerError` | | Building or reading a result failed |
+| `HydrationError`, `SerializationError`, `CompilerError` | | Building or reading a result failed, or a value can't be written to its column |
 
 ```ts
 import { ModelNotFoundException } from '@holo-js/db'
