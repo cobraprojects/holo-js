@@ -23,18 +23,19 @@ async function openAuthors(driver: Driver) {
     table.integer('id').primaryKey()
     table.integer('author_id')
     table.string('title')
+    table.integer('score').default(0)
   })
   onTestFinished(async () => {
     await schema.dropTable(postsName)
     await schema.dropTable(authorsName)
   })
   const authors = defineGeneratedTable(authorsName, { id: column.id(), name: column.string() })
-  const posts = defineGeneratedTable(postsName, { id: column.id(), author_id: column.integer(), title: column.string() })
+  const posts = defineGeneratedTable(postsName, { id: column.id(), author_id: column.integer(), title: column.string(), score: column.integer() })
   await db.table(authors).insert([{ id: 1, name: 'Ada' }, { id: 2, name: 'Grace' }])
   await db.table(posts).insert([
-    { id: 1, author_id: 1, title: 'first' },
-    { id: 2, author_id: 1, title: 'second' },
-    { id: 3, author_id: 2, title: 'other' },
+    { id: 1, author_id: 1, title: 'first', score: 9 },
+    { id: 2, author_id: 1, title: 'second', score: 5 },
+    { id: 3, author_id: 2, title: 'other', score: 1 },
   ])
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
   const Post = defineModel(posts, { timestamps: false })
@@ -82,6 +83,18 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     expect(JSON.stringify(subscription.current.data)).toContain('"second"')
   })
 
+  it('loads the next top row for a hasOne ordered by a call-time constraint', async () => {
+    const { db, posts, Author } = await openAuthors(driver)
+    const handler = () => db.model(Author).query().with('post', query => query.orderBy('score', 'desc')).orderBy('id').getJson()
+    const subscription = await subscribe(handler)
+    expect(JSON.stringify(subscription.current.data)).toContain('"first"')
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).where('id', 1).delete() }))
+
+    expect(subscription.current.data).toEqual(await handler())
+    expect(JSON.stringify(subscription.current.data)).toContain('"second"')
+  })
+
   it('loads the next matching row for latestOfMany', async () => {
     const { db, posts, Author } = await openAuthors(driver)
     const handler = () => db.model(Author).query().with('latestPost').orderBy('id').getJson()
@@ -110,7 +123,7 @@ describe.each(drivers)('realtime hasOne relations after deleting the loaded row 
     const handler = () => db.model(Author).query().with({ post: query => query.orderBy('id', 'desc') }).orderBy('id').getJson()
     const subscription = await subscribe(handler)
 
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).insert({ id: 4, author_id: 1, title: 'newest' }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(posts).insert({ id: 4, author_id: 1, title: 'newest', score: 0 }) }))
     expect(subscription.current.data).toEqual(await handler())
     expect(JSON.stringify(subscription.current.data)).toContain('"newest"')
 
