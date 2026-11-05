@@ -112,6 +112,8 @@ export default defineModel('countries', {
 
 Models don't support composite primary keys, as in Laravel. A model on a table whose primary key has several columns throws `SchemaError` when an operation needs its key, such as `find()`, `create()` or `save()`, unless you set `primaryKey` to one of them. Use such a table as a `belongsToMany` pivot instead. See [primary(columns)](/database/migrations#primary-columns).
 
+An `id()` key is typed `number`, so the model reads it as it reads `integer()` and `bigInteger()` columns. A key beyond `Number.MAX_SAFE_INTEGER` throws a `HydrationError` on every database. If a table's keys can pass that range, use [UUID, ULID, or Snowflake keys](#uuid-ulid-and-snowflake-keys), which are read as strings.
+
 ### Timestamps
 
 If the table has `created_at` and `updated_at` columns, Holo fills them on create and refreshes `updated_at` on every save. Add both columns in a migration with `table.timestamps()`.

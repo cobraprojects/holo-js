@@ -59,7 +59,7 @@ const userId = await DB.table('users').insertGetId({
 })
 ```
 
-A model whose table is in the Generated schema types its `id()` key as `number`, so it reads the key like any other integer column: on every database, a key beyond `Number.MAX_SAFE_INTEGER` throws a `HydrationError` when the model reads it, including the key `create()` gets back. `create()` runs in its own transaction, so it rolls the insert back; inside your own transaction, the insert stays until that transaction rolls back. If a table's keys can pass that range, use `uuid()`, `ulid()` or `snowflake()` keys, which are read as strings. On PostgreSQL and SQLite, an [untyped model](/database/connections#point-a-model-at-a-connection) reads such a key as its exact text.
+A model whose table is in the Generated schema throws a `HydrationError` instead when it reads such a key, including the one `create()` gets back. `create()` then rolls back the insert, unless you run it inside your own transaction. See [Primary keys](/orm/#primary-keys).
 
 ### insertOrIgnore()
 

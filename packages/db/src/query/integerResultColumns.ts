@@ -4,10 +4,10 @@ import type { QueryColumnSelection, SelectQueryPlan } from './ast'
 
 const INTEGER_TEXT = /^-?\d+$/
 
-type SelectedColumn = readonly [key: string, integer: AnyColumnDefinition | undefined]
+type SelectedColumn = readonly [key: string, integer: boolean]
 
-function integerColumn(column: AnyColumnDefinition | undefined): AnyColumnDefinition | undefined {
-  return column && readsAsInteger(column) ? column : undefined
+function integerColumn(column: AnyColumnDefinition | undefined): boolean {
+  return column !== undefined && readsAsInteger(column)
 }
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
@@ -35,7 +35,7 @@ function selectedColumns(
   return [[selection.alias ?? name, integerColumn(column)]]
 }
 
-export type IntegerResultColumns = ReadonlyMap<string, AnyColumnDefinition>
+export type IntegerResultColumns = ReadonlySet<string>
 
 export function resolveIntegerResultColumns(plan: SelectQueryPlan): IntegerResultColumns {
   const unqualifiedTable = plan.joins.length === 0 ? plan.source.table : undefined
@@ -44,10 +44,10 @@ export function resolveIntegerResultColumns(plan: SelectQueryPlan): IntegerResul
     ? columnsOf(unqualifiedTable)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
       ? selectedColumns(selection, tables, unqualifiedTable)
-      : 'alias' in selection ? [[selection.alias, undefined]] : [])
-  const columns = new Map<string, AnyColumnDefinition>()
+      : 'alias' in selection ? [[selection.alias, false]] : [])
+  const columns = new Set<string>()
   for (const [key, integer] of selected) {
-    if (integer) columns.set(key, integer)
+    if (integer) columns.add(key)
     else columns.delete(key)
   }
   return columns
@@ -57,15 +57,15 @@ function readsIntegerText(value: unknown): value is bigint | string {
   return typeof value === 'bigint' || (typeof value === 'string' && INTEGER_TEXT.test(value))
 }
 
-function readsInteger(value: unknown): boolean {
+function holdsInteger(value: unknown): boolean {
   return typeof value === 'number' || readsIntegerText(value)
 }
 
 export function readIntegerResultColumns(row: Record<string, unknown>, columns: IntegerResultColumns): Record<string, unknown> {
   const values: Record<string, unknown> = { ...row }
-  for (const key of columns.keys()) {
+  for (const key of columns) {
     const value = row[key]
-    if (readsInteger(value)) values[key] = parseInteger(value)
+    if (holdsInteger(value)) values[key] = parseInteger(value)
   }
   return values
 }
