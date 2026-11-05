@@ -357,6 +357,7 @@ const DATABASE_DEPENDENCY_METADATA_KEY = '__holoDatabaseDependencyMetadata__'
 const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
+const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 
@@ -1329,10 +1330,49 @@ function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionNam
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
 }
 
+function isCollatedValue(value: unknown, collatedStrings: boolean): boolean {
+  return collatedStrings && typeof value === 'string'
+}
+
+function collectCollatedColumns(
+  predicates: readonly QueryPredicateNode[],
+  records: readonly Readonly<Record<string, unknown>>[],
+  collatedStrings: boolean,
+  columns = new Set<string>(),
+): ReadonlySet<string> {
+  if (!collatedStrings) {
+    return columns
+  }
+
+  for (const predicate of predicates) {
+    if (predicate.kind === 'comparison') {
+      if (readExactPredicateValues(predicate).some(value => isCollatedValue(value, collatedStrings))) {
+        columns.add(getColumnName(predicate.column))
+      }
+      continue
+    }
+
+    if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
+      collectCollatedColumns(predicate.predicates, [], collatedStrings, columns)
+    }
+  }
+
+  for (const record of records) {
+    for (const [columnName, value] of Object.entries(record)) {
+      if (isCollatedValue(value, collatedStrings)) {
+        columns.add(getColumnName(columnName))
+      }
+    }
+  }
+
+  return columns
+}
+
 function createMutationRowDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>>,
+  collatedStrings: boolean,
 ): readonly string[] {
   const wildcard = createTableRowWildcardCacheDependency(connectionName, plan.source.tableName)
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
@@ -1340,7 +1380,10 @@ function createMutationRowDependencies(
     return [wildcard]
   }
 
-  const current = createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, findExactPrimaryKeyValue(plan.predicates, primaryKey))
+  const createRowDependency = (value: unknown) => isCollatedValue(value, collatedStrings)
+    ? undefined
+    : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
+  const current = createRowDependency(findExactPrimaryKeyValue(plan.predicates, primaryKey))
   const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
   if (assignedKeys.length === 0) {
     return [current ?? wildcard]
@@ -1352,7 +1395,7 @@ function createMutationRowDependencies(
 
   const dependencies = new Set([current])
   for (const [, value] of assignedKeys) {
-    dependencies.add(createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value) ?? wildcard)
+    dependencies.add(createRowDependency(value) ?? wildcard)
   }
 
   return [...dependencies]
@@ -1397,11 +1440,16 @@ function collectExactPredicateDependencies(
   connectionName: string,
   tableName: string,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
 ): readonly string[] {
   const dependencies = new Set<string>()
   for (const predicate of predicates) {
     const values = readExactPredicateValues(predicate)
     if (values.length > 0 && predicate.kind === 'comparison') {
+      if (excludedColumns.has(getColumnName(predicate.column))) {
+        continue
+      }
+
       for (const value of values) {
         const dependency = exact
           ? createTableExactPredicateCacheDependency(
@@ -1424,7 +1472,7 @@ function collectExactPredicateDependencies(
     }
 
     if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
-      for (const dependency of collectExactPredicateDependencies(predicate.predicates, connectionName, tableName, exact)) {
+      for (const dependency of collectExactPredicateDependencies(predicate.predicates, connectionName, tableName, exact, excludedColumns)) {
         dependencies.add(dependency)
       }
     }
@@ -1439,10 +1487,15 @@ function appendExactPredicateDependencyEntries(
   connectionName: string,
   tableName: string,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
 ): void {
   for (const predicate of predicates) {
     const values = readExactPredicateValues(predicate)
     if (values.length > 0 && predicate.kind === 'comparison') {
+      if (excludedColumns.has(getColumnName(predicate.column))) {
+        continue
+      }
+
       for (const value of values) {
         const entry = createPredicateDependencyEntry(
           connectionName,
@@ -1459,7 +1512,7 @@ function appendExactPredicateDependencyEntries(
     }
 
     if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
-      appendExactPredicateDependencyEntries(target, predicate.predicates, connectionName, tableName, exact)
+      appendExactPredicateDependencyEntries(target, predicate.predicates, connectionName, tableName, exact, excludedColumns)
     }
   }
 }
@@ -1469,9 +1522,14 @@ function collectRecordPredicateDependencies(
   tableName: string,
   record: Readonly<Record<string, unknown>>,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
 ): readonly string[] {
   const dependencies = new Set<string>()
   for (const [columnName, value] of Object.entries(record)) {
+    if (excludedColumns.has(getColumnName(columnName))) {
+      continue
+    }
+
     const dependency = exact
       ? createTableExactPredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
       : createTablePredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
@@ -1489,8 +1547,13 @@ function appendRecordPredicateDependencyEntries(
   tableName: string,
   record: Readonly<Record<string, unknown>>,
   exact = false,
+  excludedColumns: ReadonlySet<string> = EMPTY_COLUMNS,
 ): void {
   for (const [columnName, value] of Object.entries(record)) {
+    if (excludedColumns.has(getColumnName(columnName))) {
+      continue
+    }
+
     const entry = createPredicateDependencyEntry(connectionName, tableName, getColumnName(columnName), value, exact)
     if (entry) {
       target.set(entry.dependency, entry)
@@ -2032,8 +2095,9 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
+  collatedStrings = false,
 ): readonly string[] {
-  return inferAutomaticQueryCacheInvalidationPlan(plan, connectionName, values).dependencies
+  return inferAutomaticQueryCacheInvalidationPlan(plan, connectionName, values, false, collatedStrings).dependencies
 }
 
 export function inferAutomaticQueryCacheInvalidationPlan(
@@ -2041,6 +2105,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   connectionName: string,
   values: Readonly<Record<string, unknown>> = {},
   includeMetadata = false,
+  collatedStrings = false,
 ): DatabaseDependencyInvalidationPlan {
   const tableKey = createTableCacheDependency(connectionName, plan.source.tableName)
   const dependencies = [tableKey]
@@ -2066,9 +2131,10 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   const mutationDependency = createTableMutationCacheDependency(connectionName, plan.source.tableName)
   dependencies.push(mutationDependency)
   directDependencies.push(mutationDependency)
-  const rowDependencies = createMutationRowDependencies(plan, connectionName, values)
+  const rowDependencies = createMutationRowDependencies(plan, connectionName, values, collatedStrings)
   dependencies.push(...rowDependencies)
   directDependencies.push(...rowDependencies)
+  const collatedColumns = collectCollatedColumns(plan.predicates, [values], collatedStrings)
 
   if (includeMetadata) {
     const predicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
@@ -2080,7 +2146,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
     }
 
     const exactPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-    appendExactPredicateDependencyEntries(exactPredicateEntries, plan.predicates, connectionName, plan.source.tableName, true)
+    appendExactPredicateDependencyEntries(exactPredicateEntries, plan.predicates, connectionName, plan.source.tableName, true, collatedColumns)
     for (const entry of exactPredicateEntries.values()) {
       dependencies.push(entry.dependency)
       directDependencies.push(entry.dependency)
@@ -2096,7 +2162,7 @@ export function inferAutomaticQueryCacheInvalidationPlan(
     }
 
     const exactRecordPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-    appendRecordPredicateDependencyEntries(exactRecordPredicateEntries, connectionName, plan.source.tableName, values, true)
+    appendRecordPredicateDependencyEntries(exactRecordPredicateEntries, connectionName, plan.source.tableName, values, true, collatedColumns)
     for (const entry of exactRecordPredicateEntries.values()) {
       dependencies.push(entry.dependency)
       directDependencies.push(entry.dependency)
@@ -2116,9 +2182,9 @@ export function inferAutomaticQueryCacheInvalidationPlan(
   }
 
   dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName))
-  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true))
+  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true, collatedColumns))
   dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values))
-  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values, true))
+  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values, true, collatedColumns))
   return Object.freeze({
     dependencies: Object.freeze(dependencies),
   })
@@ -2129,8 +2195,9 @@ export function inferAutomaticInsertCacheInvalidationDependencies(
   source: Pick<QuerySource, 'tableName' | 'table'>,
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
+  collatedStrings = false,
 ): readonly string[] {
-  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId).dependencies
+  return inferAutomaticInsertCacheInvalidationPlan(connectionName, source, rows, lastInsertId, false, collatedStrings).dependencies
 }
 
 export function inferAutomaticInsertCacheInvalidationPlan(
@@ -2139,10 +2206,12 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   rows: readonly Readonly<Record<string, unknown>>[],
   lastInsertId?: number | string,
   includeMetadata = false,
+  collatedStrings = false,
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
   const primaryKey = resolveRowDependencyKey(source, connectionName)
-  const createRowDependency = (value: unknown) => primaryKey === undefined
+  const collatedColumns = collectCollatedColumns([], rows, collatedStrings)
+  const createRowDependency = (value: unknown) => primaryKey === undefined || isCollatedValue(value, collatedStrings)
     ? undefined
     : createTableRowCacheDependency(connectionName, tableName, primaryKey, value)
   const tableKey = createTableCacheDependency(connectionName, tableName)
@@ -2172,7 +2241,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
       }
 
       const rowExactPredicateEntries = new Map<string, DatabaseDependencyPredicateEntry>()
-      appendRecordPredicateDependencyEntries(rowExactPredicateEntries, connectionName, tableName, row, true)
+      appendRecordPredicateDependencyEntries(rowExactPredicateEntries, connectionName, tableName, row, true, collatedColumns)
       for (const entry of rowExactPredicateEntries.values()) {
         dependencies.add(entry.dependency)
         directDependencies.add(entry.dependency)
@@ -2184,7 +2253,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
     for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row)) {
       dependencies.add(dependency)
     }
-    for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row, true)) {
+    for (const dependency of collectRecordPredicateDependencies(connectionName, tableName, row, true, collatedColumns)) {
       dependencies.add(dependency)
     }
   }

@@ -3315,6 +3315,7 @@ export class TableQueryBuilder<
       rows,
       lastInsertId,
       hasInvalidationListeners,
+      this.hasCollatedStringComparison(),
     )
 
     await invalidateQueryCacheDependencies(
@@ -3323,6 +3324,10 @@ export class TableQueryBuilder<
       mutations,
       invalidation,
     )
+  }
+
+  private hasCollatedStringComparison(): boolean {
+    return !this.connection.getDialect().name.startsWith('postgres')
   }
 
   private async invalidateMutationQueries(
@@ -3340,6 +3345,7 @@ export class TableQueryBuilder<
       this.connection.getConnectionName(),
       values,
       hasInvalidationListeners,
+      this.hasCollatedStringComparison(),
     )
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)

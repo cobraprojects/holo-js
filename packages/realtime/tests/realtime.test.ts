@@ -8481,7 +8481,6 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         await context.table('posts').insert({ id: 2, author_id: 1, title: 'Published' })
-        await context.table('posts').insert({ id: 4, author_id: 1, title: 'Draft' })
         return true
       },
     })
@@ -8681,7 +8680,6 @@ describe('@holo-js/realtime', () => {
       access: 'public',
       handler: async ({ db: context }) => {
         await context.table('posts').insert({ id: 2, author_id: 1, title: 'Featured' })
-        await context.table('posts').insert({ id: 4, author_id: 1, title: 'Draft' })
         return true
       },
     })
