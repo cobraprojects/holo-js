@@ -144,7 +144,6 @@ export interface QueryDatePredicate {
   readonly part: QueryDatePart
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly value: unknown
-  readonly valueType?: 'date'
 }
 
 export type QueryJsonMode = 'value' | 'contains' | 'length' | 'key'

@@ -15,6 +15,9 @@ const tokyoNoonNov5 = new Date('2026-11-05T03:00:00Z')
 const tokyoMidnightNov6 = new Date('2026-11-05T15:00:00Z')
 const tokyoMidnightNov7 = new Date('2026-11-06T15:00:00Z')
 
+type TitledQuery = { orderBy(column: 'id'): { pluck(column: 'title'): Promise<unknown[]> } }
+const titles = (query: TitledQuery) => query.orderBy('id').pluck('title')
+
 function useAppTimezoneAt(now: Date, timezone = 'Asia/Tokyo'): void {
   const previousTimeZone = process.env.TZ
   configureConfigRuntime({ app: { timezone } } as never)
@@ -62,7 +65,6 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
   it('compares Date values with a DATE column as app-timezone calendar dates', async () => {
     useAppTimezoneAt(new Date('2026-11-04T20:00:00Z'))
     const { events, Event } = await createEventsTable(driver)
-    const titles = (query: { orderBy(column: 'id'): { pluck(column: 'title'): Promise<unknown[]> } }) => query.orderBy('id').pluck('title')
 
     await expect(titles(DB.table(events).where('day', tokyoMidnightNov5))).resolves.toEqual(['model', 'calendar'])
     await expect(titles(DB.table(events).where('day', tokyoNoonNov5))).resolves.toEqual(['model', 'calendar'])
@@ -81,7 +83,6 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
   it('compares Date values with a DATE column holding datetime and calendar text when the app timezone is UTC', async () => {
     useAppTimezoneAt(new Date('2026-11-05T01:00:00Z'), 'UTC')
     const { events } = await createEventsTable(driver)
-    const titles = (query: { orderBy(column: 'id'): { pluck(column: 'title'): Promise<unknown[]> } }) => query.orderBy('id').pluck('title')
     const utcMidnightNov4 = new Date('2026-11-04T00:00:00Z')
 
     await expect(titles(DB.table(events).where('day', utcMidnightNov4))).resolves.toEqual(['model'])
@@ -95,7 +96,6 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
   it('matches DATE and DATETIME rows by their app-timezone date parts', async () => {
     useAppTimezoneAt(new Date('2026-11-04T20:00:00Z'))
     const { events, Event } = await createEventsTable(driver)
-    const titles = (query: { orderBy(column: 'id'): { pluck(column: 'title'): Promise<unknown[]> } }) => query.orderBy('id').pluck('title')
 
     await expect(titles(DB.table(events).whereDate('day', '2026-11-05'))).resolves.toEqual(['model', 'calendar'])
     await expect(titles(DB.table(events).whereDate('day', '>', '2026-11-05'))).resolves.toEqual(['later'])
@@ -121,10 +121,30 @@ describe.each(drivers)('date predicates in the app timezone on %s', (driver) => 
     await expect(titles(Event.whereDate('at', '2026-11-06'))).resolves.toEqual(['calendar'])
   })
 
+  it('reads each row in the offset its own instant has across a daylight saving change', async () => {
+    useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
+    const { events } = await createEventsTable(driver)
+    await DB.table(events).insert({ title: 'summer', day: '2026-07-01', at: new Date('2026-07-01T06:30:00Z') })
+
+    await expect(titles(DB.table(events).whereDate('at', '2026-06-30'))).resolves.toEqual(['summer'])
+    await expect(titles(DB.table(events).whereTime('at', '23:30:00'))).resolves.toEqual(['summer'])
+    await expect(titles(DB.table(events).whereTime('at', '12:30:00'))).resolves.toEqual(['model'])
+    await expect(titles(DB.table(events).whereMonth('at', 6))).resolves.toEqual(['summer'])
+  })
+
+  it('matches calendar text by its own day on a table without a column definition', async () => {
+    useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
+    const { events } = await createEventsTable(driver)
+    const untyped = () => DB.table(events.tableName)
+
+    await expect(titles(untyped().whereDate('day', '2026-11-07'))).resolves.toEqual(['later'])
+    await expect(titles(untyped().whereDay('day', 7))).resolves.toEqual(['later'])
+    await expect(titles(untyped().whereDate('at', '2026-11-05'))).resolves.toEqual(['calendar'])
+  })
+
   it('matches rows by the day the app timezone is in when the UTC day is behind it', async () => {
     useAppTimezoneAt(new Date('2026-11-05T14:00:00Z'), 'America/Los_Angeles')
     const { events } = await createEventsTable(driver)
-    const titles = (query: { orderBy(column: 'id'): { pluck(column: 'title'): Promise<unknown[]> } }) => query.orderBy('id').pluck('title')
 
     await expect(titles(DB.table(events).whereDate('at', '2026-11-04'))).resolves.toEqual(['model'])
     await expect(titles(DB.table(events).whereDate('at', '2026-11-05'))).resolves.toEqual(['calendar'])

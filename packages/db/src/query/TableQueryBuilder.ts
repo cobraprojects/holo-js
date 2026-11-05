@@ -116,13 +116,12 @@ import type {
   SelectQueryPlan,
 } from './ast'
 import {
-  normalizeCalendarDatePredicateValue,
+  normalizeDateColumnPredicateValue,
   normalizeDatePartPredicateValue,
   normalizeQueryPredicateValue,
   normalizeQueryUpdateValues,
   normalizeQueryWriteRecord,
   normalizeQueryWriteValue,
-  normalizeSQLiteCalendarDatePredicateValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
 
@@ -630,8 +629,7 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: partValue ? partValue.value : this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
-      ...(this.getSourceColumnDefinition(column)?.kind === 'date' ? { valueType: 'date' as const } : {}),
+      value: partValue ?? this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
     }))
   }
 
@@ -657,6 +655,10 @@ export class TableQueryBuilder<
 
   private getColumnDefinition(column: string): AnyColumnDefinition | undefined {
     return this.source.table?.columns[column]
+  }
+
+  private isDateColumn(column: string): boolean {
+    return this.getSourceColumnDefinition(column)?.kind === 'date'
   }
 
   private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
@@ -1235,7 +1237,7 @@ export class TableQueryBuilder<
     const now = new Date()
     const today = formatCalendarDate(now, getApplicationTimezone())
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.getSourceColumnDefinition(column)?.kind === 'date'
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.isDateColumn(column)
         ? query.whereDatePart(boolean, 'date', column, operator, today)
         : query.whereDatePart(boolean, 'instant', column, operator, now), this)
   }
@@ -1252,7 +1254,7 @@ export class TableQueryBuilder<
     const startOfTomorrow = startOfDayInTimezone(now, timeZone, 1)
     return (typeof columns === 'string' ? [columns] : columns)
       .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => {
-        if (query.getSourceColumnDefinition(column)?.kind === 'date') {
+        if (query.isDateColumn(column)) {
           return query.whereDatePart(boolean, 'date', column, operator, today)
         }
 
@@ -3632,10 +3634,9 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
-    if (this.getSourceColumnDefinition(columnName)?.kind === 'date') {
-      const normalized = this.normalizePredicateValueForColumn(columnName, normalizeCalendarDatePredicateValue(value), operator)
+    if (this.isDateColumn(columnName)) {
       return {
-        value: this.connection.getDriver() === 'sqlite' ? normalizeSQLiteCalendarDatePredicateValue(normalized) : normalized,
+        value: normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator),
         valueType: 'date',
       }
     }

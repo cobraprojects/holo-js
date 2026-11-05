@@ -21,11 +21,11 @@ export function parseSQLiteDateTime(value: string): Date | undefined {
   return Number.isNaN(instant.getTime()) ? undefined : instant
 }
 
-export function sqliteWallClockExpression(column: string, timeZoneLiteral: string): string {
+export function compileSQLiteWallClock(column: string, timeZoneLiteral: string): string {
   return `${SQLITE_WALL_CLOCK_FUNCTION}((julianday(${column}) - ${UNIX_EPOCH_JULIAN_DAY}) * ${DAY_MILLISECONDS}.0, ${timeZoneLiteral})`
 }
 
-export function sqliteWallClock(epochMilliseconds: unknown, timeZone: unknown): string | null {
+export function formatSQLiteWallClock(epochMilliseconds: unknown, timeZone: unknown): string | null {
   if (typeof epochMilliseconds !== 'number' || !Number.isFinite(epochMilliseconds) || typeof timeZone !== 'string') {
     return null
   }

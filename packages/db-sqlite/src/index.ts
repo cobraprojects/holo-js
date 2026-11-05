@@ -100,7 +100,7 @@ export interface SQLiteAdapterOptions {
 
 export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
-  private functionsRegistered = false
+  private hasRegisteredFunctions = false
   private connected: boolean
   private readonly transactionKey: string | SQLiteAdapter
   private readonly filename: string
@@ -279,11 +279,11 @@ export class SQLiteAdapter implements DriverAdapter {
   private getDatabase(): SQLiteDatabaseLike {
     if (!this.database) {
       this.database = this.openDatabase()
-      this.functionsRegistered = false
+      this.hasRegisteredFunctions = false
     }
-    if (!this.functionsRegistered) {
-      this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.sqliteWallClock)
-      this.functionsRegistered = true
+    if (!this.hasRegisteredFunctions) {
+      this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.formatSQLiteWallClock)
+      this.hasRegisteredFunctions = true
     }
     this.connected = true
     return this.database

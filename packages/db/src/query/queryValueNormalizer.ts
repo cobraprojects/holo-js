@@ -44,31 +44,44 @@ function isValidDate(value: unknown): value is Date {
   return value instanceof Date && !Number.isNaN(value.getTime())
 }
 
-export function normalizeCalendarDatePredicateValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeCalendarDatePredicateValue)
-  return isValidDate(value) ? formatCalendarDate(value, getApplicationTimezone()) : value
+function mapPredicateValue(value: unknown, map: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? value.map(map) : map(value)
 }
 
-export function normalizeSQLiteCalendarDatePredicateValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeSQLiteCalendarDatePredicateValue)
-  const instant = typeof value === 'string' ? parseSQLiteDateTime(value) : undefined
-  return instant ? formatCalendarDate(instant, getApplicationTimezone()) : value
+export function normalizeDateColumnPredicateValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+  operator: unknown,
+): unknown {
+  const timeZone = getApplicationTimezone()
+  const calendarDates = mapPredicateValue(value, item => isValidDate(item) ? formatCalendarDate(item, timeZone) : item)
+  const normalized = normalizeQueryPredicateValue(table, driver, columnName, calendarDates, operator)
+  if (driver !== 'sqlite') return normalized
+
+  return mapPredicateValue(normalized, (item) => {
+    const instant = typeof item === 'string' ? parseSQLiteDateTime(item) : undefined
+    return instant ? formatCalendarDate(instant, timeZone) : item
+  })
 }
 
-export function normalizeDatePartPredicateValue(part: QueryDatePart, value: unknown): { readonly value: unknown } | undefined {
+const WALL_CLOCK_PARTS = /^(-?\d+)-(\d{2})-(\d{2}) (\d{2}:\d{2}:\d{2})$/
+
+export function normalizeDatePartPredicateValue(part: QueryDatePart, value: unknown): unknown {
   if (part === 'instant' || !isValidDate(value)) return undefined
-  const wallClock = formatWallClockSeconds(value, getApplicationTimezone())
+  const [, year, month, day, time] = WALL_CLOCK_PARTS.exec(formatWallClockSeconds(value, getApplicationTimezone()))!
   switch (part) {
     case 'date':
-      return { value: wallClock.slice(0, -9) }
+      return `${year}-${month}-${day}`
     case 'time':
-      return { value: wallClock.slice(-8) }
+      return time
     case 'year':
-      return { value: Number(wallClock.slice(0, -15)) }
+      return Number(year)
     case 'month':
-      return { value: Number(wallClock.slice(-14, -12)) }
+      return Number(month)
     case 'day':
-      return { value: Number(wallClock.slice(-11, -9)) }
+      return Number(day)
   }
 }
 
