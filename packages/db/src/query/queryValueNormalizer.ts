@@ -1,10 +1,12 @@
 import { SecurityError, SerializationError } from '../core/errors'
 import { NumericAdjustment } from './NumericAdjustment'
 import { booleanStorageValue, normalizeDialectWriteValue } from '../schema/normalization'
-import { formatSQLiteDateTime } from '../sqliteDateTime'
+import { formatSQLiteDateTime, parseSQLiteDateTime } from '../sqliteDateTime'
+import { formatWallClockSeconds } from '../applicationTime'
+import { getApplicationTimezone } from '../applicationTimezone'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
-import type { QueryJsonUpdateOperation } from './ast'
+import type { QueryDatePart, QueryJsonUpdateOperation } from './ast'
 
 type JsonPathParser = (value: string) => { readonly column: string, readonly path: readonly string[] }
 
@@ -92,6 +94,77 @@ export function normalizeQueryPredicateValue(
     return value.map(item => normalizeQueryColumnPredicateValue(table, driver, columnName, item))
   }
   return normalizeQueryColumnPredicateValue(table, driver, columnName, value)
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime())
+}
+
+function mapPredicateValue(value: unknown, map: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? value.map(map) : map(value)
+}
+
+const WALL_CLOCK_PARTS = /^(\d{4,})-(\d{2})-(\d{2}) (\d{2}:\d{2}:\d{2})$/
+
+function commonEraWallClockParts(instant: Date, timeZone: string): { year: string, month: string, day: string, time: string } | undefined {
+  const match = WALL_CLOCK_PARTS.exec(formatWallClockSeconds(instant, timeZone))
+  if (!match || Number(match[1]) < 1) return undefined
+
+  const [, year, month, day, time] = match
+  return { year: year!, month: month!, day: day!, time: time! }
+}
+
+function calendarDateOf(instant: Date, timeZone: string): string | undefined {
+  const parts = commonEraWallClockParts(instant, timeZone)
+  return parts && `${parts.year}-${parts.month}-${parts.day}`
+}
+
+export function normalizeDateColumnPredicateValue(
+  table: TableDefinition | undefined,
+  driver: string,
+  columnName: string,
+  value: unknown,
+  operator: unknown,
+): { readonly value: unknown, readonly comparesCalendarDates: boolean } {
+  const timeZone = getApplicationTimezone()
+  const instantOf = (item: unknown): Date | undefined => isValidDate(item)
+    ? item
+    : driver === 'sqlite' && typeof item === 'string' ? parseSQLiteDateTime(item) : undefined
+  const isBeforeCommonEra = (item: unknown): boolean => {
+    const instant = instantOf(item)
+    return instant !== undefined && calendarDateOf(instant, timeZone) === undefined
+  }
+  const normalized = normalizeQueryPredicateValue(table, driver, columnName, value, operator)
+  if ([value, normalized].flat().some(isBeforeCommonEra)) return { value: normalized, comparesCalendarDates: false }
+
+  const calendarDates = mapPredicateValue(value, item => isValidDate(item) ? calendarDateOf(item, timeZone) : item)
+  const normalizedCalendarDates = normalizeQueryPredicateValue(table, driver, columnName, calendarDates, operator)
+  return {
+    value: driver === 'sqlite' ? mapPredicateValue(normalizedCalendarDates, item => {
+      const instant = instantOf(item)
+      return instant ? calendarDateOf(instant, timeZone) : item
+    }) : normalizedCalendarDates,
+    comparesCalendarDates: true,
+  }
+}
+
+export function normalizeDatePartPredicateValue(part: QueryDatePart, value: unknown): unknown {
+  if (part === 'instant' || !isValidDate(value)) return undefined
+  const parts = commonEraWallClockParts(value, getApplicationTimezone())
+  if (!parts) return undefined
+
+  switch (part) {
+    case 'date':
+      return `${parts.year}-${parts.month}-${parts.day}`
+    case 'time':
+      return parts.time
+    case 'year':
+      return Number(parts.year)
+    case 'month':
+      return Number(parts.month)
+    case 'day':
+      return Number(parts.day)
+  }
 }
 
 export function normalizeQueryWriteRecord(

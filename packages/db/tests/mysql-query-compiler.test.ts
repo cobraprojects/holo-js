@@ -23,7 +23,7 @@ describe('mysql query compiler module coverage', () => {
         },
         ['id', 'email', 'name'],
       ),
-    ).toBe(' ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)')
+    ).toBe(' ON DUPLICATE KEY UPDATE `email` = `email`')
 
     expect(
       compiler.compileUpsertSuffixForTest(
@@ -49,6 +49,6 @@ describe('mysql query compiler module coverage', () => {
         },
         ['id', 'email', 'name'],
       ),
-    ).toBe(' ON DUPLICATE KEY UPDATE `id` = VALUES(`id`)')
+    ).toBe(' ON DUPLICATE KEY UPDATE `id` = `id`')
   })
 })

@@ -117,9 +117,12 @@ import type {
   QueryPredicateNode,
   QueryPredicate,
   QuerySelection,
+  QuerySource,
   SelectQueryPlan,
 } from './ast'
 import {
+  normalizeDateColumnPredicateValue,
+  normalizeDatePartPredicateValue,
   normalizeQueryPredicateValue,
   normalizeQueryUpdateValues,
   normalizeQueryWriteRecord,
@@ -177,6 +180,16 @@ type KeyedInsert = (
 ) => Promise<number | string | undefined>
 
 let keyedInsert: KeyedInsert
+
+export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
+  const separator = column.lastIndexOf('.')
+  if (separator === -1) return column
+
+  const qualifier = column.slice(0, separator)
+  const { tableName } = source
+  const ownQualifiers = [tableName, tableName.slice(tableName.lastIndexOf('.') + 1), source.alias]
+  return ownQualifiers.includes(qualifier) ? column.slice(separator + 1) : undefined
+}
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
@@ -476,7 +489,8 @@ export class TableQueryBuilder<
     negated = false,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection)
+    const nestedPlan = { ...createSelectQueryPlan(this.source), joins: this.plan.joins }
+    const nestedBuilder = new TableQueryBuilder<TTableOrName, SelectRow<TTableOrName>, TAvailableColumns>(table, this.connection, nestedPlan, undefined, internalPlanHandoff)
     const callbackResult = callback(nestedBuilder)
     const result = callbackResult instanceof TableQueryBuilder ? callbackResult : nestedBuilder
     const predicates = result.getPlan().predicates as readonly QueryPredicateNode[]
@@ -624,6 +638,7 @@ export class TableQueryBuilder<
     value?: unknown,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalized = this.normalizeOperatorValue(operator, value)
+    const partValue = normalizeDatePartPredicateValue(part, normalized.value)
 
     return this.clone(withPredicate(this.plan, {
       kind: 'date',
@@ -631,7 +646,7 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
+      value: partValue ?? this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator),
     }))
   }
 
@@ -659,19 +674,28 @@ export class TableQueryBuilder<
     return this.source.table?.columns[column]
   }
 
+  private isDateColumn(column: string): boolean {
+    return (this.getSourceColumnDefinition(column) ?? this.getJoinedColumnDefinition(column))?.kind === 'date'
+  }
+
+  private getJoinedColumnDefinition(column: string): AnyColumnDefinition | undefined {
+    const separator = column.lastIndexOf('.')
+    if (separator === -1) return undefined
+
+    const qualifier = column.slice(0, separator)
+    const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
+      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      : alias === qualifier))
+    return join?.definition?.columns[column.slice(separator + 1)]
+  }
+
   private getSourceColumnDefinition(column: string): AnyColumnDefinition | undefined {
     const columnName = this.resolveSourceColumnName(column)
     return typeof columnName === 'undefined' ? undefined : this.getColumnDefinition(columnName)
   }
 
   private resolveSourceColumnName(column: string): string | undefined {
-    const separator = column.lastIndexOf('.')
-    if (separator === -1) return column
-
-    const qualifier = column.slice(0, separator)
-    const tableName = this.source.tableName
-    const ownQualifiers = [tableName, tableName.slice(tableName.lastIndexOf('.') + 1), this.source.alias]
-    return ownQualifiers.includes(qualifier) ? column.slice(separator + 1) : undefined
+    return resolveSourceColumnName(this.source, column)
   }
 
   private assertJsonRootColumn(column: string, methodName: string): void {
@@ -850,12 +874,15 @@ export class TableQueryBuilder<
     operatorOrCompareTo: string,
     compareTo?: string,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const comparedColumn = compareTo ?? operatorOrCompareTo
+    const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
     return this.clone(withPredicate(this.plan, {
       kind: 'column',
       boolean,
       column,
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
-      compareTo: compareTo ?? operatorOrCompareTo,
+      compareTo: comparedColumn,
+      ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
     }))
   }
 
@@ -1235,7 +1262,7 @@ export class TableQueryBuilder<
     const now = new Date()
     const today = formatCalendarDate(now, getApplicationTimezone())
     return (typeof columns === 'string' ? [columns] : columns)
-      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.getSourceColumnDefinition(column)?.kind === 'date'
+      .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => query.isDateColumn(column)
         ? query.whereDatePart(boolean, 'date', column, operator, today)
         : query.whereDatePart(boolean, 'instant', column, operator, now), this)
   }
@@ -1252,7 +1279,7 @@ export class TableQueryBuilder<
     const startOfTomorrow = startOfDayInTimezone(now, timeZone, 1)
     return (typeof columns === 'string' ? [columns] : columns)
       .reduce<TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns>>((query, column) => {
-        if (query.getSourceColumnDefinition(column)?.kind === 'date') {
+        if (query.isDateColumn(column)) {
           return query.whereDatePart(boolean, 'date', column, operator, today)
         }
 
@@ -3670,6 +3697,11 @@ export class TableQueryBuilder<
   }
 
   private normalizeComparisonValue(columnName: string, value: unknown, operator: unknown): Pick<QueryPredicate, 'value' | 'valueType'> {
+    if (this.isDateColumn(columnName)) {
+      const normalized = normalizeDateColumnPredicateValue(this.source.table, this.connection.getDriver(), columnName, value, operator)
+      return normalized.comparesCalendarDates ? { value: normalized.value, valueType: 'date' } : { value: normalized.value }
+    }
+
     return {
       value: this.normalizePredicateValueForColumn(columnName, value, operator),
       ...(this.source.table?.columns[columnName]?.kind === 'json' ? { valueType: 'json' as const } : {}),
