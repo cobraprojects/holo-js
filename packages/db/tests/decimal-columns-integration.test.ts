@@ -2,9 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, column, defineGeneratedTable, defineModel, hasMany, resetDB } from '../src'
-import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
+import { openDatabase } from './support/database'
 
-const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
+const drivers = [
+  'sqlite',
+  ...(process.env.HOLO_POSTGRES_INTEGRATION === '1' ? ['postgres' as const] : []),
+  ...(process.env.HOLO_MYSQL_INTEGRATION === '1' ? ['mysql' as const] : []),
+] as const
 
 type Driver = typeof drivers[number]
 
@@ -29,7 +33,7 @@ async function openPrices(driver: Driver, options: Parameters<typeof openDatabas
 }
 
 function defaultSchema(driver: Driver): string {
-  return driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : mysqlTestConnection().database
+  return driver === 'sqlite' ? 'main' : driver === 'postgres' ? 'public' : process.env.HOLO_MYSQL_DATABASE ?? 'mysql'
 }
 
 describe.each(drivers)('decimal columns on %s', (driver) => {
