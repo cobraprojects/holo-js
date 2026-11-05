@@ -306,38 +306,45 @@ export function createSQLiteSchemaReader(connection: DatabaseContext): DialectSc
     },
 
     async readTableStructure(tableName) {
-      const { table } = splitTablePath(tableName)
       const schema = await resolveSQLiteTableSchema(connection, tableName)
-      if (schema === undefined) return undefined
-      const createTableSql = await readSQLiteCreateTableSql(connection, `${schema}.${table}`)
-      if (createTableSql === undefined) return undefined
-
-      const storedTable = parseCreateTableSql(createTableSql ?? '')
-      const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
-      const indexes = await readIndexes(schema, table)
-      const rowIdAlias = readRowIdAlias(columns.rows, indexes)
-      const structure: DatabaseTableStructure = {
-        dialect: 'sqlite',
-        tableName,
-        schema,
-        columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
-          name: row.name,
-          dataType: row.type,
-          fullType: row.type,
-          length: readStringLength(row.type),
-          notNull: row.notnull === 1,
-          defaultExpression: row.dflt_value,
-          default: readColumnDefault(row.dflt_value),
-          primaryKey: row.pk > 0,
-          autoIncrement: row.name === rowIdAlias,
-          computed: readComputedColumn(tableName, row, storedTable),
-        })),
-        primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
-        indexes,
-        foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
-        enumChecks: storedTable ? readEnumChecks(storedTable) : [],
-      }
-      return structure
+      return schema === undefined ? undefined : readStructure(tableName, schema)
     },
+
+    readListedTableStructure(tableName) {
+      return readStructure(tableName, MAIN_SCHEMA)
+    },
+  }
+
+  async function readStructure(tableName: string, schema: string): Promise<DatabaseTableStructure | undefined> {
+    const { table } = splitTablePath(tableName)
+    const createTableSql = await readSQLiteCreateTableSql(connection, `${schema}.${table}`)
+    if (createTableSql === undefined) return undefined
+
+    const storedTable = parseCreateTableSql(createTableSql ?? '')
+    const columns = await introspect<ColumnRow>('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, ?) ORDER BY cid', [table, schema], `schema:introspect:columns:${tableName}`)
+    const indexes = await readIndexes(schema, table)
+    const rowIdAlias = readRowIdAlias(columns.rows, indexes)
+    const structure: DatabaseTableStructure = {
+      dialect: 'sqlite',
+      tableName,
+      schema,
+      columns: columns.rows.filter(row => row.hidden !== 1).map(row => ({
+        name: row.name,
+        dataType: row.type,
+        fullType: row.type,
+        length: readStringLength(row.type),
+        notNull: row.notnull === 1,
+        defaultExpression: row.dflt_value,
+        default: readColumnDefault(row.dflt_value),
+        primaryKey: row.pk > 0,
+        autoIncrement: row.name === rowIdAlias,
+        computed: readComputedColumn(tableName, row, storedTable),
+      })),
+      primaryKeyColumns: columns.rows.filter(row => row.pk > 0).sort((left, right) => left.pk - right.pk).map(row => row.name),
+      indexes,
+      foreignKeys: await readForeignKeyStructures(schema, table, storedTable ? readForeignKeys(storedTable) : []),
+      enumChecks: storedTable ? readEnumChecks(storedTable) : [],
+    }
+    return structure
   }
 }

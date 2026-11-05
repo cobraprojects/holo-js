@@ -35,6 +35,11 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
     return structure ? toTableDefinition(structure) : undefined
   }
 
+  async function readListedTable(tableName: string): Promise<TableDefinition | undefined> {
+    const structure = await (reader.readListedTableStructure ?? reader.readTableStructure)(tableName)
+    return structure ? toTableDefinition(structure) : undefined
+  }
+
   return {
     listTables: () => reader.listTables(),
     locateTable: tableName => reader.locateTable(tableName),
@@ -45,7 +50,7 @@ export function createSchemaReader(connection: DatabaseContext): SchemaReader {
       const tables: TableDefinition[] = []
       for (const tableName of await reader.listTables()) {
         if (HOLO_OWNED_TABLE_PATTERN.test(tableName)) continue
-        const table = await readTable(tableName)
+        const table = await readListedTable(tableName)
         if (table) tables.push(table)
       }
       return tables

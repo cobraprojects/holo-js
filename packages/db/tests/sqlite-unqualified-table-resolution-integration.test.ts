@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { resetDB } from '../src'
+import { holoRuntimeInternals, resetDB } from '../src'
 import { openDatabase } from './support/database'
 
 async function openSQLite(statements: readonly string[]) {
@@ -16,6 +16,7 @@ async function openSQLite(statements: readonly string[]) {
   return { db, schema, indexNames, tableSql }
 }
 
+const { createSchemaReader } = holoRuntimeInternals
 const ATTACH_ARCHIVE = `ATTACH DATABASE ':memory:' AS archive`
 
 describe('SQLite unqualified table resolution', () => {
@@ -227,5 +228,20 @@ describe('SQLite unqualified table resolution', () => {
     expect(await indexNames('main')).toEqual(['items_a_index'])
     expect(await indexNames('temp')).toEqual(['items_a_index'])
     expect((await schema.getColumns('main.items')).map(column => column.name)).toEqual(['a'])
+  })
+
+  it('generates the schema of main tables even when temp objects shadow them', async () => {
+    const { db } = await openSQLite([
+      'CREATE TABLE "main"."items" ("id" INTEGER PRIMARY KEY, "main_only" TEXT)',
+      'CREATE TABLE "main"."orders" ("id" INTEGER PRIMARY KEY, "total" INTEGER)',
+      'CREATE TABLE "temp"."items" ("id" INTEGER PRIMARY KEY, "temp_only" TEXT)',
+      'CREATE VIEW "temp"."orders" AS SELECT 1 AS "id"',
+    ])
+
+    const tables = await createSchemaReader(db).readGeneratedSchema()
+    const columnsOf = (name: string) => Object.keys(tables.find(table => table.tableName === name)?.columns ?? {})
+
+    expect(columnsOf('items')).toEqual(['id', 'main_only'])
+    expect(columnsOf('orders')).toEqual(['id', 'total'])
   })
 })
