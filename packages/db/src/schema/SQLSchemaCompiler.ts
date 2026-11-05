@@ -1,5 +1,5 @@
 import { SchemaError } from '../core/errors'
-import { assertValidIdentifierPath, assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
 import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
@@ -455,7 +455,7 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileIdentifierPath(identifier: string): string {
-    assertValidIdentifierPath(identifier, 'Identifier path')
+    assertValidTablePath(identifier, 'Identifier path')
     if (!identifier.includes('.')) {
       return this.quoteIdentifier(identifier)
     }

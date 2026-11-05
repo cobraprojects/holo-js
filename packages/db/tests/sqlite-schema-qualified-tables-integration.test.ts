@@ -456,6 +456,37 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await indexesOf(schema, 'main.docs_config')).toEqual([{ name: 'old_idx', unique: false, columns: ['v'] }])
   })
 
+  it('refuses to change a qualified shadow table', async () => {
+    const { db, schema } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE VIRTUAL TABLE "temp"."docs" USING fts5("body")', source: 'schema' })
+
+    await expect(schema.table('temp.docs_config', (table) => {
+      table.text('v').nullable().default('x').change()
+    })).rejects.toThrow('SQLite cannot change table "temp.docs_config" because SQLite resolves it to shadow table "temp.docs_config".')
+    expect((await schema.getColumns('temp.docs_config')).map(columnInfo => columnInfo.name)).toEqual(['k', 'v'])
+  })
+
+  it('adds a foreign key column to an unqualified attached table that references a table in the same database', async () => {
+    const { db, schema } = await openArchive()
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."parents" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "archive"."items" ("id" INTEGER PRIMARY KEY)', source: 'schema' })
+
+    await schema.table('items', (table) => {
+      table.foreignId('parent_id').nullable().constrained('archive.parents')
+    })
+
+    expect((await schema.getForeignKeys('archive.items')).map(foreignKey => [foreignKey.from, foreignKey.table])).toEqual([['parent_id', 'parents']])
+  })
+
+  it('counts rows of a query ordered by vector similarity', async () => {
+    const { db } = await openProducts()
+    await db.executeCompiled({ sql: 'CREATE TABLE "documents" ("id" INTEGER PRIMARY KEY, "embedding" TEXT)', source: 'schema' })
+    const documents = defineGeneratedTable('documents', { id: column.id(), embedding: column.vector({ dimensions: 2 }) })
+    await DB.table('documents').insert([{ id: 1, embedding: '[1,0]' }, { id: 2, embedding: '[0,1]' }])
+
+    expect(await DB.table(documents).orderByVectorSimilarity('embedding', [1, 0]).count()).toBe(2)
+  })
+
   it('renames a table inside its attached database', async () => {
     const { schema } = await openArchive()
     await schema.createTable('archive.items', (table) => {

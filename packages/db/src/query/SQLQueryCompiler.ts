@@ -132,7 +132,6 @@ export class SQLQueryCompiler {
   }
 
   compileCount(plan: SelectQueryPlan): CompiledStatement {
-    const statement = this.compile(plan)
     const countsRows = !plan.distinct
       && plan.groupBy.length === 0
       && plan.having.length === 0
@@ -144,12 +143,15 @@ export class SQLQueryCompiler {
       && typeof plan.offset === 'undefined'
       && !plan.lockMode
     ) {
+      validateQueryPlan(plan, this.dialect)
+      this.compile({ ...plan, orderBy: [] })
       return this.compile({
         ...plan,
         orderBy: [],
         selections: [{ kind: 'aggregate', aggregate: 'count', column: '*', alias: '__holo_count' }],
       })
     }
+    const statement = this.compile(plan)
     const bindings: unknown[] = []
     const sql = countsRows ? this.compileSelectSql({ ...plan, orderBy: [] }, bindings, '1') : statement.sql
     const metadata = this.createSelectMetadata(plan)

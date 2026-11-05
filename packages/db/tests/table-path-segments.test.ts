@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { MySQLSchemaCompiler } from '../src/schema/MySQLSchemaCompiler'
+import { PostgresSchemaCompiler } from '../src/schema/PostgresSchemaCompiler'
 import { DB, SchemaError, SecurityError, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, belongsToMany, defineGeneratedTable, defineModel, onDatabaseDependencyInvalidated, resetDB, type DriverAdapter } from '../src'
 
 const unreachable = async (): Promise<never> => {
@@ -131,5 +133,21 @@ describe.each(['sqlite', 'postgres', 'mysql'] as const)('table paths with more t
       table.foreignId('team_id').constrained('a.b.c')
     })).rejects.toThrow(new SchemaError('Foreign key table "a.b.c" must be a table name or a schema-qualified table name.'))
     expect(() => defineGeneratedTable('a.b.c', { id: column.id() })).toThrow(error)
+  })
+})
+
+describe('schema compilers reject table paths with more than two segments', () => {
+  const quote = (identifier: string) => `"${identifier}"`
+
+  it('rejects them in referenced tables and in MySQL table overrides', () => {
+    const error = new SchemaError('Identifier path "a.b.c" must be a table name or a schema-qualified table name.')
+
+    expect(() => new PostgresSchemaCompiler(quote).compileCreateForeignKey('users', 'team_id', { table: 'a.b.c', column: 'id' })).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileCreateForeignKey('users', 'team_id', { table: 'a.b.c', column: 'id' })).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileRenameTable('a.b.c', 'users')).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileRenameIndex('a.b.c', 'old_idx', 'new_idx')).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileDropIndex('a.b.c', 'old_idx')).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileDropForeignKey('a.b.c', 'users_team_id_foreign')).toThrow(error)
+    expect(() => new MySQLSchemaCompiler(quote).compileDropPrimaryKey('a.b.c')).toThrow(error)
   })
 })
