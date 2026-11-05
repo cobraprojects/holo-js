@@ -55,6 +55,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 The CLI's package-manager tests run real `npm`, `pnpm`, and `yarn` installs, so those tools must be on your `PATH`. CI installs pnpm 10.34.7 and yarn 1.22.22 with npm. Install the same versions locally to run them.
 
+To run one example app against one database, set `HOLO_TEST_FRAMEWORK` to `next`, `nuxt` or `sveltekit` and `HOLO_TEST_DRIVER` to `sqlite`, `postgres` or `mysql`. Each run sets up only the database server for its driver, so `HOLO_TEST_DRIVER=sqlite bun run test:examples` needs neither PostgreSQL nor MySQL.
+
 ## Before you push
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
