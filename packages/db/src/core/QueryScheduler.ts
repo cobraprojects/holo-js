@@ -80,21 +80,32 @@ class ExclusiveGate {
 }
 
 const objectGates = new WeakMap<object, ExclusiveGate>()
-const namedGates = new Map<string, ExclusiveGate>()
+const namedGates = new Map<string, WeakRef<ExclusiveGate>>()
+const namedGateCleanup = new FinalizationRegistry<{ name: string, gate: WeakRef<ExclusiveGate> }>(({ name, gate }) => {
+  if (namedGates.get(name) === gate) namedGates.delete(name)
+})
 
-type GateMap<K> = { get(key: K): ExclusiveGate | undefined, set(key: K, gate: ExclusiveGate): unknown }
+function namedGate(name: string): ExclusiveGate {
+  const existing = namedGates.get(name)?.deref()
+  if (existing) return existing
+  const gate = new ExclusiveGate()
+  const reference = new WeakRef(gate)
+  namedGates.set(name, reference)
+  namedGateCleanup.register(gate, { name, gate: reference })
+  return gate
+}
 
-function gateFor<K>(gates: GateMap<K>, key: K): ExclusiveGate {
-  let gate = gates.get(key)
+function objectGate(identity: object): ExclusiveGate {
+  let gate = objectGates.get(identity)
   if (!gate) {
     gate = new ExclusiveGate()
-    gates.set(key, gate)
+    objectGates.set(identity, gate)
   }
   return gate
 }
 
 function sharedGate(identity: TransactionScopeIdentity): ExclusiveGate {
-  return typeof identity === 'string' ? gateFor(namedGates, identity) : gateFor(objectGates, identity)
+  return typeof identity === 'string' ? namedGate(identity) : objectGate(identity)
 }
 
 let bindGateAdapter: (scheduler: QueryScheduler, adapter: DriverAdapter) => void
@@ -117,6 +128,7 @@ export class QueryScheduler {
   private readonly serializedState: QueueState
   private readonly workerState: QueueState
   private gateAdapter?: DriverAdapter
+  private boundGate?: { readonly identity: TransactionScopeIdentity, readonly gate: ExclusiveGate }
   private readonly ownGate = new ExclusiveGate()
   private readonly transactionScope = new AsyncLocalStorage<QueueState>()
 
@@ -160,7 +172,10 @@ export class QueryScheduler {
   }
 
   private get gate(): ExclusiveGate {
-    return this.gateAdapter ? sharedGate(transactionScopeIdentity(this.gateAdapter)) : this.ownGate
+    if (!this.gateAdapter) return this.ownGate
+    const identity = transactionScopeIdentity(this.gateAdapter)
+    if (this.boundGate?.identity !== identity) this.boundGate = { identity, gate: sharedGate(identity) }
+    return this.boundGate.gate
   }
 
   async schedule<T>(
