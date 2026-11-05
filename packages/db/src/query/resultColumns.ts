@@ -117,13 +117,34 @@ function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
   return plan.unions.flatMap(union => [union.query, ...unionBranches(union.query)])
 }
 
+function hasWildcardProjection(plan: SelectQueryPlan): boolean {
+  return plan.selections.length === 0 || plan.selections.some(selection => selection.kind === 'column' && selection.column.endsWith('*'))
+}
+
+function projectionShape(plan: SelectQueryPlan): string {
+  return JSON.stringify([
+    plan.source.tableName,
+    plan.joins.map(join => join.table ?? null),
+    plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias ?? null] : selection.kind),
+  ])
+}
+
+function hasAlignedWildcards(plan: SelectQueryPlan, branches: readonly SelectQueryPlan[]): boolean {
+  const plans = [plan, ...branches]
+  if (!plans.some(hasWildcardProjection)) return true
+  const shape = projectionShape(plan)
+  return branches.every(branch => projectionShape(branch) === shape)
+}
+
 function createUnionReaderCheck(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
+  const branchPlans = unionBranches(plan)
+  if (!hasAlignedWildcards(plan, branchPlans)) return () => false
   const selected = selectedResultColumns(plan)
-  const branches = unionBranches(plan).map(selectedResultColumns)
+  const branches = branchPlans.map(selectedResultColumns)
   if (!hasEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !hasEveryPosition(branch))) {
     return () => false
   }

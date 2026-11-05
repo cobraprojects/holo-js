@@ -161,6 +161,34 @@ describe.each(drivers)('boolean columns on %s', (driver) => {
     expect(rows.map(row => row.enabled).sort()).toEqual([false, true])
   })
 
+  it.runIf(driver !== 'postgres')('leaves wildcard union columns unconverted when the branches order their columns differently', async () => {
+    const { schema } = await openFlags(driver)
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const leftName = `holo_union_left_${suffix}`
+    const rightName = `holo_union_right_${suffix}`
+    await schema.createTable(leftName, (table) => {
+      table.integer('id')
+      table.boolean('enabled')
+    })
+    await schema.createTable(rightName, (table) => {
+      table.boolean('enabled')
+      table.integer('id')
+    })
+    onTestFinished(async () => {
+      await schema.dropTable(leftName)
+      await schema.dropTable(rightName)
+    })
+    const left = defineGeneratedTable(leftName, { id: column.integer(), enabled: column.boolean() })
+    const right = defineGeneratedTable(rightName, { id: column.integer(), enabled: column.boolean() })
+    await DB.table(left).insert({ id: 1, enabled: true })
+    await DB.table(right).insert({ enabled: false, id: 42 })
+
+    const rows = await DB.table(left).unionAll(DB.table(right)).get()
+
+    expect(rows.map(row => Number(row.enabled)).sort((a, b) => a - b)).toEqual([1, 42])
+    expect((await DB.table(left).unionAll(DB.table(left)).get()).map(row => row.enabled)).toEqual([true, true])
+  })
+
   it.runIf(driver !== 'postgres')('reads union columns by position, whatever each branch names them', async () => {
     const { flags } = await openFlags(driver)
     await DB.table(flags).insert([{ id: 1, label: 'on', enabled: true }, { id: 2, label: 'off', enabled: false }])
