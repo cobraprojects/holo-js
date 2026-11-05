@@ -332,6 +332,47 @@ describe.skipIf(!mysqlIntegration)('realtime invalidation on a default _ci colum
 describe.skipIf(!postgresIntegration)('realtime invalidation on a case-sensitive column on postgres', () => {
   registerTextNumberScenarios('postgres')
 
+  it('refreshes eager-loaded relations keyed by numeric and non-numeric text after inserting the missing numeric key', async () => {
+    const adapter = createAdapter('postgres')
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 10)
+    const authors = `authors_${suffix}`
+    const posts = `posts_${suffix}`
+    const db = createDatabase({ adapter, dialect: createDialect('postgres'), connectionName: 'main' })
+    await adapter.initialize()
+    onTestFinished(async () => {
+      resetRealtimeRuntime()
+      resetDatabaseDependencyInvalidationListeners()
+      clearGeneratedTables()
+      resetDB()
+      await adapter.execute(`DROP TABLE IF EXISTS ${posts}`)
+      await adapter.execute(`DROP TABLE IF EXISTS ${authors}`)
+      await adapter.disconnect()
+    })
+    await adapter.execute(`CREATE TABLE ${authors} (code TEXT PRIMARY KEY, name TEXT NOT NULL)`)
+    await adapter.execute(`CREATE TABLE ${posts} (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_code TEXT NOT NULL)`)
+    await adapter.execute(`INSERT INTO ${authors} VALUES ('5', 'Ada'), ('abc', 'Alan')`)
+    await adapter.execute(`INSERT INTO ${posts} VALUES (1, 'First', '5'), (2, 'Second', 'abc'), (3, 'Third', '7')`)
+    configureDB(createConnectionManager({ defaultConnection: 'main', connections: { main: db } }))
+    configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
+    const Author = defineModel(defineGeneratedTable(authors, { code: column.string().primaryKey(), name: column.string() }), { timestamps: false })
+    const Post = defineModel(defineGeneratedTable(posts, { id: column.id(), title: column.string(), author_code: column.string() }), {
+      timestamps: false,
+      relations: { author: belongsTo(() => Author, 'author_code', 'code') },
+    })
+    const snapshots: unknown[] = []
+    await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler: async ({ db }) => await db.model(Post).query().with('author').orderBy('id').get() }), {}, { onData: snapshot => { snapshots.push(snapshot.data) }, onError: (error) => { throw error } })
+    const mutate = (handler: Parameters<typeof defineRealtimeMutation>[0]['handler']) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+
+    await mutate(({ db }) => db.table(posts).where('id', 1).update({ title: 'Renamed' }))
+    await mutate(({ db }) => db.table(authors).insert({ code: '7', name: 'Grace' }))
+
+    expect(snapshots.at(-1)).toEqual([
+      { id: 1, title: 'Renamed', author_code: '5', author: { code: '5', name: 'Ada' } },
+      { id: 2, title: 'Second', author_code: 'abc', author: { code: 'abc', name: 'Alan' } },
+      { id: 3, title: 'Third', author_code: '7', author: { code: '7', name: 'Grace' } },
+    ])
+  })
+
   it('refreshes a subscription filtered by a citext array after an update matched by a case-differing array', async () => {
     const setupAdapter = createAdapter('postgres')
     await setupAdapter.initialize()

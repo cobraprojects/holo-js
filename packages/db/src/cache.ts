@@ -364,6 +364,7 @@ const MUTATION_DEPENDENCY_SUFFIX = 'mutation'
 const WHERE_DEPENDENCY_PREFIX = 'where:'
 const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
+const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
@@ -1111,9 +1112,21 @@ export function createTablePredicateCacheDependency(
   value: unknown,
   textMatchesAnyNumber = false,
 ): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
   return mayEqualNumber(value, textMatchesAnyNumber)
-    ? undefined
+    ? createTablePredicateWildcardCacheDependency(connectionName, tableName, columnName)
     : createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
+}
+
+function createTablePredicateWildcardCacheDependency(
+  connectionName: string,
+  tableName: string,
+  columnName: string,
+): string {
+  return `${createTableCacheDependency(connectionName, tableName)}:${WHERE_DEPENDENCY_PREFIX}${getColumnName(columnName)}:${PREDICATE_WILDCARD_VALUE}`
 }
 
 function createTableMutationCacheDependency(
@@ -2199,13 +2212,17 @@ export function inferAutomaticQueryCacheDependencies(
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const predicateDependencies = collectExactPredicateDependencies(
-      plan.predicates,
-      connectionName,
-      plan.source.tableName,
-      false,
-      collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber),
-    )
+    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber)
+    const predicateDependencies = [
+      ...collectExactPredicateDependencies(
+        plan.predicates,
+        connectionName,
+        plan.source.tableName,
+        false,
+        numberLikeColumns,
+      ),
+      ...[...numberLikeColumns].map(column => createTablePredicateWildcardCacheDependency(connectionName, plan.source.tableName, column)),
+    ]
     if (predicateDependencies.length > 0) {
       return Object.freeze([
         createTableCacheDependency(connectionName, plan.source.tableName),
