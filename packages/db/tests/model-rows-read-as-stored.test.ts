@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel } from '../src'
 import { ModelRepository } from '../src/model/ModelRepository'
-import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { openDatabase } from './support/database'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 
@@ -37,7 +36,7 @@ describe('model rows read as stored', () => {
     const notes = defineGeneratedTable('stored_json_notes', { id: column.id(), settings: column.json() })
     const Note = defineModel(notes, { timestamps: false })
     const sqlite = createDatabase({ connectionName: 'default', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
-    const postgres = createDatabase({ connectionName: 'default', adapter: createPostgresAdapter({ config: { host: '127.0.0.1', database: 'stored_unused' } }), dialect: createDialect('postgres') })
+    const postgres = createDatabase({ connectionName: 'default', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('postgres') })
 
     expect(sqlite.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: { x: 1 } })
     expect(postgres.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: '{"x":1}' })
