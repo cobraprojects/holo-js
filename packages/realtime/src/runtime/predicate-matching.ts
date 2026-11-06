@@ -89,11 +89,20 @@ function comparesAsText(value: unknown): boolean {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean'
 }
 
+function comparesNumberWithBigint(left: unknown, right: unknown): boolean {
+  return (typeof left === 'number' && typeof right === 'bigint') || (typeof left === 'bigint' && typeof right === 'number')
+}
+
+function equalsBigint(number: number, bigint: bigint): boolean {
+  return Number.isInteger(number) && BigInt(number) === bigint
+}
+
 export function equalValues(left: unknown, right: unknown): boolean | undefined {
   if (left === null || right === null) return false
   if (left === right) return true
   if (Array.isArray(left) || Array.isArray(right)) return undefined
   if (comparesBooleanWithNumber(left, right)) return Number(left) === Number(right)
+  if (comparesNumberWithBigint(left, right)) return equalsBigint(typeof left === 'number' ? left : right as number, typeof left === 'bigint' ? left : right as bigint)
   const textComparison = (typeof left === 'string' && comparesAsText(right)) || (typeof right === 'string' && comparesAsText(left))
   return textComparison ? undefined : false
 }
