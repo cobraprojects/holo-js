@@ -85,11 +85,10 @@ describe.each(drivers)('realtime belongsTo owners hidden by constraints or scope
 
   it.each(['constraint', 'global scope'] as const)('drops an owner that stops passing an exists %s', async (kind) => {
     const { db, authors, posts, Post } = await openPosts(driver)
-    const exists = <TQuery extends { where: (column: string, value: unknown) => TQuery, whereExists: (subquery: ReturnType<typeof db.table>) => TQuery }>(query: TQuery) => query.where('active', true).whereExists(db.table(posts).select('id'))
-    const ExistsAuthor = defineModel(authors, { timestamps: false, globalScopes: { visible: query => exists(query) } })
+    const ExistsAuthor = defineModel(authors, { timestamps: false, globalScopes: { visible: query => query.where('active', true).whereExists(db.table(posts).select('id')) } })
     const ScopedPost = defineModel(posts, { timestamps: false, relations: { author: belongsTo(() => ExistsAuthor, 'author_id') } })
     const handler = kind === 'constraint'
-      ? () => db.model(Post).query().with({ author: query => exists(query) }).orderBy('id').getJson()
+      ? () => db.model(Post).query().with({ author: query => query.where('active', true).whereExists(db.table(posts).select('id')) }).orderBy('id').getJson()
       : () => db.model(ScopedPost).query().with('author').orderBy('id').getJson()
     const subscription = await subscribe(handler)
     expect(JSON.stringify(subscription.current.data)).toContain('"Ada"')

@@ -1,4 +1,4 @@
-import { TableQueryBuilder } from '@holo-js/db'
+import { TableQueryBuilder, type TableDefinition } from '@holo-js/db'
 import {
   createMutationIndexKey,
   type DatabaseMutationEvent,
@@ -6,6 +6,7 @@ import {
 } from './dependencies'
 import {
   getBackfillDatabaseConnection,
+  readBackfilledRows,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
@@ -21,6 +22,7 @@ type BelongsToHydrationTarget = {
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export async function hydrateBelongsToMutationRows(
@@ -242,7 +244,7 @@ async function fetchGroupedBelongsToRelatedRows(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  const rows = await builder.get()
+  const rows = readBackfilledRows(target.relatedTable, await builder.get())
 
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
@@ -282,7 +284,7 @@ async function fetchBelongsToRelatedRow(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  return await builder.limit(1).get()
+  return readBackfilledRows(target.relatedTable, await builder.limit(1).get())
 }
 
 function createBelongsToRelatedBackfillKey(

@@ -2,8 +2,28 @@ import type { DatabaseContext } from '../core/DatabaseContext'
 import { getRootDatabaseContext } from '../core/contextOwnership'
 import { currentRootTransaction } from '../core/openTransactions'
 import { currentSchemaGeneration } from '../core/schemaGeneration'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection } from './connectionDialect'
+import { quoteTablePath, splitTablePath, tablePathSegments } from './identifiers'
+import { readSQLiteCreateTableSql, resolveSQLiteTablePath } from './introspection/sqlite'
+import { parseCreateTableSql } from './introspection/sqliteDefinitionGrammar'
+import { sameIdentifier } from './introspection/sqliteTokens'
 
-export type CaseInsensitiveColumns = ReadonlySet<string> | 'all'
+export type TextColumn = {
+  readonly exact: boolean
+  readonly padSpace: boolean
+}
+
+export type TextColumnCollations = {
+  readonly findTextColumn: (column: string) => TextColumn | undefined
+  readonly numbersMatchText: boolean
+}
+
+export type CaseInsensitiveColumns = ReadonlySet<string> | 'all' | TextColumnCollations
+
+type MySQLColumnRow = { Field: string, Type: string, Collation: string | null }
+type MySQLCreateTableRow = { 'Create Table'?: string }
+type SQLiteIndexColumnRow = { name: string, coll: string | null }
+type ColumnReader = (reader: DatabaseContext) => Promise<CaseInsensitiveColumns>
 
 type CaseInsensitiveColumnsEntry = {
   readonly generation: number
@@ -32,27 +52,135 @@ WHERE a.attrelid = to_regclass($1)
     )
   )`
 
+const SQLITE_UNIQUE_INDEX_COLUMNS_SQL = `SELECT ii.name AS name, ii.coll AS coll
+FROM pragma_index_list(?, ?) il, pragma_index_xinfo(il.name, ?) ii
+WHERE il."unique" = 1 AND ii."key" = 1 AND ii.name IS NOT NULL`
+
+const MYSQL_EXACT_COLLATION_PATTERN = /_bin$/i
+const MYSQL_PERMANENT_TABLE_PATTERN = /^\s*CREATE\s+TABLE\b/i
+const MYSQL_MEMBER_TYPE_PATTERN = /^(?:enum|set)\b/i
+const LOOSE_TEXT_COLUMN: TextColumn = { exact: false, padSpace: true }
+
+export const UNKNOWN_TEXT_COLUMNS: TextColumnCollations = {
+  findTextColumn: () => LOOSE_TEXT_COLUMN,
+  numbersMatchText: true,
+}
+const SQLITE_EXACT_COLLATION = 'BINARY'
 const MAX_QUALIFIED_NAME_PARTS = 3
 
 const entriesByConnection = new WeakMap<DatabaseContext, Map<string, CaseInsensitiveColumnsEntry>>()
 
-async function readCaseInsensitiveColumns(connection: DatabaseContext, tableName: string): Promise<CaseInsensitiveColumns> {
-  const parts = tableName.split('.')
-  if (parts.length > MAX_QUALIFIED_NAME_PARTS) {
-    return 'all'
+function createPostgresReader(connection: DatabaseContext, tableName: string): ColumnReader | undefined {
+  if (tablePathSegments(tableName).length > MAX_QUALIFIED_NAME_PARTS) {
+    return undefined
   }
 
   const dialect = connection.getDialect()
-  const read = (reader: DatabaseContext) => reader.introspectCompiled<{ name: string }>({
-    sql: CASE_INSENSITIVE_COLUMNS_SQL,
-    bindings: [parts.map(part => dialect.quoteIdentifier(part)).join('.')],
-    source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
-  })
+  return async (reader) => {
+    const result = await reader.introspectCompiled<{ name: string }>({
+      sql: CASE_INSENSITIVE_COLUMNS_SQL,
+      bindings: [quoteTablePath(dialect, tableName)],
+      source: `schema:introspect:caseInsensitiveColumns:${tableName}`,
+    })
+    return new Set(result.rows.map(row => row.name))
+  }
+}
+
+function isSQLiteExactCollation(collation: string | null | undefined): boolean {
+  return collation === null || collation === undefined || sameIdentifier(collation, SQLITE_EXACT_COLLATION)
+}
+
+function createSQLiteReader(tableName: string): ColumnReader {
+  return async (reader) => {
+    const tablePath = await resolveSQLiteTablePath(reader, tableName)
+    const createTableSql = tablePath === undefined ? undefined : await readSQLiteCreateTableSql(reader, tablePath)
+    const table = createTableSql ? parseCreateTableSql(createTableSql) : undefined
+    if (!tablePath || !table) {
+      return 'all'
+    }
+
+    const { schema, table: storedName } = splitTablePath(tablePath)
+    const indexColumns = await reader.introspectCompiled<SQLiteIndexColumnRow>({
+      sql: SQLITE_UNIQUE_INDEX_COLUMNS_SQL,
+      bindings: [storedName, schema, schema],
+      source: `schema:introspect:uniqueIndexCollations:${tableName}`,
+    })
+    const looseKeyColumns = indexColumns.rows.filter(row => !isSQLiteExactCollation(row.coll)).map(row => row.name)
+    const columns = table.columns.map(column => ({
+      name: column.name,
+      textColumn: {
+        exact: column.constraints.every(constraint => constraint.kind !== 'COLLATE' || isSQLiteExactCollation(constraint.collation))
+          && !looseKeyColumns.some(name => sameIdentifier(name, column.name)),
+        padSpace: false,
+      },
+    }))
+    return {
+      findTextColumn: name => columns.find(column => sameIdentifier(column.name, name))?.textColumn,
+      numbersMatchText: false,
+    }
+  }
+}
+
+function createMySQLReader(connection: DatabaseContext, tableName: string): ColumnReader {
+  const { schema, table } = splitTablePath(tableName)
+  const dialect = connection.getDialect()
+  const configuredSchema = schema ?? connection.getSchemaName()
+  const qualifiedTable = quoteTablePath(dialect, configuredSchema === undefined ? table : `${configuredSchema}.${table}`)
+  return async (reader) => {
+    const created = await reader.introspectCompiled<MySQLCreateTableRow>({
+      sql: `SHOW CREATE TABLE ${qualifiedTable}`,
+      source: `schema:introspect:createTable:${tableName}`,
+    })
+    if (!MYSQL_PERMANENT_TABLE_PATTERN.test(created.rows[0]?.['Create Table'] ?? '')) {
+      return 'all'
+    }
+
+    const result = await reader.introspectCompiled<MySQLColumnRow>({
+      sql: `SHOW FULL COLUMNS FROM ${qualifiedTable}`,
+      source: `schema:introspect:columnCollations:${tableName}`,
+    })
+    if (result.rows.length === 0) {
+      return 'all'
+    }
+
+    const columns = new Map<string, TextColumn>()
+    for (const row of result.rows) {
+      if (row.Collation !== null) {
+        columns.set(row.Field.toLowerCase(), {
+          exact: MYSQL_EXACT_COLLATION_PATTERN.test(row.Collation) && !MYSQL_MEMBER_TYPE_PATTERN.test(row.Type),
+          padSpace: true,
+        })
+      }
+    }
+    return {
+      findTextColumn: name => columns.get(name.toLowerCase()),
+      numbersMatchText: true,
+    }
+  }
+}
+
+function createColumnReader(connection: DatabaseContext, tableName: string): ColumnReader | undefined {
+  if (isPostgresConnection(connection)) {
+    return createPostgresReader(connection, tableName)
+  }
+
+  if (isSQLiteConnection(connection)) {
+    return createSQLiteReader(tableName)
+  }
+
+  return isMySQLConnection(connection) ? createMySQLReader(connection, tableName) : undefined
+}
+
+async function readCaseInsensitiveColumns(connection: DatabaseContext, tableName: string): Promise<CaseInsensitiveColumns> {
+  const read = createColumnReader(connection, tableName)
+  if (!read) {
+    return 'all'
+  }
+
   try {
-    const result = connection.getScope().kind !== 'root' || currentRootTransaction(connection)
+    return connection.getScope().kind !== 'root' || currentRootTransaction(connection)
       ? await connection.transaction(read)
       : await read(connection)
-    return new Set(result.rows.map(row => row.name))
   } catch {
     return 'all'
   }

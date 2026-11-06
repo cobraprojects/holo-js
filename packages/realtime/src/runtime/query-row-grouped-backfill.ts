@@ -1,4 +1,4 @@
-import { TableQueryBuilder, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
+import { TableQueryBuilder, holoRuntimeInternals, type CompiledStatement, type DatabaseContext } from '@holo-js/db'
 import {
   readQueryRowWindowMode,
 } from './query-metadata'
@@ -13,7 +13,8 @@ import {
 import {
   createBackfillSelection,
   getBackfillDatabaseConnection,
-  quoteTableReference,
+  observedTableKey,
+  readBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillRows,
@@ -172,7 +173,7 @@ function createGroupedExactRowBackfillKey(
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -208,7 +209,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    rowsById.set(id, Object.freeze([stripGroupedRowIdentity(row, usesHiddenIdentity)]))
+    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
   }
 
   for (const value of values) {
@@ -348,7 +349,7 @@ function createGroupedWindowBackfillKey(
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
     + '}'
 }
 
@@ -367,10 +368,11 @@ async function fetchGroupedWindowBackfill(
   const rows = await connection.queryCompiled<Record<string, unknown>>(
     compileGroupedWindowBackfillStatement(connection, query, groupColumn, values, offset, limit),
   )
-  return groupWindowRows(rows.rows, values)
+  return groupWindowRows(query, rows.rows, values)
 }
 
 function groupWindowRows(
+  query: DatabaseQueryObservation,
   rows: readonly Readonly<Record<string, unknown>>[],
   values: readonly unknown[],
 ): ReadonlyMap<unknown, BackfillRows> | undefined {
@@ -389,7 +391,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    group.push(Object.freeze(result))
+    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
     rowsByGroup.set(groupValue, group)
   }
 
@@ -426,7 +428,7 @@ function compileGroupedWindowBackfillStatement(
   const upperBoundPlaceholder = placeholder(windowUpperBound)
   const derivedAlias = quote('__holo_grouped_rows')
   const rowNumberColumn = quote(GROUPED_ROW_NUMBER_ALIAS)
-  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${quoteTableReference(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
+  const sql = `SELECT * FROM (SELECT ${innerSelections}, ${rowNumber} FROM ${holoRuntimeInternals.quoteTablePath(dialect, query.tableName)} WHERE ${whereClause}) AS ${derivedAlias} WHERE ${rowNumberColumn} > ${lowerBoundPlaceholder} AND ${rowNumberColumn} <= ${upperBoundPlaceholder} ORDER BY ${quote(GROUPED_ROW_ID_ALIAS)} ASC, ${rowNumberColumn} ASC`
 
   return {
     bindings,

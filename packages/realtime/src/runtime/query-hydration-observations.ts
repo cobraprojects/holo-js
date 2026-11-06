@@ -61,6 +61,7 @@ export function rebindBelongsToObservations(
           resultPath,
           rowWindowMode: 'single' as const,
           selections: [],
+          table: hydration.relatedTable,
           tableName: hydration.relatedTableName,
         }))
       }

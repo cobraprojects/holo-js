@@ -1,5 +1,6 @@
-import { parseInteger, readSQLiteDecimal, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
+import { coerceBoolean, isStoredBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
@@ -25,8 +26,10 @@ function readIntegerResult(value: unknown): unknown {
 }
 
 function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined): ColumnReader | undefined {
-  if (column && readsAsInteger(column)) return readIntegerResult
-  return column && readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
+  if (!column) return undefined
+  if (readsAsInteger(column)) return readIntegerResult
+  if (readsAsCoercedBoolean(dialect, column)) return coerceBoolean
+  return readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
@@ -43,7 +46,7 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 
 export function tableForQualifier(tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
   if (tables.has(qualifier)) return tables.get(qualifier)
-  const matches = [...tables.entries()].filter(([name]) => name.includes('.') && name.slice(name.lastIndexOf('.') + 1) === qualifier)
+  const matches = [...tables.entries()].filter(([name]) => splitTablePath(name).schema !== undefined && splitTablePath(name).table === qualifier)
   return matches.length === 1 ? matches[0]![1] : undefined
 }
 
@@ -71,13 +74,17 @@ function selectedColumns(selection: QueryColumnSelection, tables: ReadonlyMap<st
   return [[selection.alias ?? name, table && Object.hasOwn(table.columns, name) ? table.columns[name] : undefined]]
 }
 
-function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
+function selectedResultColumns(plan: SelectQueryPlan): readonly SelectedColumn[] {
   const tables = queryTables(plan)
-  const selected: readonly SelectedColumn[] = plan.selections.length === 0
+  return plan.selections.length === 0
     ? projectedColumns(tables)
     : plan.selections.flatMap((selection): SelectedColumn[] => selection.kind === 'column'
       ? selectedColumns(selection, tables)
       : 'alias' in selection ? [[selection.alias, undefined]] : [[UNKNOWN_COLUMNS, undefined]])
+}
+
+function resultColumnDefinitions(plan: SelectQueryPlan): ReadonlyMap<string, AnyColumnDefinition> {
+  const selected = selectedResultColumns(plan)
   const definitions = new Map<string, AnyColumnDefinition>()
   for (const [key, definition] of selected) {
     if (key === UNKNOWN_COLUMNS) definitions.clear()
@@ -93,6 +100,7 @@ export function withResolvedDefinitions(plan: SelectQueryPlan, connectionName: s
     joins: plan.joins.map(join => join.table && !join.definition
       ? { ...join, definition: getConnectionGeneratedTableDefinition(join.table, connectionName) }
       : join),
+    unions: plan.unions.map(union => ({ ...union, query: withResolvedDefinitions(union.query, connectionName) })),
   }
 }
 
@@ -102,11 +110,57 @@ export function resultColumnDefinition(plan: SelectQueryPlan, key: string): AnyC
 
 export type ConvertedResultColumns = ReadonlyMap<string, ColumnReader>
 
+function hasEveryPosition(columns: readonly SelectedColumn[]): boolean {
+  return columns.every(([key]) => key !== UNKNOWN_COLUMNS)
+}
+
+function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
+  return plan.unions.flatMap(union => [union.query, ...unionBranches(union.query)])
+}
+
+function hasWildcardProjection(plan: SelectQueryPlan): boolean {
+  return plan.selections.length === 0 || plan.selections.some(selection => selection.kind === 'column' && selection.column.endsWith('*'))
+}
+
+function projectionShape(plan: SelectQueryPlan): string {
+  return JSON.stringify([
+    plan.source.tableName,
+    plan.joins.map(join => join.table ?? null),
+    plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias ?? null] : selection.kind),
+  ])
+}
+
+function hasAlignedWildcards(plan: SelectQueryPlan, branches: readonly SelectQueryPlan[]): boolean {
+  const plans = [plan, ...branches]
+  if (!plans.some(hasWildcardProjection)) return true
+  const shape = projectionShape(plan)
+  return branches.every(branch => projectionShape(branch) === shape)
+}
+
+function createUnionReaderCheck(
+  dialect: SchemaDialectName,
+  plan: SelectQueryPlan,
+): (key: string, reader: ColumnReader) => boolean {
+  if (plan.unions.length === 0) return () => true
+  const branchPlans = unionBranches(plan)
+  if (!hasAlignedWildcards(plan, branchPlans)) return () => false
+  const selected = selectedResultColumns(plan)
+  const branches = branchPlans.map(selectedResultColumns)
+  if (!hasEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !hasEveryPosition(branch))) {
+    return () => false
+  }
+  return (key, reader) => {
+    const position = selected.map(([selectedKey]) => selectedKey).lastIndexOf(key)
+    return branches.every(branch => columnReader(dialect, branch[position]?.[1]) === reader)
+  }
+}
+
 export function resolveConvertedResultColumns(dialect: SchemaDialectName, plan: SelectQueryPlan): ConvertedResultColumns {
   const columns = new Map<string, ColumnReader>()
+  const unionReads = createUnionReaderCheck(dialect, plan)
   for (const [key, definition] of resultColumnDefinitions(plan)) {
     const reader = columnReader(dialect, definition)
-    if (reader) columns.set(key, reader)
+    if (reader && unionReads(key, reader)) columns.set(key, reader)
   }
   return columns
 }
@@ -117,6 +171,14 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
     if (Object.hasOwn(row, key)) values[key] = read(row[key])
   }
   return values
+}
+
+export function hasUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
+  const booleanKeys = [...columns].filter(([, read]) => read === coerceBoolean).map(([key]) => key)
+  return booleanKeys.length > 0 && rows.some(row => booleanKeys.some((key) => {
+    const value = row[key]
+    return value != null && typeof value !== 'boolean' && !isStoredBoolean(value)
+  }))
 }
 
 export function readInsertedKey(

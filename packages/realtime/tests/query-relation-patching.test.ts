@@ -696,7 +696,6 @@ describe('@holo-js/realtime relation query patching', () => {
   })
 
   it.each([
-    ['only loosely equals', { active: 1, id: 2, name: 'New author' }],
     ['lacks the column of', { id: 2, name: 'New author' }],
     ['fails', { active: false, id: 2, name: 'New author' }],
   ])('leaves a constrained belongs-to parent-key relation to a refresh when the owner row %s its constraint and cannot be read', async (_name, row) => {
