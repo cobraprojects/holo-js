@@ -129,7 +129,7 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
   it.each(['amount', 'ratio'] as const)('keeps grouped and plain averages over the %s column equal to a fresh query when values are written as fractional numbers', async (averaged) => {
     const { db, scores } = await openScores(driver)
     await db.table(scores).where('id', '>', 0).delete()
-    const queries = [
+    const queries: Array<() => Promise<unknown>> = [
       () => db.table(scores).select('group_id').addSelectAvg('average', averaged).groupBy('group_id').orderBy('group_id').get(),
       () => db.table(scores).orderBy('id').avg(averaged),
       () => db.table(scores).where('group_id', 1).orderBy('id').avg(averaged),
@@ -184,7 +184,7 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
       { id: 2, group_id: 1, points: 1, amount: '1.00', ratio: 2 },
       { id: 3, group_id: 2, points: 1, amount: '1.00', ratio: -Number.MAX_SAFE_INTEGER },
     ])
-    const queries = [
+    const queries: Array<() => Promise<unknown>> = [
       () => db.table(scores).select('group_id').addSelectAvg('average', 'ratio').groupBy('group_id').orderBy('group_id').get(),
       () => db.table(scores).where('group_id', 2).orderBy('id').avg('ratio'),
     ]
@@ -211,7 +211,7 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
       { id: 3, group_id: 1, points: 1, amount: '1.00', ratio: 0.2 },
       { id: 4, group_id: 1, points: 1, amount: '1.00', ratio: -0.3 },
     ])
-    const queries = [
+    const queries: Array<() => Promise<unknown>> = [
       () => db.table(scores).select('group_id').addSelectAvg('average', 'ratio').groupBy('group_id').orderBy('group_id').get(),
       () => db.table(scores).orderBy('id').avg('ratio'),
     ]
@@ -400,7 +400,7 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
   it('keeps scalar and paginated subscriptions over the null group equal to a fresh query', async () => {
     const { db, scores } = await openScores(driver)
     await db.table(scores).insert({ id: 6, group_id: null, points: 2, amount: '2.00' })
-    const queries = [
+    const queries: Array<() => Promise<unknown>> = [
       () => db.table(scores).whereNull('group_id').sum('points'),
       () => db.table(scores).whereNull('group_id').count(),
       () => db.table(scores).where('group_id', 1).sum('points'),
