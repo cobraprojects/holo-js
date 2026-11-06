@@ -1,5 +1,4 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import { quoteTablePath } from '../schema/identifiers'
 import type { CompiledStatement } from '../core/types'
 import type {
   InsertStatementOptions,
@@ -26,10 +25,9 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
   }
 
   override compileTableIdentityLookup(tableName: string): CompiledStatement {
-    const quoting = { quoteIdentifier: (segment: string) => `"${segment.replaceAll('"', '""')}"` }
     return {
       sql: 'SELECT "namespaces"."nspname" AS "schema", "classes"."relname" AS "name", (SELECT "bare_namespaces"."nspname" FROM pg_catalog.pg_class AS "bare_classes" JOIN pg_catalog.pg_namespace AS "bare_namespaces" ON "bare_namespaces"."oid" = "bare_classes"."relnamespace" WHERE "bare_classes"."oid" = to_regclass(quote_ident("classes"."relname"))) AS "bare_schema" FROM (SELECT 1) AS "probe" LEFT JOIN pg_catalog.pg_class AS "classes" ON "classes"."oid" = to_regclass($1) LEFT JOIN pg_catalog.pg_namespace AS "namespaces" ON "namespaces"."oid" = "classes"."relnamespace"',
-      bindings: [quoteTablePath(quoting, tableName)],
+      bindings: [this.compileTableReference(tableName)],
       source: `schema:introspect:tableIdentity:${tableName}`,
     }
   }

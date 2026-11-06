@@ -3114,11 +3114,12 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
-    validateQueryPlan(createTruncateQueryPlan(this.source))
+    const plan = createTruncateQueryPlan(this.source)
+    validateQueryPlan(plan)
     await this.prepareMutation()
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
-    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
+    await this.connection.executeCompiled(this.getCompiler().compileResolvedTruncate(plan, tableName))
     await this.resetSequence(tableName)
     await this.invalidateTableQueries('delete')
   }
