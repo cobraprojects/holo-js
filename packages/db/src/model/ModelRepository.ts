@@ -32,6 +32,7 @@ import { collectRelationKeys, distinctStoredKeys, integerKeysToInline, isFractio
 import { assertEntitiesBelongTo, createModelCollection, setModelCollectionOwner, type ModelCollection } from './collection'
 import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
+import { normalizeQualifiedRelationKeys } from './qualifiedRelationKeys'
 import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
 import { ModelQueryBuilder, loadRelationsOn, whereIntegerKeysIn, withoutRelationLoads } from './ModelQueryBuilder'
 import { ModelEventDispatcher } from './ModelEventDispatcher'
@@ -243,7 +244,7 @@ export class ModelRepository<
       throw new SecurityError(`Relation "${name}" is not defined on model "${this.definition.name}".`)
     }
 
-    return relation
+    return normalizeQualifiedRelationKeys(this.definition, name, relation)
   }
 
   createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem, TScopes> {
