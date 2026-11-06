@@ -26,7 +26,8 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { projectModelRows, resolveAggregateSource, TableQueryBuilder } from '../query/TableQueryBuilder'
+import { projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
+import { isAwaitingGeneratedTableIdentity } from '../schema/generated'
 import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
@@ -242,6 +243,11 @@ class ModelQueryBuilderBase<
     }
   }
 
+  private isAwaitingTableIdentity(): boolean {
+    const { definition } = this.repository
+    return isAwaitingGeneratedTableIdentity(definition.table.tableName, definition.connectionName)
+  }
+
   private qualifiedKeyName(): ModelColumnName<TTable> {
     const { source } = this.tableQuery.getPlan()
     return `${source.alias ?? source.tableName}.${this.repository.definition.primaryKey}` as ModelColumnName<TTable>
@@ -424,11 +430,17 @@ class ModelQueryBuilderBase<
   }
 
   whereKey(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    if (value !== null && this.isAwaitingTableIdentity()) {
+      return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'in' : '=', value))
+    }
     const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereIn(key, value) : this.where(key, value)
   }
 
   whereKeyNot(value: unknown): ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables> {
+    if (value !== null && this.isAwaitingTableIdentity()) {
+      return this.clone(this.tableQuery[whereResolvedColumn](() => this.qualifiedKeyName(), Array.isArray(value) ? 'not in' : '!=', value))
+    }
     const key = this.qualifiedKeyName()
     return Array.isArray(value) ? this.whereNotIn(key, value) : this.where(key, '!=', value)
   }

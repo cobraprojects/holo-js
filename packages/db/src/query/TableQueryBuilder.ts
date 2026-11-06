@@ -184,6 +184,7 @@ type JsonColumnPath<
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
 
 export const hasQueryCache = Symbol('hasQueryCache')
+export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
 type KeyedInsert = (
@@ -341,6 +342,20 @@ export class TableQueryBuilder<
 
   private retainedPredicateValue<TValue>(value: TValue): TValue {
     return this.isAwaitingGeneratedTable() ? snapshotPredicateValue(value) as TValue : value
+  }
+
+  [whereResolvedColumn](resolveColumn: () => string, operator: 'in' | 'not in' | '=' | '!=', value: unknown): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const snapshot = this.retainedPredicateValue(value)
+    return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
+      kind: 'comparison',
+      boolean: 'and',
+      column: resolveColumn(),
+      operator,
+      value: snapshot,
+    }, () => {
+      const column = resolveColumn()
+      return { column, ...this.normalizeComparisonValue(column, snapshot, operator) }
+    })))
   }
 
   private withNormalizedValue<TPredicate extends QueryPredicateNode>(predicate: TPredicate, normalize: () => Partial<TPredicate>): TPredicate {

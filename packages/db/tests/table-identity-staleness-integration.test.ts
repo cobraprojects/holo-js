@@ -384,6 +384,20 @@ describe('sqlite model keyed by a generated table whose spellings disagree on th
     }
   })
 
+  it('filters a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
+    const filters: Record<string, (model: ReturnType<typeof defineModel>) => Promise<unknown>> = {
+      whereKey: async model => (await model.query().whereKey(7).first())?.get('name'),
+      whereKeyList: async model => (await model.query().whereKey([7]).first())?.get('name'),
+      whereKeyNot: async model => (await model.query().whereKeyNot(8).first())?.get('name'),
+      whereKeyNotList: async model => (await model.query().whereKeyNot([8]).first())?.get('name'),
+    }
+    for (const [name, filter] of Object.entries(filters)) {
+      await openDisagreeingRecords()
+      expect([name, await filter(defineModel('records', { timestamps: false, name: uniqueName(`Filtered${name}`) }))]).toEqual([name, 'main'])
+      clearGeneratedTables()
+    }
+  })
+
   it('finds a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
     await openDisagreeingRecords()
 
