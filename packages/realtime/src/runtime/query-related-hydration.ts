@@ -10,6 +10,7 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  readObservedRow,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -135,7 +136,8 @@ function readRelatedMutationRows(
       continue
     }
 
-    for (const row of mutation.rows) {
+    for (const storedRow of mutation.rows) {
+      const row = readObservedRow(hydration.relatedTable, hydration.readRow, storedRow)
       const matches = row[hydration.foreignKey] === localKey && matchesPredicates(row, hydration.predicates) === true
       if (matches) {
         rows.push(row)
@@ -295,7 +297,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
+  const rows = readBackfilledRows(hydration.relatedTable, await builder.get(), undefined, hydration.readRow)
   const readKey = (value: unknown) => readBackfilledValue(hydration.relatedTable, hydration.foreignKey, value)
   const requestedKeys = new Set(values.map(readKey))
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
@@ -325,7 +327,7 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(hydration, readBackfilledRows(hydration.relatedTable, rows.rows), values)
+  return groupRelatedTopOneRows(hydration, readBackfilledRows(hydration.relatedTable, rows.rows, undefined, hydration.readRow), values)
 }
 
 function groupRelatedTopOneRows(
@@ -482,7 +484,7 @@ async function fetchRelatedHydrationRows(
 
   const rows = readBackfilledRows(hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
-    .get())
+    .get(), undefined, hydration.readRow)
   return validateRelatedHydrationRows(rows, hydration)
 }
 

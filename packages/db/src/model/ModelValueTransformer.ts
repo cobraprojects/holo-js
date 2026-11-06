@@ -1,5 +1,5 @@
 import { HydrationError } from '../core/errors'
-import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, isConvertedByModelReads, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
+import { booleanStorageValue, calendarMidnightWriteValue, coerceBoolean, dateLikeWriteValue, normalizeDialectReadValue, normalizeDialectWriteValue, parseStoredDate, readIntegerKey, readsAsInteger, isConvertedByModelReads, storesDate, storesText, wholeSecondInstant } from '../schema/normalization'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { TableDefinition } from '../schema/types'
 import { Entity } from './Entity'
@@ -173,6 +173,28 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     const cast = this.resolveCast(key)
     const casted = this.isNativeJsonCast(key, cast) ? value : this.applyCastSet(cast, value)
     return this.applySchemaWriteNormalization(key, casted)
+  }
+
+  readStoredRow(row: Readonly<Record<string, unknown>>, dialect: SchemaDialectName, written = false): Readonly<Record<string, unknown>> {
+    const normalized = this.normalizeFromStorage(row as Partial<ModelRecord<TTable>>, {}, written ? 'serialized' : 'database', dialect)
+    return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, this.serializeAttributeValue(key, value)])))
+  }
+
+  comparesWithStoredValues(key: string): boolean {
+    const cast = this.resolveCast(key)
+    const column = ownEntry(this.definition.table.columns, key)
+    if (cast === undefined) {
+      if (!column || !isConvertedByModelReads(column)) return true
+      return storesDate(column) && !this.definition.serializeDate
+    }
+    const builtInCast = this.parseBuiltInCast(cast)
+    if (builtInCast?.name === 'boolean') return !column || !isConvertedByModelReads(column)
+    if (builtInCast?.name === 'number') return column !== undefined && readsAsInteger(column)
+    return this.hasBuiltInDateCast(key)
+      && builtInCast?.parameter === undefined
+      && !this.definition.serializeDate
+      && column !== undefined
+      && storesDate(column)
   }
 
   readsRowsAsStored(): boolean {

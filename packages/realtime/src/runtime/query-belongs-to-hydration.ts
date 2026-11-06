@@ -8,12 +8,14 @@ import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
   readBackfilledValue,
+  readObservedRow,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
 import type {
   BackfillCache,
   DatabaseQueryBelongsToHydrationObservation,
+  DatabaseQueryRowReader,
 } from './query-state'
 import { stableStringify } from './stable-stringify'
 
@@ -21,9 +23,15 @@ type BelongsToHydrationTarget = {
   readonly foreignKey: string
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
+  readonly readRow?: DatabaseQueryRowReader
+  readonly relatedReadRow?: DatabaseQueryRowReader
   readonly relatedConnectionName: string
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition
+}
+
+function readTargetRows(target: BelongsToHydrationTarget, rows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>>[] {
+  return readBackfilledRows(target.relatedTable, rows, undefined, target.readRow ?? target.relatedReadRow)
 }
 
 export async function hydrateBelongsToMutationRows(
@@ -132,7 +140,8 @@ function findBelongsToRelatedMutationValue(
       continue
     }
 
-    for (const row of rows) {
+    for (const storedRow of rows) {
+      const row = readObservedRow(target.relatedTable, target.readRow ?? target.relatedReadRow, storedRow)
       if (row[target.ownerKey] !== foreignKey) {
         continue
       }
@@ -245,7 +254,7 @@ async function fetchGroupedBelongsToRelatedRows(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  const rows = readBackfilledRows(target.relatedTable, await builder.get())
+  const rows = readTargetRows(target, await builder.get())
 
   const readKey = (value: unknown) => readBackfilledValue(target.relatedTable, target.ownerKey, value)
   const requestedKeys = new Set(values.map(readKey))
@@ -287,7 +296,7 @@ async function fetchBelongsToRelatedRow(
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
 
-  return readBackfilledRows(target.relatedTable, await builder.limit(1).get())
+  return readTargetRows(target, await builder.limit(1).get())
 }
 
 function createBelongsToRelatedBackfillKey(

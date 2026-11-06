@@ -211,7 +211,7 @@ async function fetchGroupedExactRowBackfill(
       return undefined
     }
 
-    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections)))
+    rowsById.set(id, Object.freeze(readBackfilledRows(query.table, [stripGroupedRowIdentity(row, usesHiddenIdentity)], selections, query.readRow)))
   }
 
   const result = new Map<unknown, BackfillRows>()
@@ -394,7 +394,7 @@ function groupWindowRows(
       ...result
     } = row
 
-    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections))
+    group.push(...readBackfilledRows(query.table, [Object.freeze(result)], query.selections, query.readRow))
     rowsByGroup.set(groupValue, group)
   }
 

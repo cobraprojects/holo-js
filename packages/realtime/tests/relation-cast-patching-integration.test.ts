@@ -35,8 +35,8 @@ const modelCasts: Record<string, ModelCastDefinition> = {
 
 const variants = drivers.flatMap(driver => [
   { driver, label: 'scalar columns', dated: false, casts: {}, patches: true },
-  { driver, label: 'date and JSON columns', dated: true, casts: {}, patches: false },
-  { driver, label: 'model casts', dated: true, casts: modelCasts, patches: false },
+  { driver, label: 'date and JSON columns', dated: true, casts: {}, patches: true },
+  { driver, label: 'model casts', dated: true, casts: modelCasts, patches: true },
 ])
 
 type Variant = typeof variants[number]
@@ -239,6 +239,23 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps relations filtered on converted columns equal to a fresh read', async () => {
+    const { db, items, Parent } = await openFixture(variant)
+    const expectFresh = await subscribeAll(variant, {
+      secret: () => db.model(Parent).query().with('items', query => query.where('secret', 's3').orderBy('id')).orderBy('id').getJson(),
+      ...variant.dated
+        ? { dated: () => db.model(Parent).query().with('items', query => query.where('born_on', '>=', '2024-05-01').orderBy('born_on')).orderBy('id').getJson() }
+        : {},
+    })
+
+    await mutate(() => db.table(items).where('id', 1).update(rowValues(variant, 9)))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 2).update({ ...rowValues(variant, 7), secret: 's3' }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).insert({ id: 4, owner_id: 2, ...rowValues(variant, 13), secret: 's3' }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
@@ -281,8 +298,8 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     })
 
     await mutate(() => db.table(notes).where('id', 1).update({ body: 'b', updated_at: '2024-02-03 04:05:06' }))
-    await expectFresh(false)
+    await expectFresh()
     await mutate(() => db.table(notes).insert({ id: 2, owner_id: 1, body: 'c', created_at: '2024-03-04 05:06:07', updated_at: '2024-03-04 05:06:07' }))
-    await expectFresh(false)
+    await expectFresh()
   })
 })

@@ -3,6 +3,7 @@ import { CompilerError, ConfigurationError, HydrationError, ModelNotFoundExcepti
 import { readNumericValue } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
 import {
+  createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
   hasActiveDatabaseDependencyCollector,
   rebindDatabaseQueryObservationHydratedResult,
@@ -31,7 +32,7 @@ import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selec
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import type { JoinedTableName } from '../query/selectionTypes'
 import { resolveMorphSelector } from './morphRegistry'
-import { modelNeedsSerialization } from './serialize'
+import { modelSerializesBeyondRows } from './serialize'
 import type { ModelCollection } from './collection'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { DriverExecutionResult } from '../core/types'
@@ -2640,9 +2641,14 @@ class ModelQueryBuilderBase<
     )
   }
 
+  private rowsCompareWithStoredValues(): boolean {
+    const observation = createDatabaseQueryObservation(this.getTableQueryBuilder().getPlan(), this.getConnectionName(), [])
+    return observation !== undefined && this.repository.comparesObservationWithStoredValues(observation)
+  }
+
   private canBindRowsToSerializedResultBase(): boolean {
-    return !modelNeedsSerialization(this.repository.definition)
-      && this.repository.readsRowsAsStored()
+    return !modelSerializesBeyondRows(this.repository.definition)
+      && this.rowsCompareWithStoredValues()
       && Object.keys(this.queryCasts).length === 0
       && this.relationFilters.length === 0
       && this.aggregateLoads.length === 0
@@ -2675,7 +2681,7 @@ class ModelQueryBuilderBase<
       const relation = this.repository.getRelationDefinition(load.relation)
       if (relation.kind === 'belongsTo') {
         const predicates = this.repository.resolveBelongsToOwnerPredicates(relation, load.constraint)
-        if (!predicates) {
+        if (!predicates || !this.repository.comparesWithStoredValues([relation.foreignKey])) {
           return undefined
         }
 
@@ -2686,6 +2692,7 @@ class ModelQueryBuilderBase<
           ownerKey: relation.ownerKey,
           predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
+          ...this.repository.relatedRowReader(relation.related) ? { readRow: this.repository.relatedRowReader(relation.related) } : {},
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2696,7 +2703,7 @@ class ModelQueryBuilderBase<
 
       if (relation.kind === 'hasMany' || relation.kind === 'hasOne') {
         const hydrationQuery = this.createPatchableRelatedHydrationQuery(relation, load.constraint)
-        if (!hydrationQuery) {
+        if (!hydrationQuery || !this.repository.comparesWithStoredValues([relation.localKey])) {
           return undefined
         }
 
@@ -2709,6 +2716,7 @@ class ModelQueryBuilderBase<
           orderBy: hydrationQuery.orderBy,
           predicates: hydrationQuery.predicates,
           primaryKey: resolveModelRowKey(relatedDefinition),
+          ...this.repository.relatedRowReader(relation.related) ? { readRow: this.repository.relatedRowReader(relation.related) } : {},
           relationKey: load.relation,
           relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
           relatedTableName: canonicalTableName(relatedDefinition.connectionName ?? this.getConnectionName(), relatedDefinition.table.tableName),
@@ -2754,7 +2762,7 @@ class ModelQueryBuilderBase<
     }
 
     if (this.canBindRowsToSerializedResult()) {
-      rebindDatabaseQueryObservationResult(rows, result)
+      rebindDatabaseQueryObservationResult(rows, result, this.repository.rowReader())
       return
     }
 
@@ -2765,6 +2773,7 @@ class ModelQueryBuilderBase<
         result,
         hydrations.belongsToHydrations ?? Object.freeze([]),
         hydrations.relatedHydrations,
+        this.repository.rowReader(),
       )
       return
     }
@@ -2775,8 +2784,8 @@ class ModelQueryBuilderBase<
   }
 
   private rowsNeedSerialization(): boolean {
-    return modelNeedsSerialization(this.repository.definition)
-      || !this.repository.readsRowsAsStored()
+    return modelSerializesBeyondRows(this.repository.definition)
+      || !this.rowsCompareWithStoredValues()
       || Object.keys(this.queryCasts).length > 0
   }
 
