@@ -123,7 +123,7 @@ describe('query observations and mutation events carry the table primary key', (
     expect(mutations.map(mutation => [mutation.primaryKey, mutation.rows])).toEqual([['ticket_no', [{ label: 'first', ticket_no: 1 }]]])
   })
 
-  it.runIf(mysqlIntegration)('publishes an inserted row without a key when the database generates a key that is not auto-increment', async () => {
+  it.runIf(mysqlIntegration)('publishes an insert without rows when the database generates a key that is not auto-increment', async () => {
     const name = `regions_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     const adapter = await openTable(name, { code: column.string().primaryKey(), name: column.string() }, {}, `CREATE TABLE ${name} (code VARCHAR(8) PRIMARY KEY DEFAULT 'XX', name TEXT)`, 'mysql')
     try {
@@ -131,7 +131,7 @@ describe('query observations and mutation events carry the table primary key', (
 
       await DB.table(name).insert({ name: 'North' })
 
-      expect(mutations.map(mutation => [mutation.primaryKey, mutation.rows])).toEqual([['code', [{ name: 'North' }]]])
+      expect(mutations.map(mutation => [mutation.primaryKey, mutation.rows])).toEqual([['code', undefined]])
     } finally {
       await adapter.execute(`DROP TABLE ${name}`)
     }

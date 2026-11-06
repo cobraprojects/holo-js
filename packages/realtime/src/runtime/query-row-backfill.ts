@@ -7,6 +7,7 @@ import {
 import {
   createBackfillSelection,
   getBackfillDatabaseConnection,
+  readBackfilledRows,
 } from './query-backfill'
 import {
   applySortedRowsWindow,
@@ -53,10 +54,10 @@ async function fetchLimitedQueryBackfillRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  return await builder
+  return readBackfilledRows(query.table, await builder
     .offset(offset)
     .limit(limit)
-    .get()
+    .get(), selections)
 }
 
 export async function backfillLimitedQueryRows(
@@ -170,6 +171,9 @@ async function hydrateBackfilledRows(
     const belongsToHydratedRow = belongsToHydrations && belongsToHydrations.length > 0
       ? await hydrateBelongsToRow(row, belongsToHydrations, backfills)
       : row
+    if (!belongsToHydratedRow) {
+      return undefined
+    }
 
     const hydratedRow = relatedHydrations && relatedHydrations.length > 0
       ? await hydrateRelatedRow(belongsToHydratedRow, relatedHydrations, backfills)

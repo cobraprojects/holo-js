@@ -1,25 +1,45 @@
-import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
-import { describe, it } from 'vitest'
+import ts from 'typescript'
+import { describe, expect, it } from 'vitest'
 
-const execFileAsync = promisify(execFile)
-
-type ExecFileError = Error & {
-  readonly stdout?: string
-  readonly stderr?: string
+const diagnosticHost: ts.FormatDiagnosticsHost = {
+  getCanonicalFileName: fileName => fileName,
+  getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
+  getNewLine: () => '\n',
 }
 
-async function expectDeclarationEmitToPass(tsconfigPath: string): Promise<void> {
-  try {
-    await execFileAsync('bun', ['x', 'tsc', '-p', tsconfigPath], {
-      cwd: join(import.meta.dirname, '..'),
-    })
-  } catch (error) {
-    const failure = error as ExecFileError
-    throw new Error([failure.message, failure.stdout, failure.stderr].filter(Boolean).join('\n'), { cause: error })
+function formatDiagnostic(diagnostic: ts.Diagnostic): string {
+  return ts.formatDiagnostic(diagnostic, diagnosticHost)
+}
+
+function emitFixtureDeclaration(tsconfigPath: string, fixturePath: string): { readonly errors: readonly string[], readonly declaration: string } {
+  const config = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: diagnostic => {
+      throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+    },
+  })
+  if (!config) {
+    throw new Error(`Unable to read ${tsconfigPath}`)
   }
+
+  const program = ts.createProgram({ rootNames: config.fileNames, options: config.options })
+  const fixture = program.getSourceFile(fixturePath)
+  if (!fixture) {
+    throw new Error(`${fixturePath} is not part of the program`)
+  }
+
+  let declaration = ''
+  const emitted = program.emit(fixture, (_fileName, text) => { declaration = text }, undefined, true)
+  const diagnostics = [
+    ...config.errors,
+    ...program.getSyntacticDiagnostics(fixture),
+    ...program.getSemanticDiagnostics(fixture),
+    ...program.getDeclarationDiagnostics(fixture),
+    ...emitted.diagnostics,
+  ]
+  return { errors: diagnostics.map(formatDiagnostic), declaration }
 }
 
 describe('@holo-js/realtime declaration emit', () => {
@@ -79,7 +99,10 @@ describe('@holo-js/realtime declaration emit', () => {
         include: ['./fixture.ts'],
       }, null, 2))
 
-      await expectDeclarationEmitToPass(join(tempDir, 'tsconfig.json'))
+      const result = emitFixtureDeclaration(join(tempDir, 'tsconfig.json'), join(tempDir, 'fixture.ts'))
+
+      expect(result.errors).toEqual([])
+      expect(result.declaration).toContain('export declare const adminPost:')
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

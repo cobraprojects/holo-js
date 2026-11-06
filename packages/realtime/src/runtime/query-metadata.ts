@@ -17,6 +17,7 @@ import {
   type DatabaseQuerySelectionObservation,
   type RowWindowMode,
 } from './query-state'
+import { observedTableKey } from './query-backfill'
 import { stableStringify } from './stable-stringify'
 
 export function readQueryOrderColumns(query: DatabaseQueryObservation): readonly string[] {
@@ -161,7 +162,7 @@ export function createRowBackfillKeyPrefix(query: DatabaseQueryObservation): str
     + ',"selections":'
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
-    + stableStringify(query.tableName)
+    + stableStringify(observedTableKey(query))
 }
 
 export function createAggregateBackfillKey(query: DatabaseQueryObservation): string {
@@ -169,6 +170,7 @@ export function createAggregateBackfillKey(query: DatabaseQueryObservation): str
     + stableStringify(query.aggregate)
     + ',"connectionName":'
     + stableStringify(query.connectionName)
+    + (query.aggregate?.kind === 'avg' ? ',"orderBy":' + stableStringify(query.orderBy) : '')
     + ',"predicates":'
     + stableStringify(query.predicates)
     + ',"tableName":'

@@ -1,10 +1,21 @@
 import { compileMySQLStringLiteral } from '../core/mysqlStringLiteral'
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { splitTablePath } from '../schema/identifiers'
+import type { CompiledStatement } from '../core/types'
 import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
+  override compileTableIdentityLookup(tableName: string): CompiledStatement {
+    const { schema, table } = splitTablePath(tableName)
+    return {
+      sql: 'SELECT COALESCE(`tables`.`TABLE_SCHEMA`, ?, DATABASE()) AS `schema`, COALESCE(`tables`.`TABLE_NAME`, ?) AS `name`, DATABASE() AS `bare_schema` FROM (SELECT 1) AS `probe` LEFT JOIN information_schema.`TABLES` AS `tables` ON `tables`.`TABLE_SCHEMA` = COALESCE(?, DATABASE()) AND `tables`.`TABLE_NAME` = ?',
+      bindings: [schema ?? null, table, schema ?? null, table],
+      source: `schema:introspect:tableIdentity:${tableName}`,
+    }
+  }
+
   protected override compileLikePredicate(predicate: QueryLikePredicate, bindings: unknown[]): string {
     bindings.push(predicate.value)
     const negation = predicate.negated ? 'NOT ' : ''
@@ -20,6 +31,14 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
   protected override compileJsonTextExtraction(column: string, path: readonly string[]): string {
     return `JSON_UNQUOTE(JSON_EXTRACT(${column}, ${this.createJsonPathLiteral(path)}))`
+  }
+
+  protected override compileTextKey(expression: string): string {
+    return `CONCAT(${expression}) COLLATE utf8mb4_0900_bin`
+  }
+
+  protected override compileIntegerKey(expression: string): string {
+    return `CASE WHEN ${expression} REGEXP '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' AND ${expression} NOT REGEXP '[^-.0-9]' THEN CAST(SUBSTRING_INDEX(${expression}, '.', 1) AS DECIMAL(65, 0)) END`
   }
 
   protected override createSqlStringLiteral(value: string): string {

@@ -1,3 +1,4 @@
+import { queryCacheInternals } from '@holo-js/db'
 import type { PredicateDependencyIndex } from './dependencies'
 import {
   matchesPredicateValue,
@@ -8,11 +9,11 @@ import type { DatabaseQueryObservation } from './query-state'
 const UNREADABLE_DEPENDENCY_VALUE = Symbol('unreadable dependency value')
 
 function createQueryTableKey(query: DatabaseQueryObservation): string {
-  return `db:${query.connectionName}:${query.tableName}`
+  return createTableKey(query.connectionName, query.tableName)
 }
 
 function createTableKey(connectionName: string, tableName: string): string {
-  return `db:${connectionName}:${tableName}`
+  return queryCacheInternals.createTableCacheDependency(connectionName, tableName)
 }
 
 function decodeDependencyValue(encodedValue: string): unknown | typeof UNREADABLE_DEPENDENCY_VALUE {

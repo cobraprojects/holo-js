@@ -1,4 +1,4 @@
-import { TableQueryBuilder } from '@holo-js/db'
+import { TableQueryBuilder, type TableDefinition } from '@holo-js/db'
 import {
   createMutationIndexKey,
   type DatabaseMutationEvent,
@@ -6,7 +6,10 @@ import {
 } from './dependencies'
 import {
   getBackfillDatabaseConnection,
+  readBackfilledRows,
 } from './query-backfill'
+import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
+import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
 import type {
   BackfillCache,
   DatabaseQueryBelongsToHydrationObservation,
@@ -16,8 +19,10 @@ import { stableStringify } from './stable-stringify'
 type BelongsToHydrationTarget = {
   readonly foreignKey: string
   readonly ownerKey: string
+  readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export async function hydrateBelongsToMutationRows(
@@ -37,6 +42,10 @@ export async function hydrateBelongsToMutationRows(
     }
 
     const hydrated = await hydrateBelongsToRow(row, hydrations, backfills, mutation)
+    if (!hydrated) {
+      return undefined
+    }
+
     if (hydrated !== row) {
       nextRows ??= [...mutation.rows.slice(0, index)]
     }
@@ -59,7 +68,7 @@ export async function hydrateBelongsToRow(
   hydrations: readonly DatabaseQueryBelongsToHydrationObservation[],
   backfills: BackfillCache,
   sourceMutation?: DatabaseMutationEvent,
-): Promise<Readonly<Record<string, unknown>>> {
+): Promise<Readonly<Record<string, unknown>> | undefined> {
   let nextRow = row
   for (const hydration of hydrations) {
     const relatedValue = await readBelongsToHydratedValue(
@@ -68,6 +77,9 @@ export async function hydrateBelongsToRow(
       backfills,
       sourceMutation,
     )
+    if (typeof relatedValue === 'undefined') {
+      return undefined
+    }
 
     if (nextRow[hydration.relationKey] === relatedValue) {
       continue
@@ -87,9 +99,13 @@ export async function readBelongsToHydratedValue(
   foreignKey: unknown,
   backfills: BackfillCache,
   sourceMutation?: DatabaseMutationEvent,
-): Promise<Readonly<Record<string, unknown>> | null> {
+): Promise<Readonly<Record<string, unknown>> | null | undefined> {
   if (foreignKey === null || typeof foreignKey === 'undefined') {
     return null
+  }
+
+  if (!canBackfillRelatedHydrationPredicates(target.predicates)) {
+    return undefined
   }
 
   return findBelongsToRelatedMutationValue(target, foreignKey, backfills.mutations)
@@ -116,9 +132,15 @@ function findBelongsToRelatedMutationValue(
     }
 
     for (const row of rows) {
-      if (row[target.ownerKey] === foreignKey) {
-        return mutation.kind === 'delete' ? null : row
+      if (row[target.ownerKey] !== foreignKey) {
+        continue
       }
+
+      if (mutation.kind === 'delete') {
+        return null
+      }
+
+      return matchesPredicates(row, target.predicates) === true ? row : undefined
     }
   }
 
@@ -130,7 +152,7 @@ async function fetchBelongsToRelatedValue(
   foreignKey: unknown,
   backfills: BackfillCache,
   sourceMutation: DatabaseMutationEvent | undefined,
-): Promise<Readonly<Record<string, unknown>> | null> {
+): Promise<Readonly<Record<string, unknown>> | null | undefined> {
   const groupedValue = await fetchGroupedBelongsToRelatedValue(target, foreignKey, backfills, sourceMutation)
   if (typeof groupedValue !== 'undefined') {
     return groupedValue
@@ -141,7 +163,7 @@ async function fetchBelongsToRelatedValue(
   backfills.rows.set(backfillKey, pendingBackfill)
 
   const rows = await pendingBackfill
-  return rows?.[0] ?? null
+  return rows ? rows[0] ?? null : undefined
 }
 
 async function fetchGroupedBelongsToRelatedValue(
@@ -213,12 +235,16 @@ async function fetchGroupedBelongsToRelatedRows(
     return undefined
   }
 
-  const rows = await new TableQueryBuilder<string, Record<string, unknown>>(
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )
     .where(target.ownerKey, 'in', values)
-    .get()
+  for (const predicate of target.predicates) {
+    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  }
+
+  const rows = readBackfilledRows(target.relatedTable, await builder.get())
 
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
@@ -249,25 +275,28 @@ async function fetchBelongsToRelatedRow(
     return undefined
   }
 
-  return await new TableQueryBuilder<string, Record<string, unknown>>(
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(
     target.relatedTableName,
     connection,
   )
     .where(target.ownerKey, foreignKey)
-    .limit(1)
-    .get()
+  for (const predicate of target.predicates) {
+    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  }
+
+  return readBackfilledRows(target.relatedTable, await builder.limit(1).get())
 }
 
 function createBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   foreignKey: unknown,
 ): string {
-  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(foreignKey)}`
+  return `belongs-to:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(foreignKey)}:${stableStringify(target.predicates)}`
 }
 
 function createGroupedBelongsToRelatedBackfillKey(
   target: BelongsToHydrationTarget,
   values: readonly unknown[],
 ): string {
-  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(values)}`
+  return `belongs-to-group:${target.relatedConnectionName}:${target.relatedTableName}:${target.ownerKey}:${stableStringify(values)}:${stableStringify(target.predicates)}`
 }
