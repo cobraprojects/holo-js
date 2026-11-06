@@ -190,6 +190,7 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
 
     expect(await cachedNames(qualified)).toEqual(['first'])
     expect(reread.length).toBeGreaterThan(0)
+    expect(reread.every(names => names.length === 1 && names[0] === 'first')).toBe(true)
   }, 10_000)
 
   it('reads a model defined by the qualified name from that table after a temp table shadows the bare name', async () => {
@@ -282,6 +283,21 @@ for (const driver of integrationDrivers(['postgres', 'mysql'] as const)) {
     })
   })
 }
+
+describe.each(integrationDrivers(['postgres'] as const))('%s model after a temp table shadows the bare name', (driver) => {
+  it('reads a model defined by the qualified name from that table after a temp table shadows the bare name', async () => {
+    const { db, name, home } = await openSingleSession(driver)
+    useGeneratedTables({ shadowed: defineGeneratedTable(name, { id: column.integer().primaryKey(), name: column.string() }) })
+    await DB.table(`${home}.${name}`).insert({ id: 1, name: 'home' })
+    const Shadowed = defineModel(`${home}.${name}`, { timestamps: false })
+    expect((await Shadowed.findOrFail(1)).get('name')).toBe('home')
+
+    await db.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${name}" ("id" INTEGER PRIMARY KEY, "name" VARCHAR(255) NOT NULL)`, source: 'schema' })
+    await db.getAdapter().execute(`INSERT INTO pg_temp."${name}" ("id", "name") VALUES (1, 'temporary')`)
+
+    expect((await Shadowed.findOrFail(1)).get('name')).toBe('home')
+  })
+})
 
 class RollbackRequested extends Error {}
 
