@@ -21,6 +21,10 @@ function holdsInteger(value: unknown): boolean {
   return typeof value === 'number' || readsIntegerText(value)
 }
 
+export function failsIntegerRead(value: unknown): boolean {
+  return holdsInteger(value) && !Number.isSafeInteger(Number(value))
+}
+
 function readIntegerResult(value: unknown): unknown {
   return holdsInteger(value) ? parseInteger(value) : value
 }
@@ -193,14 +197,11 @@ function readsCanonicalInteger(value: unknown): boolean {
     || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value) && Number.isSafeInteger(Number(value)))
 }
 
-export function isUnreadableInteger(value: unknown): boolean {
-  return holdsIntegerValue(value) && !readsCanonicalInteger(value)
-}
-
 export function holdsUnreadableInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
   return columnsOf(table).some(([key, definition]) => readsAsInteger(definition!)
     && Object.hasOwn(row, key)
-    && isUnreadableInteger(row[key]))
+    && holdsIntegerValue(row[key])
+    && !readsCanonicalInteger(row[key]))
 }
 
 export function readCanonicalInteger(value: unknown): unknown {

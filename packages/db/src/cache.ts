@@ -7,7 +7,7 @@ import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
-import { isUnreadableInteger, readCanonicalInteger } from './query/resultColumns'
+import { failsIntegerRead, readCanonicalInteger } from './query/resultColumns'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
@@ -2344,7 +2344,7 @@ function hasUnreadableFetchedInteger(
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[] = [],
 ): boolean {
-  return integerResultKeys(table, row, selections, isUnreadableInteger).length > 0
+  return integerResultKeys(table, row, selections, failsIntegerRead).length > 0
 }
 
 function readIntegerColumns(

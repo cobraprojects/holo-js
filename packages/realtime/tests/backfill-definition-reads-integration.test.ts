@@ -265,4 +265,15 @@ describe.each(drivers)('realtime backfills over tables outside the generated reg
     await mutate(() => db.table(groups).insert([{ id: 3, rank: 30, name: 'third' }, { id: 4, rank: 40, name: 'fourth' }]))
     await expectFresh()
   })
+
+  it.runIf(driver === 'sqlite')('patches a window backfill whose integer column holds text a fresh read returns unchanged', async () => {
+    const { db, posts } = await openFixture(driver)
+    await db.executeCompiled({ sql: `UPDATE "${posts.tableName}" SET "score" = 'abc' WHERE "id" = 2`, source: 'schema' })
+    const expectFresh = await subscribeAll({
+      rows: () => db.table(posts).orderBy('id').limit(1).get(),
+    })
+
+    await mutate(() => db.table(posts).where('id', 1).delete())
+    await expectFresh()
+  })
 })
