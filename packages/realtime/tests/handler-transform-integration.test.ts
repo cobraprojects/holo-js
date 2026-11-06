@@ -178,7 +178,11 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
       for (const post of posts) delete post.title
       return posts
     }],
-    ['reverses the collection before toJSON()', async (database, Post) => (await database.model(Post).query().orderBy('id').get()).reverse().toJSON()],
+    ['reverses the collection before toJSON()', async (database, Post) => {
+      const posts = await database.model(Post).query().orderBy('id').get()
+      posts.reverse()
+      return posts.toJSON()
+    }],
     ['serializes the collection twice', async (database, Post) => {
       const posts = await database.model(Post).query().orderBy('id').get()
       return { first: posts.toJSON(), second: posts.toJSON() }
@@ -198,7 +202,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('a h
     }],
     ['sets an attribute on each model', async (database, Post) => {
       const posts = await database.model(Post).query().orderBy('id').get()
-      for (const post of posts) post.set('title', post.title.toUpperCase())
+      for (const post of posts) post.set('title', String(post.title).toUpperCase())
       return posts
     }],
   ]
