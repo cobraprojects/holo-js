@@ -224,8 +224,17 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
 
+function isPlainPredicateObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (typeof value !== 'object' || value === null) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 function snapshotPredicateValue(value: unknown): unknown {
-  return Array.isArray(value) ? Object.freeze([...value]) : value
+  if (Array.isArray(value)) return Object.freeze(value.map(snapshotPredicateValue))
+  if (value instanceof Date) return new Date(value.getTime())
+  if (isPlainPredicateObject(value)) return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, snapshotPredicateValue(item)])))
+  return value
 }
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
@@ -999,7 +1008,7 @@ export class TableQueryBuilder<
       return this.whereSubWithBoolean(boolean, column, operator, values)
     }
 
-    const snapshot = Object.freeze([...values])
+    const snapshot = snapshotPredicateValue(values) as readonly unknown[]
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
@@ -1015,7 +1024,7 @@ export class TableQueryBuilder<
     range: readonly [unknown, unknown],
     operator: 'between' | 'not between',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    const snapshot = Object.freeze([...range])
+    const snapshot = snapshotPredicateValue(range) as readonly [unknown, unknown]
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
@@ -1063,10 +1072,10 @@ export class TableQueryBuilder<
     bounds: readonly [string, string],
     negated: boolean,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    const predicate: QueryBetweenColumnsPredicate = { kind: 'between-columns', boolean, subject, bounds, negated }
-    return this.clone(withPredicate(this.plan, 'value' in subject
-      ? this.withNormalizedValue(predicate, () => ({ subject: { value: this.normalizePredicateValueForColumn(bounds[0], subject.value) } }))
-      : predicate))
+    if (!('value' in subject)) return this.clone(withPredicate(this.plan, { kind: 'between-columns', boolean, subject, bounds, negated }))
+    const value = snapshotPredicateValue(subject.value)
+    const predicate: QueryBetweenColumnsPredicate = { kind: 'between-columns', boolean, subject: { value }, bounds, negated }
+    return this.clone(withPredicate(this.plan, this.withNormalizedValue(predicate, () => ({ subject: { value: this.normalizePredicateValueForColumn(bounds[0], value) } }))))
   }
 
   whereLike(

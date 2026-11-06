@@ -543,8 +543,10 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       const { bare, qualified } = tableSpellings(driver, table.tableName)
       const items = defineGeneratedTable(bare, itemColumns)
       useGeneratedTables({ items })
-      await DB.table(items).insert([1, 2, 3].map(id => ({ id, name: `item ${id}`, active: true, settings: null })))
+      await DB.table(items).insert([1, 2, 3].map(id => ({ id, name: `item ${id}`, active: true, settings: { theme: id === 1 ? 'dark' : 'light' } })))
       const ids = [1]
+      const settings = { theme: 'dark' }
+      const objectQuery = DB.table(qualified).where('settings', settings)
       const range: [number, number] = [1, 1]
       const inQuery = DB.table(qualified).whereIn('id', ids)
       const betweenQuery = DB.table(qualified).whereBetween('id', range)
@@ -553,11 +555,13 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
 
       ids.push(2)
       range[1] = 3
+      settings.theme = 'light'
 
       expect(await inQuery.pluck('id')).toEqual([1])
       expect(await betweenQuery.pluck('id')).toEqual([1])
       expect(await operatorInQuery.pluck('id')).toEqual([1])
       expect(await operatorBetweenQuery.pluck('id')).toEqual([1])
+      expect(await objectQuery.pluck('id')).toEqual([1])
     })
 
     it('normalizes a where() value on the qualified name again after an unrelated schema change', async () => {
