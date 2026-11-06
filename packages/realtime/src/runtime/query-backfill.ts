@@ -51,7 +51,7 @@ export function readBackfilledValue(table: TableDefinition | undefined, column: 
 }
 
 function connectionTableKey(connectionName: string, tableName: string): string {
-  return `${connectionName}\0${tableName}`
+  return `${connectionName}\0${queryCacheInternals.canonicalTableName(connectionName, tableName)}`
 }
 
 function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, TableDefinition> {
