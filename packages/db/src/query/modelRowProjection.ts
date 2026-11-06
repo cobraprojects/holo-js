@@ -146,14 +146,14 @@ function shadowedModelColumns(branch: SelectQueryPlan, selection: QueryColumnSel
   return wildcardColumns(branch, selection.column, joinedColumns)?.filter(column => modelColumns.includes(column))
 }
 
-function keepsPlace(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[]): readonly boolean[] {
+function anchoredSelections(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[]): readonly boolean[] {
   return selections.map((selection) => {
     const output = selectionOutputName(selection)
     return typeof output === 'undefined' || modelColumns.includes(output) || (output === '*' && selectionRole(branch.source, selection) === 'own')
   })
 }
 
-function protectModelColumns(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[], joinedColumns: JoinedColumns, driver: string, placed = keepsPlace(branch, selections, modelColumns)): readonly QuerySelection[] {
+function protectModelColumns(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[], joinedColumns: JoinedColumns, driver: string, anchored = anchoredSelections(branch, selections, modelColumns)): readonly QuerySelection[] {
   const isModelOutput = (selection: QuerySelection): selection is QueryColumnSelection =>
     selection.kind === 'column' && selectionRole(branch.source, selection) === 'own' && ['*', ...modelColumns].includes(columnOutputName(selection))
   const firstOwn = selections.findIndex(isModelOutput)
@@ -171,7 +171,7 @@ function protectModelColumns(branch: SelectQueryPlan, selections: readonly Query
   const shadowsUnknown = (selection: QuerySelection) => selection.kind === 'column' && shadowsModelColumn(branch, selection, modelColumns, joinedColumns)
     && typeof shadowedModelColumns(branch, selection, modelColumns, joinedColumns) === 'undefined'
   const lastUnknown = selections.reduce((last, selection, index) => index > firstOwn && shadowsUnknown(selection) ? index : last, -1)
-  const moved = selections.filter((selection, index) => index > firstOwn && index <= lastUnknown && (shadowsUnknown(selection) || !placed[index]))
+  const moved = selections.filter((selection, index) => index > firstOwn && index <= lastUnknown && (shadowsUnknown(selection) || !anchored[index]))
   const kept = selections.flatMap((selection, index) => {
     if (moved.includes(selection)) return []
     if (index <= firstOwn || selection.kind !== 'column' || !shadowsModelColumn(branch, selection, modelColumns, joinedColumns)) return [selection]
@@ -206,13 +206,13 @@ function sharesOrderedName(branch: SelectQueryPlan, selection: QuerySelection, o
   return !columns || columns.some(column => ordered.includes(column))
 }
 
-function projectUnionBranch(branch: SelectQueryPlan, driver: string, modelColumns: readonly string[], joinedColumns: JoinedColumns, shouldLeadWithModelColumns: boolean, placed: readonly boolean[]): SelectQueryPlan {
-  const selections = protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver, placed)
+function projectUnionBranch(branch: SelectQueryPlan, driver: string, modelColumns: readonly string[], joinedColumns: JoinedColumns, shouldLeadWithModelColumns: boolean, anchored: readonly boolean[]): SelectQueryPlan {
+  const selections = protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver, anchored)
   const leading = shouldLeadWithModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
   return Object.freeze({
     ...branch,
     selections: Object.freeze([...leading, ...selections]),
-    unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: projectUnionBranch(union.query, driver, modelColumns, joinedColumns, shouldLeadWithModelColumns, placed) }))),
+    unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: projectUnionBranch(union.query, driver, modelColumns, joinedColumns, shouldLeadWithModelColumns, anchored) }))),
   })
 }
 
@@ -227,8 +227,8 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
     return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: protectModelColumns(plan, expandSelections(plan, driver), modelColumns, joinedColumns, driver) })
   }
 
-  const placed = keepsPlace(plan, expandSelections(plan, driver), modelColumns)
-  const projectedRoles = (branch: SelectQueryPlan) => protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver, placed).flatMap((selection) => {
+  const anchored = anchoredSelections(plan, expandSelections(plan, driver), modelColumns)
+  const projectedRoles = (branch: SelectQueryPlan) => protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver, anchored).flatMap((selection) => {
     const role = selectionRole(branch.source, selection)
     if (selection.kind !== 'column' || !selection.column.endsWith('.*')) return [role]
     const columns = role === 'own' ? (modelColumns.length > 0 ? modelColumns : undefined) : wildcardColumns(branch, selection.column, joinedColumns)
@@ -240,5 +240,5 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
   }
   const ordered = branches.flatMap(branch => orderedModelColumns(branch, modelColumns))
   const shouldLeadWithModelColumns = driver === 'sqlite' && ordered.length > 0 && branches.some(branch => expandSelections(branch, driver).some(selection => sharesOrderedName(branch, selection, ordered, joinedColumns)))
-  return projectUnionBranch(plan, driver, modelColumns, joinedColumns, shouldLeadWithModelColumns, placed)
+  return projectUnionBranch(plan, driver, modelColumns, joinedColumns, shouldLeadWithModelColumns, anchored)
 }

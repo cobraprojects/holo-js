@@ -220,9 +220,26 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
 
-function unionBranchColumn(branch: SelectQueryPlan, column: string): string {
-  const aliased = branch.selections.find(selection => selection.kind === 'column' && selection.alias === column)
-  if (aliased?.kind === 'column') return aliased.column
+function mayOutputName(branch: SelectQueryPlan, selection: QuerySelection, name: string, connectionName: string): boolean {
+  if (selection.kind === 'raw') return true
+  if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
+  if (selection.column === '*') return true
+  const qualifier = selection.column.slice(0, -2)
+  if (qualifiesTable(qualifier, branch.source.tableName, branch.source.alias)) return !branch.source.table || Object.hasOwn(branch.source.table.columns, name)
+  const join = branch.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+  const columns = join ? knownJoinedColumns(join, connectionName) : undefined
+  return columns ? columns.includes(name) : true
+}
+
+function unionBranchColumn(branch: SelectQueryPlan, column: string, connectionName: string): string {
+  const index = branch.selections.findIndex(selection => selection.kind === 'column' && selection.alias === column)
+  const aliased = branch.selections[index]
+  if (aliased?.kind === 'column') {
+    if (branch.selections.slice(index + 1).some(selection => mayOutputName(branch, selection, column, connectionName))) {
+      throw new CompilerError(`Cannot cursor paginate a union by "${column}": more than one of its selected columns may be named "${column}". Select it under a name no other column has.`)
+    }
+    return aliased.column
+  }
   if (branch.joins.length === 0 || column.includes('.') || !branch.source.table || !Object.hasOwn(branch.source.table.columns, column)) return column
   return `${branch.source.alias ?? branch.source.tableName}.${column}`
 }
@@ -2564,21 +2581,28 @@ export class TableQueryBuilder<
     const cursorOrders = orderedQuery.resolveCursorOrders()
     if (decodedCursor && decodedCursor.values.length !== cursorOrders.length) throw new SecurityError('Cursor does not match the query ordering.')
     const previous = decodedCursor?.previous === true
+    const connectionName = this.connection.getConnectionName()
+    const unionColumns = (branch: SelectQueryPlan): readonly string[] => cursorOrders.map(order => unionBranchColumn(branch, order.column, connectionName))
+    const assertUnionColumns = (branch: SelectQueryPlan): void => {
+      unionColumns(branch)
+      for (const union of branch.unions) assertUnionColumns(union.query)
+    }
+    if (orderedQuery.plan.unions.length > 0) assertUnionColumns(orderedQuery.plan)
     let plan = withOffset(withLimit(orderedQuery.plan, perPage + 1), undefined)
     if (decodedCursor) {
       const normalizedCursor = { ...decodedCursor, values: decodedCursor.values.map((value, index) => this.normalizePredicateValueForColumn(cursorOrders[index]!.column, value)) }
       const nullsLow = !this.connection.getDialect().name.includes('postgres')
-      const filter = (branch: SelectQueryPlan, branchColumn: (column: string) => string): SelectQueryPlan => {
+      const filter = (branch: SelectQueryPlan, columns: readonly string[]): SelectQueryPlan => {
         const grouped = branch.predicates.some(predicate => predicate.boolean === 'or')
           ? withPredicate(withoutPredicates(branch, () => true), { kind: 'group', predicates: branch.predicates })
           : branch
-        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map(order => ({ ...order, column: branchColumn(order.column) })), nullsLow))
+        return withPredicate(grouped, cursorPredicate(normalizedCursor, cursorOrders.map((order, index) => ({ ...order, column: columns[index]! })), nullsLow))
       }
       const filterUnion = (branch: SelectQueryPlan): SelectQueryPlan => Object.freeze({
-        ...filter(branch, column => unionBranchColumn(branch, column)),
+        ...filter(branch, unionColumns(branch)),
         unions: Object.freeze(branch.unions.map(union => Object.freeze({ ...union, query: filterUnion(union.query) }))),
       })
-      plan = plan.unions.length === 0 ? filter(plan, column => column) : filterUnion(plan)
+      plan = plan.unions.length === 0 ? filter(plan, cursorOrders.map(order => order.column)) : filterUnion(plan)
     }
     if (previous) plan = replaceOrderBy(plan, cursorOrders.map(order => ({ kind: 'column', column: order.column, direction: order.direction === 'asc' ? 'desc' : 'asc' })))
     const pageQuery = orderedQuery.clone(plan)

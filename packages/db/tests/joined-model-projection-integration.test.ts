@@ -530,6 +530,12 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     }
     expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
     expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+    const labelled = () => Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${products}.price as label` as never, `${notes}.*`)
+    const union = labelled().where(`${notes}.id` as never, 11).union(labelled().where(`${notes}.id` as never, 12))
+    expect((await union.get()).map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))).toEqual([[1, 'first'], [2, 'second']])
+    await expect(union.orderBy('label' as never, 'desc').cursorPaginate(1)).rejects.toThrow(
+      'Cannot cursor paginate a union by "label": more than one of its selected columns may be named "label". Select it under a name no other column has.',
+    )
 
     registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { id: column.integer(), product_id: column.integer(), label: column.string() }) })
     onTestFinished(() => clearGeneratedTables())
