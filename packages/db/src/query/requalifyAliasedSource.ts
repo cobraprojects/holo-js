@@ -66,12 +66,12 @@ function requalifyPlan(plan: SelectQueryPlan, target: Target, enclosing: readonl
   return requalifyPlanBody(plan, target, enclosing, bindingsOf(plan))
 }
 
-export function requalifyAliasedSource(plan: SelectQueryPlan, parentTableName: string): SelectQueryPlan {
+export function requalifyAliasedSource(plan: SelectQueryPlan, parentTableName: string, previousAlias?: string): SelectQueryPlan {
   const alias = plan.source.alias
   if (alias === undefined) return plan
   const tableName = plan.source.tableName
   const names = parentTableName === tableName ? sameTable : spelledAlike
-  return requalifyPlanBody(plan, { names: qualifier => names(qualifier, tableName), alias }, [], bindingsOf(plan, false))
+  return requalifyPlanBody(plan, { names: qualifier => qualifier === previousAlias || names(qualifier, tableName), alias }, [], bindingsOf(plan, false))
 }
 
 function requalifyPlanBody(plan: SelectQueryPlan, target: Target, enclosing: readonly Binding[], own: readonly Binding[]): SelectQueryPlan {
@@ -159,8 +159,12 @@ function requalifyPredicates(
   }))
 }
 
-export function boundTableNames(plan: SelectQueryPlan, names: Set<string> = new Set()): ReadonlySet<string> {
-  names.add(plan.source.alias ?? plan.source.tableName)
+export function nestedTableNames(plan: SelectQueryPlan): ReadonlySet<string> {
+  return boundTableNames(plan, new Set(), false)
+}
+
+function boundTableNames(plan: SelectQueryPlan, names: Set<string>, includeSource = true): Set<string> {
+  if (includeSource) names.add(plan.source.alias ?? plan.source.tableName)
   for (const join of plan.joins) {
     const binding = join.alias ?? join.table
     if (binding !== undefined) names.add(binding)

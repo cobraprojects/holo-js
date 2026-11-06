@@ -20,7 +20,7 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
-import { sameTable, boundTableNames } from '../query/requalifyAliasedSource'
+import { nestedTableNames, sameTable } from '../query/requalifyAliasedSource'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -2780,11 +2780,12 @@ export class ModelRepository<
     const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
       const query = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
       if (alias === undefined) return query
-      if (query.getPlan().source.alias !== undefined) return requalifyTableSource(query, this.definition.table.tableName)
-      const bound = boundTableNames(query.getPlan())
+      const current = query.getPlan().source.alias
+      const nested = nestedTableNames(query.getPlan())
+      if (current !== undefined && !nested.has(current)) return requalifyTableSource(query, this.definition.table.tableName)
       let unused = alias
-      for (let reserved = 2; bound.has(unused); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
-      return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName)
+      for (let reserved = 2; nested.has(unused) || unused === query.getTableName(); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
+      return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName, current)
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
       ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), query.getTableName())

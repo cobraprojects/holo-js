@@ -202,15 +202,15 @@ let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: strin
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
 let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
-let sourceRequalifying: (query: AnyTableQuery, parentTableName: string) => AnyTableQuery
+let sourceRequalifying: (query: AnyTableQuery, parentTableName: string, previousAlias?: string) => AnyTableQuery
 
 export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
   if (!/^[A-Z_]\w*$/i.test(alias)) throw new CompilerError(`Table alias "${alias}" must be a plain identifier.`)
   return sourceAliasing(query as unknown as AnyTableQuery, alias) as unknown as TQuery
 }
 
-export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, parentTableName: string): TQuery {
-  return sourceRequalifying(query as unknown as AnyTableQuery, parentTableName) as unknown as TQuery
+export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, parentTableName: string, previousAlias?: string): TQuery {
+  return sourceRequalifying(query as unknown as AnyTableQuery, parentTableName, previousAlias) as unknown as TQuery
 }
 
 export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
@@ -3076,7 +3076,7 @@ export class TableQueryBuilder<
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
     sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
-    sourceRequalifying = (query, parentTableName) => query.clone(requalifyAliasedSource(query.plan, parentTableName))
+    sourceRequalifying = (query, parentTableName, previousAlias) => query.clone(requalifyAliasedSource(query.plan, parentTableName, previousAlias))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {

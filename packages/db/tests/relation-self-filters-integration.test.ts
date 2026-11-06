@@ -498,4 +498,20 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(expected).toEqual([1])
     expect(has.map(id)).toEqual(expected)
   })
+
+  it('moves the related alias away from a nested query that binds the same name', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const grantsTable = table.replace('sr_categories_', 'sr_grants_')
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${grantsTable} as holo_reserved_0`)
+      .whereColumn('holo_reserved_0.category_id', '=', `${table}.id`))
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const nested = await Category.whereHas('children', query => (query as unknown as { whereHas(name: string, callback: unknown): unknown }).whereHas('children', constraint)).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(filtered.map(id)).toEqual(expected)
+    expect(nested.map(id)).toEqual([])
+  })
 })
