@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { queryCacheInternals, recordDatabaseQueryObservation, runRequiringDatabaseQueryRefresh, type DatabaseQueryObservation } from '../src/cache'
+import { queryCacheInternals, readDatabaseQueryObservationCount, recordDatabaseQueryObservation, runRequiringDatabaseQueryRefresh, truncateDatabaseQueryObservations, type DatabaseQueryObservation } from '../src/cache'
 
 function observation(tableName: string): DatabaseQueryObservation {
   return Object.freeze({
@@ -40,6 +40,35 @@ describe('refresh-only query observations', () => {
       ['concurrent', true, false],
       ['inside_last', false, true],
       ['after', true, false],
+    ])
+  })
+
+  it('keeps a concurrent query patchable when it reuses a position the scoped load truncated', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let truncated!: () => void
+    const truncation = new Promise<void>((resolve) => { truncated = resolve })
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      await Promise.all([
+        runRequiringDatabaseQueryRefresh(async () => {
+          recordDatabaseQueryObservation(observation('inside_kept'))
+          const count = readDatabaseQueryObservationCount()
+          recordDatabaseQueryObservation(observation('inside_truncated'))
+          truncateDatabaseQueryObservations(count)
+          truncated()
+          await gate
+        }),
+        (async () => {
+          await truncation
+          recordDatabaseQueryObservation(observation('concurrent'))
+          release()
+        })(),
+      ])
+    }) as { queries: readonly DatabaseQueryObservation[] }
+
+    expect(result.queries.map(query => [query.tableName, query.patchable, query.serialized === true])).toEqual([
+      ['inside_kept', false, true],
+      ['concurrent', true, false],
     ])
   })
 

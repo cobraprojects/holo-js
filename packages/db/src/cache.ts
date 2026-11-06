@@ -584,7 +584,16 @@ export function truncateDatabaseQueryObservations(count: number): void {
     return
   }
 
-  state.queries.length = Math.max(0, count)
+  const length = Math.max(0, count)
+  state.queries.length = length
+  const indexes = refreshOnlyObservationIndexes.getStore()
+  if (indexes) {
+    for (const index of indexes) {
+      if (index >= length) {
+        indexes.delete(index)
+      }
+    }
+  }
 }
 
 export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown): void {
