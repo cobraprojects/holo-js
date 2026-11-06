@@ -54,7 +54,7 @@ async function openFixture(driver: typeof drivers[number]) {
   const Tag = defineModel(tags, { timestamps: false })
   const Rate = defineModel(rates, { timestamps: false, fillable: ['rate'] })
   const Group = defineModel(groups, { timestamps: false, relations: { tags: belongsToMany(() => Tag, rates, 'group_id', 'tag_id').withPivot('id', 'rate').using(() => Rate) } })
-  return { db, rates, Group, Rate }
+  return { db, rates, Group, Rate, schema }
 }
 
 describe.each(drivers)('realtime values the database normalizes on %s', (driver) => {
@@ -317,30 +317,38 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
   })
 
   it('maps grouped pagination counts back to the predicate values that requested them', async () => {
-    const { db, rates } = await openFixture(driver)
+    const { db, rates, schema } = await openFixture(driver)
     await db.table(rates).insert([{ id: 2, group_id: 2, tag_id: 1, rate: '1.00' }, { id: 3, group_id: 2, tag_id: 1, rate: '1.00' }])
-    const observe = (value: unknown) => ({
+    const labelsName = `holo_norm_labels_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(labelsName, (table) => {
+      table.id()
+      table.string('category')
+    })
+    onTestFinished(() => schema.dropTable(labelsName))
+    const labels = defineGeneratedTable(labelsName, { id: column.id(), category: column.string() })
+    await db.table(labels).insert([{ id: 1, category: '1' }, { id: 2, category: 'integer:1' }, { id: 3, category: 'integer:1' }])
+    const observeIn = (table: typeof rates | typeof labels, groupColumn: string) => (value: unknown) => ({
       connectionName: db.getConnectionName(),
       dependencies: [],
       orderBy: [],
       pagination: { currentPage: 1, kind: 'standard' as const, pageName: 'page', perPage: 1, total: 0 },
       patchable: true,
-      predicates: [{ column: 'group_id', operator: '=' as const, value }],
+      predicates: [{ column: groupColumn, operator: '=' as const, value }],
       selections: [],
-      table: rates,
-      tableName: rates.tableName,
+      table,
+      tableName: table.tableName,
     })
-    const mutation = Object.freeze({ connectionName: db.getConnectionName(), kind: 'update' as const, predicates: [], tableName: rates.tableName })
-    const tableKey = `db:${db.getConnectionName()}:${rates.tableName}`
-    const countFor = async (values: readonly unknown[]) => {
-      const queries = values.map(observe)
+    const countFor = async (values: readonly unknown[], table: typeof rates | typeof labels = rates, groupColumn = 'group_id') => {
+      const mutation = Object.freeze({ connectionName: db.getConnectionName(), kind: 'update' as const, predicates: [], tableName: table.tableName })
+      const tableKey = `db:${db.getConnectionName()}:${table.tableName}`
+      const queries = values.map(observeIn(table, groupColumn))
       const backfills = {
         aggregates: new Map(),
         aggregateSql: new Map(),
         entries: [{ queries }],
-        mutationExactPredicates: new WeakMap([[mutation, new Map([[tableKey, new Map([['group_id', new Set(values.map(value => encodeURIComponent(JSON.stringify(value))))]])]])]]),
+        mutationExactPredicates: new WeakMap([[mutation, new Map([[tableKey, new Map([[groupColumn, new Set(values.map(value => encodeURIComponent(JSON.stringify(value))))]])]])]]),
         mutationMetadata: new WeakMap(),
-        mutations: new Map([[createMutationIndexKey(db.getConnectionName(), rates.tableName), Object.freeze([mutation])]]),
+        mutations: new Map([[createMutationIndexKey(db.getConnectionName(), table.tableName), Object.freeze([mutation])]]),
         paginationGroupedCounts: new Map(),
         paginationCounts: new Map(),
         rowGroups: new Map(),
@@ -352,6 +360,7 @@ describe.each(drivers)('realtime values the database normalizes on %s', (driver)
     expect(await countFor([1, 2])).toEqual([1, 2])
     expect(await countFor(['1', '2'])).toEqual([1, 2])
     expect(await countFor([1, '1', '2'])).toEqual([1, 1, 2])
+    expect(await countFor(['1', 'integer:1'], labels, 'category')).toEqual([1, 2])
   })
 
   it('refreshes subscriptions filtering an integer column by text after writes of either representation', async () => {
