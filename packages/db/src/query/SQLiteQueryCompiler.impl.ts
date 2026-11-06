@@ -88,6 +88,16 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
   }
 
+  override compileTableIdentityLookup(tableName: string): CompiledStatement {
+    const { schema, table } = splitTablePath(tableName)
+    const resolve = (schemaFilter: string) => `SELECT "tables"."schema" AS "schema", "tables"."name" AS "name" FROM pragma_table_list AS "tables" JOIN pragma_database_list AS "databases" ON "databases"."name" = "tables"."schema" WHERE "tables"."name" = ? COLLATE NOCASE ${schemaFilter}ORDER BY CASE "tables"."schema" WHEN 'temp' THEN 0 ELSE 1 END, "databases"."seq" LIMIT 1`
+    return {
+      sql: `SELECT "resolved"."schema" AS "schema", "resolved"."name" AS "name", (SELECT "bare"."schema" FROM (${resolve('')}) AS "bare") AS "bare_schema" FROM (SELECT 1) AS "probe" LEFT JOIN (${resolve(schema === undefined ? '' : 'AND "tables"."schema" = ? COLLATE NOCASE ')}) AS "resolved" ON 1 = 1`,
+      bindings: schema === undefined ? [table, table] : [table, table, schema],
+      source: `schema:introspect:tableIdentity:${tableName}`,
+    }
+  }
+
   override compileSequenceReset(tableName: string): { readonly probe: CompiledStatement, readonly reset: CompiledStatement } {
     const { schema, table } = splitSchemaTable(tableName)
     return {
