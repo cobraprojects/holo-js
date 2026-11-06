@@ -93,7 +93,7 @@ async function runApp(framework, driver) {
     {
       const generatedBroadcastKey = (await readFile(join(projectRoot, '.env'), 'utf8').catch(() => '')).match(/^BROADCAST_APP_KEY=(.+)$/m)?.[1]?.trim()
       if (!env.BROADCAST_APP_KEY && generatedBroadcastKey) env.BROADCAST_APP_KEY = generatedBroadcastKey
-      assert.ok(env.BROADCAST_APP_KEY, `${framework} example app .env must define BROADCAST_APP_KEY; run bun install to generate it`)
+      assert.ok(env.BROADCAST_APP_KEY, `${framework} example app .env must define BROADCAST_APP_KEY; run bun run setup:examples blog-${framework} to generate it`)
     }
     await provisioning.create()
     await mkdir(join(projectRoot, 'storage'), { recursive: true })

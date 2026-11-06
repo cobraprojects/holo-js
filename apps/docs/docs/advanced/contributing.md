@@ -10,7 +10,13 @@ The monorepo uses [Bun](https://bun.sh) for installs and scripts.
 git clone https://github.com/cobraprojects/holo-js.git
 cd holo-js
 bun install
+bun run build
+bun run setup:examples
 ```
+
+`bun install` only installs dependencies. The example apps run the `holo` CLI, so `bun run build` builds every package first. `bun run setup:examples` then runs each example app's `setup` script, which generates its `.env` keys, installs broadcast support, and prepares its framework files. Pass app names to set up only some of them, for example `bun run setup:examples blog-next`. Run it again after a rebuild or a `git clean` that removes the generated files.
+
+`bun run test:contributor-setup` clones your current commit into a temporary folder, runs these steps there, and then runs one package's tests, the same way CI does.
 
 ### Services the test suite needs
 
@@ -61,6 +67,8 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 
 | Command | What it does |
 | --- | --- |
+| `bun run build` | Build every library package. |
+| `bun run setup:examples` | Set up the example apps once the packages are built. |
 | `bun run typecheck` | Typecheck every library package and the tests. |
 | `bun run lint` | Run ESLint across the repo. |
 | `bun run lint:fix` | Lint and auto-fix. |
@@ -69,6 +77,7 @@ Shared dependency versions live in the root `package.json` under `workspaces.cat
 | `bun run check:dead-code` | Fail on new Fallow findings against the committed baseline. |
 | `bun run --cwd packages/<name> test` | Run one package's tests while you work. |
 | `bun run test:libraries` | Run every library test suite against the real services. |
+| `bun run test:contributor-setup` | Clone the current commit into a temporary folder, run the documented setup there, and run one package's tests. |
 | `bun run test:real-database-gating` | Run every PostgreSQL and MySQL test without integration flags or servers, and fail if any of them connects instead of skipping. |
 | `bun run test:examples` | Run the Next.js, Nuxt, and SvelteKit example apps against SQLite, PostgreSQL, and MySQL. |
 | `bun run test:ci` | `test:libraries` plus `test:examples`. |
@@ -85,7 +94,7 @@ To run one example app against one database, set `HOLO_TEST_FRAMEWORK` to `next`
 
 Run `bun run check` before you push. Running one package's tests is fine while you edit, but it doesn't replace `check` for changes to shared packages.
 
-CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, the real-database gating check, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites.
+CI runs the critical checks on every pull request: library and test typechecks and lint on Node 24, every library test suite against real services on each supported Node version (22.18.0, 24, and 26), the dependency audit and dead-code gate, the real-database gating check, the documented contributor setup in a fresh clone, native package loading and server lifecycle checks on Linux, Windows, and macOS with the same Node versions, the published-package, scaffold, and browser-bundle acceptance checks, and each example app against SQLite, Postgres, and MySQL. Run `bun run test` locally to cover the same suites, and `bun run test:contributor-setup` for changes to the setup steps or the example apps' scripts.
 
 CI splits the library suites into three jobs per Node version by running `bun run test:libraries --skip-build --shard <n>/3` after it builds the packages. Each package stays whole, and the split balances the measured durations in `scripts/library-suite-durations.json`, so a package missing from it still runs. Update a package's entry when its tests get much slower or faster.
 
@@ -126,7 +135,7 @@ The framework versions that `holo new` installs are set in `packages/cli/src/met
 3. Run `bun run test:examples`.
 4. Run `bun run check`.
 
-Keep the example apps in `apps/` in line with what new projects get.
+Keep the example apps in `apps/` in line with what new projects get, with one exception: new projects run their setup from the `prepare` script, and Nuxt projects also run `nuxt prepare` from `postinstall`. The example apps run the same commands from a `setup` script instead, because the `holo` CLI and the adapters they need don't exist until `bun run build` has run. Don't add install lifecycle scripts to the example apps.
 
 ## Releases
 
