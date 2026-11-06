@@ -43,8 +43,9 @@ async function openPostTags(driver: 'sqlite' | 'postgres' | 'mysql') {
   await db.table(postTag).insert([{ id: 1, post_id: 10, tag_id: 1 }, { id: 2, post_id: 10, tag_id: 2 }])
   const Tag = defineModel(tags, { timestamps: false })
   const Post = defineModel(posts, { timestamps: false, relations: { tags: belongsToMany(() => Tag, postTag, 'post_id', 'tag_id') } })
+  const OrderedPost = defineModel(posts, { timestamps: false, relations: { tags: belongsToMany(() => Tag, postTag, 'post_id', 'tag_id').withPivot('id').orderByPivot('id') } })
   configureRealtimeRuntime({ db: () => db, loadAuthModule: async () => null })
-  return { db, Post, postTag, tags }
+  return { db, OrderedPost, Post, postTag, tags }
 }
 
 const sequences: Record<string, readonly Step[]> = {
@@ -74,6 +75,28 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rea
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => step(db, tables) }))
       const fresh = JSON.parse(JSON.stringify(await handler()))
       expect({ step: index, data: JSON.parse(JSON.stringify(subscription.current.data)) }).toEqual({ step: index, data: fresh })
+    }
+  })
+
+  it('patches an ordered belongsToMany pivot insert and then a related update from the current result', async () => {
+    const tables = await openPostTags(driver)
+    const { db, OrderedPost, postTag, tags } = tables
+    const read = () => db.model(OrderedPost).query().with('tags').orderBy('id').getJson()
+    let subscriptionReads = 0
+    const handler = () => {
+      subscriptionReads += 1
+      return read()
+    }
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+    const steps = [
+      () => db.table(postTag).insert({ id: 3, post_id: 10, tag_id: 3 }),
+      () => db.table(tags).where('id', 1).update({ name: 'renamed' }),
+    ]
+
+    for (const [index, step] of steps.entries()) {
+      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: step }))
+      const fresh = JSON.parse(JSON.stringify(await read()))
+      expect({ step: index, reads: subscriptionReads, data: JSON.parse(JSON.stringify(subscription.current.data)) }).toEqual({ step: index, reads: 1, data: fresh })
     }
   })
 })
