@@ -136,6 +136,9 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
       author: () => db.model(library.Post).query().with('author').orderBy('id').getJson(),
       tags: () => db.model(library.Post).query().with('tags').orderBy('id').getJson(),
       comments: () => db.model(library.Post).query().with('comments', 'firstComment', 'latestComment').orderBy('id').getJson(),
+      commentable: () => db.model(library.Comment).query().with('commentable').orderBy('id').getJson(),
+      morphTags: () => db.model(library.Post).query().with('morphTags').orderBy('id').getJson(),
+      taggedPosts: () => db.model(library.Tag).query().with('taggedPosts').orderBy('id').getJson(),
     })
     const subscribe = async (reads: ReturnType<typeof readsOf>) => {
       const runs: Record<string, number> = {}
@@ -177,6 +180,10 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
     await mutate(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
     await mutate(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
     await mutate(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
+    await mutate(() => db.table(names.tags).where('id', 200).update({ label: 'programs' }))
+    expect(JSON.stringify(qualified.current.morphTags!())).toContain('programs')
+    expect(JSON.stringify(qualified.current.commentable!())).toContain('Analytical Engines')
+    expect(JSON.stringify(qualified.current.taggedPosts!())).toContain('Frequency Hopping')
     await mutate(() => db.table(posts).where('id', 20).delete())
     await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }), ['reviews', 'firstReview'])
 
