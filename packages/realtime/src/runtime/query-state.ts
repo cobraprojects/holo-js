@@ -122,6 +122,7 @@ export type DatabaseQueryCursorPaginationObservation = {
 }
 
 export type DatabaseQueryAggregateObservation = {
+  readonly absoluteSum?: number
   readonly column?: string
   readonly count?: number
   readonly currentValueCount?: number
@@ -142,6 +143,7 @@ export type DatabaseQueryGroupedAggregateObservation = {
   readonly aggregateResultKey: string
   readonly aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[]
   readonly averageStates?: readonly DatabaseQueryGroupedAverageStateObservation[]
+  readonly integerColumn?: true
   readonly groupColumn: string
   readonly groupResultKey: string
   readonly having?: DatabaseQueryGroupedAggregateHavingObservation
@@ -361,6 +363,7 @@ export type GroupedAggregateValueCountBackfillResult = {
   readonly value: number
 }
 export type GroupedAggregateValueBackfillCache = Map<string, Promise<ReadonlyMap<unknown, GroupedAggregateValueBackfillResult> | undefined>>
+export type GroupedAverageStateBackfillCache = Map<string, Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined>>
 export type GroupedAggregateValueCountBackfillCache = Map<string, Promise<ReadonlyMap<unknown, readonly GroupedAggregateValueCountBackfillResult[]> | undefined>>
 export type PaginationCountBackfillCache = Map<string, Promise<number | undefined>>
 export type PaginationGroupedCountBackfillCache = Map<string, Promise<ReadonlyMap<unknown, number> | undefined>>
@@ -375,6 +378,7 @@ export type BackfillCache<TEntry = unknown> = {
   readonly entries: readonly TEntry[]
   readonly exactPredicates?: PredicateDependencyIndex
   readonly groupedAggregateValues?: GroupedAggregateValueBackfillCache
+  readonly groupedAverageStates?: GroupedAverageStateBackfillCache
   readonly groupedAggregateValueCounts?: GroupedAggregateValueCountBackfillCache
   readonly mutationExactPredicates?: WeakMap<DatabaseMutationEvent, PredicateDependencyIndex>
   readonly mutationMetadata: WeakMap<DatabaseMutationEvent, MutationPatchMetadata>
@@ -426,6 +430,7 @@ export type RowOrderingAnalysis = 'invalid' | 'sorted' | 'unsorted'
 export type RowWindowMode = 'invalid' | 'limited' | 'single' | 'unwindowed'
 
 export type AggregateCountState = {
+  absoluteSum: number
   count: number
   sum: number
 }

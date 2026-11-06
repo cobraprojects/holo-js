@@ -7,7 +7,7 @@ import {
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { backfillGroupedAggregateRows } from './query-grouped-aggregate-backfill'
+import { backfillGroupedAggregateRows, collectAffectedGroupValues } from './query-grouped-aggregate-backfill'
 import { tryPatchGroupedAverageQuery } from './query-grouped-average-patching'
 import {
   tryPatchGroupedAggregateDeltas,
@@ -61,6 +61,12 @@ export function tryPatchGroupedAggregateQuery(
     const averagePatch = tryPatchGroupedAverageQuery(query, groupedAggregate, rows, mutations)
     if (averagePatch) {
       return averagePatch
+    }
+
+    if (!groupedAggregate.averageStates && !groupedAggregate.integerColumn) {
+      return collectAffectedGroupValues(query, groupedAggregate, mutations)?.length === 0
+        ? UNCHANGED_QUERY_RESULT
+        : UNPATCHED_RESULT
     }
 
     return backfills

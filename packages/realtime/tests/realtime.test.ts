@@ -1513,7 +1513,7 @@ describe('@holo-js/realtime', () => {
     expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
   })
 
-  it('patches hidden having grouped average rows without rerunning or backfilling', async () => {
+  it('patches hidden having grouped average rows from a backfill without rerunning on SQLite', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1592,10 +1592,10 @@ describe('@holo-js/realtime', () => {
       { author_id: 2, average_score: 8.5 },
     ])
     expect(patches).toHaveLength(1)
-    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
+    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(true)
   })
 
-  it('patches observed grouped average rows from hidden state without rerunning or backfilling', async () => {
+  it('patches observed grouped average rows from a backfill without rerunning on SQLite', async () => {
     const adapter = await createNativeRelationalAdapter({
       posts: [
         { id: 1, author_id: 1, score: 5, title: 'First' },
@@ -1670,8 +1670,8 @@ describe('@holo-js/realtime', () => {
       { author_id: 1, average_score: 8 },
     ])
     expect(patches).toHaveLength(1)
-    expect(mutationQueries.some(query => query.sql.includes('AVG("score")'))).toBe(false)
-    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(false)
+    expect(mutationQueries.some(query => query.sql.includes('AVG("score")'))).toBe(true)
+    expect(mutationQueries.some(query => query.sql.includes('__holo_grouped_aggregate_value'))).toBe(true)
   })
 
   it('patches grouped max rows without rerunning the query handler', async () => {

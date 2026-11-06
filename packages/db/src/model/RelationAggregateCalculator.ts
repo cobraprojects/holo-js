@@ -1,4 +1,4 @@
-import type { DatabaseQueryAggregateObservation } from '../cache'
+import { createAverageAggregateObservation, type DatabaseQueryAggregateObservation } from '../cache'
 import { DatabaseError } from '../core/errors'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { readNumericValue } from '../schema/normalization'
@@ -39,7 +39,7 @@ export class RelationAggregateCalculator {
         return Object.freeze({ value: numbers.reduce((sum, value) => sum + value, 0) })
       case 'avg': {
         const sum = numbers.reduce((total, value) => total + value, 0)
-        const metadata = Object.freeze({ column, count: numbers.length, kind, sum })
+        const metadata = createAverageAggregateObservation(column, numbers)
         return Object.freeze({ metadata, value: numbers.length === 0 ? null : sum / numbers.length })
       }
       case 'min':

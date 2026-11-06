@@ -1,4 +1,4 @@
-import { TableQueryBuilder } from '@holo-js/db'
+import { CompilerError, TableQueryBuilder } from '@holo-js/db'
 import type { DatabaseMutationEvent } from './dependencies'
 import {
   matchesGroupedCountHaving,
@@ -14,16 +14,20 @@ import type {
   BackfillCache,
   DatabaseQueryGroupedAggregateStateObservation,
   DatabaseQueryGroupedAggregateObservation,
+  DatabaseQueryGroupedAverageStateObservation,
   DatabaseQueryObservation,
   GroupedAggregateValueBackfillResult,
   GroupedAggregateValueCountBackfillResult,
   PatchQueryResult,
 } from './query-state'
 import { stableStringify } from './stable-stringify'
+import { createGroupedAverageQueryState } from './query-grouped-average-patching'
 
 const GROUPED_AGGREGATE_VALUE_KEY = '__holo_grouped_aggregate_value'
 const GROUPED_AGGREGATE_ROW_COUNT_KEY = '__holo_grouped_aggregate_row_count'
 const GROUPED_AGGREGATE_VALUE_COUNT_KEY = '__holo_grouped_aggregate_value_count'
+const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
+const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 
 type GroupedAggregateValueCountGroup = {
   readonly groupValue: unknown
@@ -76,7 +80,7 @@ export async function backfillGroupedAggregateRows(
       })
 }
 
-function collectAffectedGroupValues(
+export function collectAffectedGroupValues(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   mutations: readonly DatabaseMutationEvent[],
@@ -162,6 +166,8 @@ function createGroupedAggregateValueBackfillKey(
 ): string {
   return '{"aggregateColumn":'
     + stableStringify(groupedAggregate.aggregateColumn)
+    + ',"averageStates":'
+    + stableStringify(Boolean(groupedAggregate.averageStates))
     + ',"connectionName":'
     + stableStringify(query.connectionName)
     + ',"groupColumn":'
@@ -236,7 +242,7 @@ async function fetchGroupedAggregateValues(
     aggregateBuilder = aggregateBuilder.addSelectMax(GROUPED_AGGREGATE_VALUE_KEY, column)
   }
   const having = groupedAggregate.having
-  if (having) {
+  if (having && !groupedAggregate.averageStates) {
     aggregateBuilder = aggregateBuilder.having('count(*)', having.operator, having.value)
   }
 
@@ -266,6 +272,117 @@ async function fetchGroupedAggregateValues(
   return results
 }
 
+async function fetchGroupedAverageStates(
+  query: DatabaseQueryObservation,
+  groupedAggregate: DatabaseQueryGroupedAggregateObservation,
+  values: readonly unknown[],
+): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
+  const column = groupedAggregate.aggregateColumn
+  const connection = getBackfillDatabaseConnection(query.connectionName)
+  if (!column || !connection) {
+    return undefined
+  }
+
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
+  for (const predicate of query.predicates) {
+    builder = builder.where(predicate.column, predicate.operator, predicate.value)
+  }
+
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await whereGroupValues(builder, groupedAggregate.groupColumn, values)
+      .select(groupedAggregate.groupColumn)
+      .addSelectSum(GROUPED_AVERAGE_SUM_KEY, column)
+      .addSelectCount(GROUPED_AVERAGE_COUNT_KEY, column)
+      .addSelectCount(GROUPED_AGGREGATE_ROW_COUNT_KEY)
+      .groupBy(groupedAggregate.groupColumn)
+      .get<Record<string, unknown>>()
+  } catch (error) {
+    if (error instanceof CompilerError) {
+      return undefined
+    }
+
+    throw error
+  }
+
+  const states: DatabaseQueryGroupedAverageStateObservation[] = []
+  for (const row of rows) {
+    const count = normalizeAggregateMetadataNumber(row[GROUPED_AVERAGE_COUNT_KEY])
+    const rowCount = normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
+    const sum = row[GROUPED_AVERAGE_SUM_KEY] === null ? 0 : normalizeAggregateMetadataNumber(row[GROUPED_AVERAGE_SUM_KEY])
+    if (typeof count !== 'number' || count < 0 || typeof rowCount !== 'number' || rowCount < 0 || typeof sum !== 'number') {
+      return undefined
+    }
+
+    states.push(Object.freeze({
+      count,
+      groupValue: row[groupedAggregate.groupColumn],
+      rowCount,
+      sum,
+    }))
+  }
+
+  return states
+}
+
+async function readGroupedAverageStates(
+  query: DatabaseQueryObservation,
+  groupedAggregate: DatabaseQueryGroupedAggregateObservation,
+  values: readonly unknown[],
+  backfills: BackfillCache,
+): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
+  const cache = backfills.groupedAverageStates
+  if (!cache) {
+    return await fetchGroupedAverageStates(query, groupedAggregate, values)
+  }
+
+  const backfillKey = createGroupedAverageStateBackfillKey(query, groupedAggregate, values)
+  const pendingBackfill = cache.get(backfillKey) ?? fetchGroupedAverageStates(query, groupedAggregate, values)
+  cache.set(backfillKey, pendingBackfill)
+  return await pendingBackfill
+}
+
+function createGroupedAverageStateBackfillKey(
+  query: DatabaseQueryObservation,
+  groupedAggregate: DatabaseQueryGroupedAggregateObservation,
+  values: readonly unknown[],
+): string {
+  return '{"averageStateColumn":'
+    + stableStringify(groupedAggregate.aggregateColumn)
+    + ',"connectionName":'
+    + stableStringify(query.connectionName)
+    + ',"groupColumn":'
+    + stableStringify(groupedAggregate.groupColumn)
+    + ',"predicates":'
+    + stableStringify(query.predicates)
+    + ',"tableName":'
+    + stableStringify(query.tableName)
+    + ',"values":'
+    + stableStringify(values)
+    + '}'
+}
+
+async function createBackfilledGroupedAverageQuery(
+  query: DatabaseQueryObservation,
+  groupedAggregate: DatabaseQueryGroupedAggregateObservation,
+  groupValues: readonly unknown[],
+  backfills: BackfillCache,
+): Promise<DatabaseQueryObservation> {
+  const groupStates = await readGroupedAverageStates(query, groupedAggregate, groupValues, backfills)
+  return createGroupedAverageQueryState(
+    query,
+    groupedAggregate,
+    groupStates && Object.freeze([...withoutGroupStates(groupedAggregate.averageStates ?? [], groupValues), ...groupStates]),
+  )
+}
+
+function withoutGroupStates<TState extends { readonly groupValue: unknown }>(
+  states: readonly TState[],
+  groupValues: readonly unknown[],
+): TState[] {
+  return states.filter(state => !groupValues.some(groupValue => Object.is(groupValue, state.groupValue)))
+}
+
 async function createBackfilledGroupedAggregateQuery(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
@@ -273,6 +390,10 @@ async function createBackfilledGroupedAggregateQuery(
   backfilledValues: ReadonlyMap<unknown, GroupedAggregateValueBackfillResult>,
   backfills: BackfillCache,
 ): Promise<DatabaseQueryObservation | undefined> {
+  if (groupedAggregate.kind === 'avg' && groupedAggregate.averageStates) {
+    return await createBackfilledGroupedAverageQuery(query, groupedAggregate, groupValues, backfills)
+  }
+
   if (
     groupedAggregate.kind !== 'min'
     && groupedAggregate.kind !== 'max'
@@ -290,8 +411,7 @@ async function createBackfilledGroupedAggregateQuery(
       ...query,
       groupedAggregate: Object.freeze({
         ...groupedAggregate,
-        aggregateStates: Object.freeze([...(groupedAggregate.aggregateStates ?? [])]
-          .filter(state => !groupValues.some(groupValue => Object.is(groupValue, state.groupValue)))),
+        aggregateStates: Object.freeze(withoutGroupStates(groupedAggregate.aggregateStates ?? [], groupValues)),
       }),
     })
   }
@@ -468,8 +588,7 @@ function createBackfilledGroupedAggregateStates(
   stateEntries: readonly NumericGroupedAggregateBackfillEntry[],
   valueCounts: ReadonlyMap<unknown, readonly GroupedAggregateValueCountBackfillResult[]>,
 ): readonly DatabaseQueryGroupedAggregateStateObservation[] | undefined {
-  const states = [...(groupedAggregate.aggregateStates ?? [])]
-    .filter(state => !groupValues.some(groupValue => Object.is(groupValue, state.groupValue)))
+  const states = withoutGroupStates(groupedAggregate.aggregateStates ?? [], groupValues)
 
   for (const stateEntry of stateEntries) {
     const groupValueCounts = valueCounts.get(stateEntry.groupValue)
@@ -520,19 +639,19 @@ function mergeBackfilledGroupedAggregateRows(
       continue
     }
 
-    const backfilledValue = backfilledValues.get(groupValue)!.value
+    const backfilledValue = backfilledValues.get(groupValue)!
     if (!shouldKeepBackfilledGroupedAggregateValue(groupedAggregate, backfilledValue)) {
       continue
     }
 
     nextRows.push(Object.freeze({
       ...row,
-      [groupedAggregate.aggregateResultKey]: backfilledValue,
+      [groupedAggregate.aggregateResultKey]: backfilledValue.value,
     }))
   }
 
   for (const [groupValue, backfilledValue] of backfilledValues) {
-    if (!shouldKeepBackfilledGroupedAggregateValue(groupedAggregate, backfilledValue.value)) {
+    if (!shouldKeepBackfilledGroupedAggregateValue(groupedAggregate, backfilledValue)) {
       continue
     }
 
@@ -556,10 +675,13 @@ function mergeBackfilledGroupedAggregateRows(
 
 function shouldKeepBackfilledGroupedAggregateValue(
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
-  value: number | null,
+  backfilledValue: GroupedAggregateValueBackfillResult,
 ): boolean {
-  return groupedAggregate.kind !== 'count'
-    || (value !== null && matchesGroupedCountHaving(groupedAggregate, value))
+  if (groupedAggregate.kind === 'count') {
+    return backfilledValue.value !== null && matchesGroupedCountHaving(groupedAggregate, backfilledValue.value)
+  }
+
+  return typeof backfilledValue.rowCount !== 'number' || matchesGroupedCountHaving(groupedAggregate, backfilledValue.rowCount)
 }
 
 function rowsEqual(

@@ -194,6 +194,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
         column: 'views',
         count: 1,
         kind: 'avg',
+        absoluteSum: 5,
         sum: 5,
       },
     })
@@ -215,6 +216,7 @@ describe('@holo-js/realtime aggregate patching dispatcher', () => {
           column: 'views',
           count: 2,
           kind: 'avg',
+          absoluteSum: 12,
           sum: 12,
         },
       },

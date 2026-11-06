@@ -5,6 +5,7 @@ import {
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
+import { isSafeIntegerNumber } from './query-aggregate-common'
 import {
   UNCHANGED_QUERY_RESULT,
 } from './query-patch-results'
@@ -153,7 +154,7 @@ function appendGroupedAverageRowsChanges(
     }
 
     const contribution = readGroupedAggregateNumericContribution(groupedAggregate, row)
-    if (typeof contribution === 'undefined') {
+    if (!isSafeIntegerNumber(contribution)) {
       return false
     }
 
@@ -170,7 +171,7 @@ function appendGroupedAverageRowsChanges(
 
 function mergeGroupedAverageChanges(
   changes: readonly GroupedAverageChange[],
-): readonly GroupedAverageChange[] {
+): readonly GroupedAverageChange[] | undefined {
   const merged: GroupedAverageChange[] = []
   for (const change of changes) {
     const index = merged.findIndex(candidate => Object.is(candidate.groupValue, change.groupValue))
@@ -180,11 +181,16 @@ function mergeGroupedAverageChanges(
     }
 
     const current = merged[index]!
+    const sumDelta = current.sumDelta + change.sumDelta
+    if (!isSafeIntegerNumber(sumDelta)) {
+      return undefined
+    }
+
     merged[index] = Object.freeze({
       countDelta: current.countDelta + change.countDelta,
       groupValue: current.groupValue,
       rowCountDelta: current.rowCountDelta + change.rowCountDelta,
-      sumDelta: current.sumDelta + change.sumDelta,
+      sumDelta,
     })
   }
 
@@ -283,7 +289,7 @@ function applyGroupedAverageStateChange(
   const count = currentState.count + change.countDelta
   const rowCount = currentState.rowCount + change.rowCountDelta
   const sum = currentState.sum + change.sumDelta
-  if (count < 0 || rowCount < 0) {
+  if (count < 0 || rowCount < 0 || !isSafeIntegerNumber(currentState.sum) || !isSafeIntegerNumber(sum)) {
     return undefined
   }
 
@@ -361,10 +367,10 @@ function updateGroupedAverageRows(
   ])
 }
 
-function createGroupedAverageQueryState(
+export function createGroupedAverageQueryState(
   query: DatabaseQueryObservation,
   groupedAggregate: DatabaseQueryGroupedAggregateObservation,
-  states: readonly DatabaseQueryGroupedAverageStateObservation[],
+  states: readonly DatabaseQueryGroupedAverageStateObservation[] | undefined,
 ): DatabaseQueryObservation {
   return Object.freeze({
     ...query,

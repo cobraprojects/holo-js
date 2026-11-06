@@ -18,6 +18,7 @@ function createQuery(overrides: Partial<DatabaseQueryObservation> = {}): Databas
       column: 'views',
       count: 2,
       kind: 'avg',
+      absoluteSum: 12,
       sum: 12,
     },
     connectionName: 'main',
@@ -85,6 +86,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
           column: 'views',
           count: 3,
           kind: 'avg',
+          absoluteSum: 21,
           sum: 21,
         },
       },
@@ -129,6 +131,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
           column: 'views',
           count: 1,
           kind: 'avg',
+          absoluteSum: 11,
           sum: 11,
         },
       },
@@ -162,6 +165,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
           column: 'views',
           count: 3,
           kind: 'avg',
+          absoluteSum: 18,
           sum: 18,
         },
       },
@@ -221,6 +225,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         column: 'views',
         count: 1,
         kind: 'avg',
+        absoluteSum: 5,
         sum: 5,
       },
     })
@@ -246,6 +251,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
           column: 'views',
           count: 0,
           kind: 'avg',
+          absoluteSum: 0,
           sum: 0,
         },
       },
@@ -267,6 +273,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
       column: 'views',
       count: 3,
       kind: 'avg' as const,
+      absoluteSum: 21,
       sum: 21,
     })
 
@@ -297,7 +304,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
     })
   })
 
-  it('keeps missing average metadata unchanged when mutations cannot affect the query', () => {
+  it('backfills missing average metadata when an update without rows could reorder the averaged rows', async () => {
     const query = createQuery({
       aggregate: {
         column: 'views',
@@ -306,7 +313,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
     })
     const aggregate = query.aggregate as DatabaseQueryAggregateObservation
 
-    expect(tryPatchAverageAggregate(
+    await expect(tryPatchAverageAggregate(
       query,
       aggregate,
       6,
@@ -318,7 +325,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         }),
       ],
       createBackfills(query),
-    )).toEqual({ patched: true, unchanged: true })
+    )).resolves.toEqual({ patched: false })
   })
 
   it('falls back with missing average metadata when returned rows are unavailable', async () => {
@@ -597,6 +604,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
           column: 'views',
           count: 2,
           kind: 'avg',
+          absoluteSum: 16,
           sum: 16,
         },
       },
@@ -657,6 +665,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
       column: 'views',
       count: 2,
       kind: 'avg' as const,
+      absoluteSum: 16,
       sum: 16,
     })
 
@@ -809,6 +818,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
       column: 'views',
       count: 2,
       kind: 'avg' as const,
+      absoluteSum: 16,
       sum: 16,
     })
 
@@ -908,6 +918,7 @@ describe('@holo-js/realtime average aggregate patching', () => {
         column: 'views',
         count: 0,
         kind: 'avg',
+        absoluteSum: 0,
         sum: 0,
       },
     })

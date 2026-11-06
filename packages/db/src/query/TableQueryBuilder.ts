@@ -26,6 +26,7 @@ import {
   inferDatabaseQueryObservationDependencies,
   normalizeQueryCacheConfig,
   queryCacheInternals,
+  createAverageAggregateObservation,
   rebindDatabaseQueryObservationAggregate,
   rebindDatabaseQueryObservationCursorPagination,
   rebindDatabaseQueryObservationPagination,
@@ -2224,6 +2225,14 @@ export class TableQueryBuilder<
     })
   }
 
+  private readsIntegerColumn(column: string): boolean {
+    const separator = column.lastIndexOf('.')
+    if (separator >= 0 && this.resolveSourceColumnName(column) === undefined) return false
+    const name = column.slice(separator + 1)
+    const kind = Object.entries(this.source.table?.columns ?? {}).find(([key]) => key === name)?.[1].kind
+    return kind === 'integer' || kind === 'bigInteger'
+  }
+
   private observesSQLiteDecimalColumn(): boolean {
     if (this.connection.getDriver() !== 'sqlite') return false
     const tables = new Map<string, TableDefinition | undefined>([[this.plan.source.alias ?? this.plan.source.tableName, this.source.table]])
@@ -2277,7 +2286,7 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() !== 'mysql'
+    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() === 'postgres' && this.readsIntegerColumn(groupedAggregate.aggregateColumn)
       ? await this.readGroupedAverageStates(groupedAggregate)
       : undefined
     const aggregateStates = (
@@ -2924,7 +2933,7 @@ export class TableQueryBuilder<
     const rows = await query.get<Record<string, unknown>>()
     if (rows.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(rows, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
+        rebindDatabaseQueryObservationAggregate(rows, null, createAverageAggregateObservation(column, []))
       }
       return null
     }
@@ -2933,7 +2942,7 @@ export class TableQueryBuilder<
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(rows, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
+      rebindDatabaseQueryObservationAggregate(rows, result, createAverageAggregateObservation(column, values))
     }
     return result
   }
