@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOne, resetDB, type Entity, type ModelDefinitionLike, type TableDefinition } from '../src'
+import { DB, belongsTo, belongsToMany, clearGeneratedTables, column, defineGeneratedTable, defineModel, hasMany, hasManyThrough, hasOne, registerGeneratedTables, resetDB, type Entity, type ModelDefinitionLike, type TableDefinition } from '../src'
 import { integrationDrivers, mysqlTestConnection, openDatabase } from './support/database'
 
 type Category = Entity<TableDefinition>
@@ -94,7 +94,7 @@ async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
   const QualifiedLeaf = defineModel(qualifiedCategories, { name: `QualifiedLeaf${suffix}`, timestamps: false })
   const QualifiedParent = defineModel(qualifiedCategories, { name: `QualifiedParent${suffix}`, timestamps: false, relations: { children: hasMany(() => Leaf, 'parent_id'), parent: belongsTo(() => Leaf, 'parent_id') } })
   const PlainParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id'), parent: belongsTo(() => QualifiedLeaf, 'parent_id') } })
-  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schemaName, table: names.categories }
+  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schema, schemaName, table: names.categories }
 }
 
 const relationNames = ['children', 'firstChild', 'parent', 'linked'] as const
@@ -362,5 +362,29 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
       expect(has.map(id)).toEqual(expected)
       expect(doesntHave.map(id)).toEqual(loaded.map(id).filter(value => !expected.includes(value)))
     }
+  })
+
+  it('keeps deferred value conversions of nested queries on a table registered under another spelling', async () => {
+    const { Category, table, schema, schemaName } = await openSelfFixtures(driver)
+    const settingsName = table.replace('sr_categories_', 'sr_settings_')
+    await schema.createTable(settingsName, (columns) => {
+      columns.integer('id').primaryKey()
+      columns.integer('category_id')
+      columns.json('settings')
+    })
+    onTestFinished(() => schema.dropTable(settingsName))
+    const settings = defineGeneratedTable(settingsName, { id: column.integer().primaryKey(), category_id: column.integer(), settings: column.json() })
+    registerGeneratedTables({ settings })
+    onTestFinished(() => clearGeneratedTables())
+    await DB.table(settings).insert([{ id: 1, category_id: 2, settings: { theme: 'dark' } }])
+    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${schemaName}.${settingsName}`)
+      .where('settings', { theme: 'dark' })
+      .whereColumn('category_id', '=', `${table}.id`))
+    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    expect(expected).toEqual([1])
+    expect(filtered.map(id)).toEqual(expected)
   })
 })

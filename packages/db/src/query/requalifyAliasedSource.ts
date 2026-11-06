@@ -1,4 +1,5 @@
 import type { QueryJoinClause, QueryOrderBy, QueryPredicateNode, QuerySelection, SelectQueryPlan } from './ast'
+import { remapDeferredPredicateNormalization } from './deferredPredicateValues'
 
 function shortName(name: string): string {
   return name.slice(name.lastIndexOf('.') + 1)
@@ -79,8 +80,12 @@ function requalifyPredicates(
   alias: string,
 ): readonly QueryPredicateNode[] {
   const column = (value: string) => requalifyColumn(value, tableName, alias)
-
-  return Object.freeze(predicates.map((predicate): QueryPredicateNode => {
+  const remap = (normalized: Partial<QueryPredicateNode>): Partial<QueryPredicateNode> => ({
+    ...normalized,
+    ...('column' in normalized && typeof normalized.column === 'string' ? { column: column(normalized.column) } : {}),
+    ...('compareTo' in normalized && typeof normalized.compareTo === 'string' ? { compareTo: column(normalized.compareTo) } : {}),
+  })
+  const rewrite = (predicate: QueryPredicateNode): QueryPredicateNode => {
     switch (predicate.kind) {
       case 'comparison':
       case 'null':
@@ -109,6 +114,12 @@ function requalifyPredicates(
       case 'raw':
         return predicate
     }
+  }
+
+  return Object.freeze(predicates.map((predicate) => {
+    const rewritten = rewrite(predicate)
+    if (rewritten !== predicate) remapDeferredPredicateNormalization(predicate, rewritten, remap)
+    return rewritten
   }))
 }
 

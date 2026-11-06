@@ -15,6 +15,11 @@ export function copyDeferredPredicateNormalization(from: QueryPredicateNode, to:
   if (normalize) normalizations.set(to, normalize)
 }
 
+export function remapDeferredPredicateNormalization(from: QueryPredicateNode, to: QueryPredicateNode, remap: (normalized: Partial<QueryPredicateNode>) => Partial<QueryPredicateNode>): void {
+  const normalize = normalizations.get(from)
+  if (normalize) normalizations.set(to, () => remap(normalize()))
+}
+
 function mapAll<T>(items: readonly T[], map: (item: T) => T): readonly T[] {
   const mapped = items.map(map)
   return mapped.every((item, index) => item === items[index]) ? items : Object.freeze(mapped)
