@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createServer } from 'node:http'
+import { createServer, get, type IncomingMessage } from 'node:http'
 import { createServer as createPortReservation } from 'node:net'
 import { expect, it, onTestFinished } from 'vitest'
 import { normalizeBroadcastConfig, startBroadcastWorker } from '@holo-js/broadcast'
@@ -79,9 +79,12 @@ async function startNativeQueryTransport() {
     restart,
     transport: createBroadcastRealtimeTransport({ configEndpoint: `http://127.0.0.1:${httpAddress.port}/broadcasting/config` }),
     async connections(): Promise<number> {
-      const response = await fetch(`http://127.0.0.1:${worker.port}/stats`)
-      expect(response.status).toBe(200)
-      return (await response.json() as { connectionCount: number }).connectionCount
+      const request = get({ host: '127.0.0.1', port: worker.port, path: '/stats', agent: false })
+      const [response] = await once(request, 'response') as [IncomingMessage]
+      expect(response.statusCode).toBe(200)
+      let body = ''
+      for await (const chunk of response) body += String(chunk)
+      return (JSON.parse(body) as { connectionCount: number }).connectionCount
     },
   }
 }
