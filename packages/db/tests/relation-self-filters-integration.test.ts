@@ -499,19 +499,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(has.map(id)).toEqual(expected)
   })
 
-  it('moves the related alias away from a nested query that binds the same name', async () => {
-    const { Category, table } = await openSelfFixtures(driver)
+  it('rejects table aliases that use the reserved self-relation prefix', async () => {
+    const { table } = await openSelfFixtures(driver)
     const grantsTable = table.replace('sr_categories_', 'sr_grants_')
-    const constraint = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${grantsTable} as holo_reserved_0`)
-      .whereColumn('holo_reserved_0.category_id', '=', `${table}.id`))
-    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
-    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
 
-    const filtered = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
-    const nested = await Category.whereHas('children', query => (query as unknown as { whereHas(name: string, callback: unknown): unknown }).whereHas('children', constraint)).orderBy('id').get() as unknown as Category[]
-
-    expect(expected).toEqual([1])
-    expect(filtered.map(id)).toEqual(expected)
-    expect(nested.map(id)).toEqual([])
+    expect(() => DB.table(`${grantsTable} as holo_reserved_0`)).toThrow('Table alias "holo_reserved_0" is reserved')
+    expect(() => DB.table(`${grantsTable} as HOLO_RESERVED_0`)).toThrow('Table alias "HOLO_RESERVED_0" is reserved')
+    expect(() => DB.table(table).join(`${grantsTable} as holo_reserved_1`, 'holo_reserved_1.category_id', '=', `${table}.id`)).toThrow('is reserved')
+    expect(() => DB.table(table).from(`${grantsTable} as Holo_Reserved_2`)).toThrow('is reserved')
+    expect(() => DB.table(table).joinSub(DB.table(grantsTable), 'holo_reserved_3', 'holo_reserved_3.category_id', '=', `${table}.id`)).toThrow('is reserved')
   })
 })

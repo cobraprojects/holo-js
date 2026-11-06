@@ -2840,10 +2840,11 @@ export class ModelRepository<
         const throughSource = throughAlias ?? throughTable
         const joined = joinOnKeyColumns(
           relatedQuery,
-          throughAlias === undefined ? throughTable : `${throughTable} as ${throughAlias}`,
+          throughTable,
           `${throughSource}.${relation.secondLocalKey}`,
           `${relatedSource}.${relation.secondKey}`,
           { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
+          throughAlias,
         )
 
         const throughDeletedAt = through.getDeletedAtColumn()
