@@ -720,6 +720,47 @@ describe('@holo-js/realtime relation query patching', () => {
     })
   })
 
+  it('patches a constrained belongs-to parent-key relation from an owner row that passes its constraint', async () => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'active', operator: '=', value: true }] })
+    const value = createPostValue(1, Object.freeze({ active: true, id: 1, name: 'Old author' }))
+
+    await expect(tryPatchQueryRelation(
+      query,
+      value,
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [{ active: true, id: 2, name: 'New author' }])]),
+    )).resolves.toEqual({
+      patched: true,
+      query,
+      value: createPostValue(2, { active: true, id: 2, name: 'New author' }),
+    })
+  })
+
+  it.each([
+    ['lacks the column of', { id: 2, name: 'New author' }],
+    ['fails', { active: false, id: 2, name: 'New author' }],
+  ])('leaves a constrained belongs-to parent-key relation to a refresh when the owner row %s its constraint and cannot be read', async (_name, row) => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'active', operator: '=', value: true }] })
+
+    await expect(tryPatchQueryRelation(
+      query,
+      createPostValue(1, Object.freeze({ active: true, id: 1, name: 'Old author' })),
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [row])]),
+    )).resolves.toBe(UNPATCHED_RESULT)
+  })
+
+  it('leaves a belongs-to parent-key relation to a refresh when its owner constraint cannot be checked', async () => {
+    const query = createBelongsToParentKeyQuery({ predicates: [{ column: 'name', operator: 'in', value: [] }] })
+
+    await expect(tryPatchQueryRelation(
+      query,
+      createPostValue(1, Object.freeze({ id: 1, name: 'Old author' })),
+      [createPostMutation('update', [{ id: 1, author_id: 2 }])],
+      createBackfills([createAuthorMutation('insert', [{ id: 2, name: 'New author' }])]),
+    )).resolves.toBe(UNPATCHED_RESULT)
+  })
+
   it('patches belongs-to parent-key relation value changes without changing the foreign key', async () => {
     const query = createBelongsToParentKeyQuery()
     const value = createPostValue(1, Object.freeze({ id: 1, name: 'Old author' }))
@@ -959,11 +1000,7 @@ describe('@holo-js/realtime relation query patching', () => {
         { id: 1, author_id: 2 },
       ])],
       createBackfills(),
-    )).resolves.toEqual({
-      patched: true,
-      query,
-      value: createPostValue(2, null),
-    })
+    )).resolves.toBe(UNPATCHED_RESULT)
   })
 })
 
@@ -1011,6 +1048,7 @@ function createBelongsToParentKeyQuery(
       foreignKey: 'author_id',
       kind: 'belongsToParentKey',
       ownerKey: 'id',
+      predicates: [],
       relationKey: 'author',
       relatedConnectionName: 'main',
       relatedTableName: 'authors',

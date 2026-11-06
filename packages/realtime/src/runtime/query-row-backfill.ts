@@ -171,6 +171,9 @@ async function hydrateBackfilledRows(
     const belongsToHydratedRow = belongsToHydrations && belongsToHydrations.length > 0
       ? await hydrateBelongsToRow(row, belongsToHydrations, backfills)
       : row
+    if (!belongsToHydratedRow) {
+      return undefined
+    }
 
     const hydratedRow = relatedHydrations && relatedHydrations.length > 0
       ? await hydrateRelatedRow(belongsToHydratedRow, relatedHydrations, backfills)

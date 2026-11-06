@@ -16,6 +16,7 @@ import {
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
+  type DatabaseQueryPredicateObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder, insertGetIdByKey, joinOnKeyColumns, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
@@ -24,7 +25,7 @@ import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { textMatchesAnyNumber } from '../schema/connectionDialect'
 import { normalizeDialectReadValue, storesJson, storesText } from '../schema/normalization'
 import { resolveModelRowKey } from './defineModelHelpers'
-import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type SelectQueryPlan } from '../query/ast'
+import { createSelectQueryPlan, createTableSource, withLockMode, withOneOfManyAggregateMarker, withPredicate, type QueryPredicateNode, type SelectQueryPlan } from '../query/ast'
 import { commitFailureRestoreFor } from '../core/commitFailureCallbacks'
 import { Entity, captureEntityWriteState, createEntityCommitRestore, getEntityKeyForSave, restoreEntityWriteState } from './Entity'
 import { assertAttributeNameAllowed, assertColumnWritable, canonicalStoredKey, ownEntry, type RejectedGeneratedColumns, snapshotAttributes, valuesAreEqual } from './entityRuntime'
@@ -115,6 +116,11 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+}
+
+function hasTypedComparison(predicates: readonly QueryPredicateNode[]): boolean {
+  return predicates.some(predicate => (predicate.kind === 'comparison' && typeof predicate.valueType !== 'undefined')
+    || (predicate.kind === 'group' && hasTypedComparison(predicate.predicates)))
 }
 
 function createRelationQueryObservation(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): DatabaseQueryObservation | undefined {
@@ -889,7 +895,7 @@ export class ModelRepository<
       }
 
       if (relation.kind === 'belongsTo') {
-        this.recordBelongsToRelationObservations(entities, relationName, relation, createPath)
+        this.recordBelongsToRelationObservations(entities, relationName, relation, entry.constraint, createPath)
         continue
       }
 
@@ -1028,9 +1034,11 @@ export class ModelRepository<
     entities: readonly Entity<TTable>[],
     relationName: string,
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    constraint: RelationConstraint | undefined,
     createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
   ): void {
     const related = this.resolveRelatedRepository(relation.related)
+    const ownerPredicates = this.resolveBelongsToOwnerPredicates(relation, constraint)
     for (let index = 0; index < entities.length; index += 1) {
       const entity = entities[index]
       if (!entity || !entity.hasRelation(relationName)) {
@@ -1044,7 +1052,7 @@ export class ModelRepository<
         relationName,
         relation,
         resultPath.slice(0, -1),
-        !relation.constraint && relatedRowsArePatchable(related),
+        ownerPredicates,
       ))
       if (observed) {
         recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation({
@@ -1080,13 +1088,13 @@ export class ModelRepository<
         connectionName: related.getConnectionName(),
         dependencies,
         orderBy: [],
-        patchable: relatedRowsArePatchable(related),
+        patchable: typeof ownerPredicates !== 'undefined',
         ...serializedFlag(!relatedRowsArePatchable(related)),
         predicates: Object.freeze([Object.freeze({
           column: relation.ownerKey,
           operator: '=' as const,
           value: ownerKey,
-        })]),
+        }), ...(ownerPredicates ?? [])]),
         selections: [],
         table: related.definition.table,
         tableName: related.definition.table.tableName,
@@ -1099,7 +1107,7 @@ export class ModelRepository<
     relationName: string,
     relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
     resultPath: readonly DatabaseQueryResultPathSegment[],
-    patchable: boolean,
+    ownerPredicates: readonly DatabaseQueryPredicateObservation[] | undefined,
   ): DatabaseQueryObservation | undefined {
     const parentKey = entity.toAttributes()[this.definition.primaryKey as keyof ReturnType<typeof entity.toAttributes>]
     if (parentKey === null || typeof parentKey === 'undefined') {
@@ -1123,7 +1131,7 @@ export class ModelRepository<
       connectionName: this.getConnectionName(),
       dependencies,
       orderBy: [],
-      patchable,
+      patchable: typeof ownerPredicates !== 'undefined',
       ...serializedFlag(!relatedRowsArePatchable(related)),
       predicates: Object.freeze([Object.freeze({
         column: this.definition.primaryKey,
@@ -1134,6 +1142,7 @@ export class ModelRepository<
         foreignKey: relation.foreignKey,
         kind: 'belongsToParentKey' as const,
         ownerKey: relation.ownerKey,
+        predicates: ownerPredicates ?? Object.freeze([]),
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
@@ -2575,6 +2584,36 @@ export class ModelRepository<
 
   relatedRowsArePatchable(related: () => ModelDefinitionLike): boolean {
     return relatedRowsArePatchable(this.resolveRelatedRepository(related))
+  }
+
+  resolveRelationHydrationQuery(
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' | 'hasMany' | 'hasOne' }>,
+    constraint?: RelationConstraint,
+  ): { readonly observation: DatabaseQueryObservation, readonly rowsPatchable: boolean } | undefined {
+    const related = this.resolveRelatedRepository(relation.related)
+    const query = this.applyRelationConstraint(relation, related, constraint)
+    const plan = query.getTableQueryBuilder().getPlan()
+    if (hasTypedComparison(plan.predicates)) {
+      return undefined
+    }
+
+    const observation = createDatabaseQueryObservation(plan, related.getConnectionName(), [])
+    if (!observation?.patchable || typeof observation.limit !== 'undefined' || typeof observation.offset !== 'undefined') {
+      return undefined
+    }
+
+    return Object.freeze({
+      observation,
+      rowsPatchable: relatedRowsArePatchable(related) && query.canPatchLoadedRows() && observation.selections.length === 0,
+    })
+  }
+
+  resolveBelongsToOwnerPredicates(
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    constraint?: RelationConstraint,
+  ): readonly DatabaseQueryPredicateObservation[] | undefined {
+    const resolved = this.resolveRelationHydrationQuery(relation, constraint)
+    return resolved?.rowsPatchable ? resolved.observation.predicates : undefined
   }
 
   private resolveRelatedRepository(related: () => ModelDefinitionLike): ModelRepository {
