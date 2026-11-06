@@ -139,7 +139,7 @@ export function findGeneratedModelTableDefinition(tableName: string, connectionN
     return withSpelling(table, tableName)
   }
   const known = lastKnownCanonicalTableName(schemaConnection, tableName)
-  if (isGeneratedSchemaSuspended() || known === undefined) return undefined
+  if (isGeneratedSchemaSuspended() || known === undefined || generatedSchemaConnectionFor(connectionName) === undefined) return undefined
   const bound = boundModelTables.get(bindingKey)
   if (bound && [...generatedTables.values()].includes(bound)) return withSpelling(bound, tableName)
   const spelling = listGeneratedTableSpellings(tableName).find(name => (lastKnownCanonicalTableName(schemaConnection, name) ?? name) === known)

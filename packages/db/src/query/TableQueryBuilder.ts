@@ -993,13 +993,14 @@ export class TableQueryBuilder<
       return this.whereSubWithBoolean(boolean, column, operator, values)
     }
 
+    const snapshot = Object.freeze([...values])
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator,
-      value: values,
-    }, () => this.normalizeComparisonValue(column, values, operator))))
+      value: snapshot,
+    }, () => this.normalizeComparisonValue(column, snapshot, operator))))
   }
 
   private whereBetweenWithBoolean(
@@ -1008,13 +1009,14 @@ export class TableQueryBuilder<
     range: readonly [unknown, unknown],
     operator: 'between' | 'not between',
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
+    const snapshot = Object.freeze([...range])
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator,
-      value: range,
-    }, () => this.normalizeComparisonValue(column, range, operator))))
+      value: snapshot,
+    }, () => this.normalizeComparisonValue(column, snapshot, operator))))
   }
 
   whereBetweenColumns(column: DeclaredColumnName<TTableOrName, TAvailableColumns>, columns: readonly [DeclaredColumnName<TTableOrName, TAvailableColumns>, DeclaredColumnName<TTableOrName, TAvailableColumns>]): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {

@@ -317,6 +317,30 @@ describe('sqlite model keyed by a generated table whose spellings disagree on th
   })
 })
 
+describe('sqlite model on a connection outside the generated schema', () => {
+  it('stays untyped after resolving a spelling that matches a generated table of another connection', async () => {
+    const { db } = await openDatabase('sqlite', { connectionName: 'primary' })
+    await createSchemaService(db).createTable('users', (columns) => {
+      columns.integer('id').primaryKey()
+      columns.string('name')
+    })
+    const reporting = createDatabase({ connectionName: 'reporting', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+    onTestFinished(() => reporting.disconnect())
+    await createSchemaService(reporting).createTable('users', (columns) => {
+      columns.integer('code').primaryKey()
+      columns.string('label')
+    })
+    configureDB(createConnectionManager({ defaultConnection: 'primary', connections: { primary: db, reporting } }))
+    useGeneratedTables({ users: defineGeneratedTable('users', { id: column.integer().primaryKey(), name: column.string() }) })
+    useMemoryCache()
+    const ReportUser = defineModel('main.users', { connectionName: 'reporting', primaryKey: 'code', timestamps: false })
+
+    expect(await DB.connection('reporting').table('main.users').cache(60).get()).toEqual([])
+
+    expect(ReportUser.definition.untyped).toBe(true)
+  })
+})
+
 class RollbackRequested extends Error {}
 
 describe.each(integrationDrivers(['postgres'] as const))('%s table identity after a rolled-back search_path change', (driver) => {
@@ -512,6 +536,24 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
 
       expect(await DB.table(bare).where('settings', { theme: 'dark' }).value('id')).toBe(1)
       expect((await defineModel(bare, { timestamps: false }).firstOrFail()).get('settings')).toEqual({ theme: 'dark' })
+    })
+
+    it('keeps the values a deferred whereIn() and whereBetween() were built with', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      await DB.table(items).insert([1, 2, 3].map(id => ({ id, name: `item ${id}`, active: true, settings: null })))
+      const ids = [1]
+      const range: [number, number] = [1, 1]
+      const inQuery = DB.table(qualified).whereIn('id', ids)
+      const betweenQuery = DB.table(qualified).whereBetween('id', range)
+
+      ids.push(2)
+      range[1] = 3
+
+      expect(await inQuery.pluck('id')).toEqual([1])
+      expect(await betweenQuery.pluck('id')).toEqual([1])
     })
 
     it('normalizes a where() value on the qualified name again after an unrelated schema change', async () => {
