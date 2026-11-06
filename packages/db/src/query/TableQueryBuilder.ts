@@ -18,6 +18,7 @@ import {
   createTableCacheDependency,
   createTableRowWildcardCacheDependency,
   createDatabaseQueryFallbackObservation,
+  recordDatabaseQueryRefreshTables,
   createDatabaseQueryObservation,
   disableDatabaseQueryObservationPatching,
   inferAutomaticInsertCacheInvalidationPlan,
@@ -2270,6 +2271,9 @@ export class TableQueryBuilder<
       || !groupedAggregate
     ) {
       recordDatabaseQueryObservation(observation)
+      if (observation && !observation.patchable) {
+        recordDatabaseQueryRefreshTables(observationDependencies, observation.connectionName, observation.tableName)
+      }
       return
     }
 

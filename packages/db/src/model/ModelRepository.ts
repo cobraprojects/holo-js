@@ -549,32 +549,47 @@ export class ModelRepository<
         continue
       }
 
-      await this.loadRelation(pending, relationName, relation, node.constraint)
-
       if (node.children.length > 0) {
-        this.forgetPatchableRelationObservations(pending, relationName)
-        const relatedEntities = this.collectLoadedRelationEntities(pending, relationName)
-        if (relatedEntities.length > 0) {
-          if (relation.kind === 'morphTo') {
-            const grouped = new Map<string, Entity[]>()
-
-            for (const relatedEntity of relatedEntities) {
-              const repository = relatedEntity.getRepository() as ModelRepository
-              const key = `${repository.getConnectionName()}:${repository.definition.table.tableName}`
-              const bucket = grouped.get(key) ?? []
-              bucket.push(relatedEntity)
-              grouped.set(key, bucket)
-            }
-
-            for (const group of grouped.values()) {
-              const repository = group[0]!.getRepository() as ModelRepository
-              await repository.loadRelations(group, node.children, missingOnly)
-            }
-          } else {
-            await this.resolveRelatedRepository(relation.related).loadRelations(relatedEntities, node.children, missingOnly)
-          }
-        }
+        await this.loadRequiringQueryRefresh(() => this.loadRelationTree(pending, relationName, relation, node, missingOnly))
+        continue
       }
+
+      await this.loadRelation(pending, relationName, relation, node.constraint)
+    }
+  }
+
+  private async loadRelationTree(
+    pending: readonly Entity<TTable>[],
+    relationName: string,
+    relation: RelationDefinition,
+    node: { readonly constraint?: RelationConstraint, readonly children: readonly EagerLoad[] },
+    missingOnly: boolean,
+  ): Promise<void> {
+    await this.loadRelation(pending, relationName, relation, node.constraint)
+    this.forgetPatchableRelationObservations(pending, relationName)
+
+    const relatedEntities = this.collectLoadedRelationEntities(pending, relationName)
+    if (relatedEntities.length === 0) {
+      return
+    }
+
+    if (relation.kind !== 'morphTo') {
+      await this.resolveRelatedRepository(relation.related).loadRelations(relatedEntities, node.children, missingOnly)
+      return
+    }
+
+    const grouped = new Map<string, Entity[]>()
+    for (const relatedEntity of relatedEntities) {
+      const repository = relatedEntity.getRepository() as ModelRepository
+      const key = `${repository.getConnectionName()}:${repository.definition.table.tableName}`
+      const bucket = grouped.get(key) ?? []
+      bucket.push(relatedEntity)
+      grouped.set(key, bucket)
+    }
+
+    for (const group of grouped.values()) {
+      const repository = group[0]!.getRepository() as ModelRepository
+      await repository.loadRelations(group, node.children, missingOnly)
     }
   }
 
@@ -760,9 +775,10 @@ export class ModelRepository<
 
       const relation = this.getRelationDefinition(aggregate.relation)
       const key = this.relationAggregateCalculator.getAttributeKey(aggregate)
+      const constrained = Boolean(aggregate.constraint || relation.constraint)
 
       if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
-        const counts = await this.getRelationMatchCounts(entities, relation, aggregate.constraint)
+        const counts = await this.loadRequiringQueryRefreshWhen(constrained, () => this.getRelationMatchCounts(entities, relation, aggregate.constraint))
 
         for (const entity of entities) {
           const parentKey = this.getRelationParentValue(entity, relation)
@@ -783,7 +799,7 @@ export class ModelRepository<
         throw new SecurityError(`Relation aggregate "${aggregate.kind}" requires a target column.`)
       }
 
-      const values = await this.getRelationAggregateValues(entities, relation, aggregate)
+      const values = await this.loadRequiringQueryRefreshWhen(constrained, () => this.getRelationAggregateValues(entities, relation, aggregate))
       for (const entity of entities) {
         const parentKey = this.getRelationParentValue(entity, relation)
         const computation = values.get(parentKey)
@@ -2303,6 +2319,10 @@ export class ModelRepository<
 
   private async loadRequiringQueryRefresh(load: () => Promise<void>): Promise<void> {
     await runRequiringDatabaseQueryRefresh(load)
+  }
+
+  private async loadRequiringQueryRefreshWhen<TValue>(required: boolean, load: () => Promise<TValue>): Promise<TValue> {
+    return required ? await runRequiringDatabaseQueryRefresh(load) : await load()
   }
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {

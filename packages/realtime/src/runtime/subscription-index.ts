@@ -378,6 +378,10 @@ function isQueryEntryDependencyContradictedByInvalidation(
   }
 
   for (const [tableKey, tablePredicates] of entry.predicateDependencies) {
+    if (tablePredicates.get(PREDICATE_WILDCARD_VALUE)?.has(PREDICATE_WILDCARD_VALUE)) {
+      continue
+    }
+
     for (const [columnName, values] of tablePredicates) {
       const invalidatedValues = event.predicates.get(tableKey)?.get(columnName)
       const exactInvalidatedValues = event.exactPredicates.get(tableKey)?.get(columnName)
