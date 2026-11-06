@@ -14,6 +14,10 @@ function bindsTable(binding: string, tableName: string): boolean {
   return shortName(binding) === shortName(tableName)
 }
 
+function spelledAlike(left: string, right: string): boolean {
+  return bindsTable(left, right) && schemaOf(left) === schemaOf(right)
+}
+
 export function sameTable(left: string, right: string): boolean {
   const leftSchema = schemaOf(left)
   const rightSchema = schemaOf(right)
@@ -49,7 +53,7 @@ function requalifyColumn(column: string, tableName: string, alias: string, scope
   if (separator < 0) return column
 
   const qualifier = root.slice(0, separator)
-  if (!sameTable(qualifier, tableName) || scope.some(binding => captures(binding, qualifier))) return column
+  if (!spelledAlike(qualifier, tableName) || scope.some(binding => captures(binding, qualifier))) return column
   return `${alias}${column.slice(separator)}`
 }
 

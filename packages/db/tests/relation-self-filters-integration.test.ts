@@ -94,7 +94,8 @@ async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
   const QualifiedLeaf = defineModel(qualifiedCategories, { name: `QualifiedLeaf${suffix}`, timestamps: false })
   const QualifiedParent = defineModel(qualifiedCategories, { name: `QualifiedParent${suffix}`, timestamps: false, relations: { children: hasMany(() => Leaf, 'parent_id'), parent: belongsTo(() => Leaf, 'parent_id') } })
   const PlainParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id'), parent: belongsTo(() => QualifiedLeaf, 'parent_id') } })
-  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schema, adapter, db, schemaName, table: names.categories }
+  const QualifiedTree = defineModel(qualifiedCategories, { name: `QualifiedTree${suffix}`, timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id') } })
+  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, QualifiedTree, schema, adapter, db, schemaName, table: names.categories }
 }
 
 const relationNames = ['children', 'firstChild', 'parent', 'linked'] as const
@@ -297,20 +298,18 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
   })
 
   it('reads table-qualified constraint columns from the related row, as eager loading does', async () => {
-    const { Category, table, schemaName } = await openSelfFixtures(driver)
+    const { Category, table } = await openSelfFixtures(driver)
     const loaded = await Category.with('children', query => query.where(`${table}.name` as never, 'branch')).orderBy('id').get() as unknown as Category[]
     const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
 
     const filtered = await Category.whereHas('children', query => query.where(`${table}.name`, 'branch').whereColumn(`${table}.id`, '>', `${table}.parent_id`)).orderBy('id').get() as unknown as Category[]
     const grouped = await Category.whereHas('children', query => query.where(inner => inner.whereNull(`${table}.name`).orWhere(`${table}.name`, 'branch'))).orderBy('id').get() as unknown as Category[]
     const excluded = await Category.whereDoesntHave('parent', query => query.where(`${table}.name`, 'root')).orderBy('id').get() as unknown as Category[]
-    const schemaQualified = await Category.whereHas('children', query => query.where(`${schemaName}.${table}.name`, 'branch')).orderBy('id').get() as unknown as Category[]
 
     expect(expected).toEqual([1])
     expect(filtered.map(id)).toEqual(expected)
     expect(grouped.map(id)).toEqual(expected)
     expect(excluded.map(id)).toEqual([1, 4, 5])
-    expect(schemaQualified.map(id)).toEqual(expected)
   })
 
   it('applies soft deletes of a self table joined as the through table', async () => {
@@ -421,16 +420,19 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     await DB.table(auditTable).insert([{ id: 10, owner_id: 1, tenant_id: 1 }, { id: 20, owner_id: 2, tenant_id: 9 }])
     const Audit = defineModel(auditTable, { name: `Audit${suffix}`, timestamps: false })
     const Home = defineModel(homeTable, { name: `Home${suffix}`, timestamps: false, relations: { audits: hasMany(() => Audit, 'owner_id') } })
+    const BareHome = defineModel(defineGeneratedTable(name, { id: column.integer().primaryKey(), tenant_id: column.integer() }), { name: `BareHome${suffix}`, timestamps: false, relations: { audits: hasMany(() => Audit, 'owner_id') } })
 
     const sameTenant = await Home.whereHas('audits', query => query.whereColumn(`${audit}.${name}.tenant_id` as never, '=', `${home}.${name}.tenant_id`)).orderBy('id').get() as unknown as Category[]
+    const bareSameTenant = await BareHome.whereHas('audits', query => query.whereColumn(`${audit}.${name}.tenant_id` as never, '=', `${name}.tenant_id`)).orderBy('id').get() as unknown as Category[]
     const has = await Home.has('audits').orderBy('id').get() as unknown as Category[]
 
     expect(has.map(id)).toEqual([1, 2])
     expect(sameTenant.map(id)).toEqual([1])
+    expect(bareSameTenant.map(id)).toEqual([1])
   })
 
   it('rewrites schema-qualified references next to a same-named table from another schema', async () => {
-    const { Category, table, schemaName, adapter, db, schema } = await openSelfFixtures(driver)
+    const { QualifiedTree: Category, table, schemaName, adapter, db, schema } = await openSelfFixtures(driver)
     const audit = `sr_audit_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     const quote = (identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
     if (driver === 'sqlite') {
