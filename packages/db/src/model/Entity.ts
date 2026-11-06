@@ -762,6 +762,7 @@ class EntityBase<
     }
 
     await repo.loadMorphRelations([this], relation, mapping)
+    requireDatabaseQueryRefreshForRows([this])
     return this
   }
 

@@ -512,6 +512,10 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
 
 function rememberObservedResult(state: DatabaseDependencyCollectorState, query: DatabaseQueryObservation | undefined): void {
   const result = query?.result
+  if (result && typeof result === 'object' && state.observedResults.has(result)) {
+    return
+  }
+
   if (Array.isArray(result)) {
     state.observedResults.set(result, observeResultValues(true, [...result]))
   } else if (readObservedFields(result)) {

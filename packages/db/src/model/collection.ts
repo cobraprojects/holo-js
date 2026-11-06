@@ -213,6 +213,7 @@ export function createModelCollection<
         throw new HydrationError('The bound repository cannot load morph relations.')
       }
       await repo.loadMorphRelations(collection, relation, mapping)
+      requireDatabaseQueryRefreshForRows(collection)
       return collection
     },
     async loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>> {
