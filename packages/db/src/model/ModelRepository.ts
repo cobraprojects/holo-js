@@ -1865,6 +1865,7 @@ export class ModelRepository<
   }
 
   async restore(id: unknown): Promise<Entity<TTable>> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const existing = await this.query().withTrashed().find(id, primaryKey)
     if (!existing) {
@@ -1875,6 +1876,7 @@ export class ModelRepository<
   }
 
   async forceDelete(id: unknown): Promise<void> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const existing = await this.query().withTrashed().find(id, primaryKey)
     if (!existing) {

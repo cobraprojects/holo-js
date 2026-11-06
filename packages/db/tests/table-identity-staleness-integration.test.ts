@@ -342,17 +342,30 @@ describe.each(integrationDrivers(['postgres'] as const))('%s model after a temp 
   })
 })
 
+async function openDisagreeingRecords() {
+  const { db } = await openDatabase('sqlite')
+  await db.getAdapter().execute(`ATTACH DATABASE ':memory:' AS "aux"`)
+  await db.getAdapter().execute('CREATE TABLE "main"."records" ("code" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
+  await db.getAdapter().execute('CREATE TABLE "aux"."records" ("other_key" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
+  await db.getAdapter().execute('INSERT INTO "main"."records" ("code", "name") VALUES (7, \'main\')')
+  useGeneratedTables({
+    mainRecords: defineGeneratedTable('main.records', { code: column.integer().primaryKey(), name: column.string() }),
+    auxRecords: defineGeneratedTable('aux.records', { other_key: column.integer().primaryKey(), name: column.string() }),
+  })
+  return db
+}
+
 describe('sqlite model keyed by a generated table whose spellings disagree on the primary key', () => {
+  it('force-deletes a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
+    const db = await openDisagreeingRecords()
+
+    await defineModel('records', { timestamps: false, name: uniqueName('DeletedRecord') }).forceDelete(7)
+
+    expect((await db.getAdapter().query('SELECT "code" FROM "main"."records"')).rows).toEqual([])
+  })
+
   it('finds a model defined by the bare name by the key of the table SQLite resolves it to before any other query', async () => {
-    const { db } = await openDatabase('sqlite')
-    await db.getAdapter().execute(`ATTACH DATABASE ':memory:' AS "aux"`)
-    await db.getAdapter().execute('CREATE TABLE "main"."records" ("code" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
-    await db.getAdapter().execute('CREATE TABLE "aux"."records" ("other_key" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)')
-    await db.getAdapter().execute('INSERT INTO "main"."records" ("code", "name") VALUES (7, \'main\')')
-    useGeneratedTables({
-      mainRecords: defineGeneratedTable('main.records', { code: column.integer().primaryKey(), name: column.string() }),
-      auxRecords: defineGeneratedTable('aux.records', { other_key: column.integer().primaryKey(), name: column.string() }),
-    })
+    await openDisagreeingRecords()
 
     expect((await defineModel('records', { timestamps: false }).find(7))?.get('name')).toBe('main')
     expect((await defineModel('records', { timestamps: false, name: 'QueriedRecord' }).query().find(7))?.get('name')).toBe('main')
