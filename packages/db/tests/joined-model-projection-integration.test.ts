@@ -184,7 +184,9 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
 
     const explicit = joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)
     expect(attributes(await explicit.union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 102)).get())).toEqual([ownRows[0], { ...ownRows[1]!, factor: 8 }])
-    await expect(explicit.union(joined().select(`${orders}.*`, `${products}.*`)).get()).rejects.toThrow(
+    expect(attributes(await explicit.union(joined().select(`${orders}.*`, `${products}.*`).where(`${orders}.id`, 102)).get())).toEqual([ownRows[0], { ...ownRows[1]!, factor: 8 }])
+    const withOrderId = joined().select(`${products}.*`, `${orders}.id as order_id` as never)
+    await expect(withOrderId.union(joined().select(`${orders}.id as order_id` as never, `${products}.*`)).get()).rejects.toThrow(
       `Cannot combine a joined "${products}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`,
     )
     await expect(joined().select(`${products}.*`).union(joined().select(`${products}.price`, `${orders}.id`)).get()).rejects.toThrow(collision(`${orders}.id`, 'id', products))
@@ -196,7 +198,8 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const nested = joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)
       .union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 102).union(joined().select(`${products}.*`, `${orders}.*`).where(`${orders}.id`, 101)))
     expect(attributes(await nested.get())).toEqual(ownRows)
-    await expect(joined().select(`${products}.*`, `${orders}.*`).union(joined().select(`${products}.*`, `${orders}.*`).union(joined().select(`${orders}.*`, `${products}.*`))).get())
+    const withOrderId = () => joined().select(`${products}.*`, `${orders}.id as order_id` as never)
+    await expect(withOrderId().union(withOrderId().union(joined().select(`${orders}.id as order_id` as never, `${products}.*`))).get())
       .rejects.toThrow(`Cannot combine a joined "${products}" model query with a union whose selections don't line up with its own.`)
   })
 
@@ -317,6 +320,30 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     const first = await query.cursorPaginate(1)
     const second = await query.cursorPaginate(1, first.nextCursor)
     expect([first, second].map(page => page.data.map(row => Number(row.product_key)))).toEqual([[1], [2]])
+  })
+
+  it('keeps the precedence of non-model outputs of a joined wildcard that also shadows a model column', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('id')
+      table.integer('product_id')
+      table.string('label')
+    })
+    await DB.table(notes).insert([{ id: 11, product_id: 1, label: 'first' }, { id: 12, product_id: 2, label: 'second' }])
+    registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { id: column.integer(), product_id: column.integer(), label: column.string() }) })
+    onTestFinished(() => clearGeneratedTables())
+
+    const labelled = () => Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(`${products}.*`, `${products}.price as label` as never, `${notes}.*`)
+    const read = (rows: readonly { toAttributes(): Record<string, unknown> }[]) => rows
+      .map(entity => [Number(entity.toAttributes().id), Number(entity.toAttributes().price), entity.toAttributes().label])
+      .sort((left, right) => Number(left[0]) - Number(right[0]))
+    expect(read(await labelled().get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
+    expect(read(await labelled().distinct().get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
+    expect(read(await labelled().where(`${notes}.id` as never, 11).union(labelled().where(`${notes}.id` as never, 12)).get())).toEqual([[1, 10, 'first'], [2, 20, 'second']])
   })
 
   it('shows the projected SQL that a joined model query runs', async () => {

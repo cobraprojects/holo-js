@@ -7,8 +7,6 @@ type JoinedColumns = (join: QueryJoinClause) => readonly string[] | undefined
 
 type SelectionRole = 'own' | 'joined' | 'other'
 
-type AlignmentRole = SelectionRole | 'shadow'
-
 function knownSubqueryColumns(subquery: SelectQueryPlan, connectionName: string): readonly string[] | undefined {
   if (subquery.selections.length === 0) return knownTableColumns(subquery.source.table?.tableName ?? subquery.source.tableName, subquery.source.table, connectionName)
   const outputs = subquery.selections.map(selection => selectionOutputName(selection))
@@ -108,16 +106,32 @@ function shadowsModelColumn(branch: SelectQueryPlan, selection: QuerySelection, 
   return !columns || columns.some(column => modelColumns.includes(column))
 }
 
-function alignmentRole(branch: SelectQueryPlan, selection: QuerySelection, modelColumns: readonly string[], joinedColumns: JoinedColumns): AlignmentRole {
-  return shadowsModelColumn(branch, selection, modelColumns, joinedColumns) ? 'shadow' : selectionRole(branch.source, selection)
+function shadowedModelColumns(branch: SelectQueryPlan, selection: QueryColumnSelection, modelColumns: readonly string[], joinedColumns: JoinedColumns): readonly string[] | undefined {
+  if (!selection.column.endsWith('.*')) return [columnOutputName(selection)]
+  return wildcardColumns(branch, selection.column, joinedColumns)?.filter(column => modelColumns.includes(column))
 }
 
-function moveShadowingColumnsFirst(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[], joinedColumns: JoinedColumns): readonly QuerySelection[] {
-  const firstOwn = selections.findIndex(selection => selection.kind === 'column' && selectionRole(branch.source, selection) === 'own' && ['*', ...modelColumns].includes(columnOutputName(selection)))
+function protectModelColumns(branch: SelectQueryPlan, selections: readonly QuerySelection[], modelColumns: readonly string[], joinedColumns: JoinedColumns, driver: string): readonly QuerySelection[] {
+  const isModelOutput = (selection: QuerySelection): selection is QueryColumnSelection =>
+    selection.kind === 'column' && selectionRole(branch.source, selection) === 'own' && ['*', ...modelColumns].includes(columnOutputName(selection))
+  const firstOwn = selections.findIndex(isModelOutput)
   if (firstOwn === -1) return Object.freeze([...selections])
-  const following = selections.slice(firstOwn)
-  const moved = following.filter(selection => shadowsModelColumn(branch, selection, modelColumns, joinedColumns))
-  return Object.freeze([...selections.slice(0, firstOwn), ...moved, ...following.filter(selection => !moved.includes(selection))])
+
+  const ownTable = tableWildcard(branch.source.alias ?? branch.source.tableName, driver).slice(0, -2)
+  const modelOutputs = selections.filter(isModelOutput)
+  const reselect = (name: string): readonly QuerySelection[] => {
+    const selected = modelOutputs.filter(selection => columnOutputName(selection) === name)
+    if (selected.length > 0) return selected
+    return modelOutputs.some(selection => columnOutputName(selection) === '*') ? [Object.freeze({ kind: 'column' as const, column: `${ownTable}.${name}` })] : []
+  }
+  const moved = selections.filter((selection, index) => index > firstOwn && selection.kind === 'column' && shadowsModelColumn(branch, selection, modelColumns, joinedColumns)
+    && typeof shadowedModelColumns(branch, selection, modelColumns, joinedColumns) === 'undefined')
+  const kept = selections.flatMap((selection, index) => {
+    if (moved.includes(selection)) return []
+    if (index <= firstOwn || selection.kind !== 'column' || !shadowsModelColumn(branch, selection, modelColumns, joinedColumns)) return [selection]
+    return [selection, ...(shadowedModelColumns(branch, selection, modelColumns, joinedColumns) ?? []).flatMap(reselect)]
+  })
+  return Object.freeze([...kept.slice(0, firstOwn), ...moved, ...kept.slice(firstOwn)])
 }
 
 function ordersByModelColumn(plan: SelectQueryPlan, modelColumns: readonly string[], aliases: ReadonlySet<string>) {
@@ -147,7 +161,7 @@ function sharesOrderedName(branch: SelectQueryPlan, selection: QuerySelection, o
 }
 
 function projectUnionBranch(branch: SelectQueryPlan, driver: string, modelColumns: readonly string[], joinedColumns: JoinedColumns, shouldLeadWithModelColumns: boolean): SelectQueryPlan {
-  const selections = moveShadowingColumnsFirst(branch, expandSelections(branch, driver), modelColumns, joinedColumns)
+  const selections = protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver)
   const leading = shouldLeadWithModelColumns ? selections.filter(selection => selectionRole(branch.source, selection) === 'own') : []
   return Object.freeze({
     ...branch,
@@ -164,10 +178,10 @@ export function projectModelRowPlan(plan: SelectQueryPlan, driver: string, joine
   for (const branch of branches) assertBranchSelections(branch, plan.source, modelColumns, joinedColumns)
 
   if (plan.unions.length === 0) {
-    return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: moveShadowingColumnsFirst(plan, expandSelections(plan, driver), modelColumns, joinedColumns) })
+    return Object.freeze({ ...plan, orderBy: qualifyModelOrders(plan, modelColumns, driver), selections: protectModelColumns(plan, expandSelections(plan, driver), modelColumns, joinedColumns, driver) })
   }
 
-  const roles = branches.map(branch => expandSelections(branch, driver).map(selection => alignmentRole(branch, selection, modelColumns, joinedColumns)).join())
+  const roles = branches.map(branch => protectModelColumns(branch, expandSelections(branch, driver), modelColumns, joinedColumns, driver).map(selection => selectionRole(branch.source, selection)).join())
   if (roles.some(role => role !== roles[0])) {
     throw new CompilerError(`Cannot combine a joined "${plan.source.tableName}" model query with a union whose selections don't line up with its own. Select the same tables' columns in the same order in each query.`)
   }
