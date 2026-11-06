@@ -29,6 +29,7 @@ export interface QueryColumnSelection {
   readonly kind: 'column'
   readonly column: string
   readonly alias?: string
+  readonly keyCast?: QueryKeyCast
 }
 
 export function readAllColumnsSelectionTable(column: string): string | undefined {
@@ -60,6 +61,13 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
 
+export type QueryKeyCast = 'text' | 'integer'
+
+export interface QueryKeyCasts {
+  readonly left?: QueryKeyCast
+  readonly right?: QueryKeyCast
+}
+
 export interface QueryJoinClause {
   readonly type: QueryJoinType
   readonly table?: string
@@ -70,6 +78,7 @@ export interface QueryJoinClause {
   readonly leftColumn?: string
   readonly operator?: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly rightColumn?: string
+  readonly keyCasts?: QueryKeyCasts
 }
 
 export interface QueryUnionClause {
@@ -110,6 +119,7 @@ export interface QueryColumnPredicate {
   readonly operator: Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>
   readonly compareTo: string
   readonly dateOperands?: { readonly column: boolean, readonly compareTo: boolean }
+  readonly keyCasts?: QueryKeyCasts
 }
 
 export interface QueryNullPredicate {

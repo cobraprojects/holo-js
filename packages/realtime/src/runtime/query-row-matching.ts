@@ -40,12 +40,18 @@ function isNumericIdentity(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'bigint'
 }
 
+function isStoredScalarIdentity(value: unknown): boolean {
+  return typeof value === 'string' || isNumericIdentity(value)
+}
+
 function rowIdentitiesMayMatch(left: unknown, right: unknown): boolean {
   return left === right
     || Array.isArray(left)
     || Array.isArray(right)
     || (typeof left === 'string' && isNumericIdentity(right))
     || (typeof right === 'string' && isNumericIdentity(left))
+    || (typeof left === 'boolean' && isStoredScalarIdentity(right))
+    || (typeof right === 'boolean' && isStoredScalarIdentity(left))
 }
 
 export function rowIdentityIndexMayHold(index: ReadonlyMap<unknown, number>, identity: unknown): boolean {

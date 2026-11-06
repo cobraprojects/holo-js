@@ -1,4 +1,6 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
+import { splitTablePath } from '../schema/identifiers'
+import type { CompiledStatement } from '../core/types'
 import type {
   InsertStatementOptions,
   QueryDatePredicate,
@@ -11,12 +13,26 @@ import type {
 } from './ast'
 
 export class PostgresQueryCompiler extends SQLQueryCompiler {
+  protected override compileIntegerKey(expression: string): string {
+    return `CASE WHEN ${expression} ~ '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' THEN CAST(split_part(${expression}, '.', 1) AS NUMERIC) END`
+  }
+
   protected override createBooleanLiteral(value: boolean): string {
     return value ? 'true' : 'false'
   }
 
   protected override createBinaryLiteral(value: Uint8Array): string {
     return `'\\x${Buffer.from(value).toString('hex')}'::bytea`
+  }
+
+  override compileTableIdentityLookup(tableName: string): CompiledStatement {
+    const { schema, table } = splitTablePath(tableName)
+    const quote = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`
+    return {
+      sql: 'SELECT "namespaces"."nspname" AS "schema", "classes"."relname" AS "name", (SELECT "bare_namespaces"."nspname" FROM pg_catalog.pg_class AS "bare_classes" JOIN pg_catalog.pg_namespace AS "bare_namespaces" ON "bare_namespaces"."oid" = "bare_classes"."relnamespace" WHERE "bare_classes"."oid" = to_regclass(quote_ident("classes"."relname"))) AS "bare_schema" FROM (SELECT 1) AS "probe" LEFT JOIN pg_catalog.pg_class AS "classes" ON "classes"."oid" = to_regclass($1) LEFT JOIN pg_catalog.pg_namespace AS "namespaces" ON "namespaces"."oid" = "classes"."relnamespace"',
+      bindings: [schema === undefined ? quote(table) : `${quote(schema)}.${quote(table)}`],
+      source: `schema:introspect:tableIdentity:${tableName}`,
+    }
   }
 
   protected override compileTruncateSql(table: string): string {
