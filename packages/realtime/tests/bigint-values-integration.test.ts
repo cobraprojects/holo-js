@@ -132,6 +132,29 @@ describe.each(drivers)('realtime BigInt values on %s', (driver) => {
     expect(await cached()).toHaveLength(2)
   })
 
+  it('invalidates cached queries and subscriptions on an unsafe primary key written as the equal number or BigInt', async () => {
+    const { db, counters } = await openFixture(driver)
+    const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')
+    configureCacheRuntime({ config: { default: 'memory', drivers: { memory: { driver: 'memory' } } } })
+    onTestFinished(() => resetCacheRuntime())
+    await db.table(counters.tableName).insert([{ id: '9007199254740992', n: 1, label: 'before' }, { id: '1000000000000000128', n: 2, label: 'before' }])
+    const byBigInt = () => db.table(counters).select('label').where('id', 9007199254740992n).get()
+    const byNumber = () => db.table(counters).select('label').where('id', 1000000000000000100).get()
+    const cachedByBigInt = () => db.table(counters).select('label').where('id', 9007199254740992n).cache(60).get()
+    const cachedByNumber = () => db.table(counters).select('label').where('id', 1000000000000000100).cache(60).get()
+    const expectFresh = await subscribeAll({ byBigInt, byNumber })
+    expect(await cachedByBigInt()).toEqual(await byBigInt())
+    expect(await cachedByNumber()).toEqual(await byNumber())
+
+    await mutate(() => db.table(counters).where('id', 9007199254740992).update({ label: 'after' }))
+    await mutate(() => db.table(counters).where('id', 1000000000000000128n).update({ label: 'after' }))
+
+    await expectFresh()
+    expect(await cachedByBigInt()).toEqual(await byBigInt())
+    expect(await cachedByNumber()).toEqual(await byNumber())
+    expect(await byBigInt()).toEqual([{ label: 'after' }])
+  })
+
   it('keeps cached queries on an unsafe BigInt apart from the unequal number with the same digits', async () => {
     const { db, counters } = await openFixture(driver)
     const { configureCacheRuntime, resetCacheRuntime } = await import('../../cache/src')

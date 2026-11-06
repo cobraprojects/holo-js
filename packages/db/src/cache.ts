@@ -1053,7 +1053,7 @@ export function createDeterministicQueryCacheKey(
   statement: CompiledStatement,
   connectionName: string,
 ): string {
-  const digest = createHash('sha256').update(stringifyBigIntsAsIntegers({
+  const digest = createHash('sha256').update(stringifyQueryCacheKey({
     connectionName,
     sql: statement.sql,
     bindings: statement.bindings ?? [],
@@ -1077,16 +1077,24 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
-const BIGINT_MARKER = `bigint:${randomUUID()}:`
-const BIGINT_MARKER_PATTERN = new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, 'g')
+const INTEGER_MARKER = `integer:${randomUUID()}:`
+const INTEGER_MARKER_PATTERN = new RegExp(`"${INTEGER_MARKER}(-?\\d+)(n?)"`, 'g')
 
-function stringifyBigIntsAsIntegers(value: unknown): string | undefined {
-  return JSON.stringify(value, (_key, element: unknown) => typeof element === 'bigint' ? `${BIGINT_MARKER}${element}` : element)
-    ?.replace(BIGINT_MARKER_PATTERN, (_marker, digits: string) => Number.isSafeInteger(Number(digits)) ? digits : `${digits}n`)
+function stringifyIntegers(value: unknown, exactNumbers: boolean): string | undefined {
+  return JSON.stringify(value, (_key, element: unknown) => {
+    if (typeof element === 'bigint') return `${INTEGER_MARKER}${element}n`
+    return exactNumbers && typeof element === 'number' && Number.isInteger(element) && !Number.isSafeInteger(element)
+      ? `${INTEGER_MARKER}${BigInt(element)}`
+      : element
+  })?.replace(INTEGER_MARKER_PATTERN, (_marker, digits: string, bigint: string) => exactNumbers || Number.isSafeInteger(Number(digits)) ? digits : `${digits}${bigint}`)
+}
+
+function stringifyQueryCacheKey(value: unknown): string | undefined {
+  return stringifyIntegers(value, false)
 }
 
 function encodeDependencyValue(value: unknown): string {
-  return encodeURIComponent(stringifyBigIntsAsIntegers(value)!)
+  return encodeURIComponent(stringifyIntegers(value, true)!)
 }
 
 function createPredicateMetadata(

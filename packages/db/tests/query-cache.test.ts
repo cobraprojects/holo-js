@@ -464,7 +464,10 @@ describe('query cache BigInt values', () => {
 
     expect(createTablePredicateCacheDependency('main', 'users', 'score', 0n)).toBe(createTablePredicateCacheDependency('main', 'users', 'score', 0))
     expect(createTablePredicateCacheDependency('main', 'users', 'score', [1n, 2])).toBe(createTablePredicateCacheDependency('main', 'users', 'score', [1, 2]))
-    expect(createTablePredicateCacheDependency('main', 'users', 'score', 9007199254740993n)).toBe('db:main:users:where:score:9007199254740993n')
+    expect(createTablePredicateCacheDependency('main', 'users', 'score', 9007199254740993n)).toBe('db:main:users:where:score:9007199254740993')
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000128n)).toBe(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100))
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000128n)).toBe('db:main:users:row:id:1000000000000000128')
+    expect(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100n)).not.toBe(createTableRowCacheDependency('main', 'users', 'id', 1000000000000000100))
     expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100n] }, 'main'))
       .not.toBe(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100] }, 'main'))
     expect(createDeterministicQueryCacheKey({ sql: 'select ?', bindings: [1000000000000000100n] }, 'main'))
