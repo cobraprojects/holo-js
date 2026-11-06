@@ -17,7 +17,7 @@ import type {
   RealtimeResultFor,
 } from '../contracts'
 import {
-  collectPredicateDependencies,
+  collectReadPredicateDependencies,
   collectTableDependencies,
 } from './dependencies'
 import {
@@ -89,7 +89,7 @@ export async function executeInitialQuery<TDefinition extends RealtimeQueryDefin
 
   return {
     contexts: result.contexts,
-    predicateDependencies: collectPredicateDependencies(result.dependencies),
+    predicateDependencies: collectReadPredicateDependencies(result.dependencies, result.queries),
     result,
     resultHash: createResultHash(result.data),
     snapshot,
