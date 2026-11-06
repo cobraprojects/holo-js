@@ -910,8 +910,16 @@ function linkNativeFramework(projectRoot: string, framework: 'nuxt' | 'sveltekit
     ? ['nuxt', '@nuxt/kit', 'vue', 'vue-router']
     : ['@sveltejs/kit', '@sveltejs/adapter-node', '@sveltejs/vite-plugin-svelte', 'svelte', 'vite']
   const nodeModulesRoot = join(projectRoot, 'node_modules')
+  const binRoot = join(nodeModulesRoot, '.bin')
+  mkdirSync(binRoot, { recursive: true })
   for (const dependency of dependencies) {
-    symlinkPackageDependencySync(nodeModulesRoot, dependency, resolveInstalledDependencyRoot(workspaceRoot, dependency))
+    const dependencyRoot = resolveInstalledDependencyRoot(workspaceRoot, dependency)
+    symlinkPackageDependencySync(nodeModulesRoot, dependency, dependencyRoot)
+    const { bin } = JSON.parse(readFileSync(join(dependencyRoot, 'package.json'), 'utf8')) as { bin?: string | Record<string, string> }
+    const bins = typeof bin === 'string' ? { [dependency.split('/').at(-1) as string]: bin } : bin ?? {}
+    for (const [name, script] of Object.entries(bins)) {
+      writeLauncherSync(binRoot, name, { node: { absolute: join(dependencyRoot, script) } })
+    }
   }
   symlinkPackageDependencySync(nodeModulesRoot, `@holo-js/adapter-${framework}`, join(workspaceRoot, 'packages', `adapter-${framework}`))
 }
@@ -10873,6 +10881,7 @@ export default defineConfig({
     tempDirs.push(projectRoot)
     linkNativeFramework(projectRoot, 'nuxt')
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'nuxt' }, null, 2))
+    vi.stubEnv('npm_config_registry', 'http://127.0.0.1:9/')
 
     await (async () => {
       await runProjectPrepare(projectRoot)

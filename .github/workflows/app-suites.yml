@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -32,6 +34,12 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: bun-${{ runner.os }}-
+      - name: Cache the scaffold smoke npm downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm/_cacache
+          key: scaffold-npm-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: scaffold-npm-${{ runner.os }}-
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:

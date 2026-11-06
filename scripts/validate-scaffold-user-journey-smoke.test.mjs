@@ -20,6 +20,8 @@ test('scaffold smoke owns the complete three-framework user journey', async () =
   assert.match(source, /\.holo-js\/generated\/sveltekit\/holo\.ts/)
   assert.match(source, /--overlay-local-packages/)
   assert.match(source, /HOLO_SMOKE_SCRIPT/)
+  assert.match(source, /\.\.\.npmEnvironment,/)
+  assert.match(source, /scaffoldSmokeNpmEnvironment\(rootDir\)/)
   assert.match(source, /waitForRenderedApp/)
   assert.match(source, /without-optional-packages/)
   assert.match(source, /reported-selection/)
