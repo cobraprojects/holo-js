@@ -100,6 +100,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { knownJoinedColumns, projectModelRowPlan, qualifiesTable, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn, tableWildcard } from './modelRowProjection'
 import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
@@ -120,8 +121,8 @@ import type {
   QueryOperator,
   QueryPredicateNode,
   QueryPredicate,
+  QueryColumnSelection,
   QuerySelection,
-  QuerySource,
   SelectQueryPlan,
 } from './ast'
 import {
@@ -180,6 +181,7 @@ type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TV
 
 export const hasQueryCache = Symbol('hasQueryCache')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
+export const projectModelRows = Symbol('projectModelRows')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -204,12 +206,6 @@ export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference
   return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts) as unknown as TQuery
 }
 
-export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
-  const separator = column.lastIndexOf('.')
-  if (separator === -1) return column
-
-  return qualifiesTable(column.slice(0, separator), source.tableName, source.alias) ? column.slice(separator + 1) : undefined
-}
 
 export function insertGetIdByKey(
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
@@ -223,15 +219,6 @@ const trustedRawWhereAppenders = new WeakMap<object, (sql: string, bindings: rea
 const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
-
-function selectionOutputName(selection: QuerySelection): string | undefined {
-  if (selection.kind === 'column') return selection.alias ?? selection.column.slice(selection.column.lastIndexOf('.') + 1)
-  return 'alias' in selection ? selection.alias : undefined
-}
-
-function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
-  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === splitTablePath(tableName).table))
-}
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map(predicate => Object.freeze({ ...predicate }) as QueryPredicateNode))
@@ -1999,7 +1986,7 @@ export class TableQueryBuilder<
     }
     const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
     const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
-    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? splitTablePath(table).table : table}.*`
+    const wildcard = (table: string) => tableWildcard(table, this.connection.getDriver())
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
@@ -2009,6 +1996,12 @@ export class TableQueryBuilder<
         ? [...implicitSelections, wildcard(source)]
         : this.modelAggregateSelections(column, source, key, wildcard(source))
     return { key, joined: !!join, selections, cache: this.plan.joins.length > 0 ? this.projectAggregate(selections).queryCacheConfig : undefined }
+  }
+
+  [projectModelRows](): { readonly query: TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> } {
+    const connectionName = this.connection.getConnectionName()
+    const plan = projectModelRowPlan(this.plan, this.connection.getDriver(), join => knownJoinedColumns(join, connectionName))
+    return { query: plan === this.plan ? this : this.clone(plan) }
   }
 
   cache(
@@ -3907,11 +3900,33 @@ export class TableQueryBuilder<
   }
 
   private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
-    const selection = this.plan.selections.find(selection => selection.kind === 'column' && selection.column === column)
-    if (selection?.kind === 'column' && selection.alias) return row[selection.alias]
+    const sourceColumn = this.resolveSourceColumnName(column)
+    const selections = this.plan.selections
+    const ownColumns = Object.keys(this.source.table?.columns ?? {})
+    const connectionName = this.connection.getConnectionName()
+    const outputsName = (selection: QuerySelection, name: string, unknownOverwrites: boolean): boolean => {
+      if (selection.kind === 'raw') return unknownOverwrites
+      if (selection.kind !== 'column' || (!selection.column.endsWith('.*') && selection.column !== '*')) return selectionOutputName(selection) === name
+      if (this.resolveSourceColumnName(selection.column) === '*') return name === sourceColumn || ownColumns.includes(name)
+      const qualifier = selection.column.slice(0, -2)
+      const join = this.plan.joins.find(candidate => qualifiesTable(qualifier, candidate.table, candidate.alias))
+      const columns = join ? knownJoinedColumns(join, connectionName) : undefined
+      return columns ? columns.includes(name) : unknownOverwrites
+    }
+    const survives = (index: number, name: string, unknownOverwrites = false) => !selections.slice(index + 1).some(selection => outputsName(selection, name, unknownOverwrites))
+    const selectsColumn = (selection: QuerySelection): selection is QueryColumnSelection => selection.kind === 'column'
+      && (selection.column === column || (typeof sourceColumn !== 'undefined' && this.resolveSourceColumnName(selection.column) === sourceColumn))
+    const ownOutput = typeof sourceColumn === 'undefined'
+      ? -1
+      : selections.findIndex((selection, index) => selection.kind === 'column' && !selection.alias
+        && [sourceColumn, '*'].includes(this.resolveSourceColumnName(selection.column) ?? '') && survives(index, sourceColumn, true))
+    if (typeof sourceColumn !== 'undefined' && ownOutput !== -1 && sourceColumn in row) return row[sourceColumn]
+    const aliased = selections.find((selection, index) => selectsColumn(selection) && typeof selection.alias === 'string' && survives(index, selection.alias))
+    if (aliased?.kind === 'column' && aliased.alias) return row[aliased.alias]
     if (column in row) {
       return row[column]
     }
+    if (typeof sourceColumn === 'undefined' && !selectsJoinedColumn(this.plan, column)) return undefined
 
     return row[column.split('.').at(-1)!]
   }
