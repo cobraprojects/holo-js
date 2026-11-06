@@ -230,7 +230,7 @@ async function deliverPatchedQueryEntry(
       )
     }
 
-    rebindSiblingObservations(entry, data, pathKey)
+    rebindSiblingObservations(entry, data, key => key === pathKey)
     await deliverPatchedQueryData(
       entry,
       data,
@@ -292,7 +292,7 @@ async function deliverPatchedQueryEntry(
       )
     }
 
-    rebindSiblingObservations(entry, data, firstPathKey, secondPathKey)
+    rebindSiblingObservations(entry, data, key => key === firstPathKey || key === secondPathKey)
     await deliverPatchedQueryData(
       entry,
       data,
@@ -389,7 +389,7 @@ async function deliverPatchedQueryEntry(
     ? finishTopLevelPathReplacement(data, topLevelReplacementState).value
     : replacePatchedQueryDataWithPlan(data, firstPatch, additionalPatches)
   updateDelayedTargets(entry, data, firstDelayedTargetIndex, delayedTargetIndexes)
-  rebindSiblingObservations(entry, data, ...patchedPathKeys)
+  rebindSiblingObservations(entry, data, key => patchedPathKeys.has(key))
 
   await deliverPatchedQueryData(
     entry,
@@ -402,7 +402,7 @@ async function deliverPatchedQueryEntry(
 function rebindSiblingObservations(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   data: unknown,
-  ...patchedPathKeys: readonly string[]
+  isPatchedPathKey: (pathKey: string) => boolean,
 ): void {
   const { queries } = entry
   for (let index = 0; index < queries.length; index += 1) {
@@ -413,7 +413,7 @@ function rebindSiblingObservations(
 
     const target = entry.patchTargets[index]
     const pathKey = readPatchPathKey(query, target)
-    if (!patchedPathKeys.includes(pathKey)) {
+    if (!isPatchedPathKey(pathKey)) {
       continue
     }
 
