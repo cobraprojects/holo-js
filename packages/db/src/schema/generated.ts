@@ -101,6 +101,7 @@ export function defineGeneratedTable<
 
 export function clearGeneratedTables(): void {
   generatedTables.clear()
+  boundModelTables.clear()
 }
 
 export function getGeneratedTableDefinition<TName extends string>(tableName: TName): GeneratedSchemaTable<TName> | undefined {
@@ -113,14 +114,36 @@ export function getConnectionGeneratedTableDefinition(tableName: string, connect
   return schemaConnection === undefined || schemaConnection === connectionName ? findGeneratedTableByIdentity(tableName, connectionName) : undefined
 }
 
+const respelledTables = new WeakMap<TableDefinition, Map<string, TableDefinition>>()
+
+function withSpelling(table: TableDefinition | undefined, tableName: string): TableDefinition | undefined {
+  if (!table || table.tableName === tableName) return table
+  const spellings = respelledTables.get(table) ?? new Map<string, TableDefinition>()
+  respelledTables.set(table, spellings)
+  const existing = spellings.get(tableName)
+  if (existing) return existing
+  const respelled = Object.freeze({ ...table, tableName })
+  spellings.set(tableName, respelled)
+  return respelled
+}
+
+const boundModelTables = new Map<string, TableDefinition>()
+
 export function findGeneratedModelTableDefinition(tableName: string, connectionName: string | undefined): TableDefinition | undefined {
   const schemaConnection = connectionName ?? generatedSchemaSource.connectionName
   if (schemaConnection === undefined) return generatedTables.get(tableName)
+  const bindingKey = `${schemaConnection}\u0000${tableName}`
   const table = getConnectionGeneratedTableDefinition(tableName, schemaConnection)
+  if (table) {
+    if (table !== generatedTables.get(tableName)) boundModelTables.set(bindingKey, table)
+    return withSpelling(table, tableName)
+  }
   const known = lastKnownCanonicalTableName(schemaConnection, tableName)
-  if (table || known === undefined || isGeneratedSchemaSuspended()) return table
+  if (isGeneratedSchemaSuspended() || known === undefined) return undefined
+  const bound = boundModelTables.get(bindingKey)
+  if (bound && [...generatedTables.values()].includes(bound)) return withSpelling(bound, tableName)
   const spelling = listGeneratedTableSpellings(tableName).find(name => (lastKnownCanonicalTableName(schemaConnection, name) ?? name) === known)
-  return spelling === undefined ? undefined : generatedTables.get(spelling)
+  return spelling === undefined ? undefined : withSpelling(generatedTables.get(spelling), tableName)
 }
 
 function generatedSchemaConnectionFor(connectionName: string | undefined): string | undefined {

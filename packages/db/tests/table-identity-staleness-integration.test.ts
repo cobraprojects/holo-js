@@ -4,7 +4,7 @@ import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
-import { DB, clearGeneratedTables, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, unsafeSql } from '../src'
+import { DB, clearGeneratedTables, onDatabaseDependencyInvalidated, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, unsafeSql } from '../src'
 import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection, tableSpellings } from './support/database'
 import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
@@ -173,6 +173,37 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
       await transaction.unsafeExecute(unsafeSql(`CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`))
       expect(await cachedNames(bare)).toEqual([])
     })
+  })
+
+  it('lets an invalidation listener reread the table whose identity refresh notified it', async () => {
+    const { schema, table } = await openDatabase(driver)
+    useMemoryCache()
+    const { qualified } = tableSpellings(driver, table.tableName)
+    await DB.table(qualified).insert({ id: 1, name: 'first', active: false })
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    const reread: unknown[][] = []
+    const stop = onDatabaseDependencyInvalidated(async () => { reread.push(await cachedNames(qualified)) })
+    onTestFinished(stop)
+
+    await schema.createTable(`${qualified}_unrelated`, (columns) => { columns.integer('id').primaryKey() })
+    onTestFinished(() => schema.dropTable(`${qualified}_unrelated`))
+
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    expect(reread.length).toBeGreaterThan(0)
+  }, 10_000)
+
+  it('reads a model defined by the qualified name from that table after a temp table shadows the bare name', async () => {
+    const { db, table } = await openDatabase(driver)
+    const { bare, qualified } = tableSpellings(driver, table.tableName)
+    useGeneratedTables({ items: defineGeneratedTable(bare, itemColumns) })
+    await DB.table(qualified).insert({ id: 1, name: 'main', active: false })
+    const Item = defineModel(qualified, { timestamps: false })
+    expect((await Item.findOrFail(1)).get('name')).toBe('main')
+
+    await db.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "active" INTEGER NOT NULL, "settings" TEXT)`, source: 'schema' })
+    await db.getAdapter().execute(`INSERT INTO "temp"."${bare}" ("id", "name", "active") VALUES (1, 'temporary', 0)`)
+
+    expect((await Item.findOrFail(1)).get('name')).toBe('main')
   })
 
   it('still expires a replaced table on the retry after a failed identity refresh', async () => {
