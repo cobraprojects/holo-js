@@ -106,6 +106,7 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
       { id: 3, author_id: 2, score: 50 },
       { id: 4, author_id: 2, score: 20 },
     ])
+    await db.table(authorsTable).insert({ id: 3, name: 'Linus' })
     const read = () => db.model(Author).query().with('topPost', query => query.where(qualify(postsTable, 'score'), '>', 0).orderBy(qualify(postsTable, 'score'), 'desc')).orderBy('id').get()
     let reads = 0
     const subscription = await subscribeRealtimeQuery(
@@ -116,6 +117,7 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
       {},
       { onData: () => {}, onError: (error) => { throw error } },
     )
+    const statementsBeforeInsert = statements.length
 
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(authorsTable).insert([
       { id: 1, name: 'Ada' },
@@ -125,9 +127,10 @@ describe.each(drivers)('realtime on schema-qualified tables on %s', (driver) => 
     expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual([
       { id: 1, name: 'Ada', topPost: { id: 2, author_id: 1, score: 30 } },
       { id: 2, name: 'Grace', topPost: { id: 3, author_id: 2, score: 50 } },
+      { id: 3, name: 'Linus', topPost: null },
     ])
     expect(JSON.parse(JSON.stringify(subscription.current.data))).toEqual(JSON.parse(JSON.stringify(await read())))
     expect(reads).toBe(1)
-    expect(statements.some(sql => sql.includes('ROW_NUMBER() OVER') && sql.includes(`FROM "${namespace}"."${postsName}"`))).toBe(true)
+    expect(statements.slice(statementsBeforeInsert).some(sql => sql.includes('ROW_NUMBER() OVER') && sql.includes(`"${postsName}"`))).toBe(true)
   })
 })

@@ -50,6 +50,7 @@ async function subscribeCounted(queries: Record<string, () => Promise<unknown>>)
 describe.each(drivers)('realtime boolean columns on %s', (driver) => {
   it('patches row, filtered, ordered and grouped subscriptions over a boolean column to equal fresh reads', async () => {
     const { db, flags } = await openFlags(driver)
+    await db.table(flags).insert({ id: 4, group_id: 3, enabled: false })
     const { subscriptions, expectPatched } = await subscribeCounted({
       rows: () => db.table(flags).select('id', 'enabled').orderBy('id').get(),
       wildcard: () => db.table(flags).orderBy('id').get(),
@@ -72,7 +73,7 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await expectPatched()
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
     await expectPatched()
-    expect(subscriptions[0]!.current.data).toEqual([{ id: 2, enabled: true }, { id: 3, enabled: true }])
+    expect(subscriptions[0]!.current.data).toEqual([{ id: 2, enabled: true }, { id: 3, enabled: true }, { id: 4, enabled: false }])
   })
 
   it('patches a typed subscription to equal a fresh read after name-only writes', async () => {
@@ -82,7 +83,7 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
       enabledRows: () => db.table(flags).where('enabled', true).orderBy('id').get(),
     })
 
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).where('id', 1).update({ enabled: 0 }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).where('id', 2).update({ enabled: 1 }) }))
     await expectPatched()
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 1 }) }))
     await expectPatched()

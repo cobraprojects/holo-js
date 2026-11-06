@@ -84,6 +84,9 @@ export async function tryPatchQueryEntry(
     return entry.patchTargets.length > 0
       && entry.patchTargets.every(target => backfills.mutations.has(target.mutationIndexKey))
   }
+  if (hasNestedTargetsOnSameTable(relevantTargets)) {
+    return false
+  }
   for (const { mutations, target } of relevantTargets) {
     if (canSkipPatchedBelongsToHydrationTarget(target, patchedBelongsToHydrationKeys)) {
       continue
@@ -172,6 +175,40 @@ export async function tryPatchQueryEntry(
     additionalPatches ?? EMPTY_PATCHED_QUERY_DELIVERIES,
   )
   return true
+}
+
+function hasNestedTargetsOnSameTable(
+  relevantTargets: readonly RelevantMutationTarget[],
+): boolean {
+  if (relevantTargets.length < 2) {
+    return false
+  }
+
+  const paths = new Set<string>()
+  for (const { target } of relevantTargets) {
+    let identity = JSON.stringify(target.mutationIndexKey)
+    for (const segment of target.resultPath) {
+      identity += `,${JSON.stringify(segment)}`
+    }
+    paths.add(identity)
+  }
+
+  for (const { target } of relevantTargets) {
+    if (target.query.relation?.kind === 'belongsToParentKey') {
+      continue
+    }
+
+    let identity = JSON.stringify(target.mutationIndexKey)
+    for (const segment of target.resultPath) {
+      if (paths.has(identity)) {
+        return true
+      }
+
+      identity += `,${JSON.stringify(segment)}`
+    }
+  }
+
+  return false
 }
 
 function canSkipPatchedBelongsToHydrationTarget(
@@ -450,7 +487,7 @@ function canSkipCoveredHydratedMutationValueTarget(
   relevantTargets: readonly RelevantMutationTarget[],
 ): boolean {
   const hydrations = target.query.belongsToHydrations
-  if (!hydrations || hydrations.length === 0) {
+  if (!hydrations || hydrations.length === 0 || target.query.resultBound === false) {
     return false
   }
 
@@ -462,7 +499,7 @@ function canSkipCoveredUnpatchableTarget(
   mutations: readonly DatabaseMutationEvent[],
   relevantTargets: readonly RelevantMutationTarget[],
 ): boolean {
-  if (target.query.serialized) {
+  if (target.query.serialized || target.query.resultBound === false) {
     return false
   }
 

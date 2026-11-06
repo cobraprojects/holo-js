@@ -207,6 +207,14 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
         const comment = await db.model(Comment).query().orderBy('id').first()
         return (await comment!.loadMorph('commentable', { [postType]: ['comments'] })).toJSON()
       },
+      loadMorphModel: async () => {
+        const comment = await db.model(Comment).query().orderBy('id').first()
+        return await comment!.loadMorph('commentable', {})
+      },
+      loadMorphCollection: async () => {
+        const comments = await db.model(Comment).query().orderBy('id').get()
+        return await comments.loadMorph('commentable', {})
+      },
     }
     const current: Record<string, () => unknown> = {}
     for (const [name, handler] of Object.entries(reads)) {
@@ -228,7 +236,9 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
     expect(current.loadMorph!()).toMatchObject({ id: 100, body: 'first', commentable: { id: 10, title: 'Analytical Engines' } })
     await mutate('inserting a comment on the post', () => db.table(comments).insert({ id: 300, commentable_type: postType, commentable_id: 10, body: 'more' }))
     expect(JSON.stringify(current.nestedLoadMorph!())).toContain('more')
+    await mutate('inserting an earlier comment', () => db.table(comments).insert({ id: 50, commentable_type: postType, commentable_id: 10, body: 'earliest' }))
+    expect(current.loadMorphModel!()).toMatchObject({ id: 50, commentable: { id: 10, title: 'Analytical Engines' } })
     await mutate('deleting the post', () => db.table(posts).where('id', 10).delete())
-    expect(current.loadMorph!()).toMatchObject({ id: 100, commentable: null })
+    expect(current.loadMorph!()).toMatchObject({ id: 50, commentable: null })
   })
 })
