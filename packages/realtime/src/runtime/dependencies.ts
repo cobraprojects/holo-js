@@ -18,8 +18,10 @@ export type DatabaseMutationEvent = {
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
   readonly primaryKey?: string
+  readonly publicationStartedAt?: number
   readonly rows?: readonly Readonly<Record<string, unknown>>[]
   readonly tableName: string
+  readonly unordered?: true
   readonly values?: Readonly<Record<string, unknown>>
   readonly valueKeys?: readonly string[]
 }
@@ -45,7 +47,9 @@ export type DatabaseDependencyInvalidationMetadata = {
   readonly exactPredicates: readonly ParsedPredicateDependency[]
   readonly hasMutationDependency: boolean
   readonly predicates: readonly ParsedPredicateDependency[]
+  readonly publicationStartedAt?: number
   readonly tableDependencies: readonly string[]
+  readonly unordered?: true
 }
 
 export type DatabaseDependencyInvalidationEventWithMetadata = DatabaseDependencyInvalidationEvent & {
@@ -332,6 +336,7 @@ export function readDatabaseDependencyInvalidationMetadata(
 
 function bindMutationMetadata(
   mutations: readonly DatabaseMutationEvent[],
+  metadata: DatabaseDependencyInvalidationMetadata | undefined,
 ): readonly DatabaseMutationEvent[] {
   if (mutations.length === 0) {
     return EMPTY_DATABASE_MUTATIONS
@@ -345,6 +350,8 @@ function bindMutationMetadata(
       firstPredicate: readMutationFirstPredicate(mutation),
       predicateCount: readMutationPredicateCount(mutation),
       valueKeys: readMutationValueKeys(mutation),
+      ...(metadata?.publicationStartedAt === undefined ? {} : { publicationStartedAt: metadata.publicationStartedAt }),
+      ...(metadata?.unordered ? { unordered: true as const } : {}),
     }))
   }
 
@@ -353,8 +360,8 @@ function bindMutationMetadata(
 
 export function parseInvalidationEvent(event: DatabaseDependencyInvalidationEvent): ParsedInvalidationEvent {
   const eventWithMutations = event as DatabaseDependencyInvalidationEventWithMutations
-  const mutations = bindMutationMetadata(eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS)
   const metadata = readDatabaseDependencyInvalidationMetadata(event)
+  const mutations = bindMutationMetadata(eventWithMutations.mutations ?? EMPTY_DATABASE_MUTATIONS, metadata)
   if (metadata) {
     const hasMutationDependency = metadata.hasMutationDependency || hasUpsertMutation(mutations)
     return {

@@ -3001,6 +3001,7 @@ export class TableQueryBuilder<
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
@@ -3019,7 +3020,7 @@ export class TableQueryBuilder<
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows),
         ))
-    await this.invalidateInsertQueries('insert', captureReturningRows ? result.rows?.rows ?? rows : rows, result.lastInsertId, {
+    await this.invalidateInsertQueries('insert', captureReturningRows ? result.rows?.rows ?? rows : rows, publicationStartedAt, result.lastInsertId, {
       canReadRows,
       rowsAreWritten: !captureReturningRows,
     })
@@ -3032,6 +3033,7 @@ export class TableQueryBuilder<
   async insertOrIgnore(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
   ): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
@@ -3054,7 +3056,7 @@ export class TableQueryBuilder<
       return insertResult
     }
 
-    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId, {
+    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, publicationStartedAt, result.lastInsertId, {
       canReadRows: canReadRows && (captureReturningRows || result.affectedRows === rows.length),
       rowsAreWritten: !captureReturningRows,
     })
@@ -3091,6 +3093,7 @@ export class TableQueryBuilder<
     uniqueBy: readonly string[],
     requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     await this.prepareMutation()
     const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
@@ -3117,7 +3120,7 @@ export class TableQueryBuilder<
       return upsertResult
     }
 
-    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, {
+    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, publicationStartedAt, result.lastInsertId, {
       canReadRows: hasInvalidationListeners,
       conflictColumns: result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy,
       previousRows,
@@ -3199,6 +3202,7 @@ export class TableQueryBuilder<
     query: TableQueryBuilder<TableDefinition, Record<string, unknown>>,
     ignoreConflicts: boolean,
   ): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     if (getRootDatabaseContext(query.getConnection()) !== getRootDatabaseContext(this.connection)) {
       throw new SecurityError(`insertUsing() needs a source query on the same database connection as "${this.connection.getConnectionName()}".`)
     }
@@ -3208,7 +3212,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
-    await this.invalidateTableQueries('insert')
+    await this.invalidateTableQueries('insert', publicationStartedAt)
     return {
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
@@ -3216,6 +3220,7 @@ export class TableQueryBuilder<
   }
 
   async truncate(): Promise<void> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     if (this.getCompiler().truncateCommitsOpenTransaction() && this.connection.isInTransaction()) {
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
@@ -3227,10 +3232,11 @@ export class TableQueryBuilder<
     await this.assertNotReferencedByOtherTables(tableName)
     await this.connection.executeCompiled(this.getCompiler().compileResolvedTruncate(plan, tableName))
     await this.resetSequence(tableName)
-    await this.invalidateTableQueries('delete')
+    await this.invalidateTableQueries('delete', publicationStartedAt)
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     assertQueryTablePath(this.source.tableName)
     await this.prepareMutation()
     const normalizedValues = this.normalizeUpdateValues(values)
@@ -3264,6 +3270,7 @@ export class TableQueryBuilder<
     if (result.affectedRows !== 0) {
       const rows = await this.readUpdatedDecimalRows(normalizedValues, capturedRows?.rows, useReturningRows)
       await this.invalidateMutationQueries(
+        publicationStartedAt,
         rows ? this.withReadDecimalValues(normalizedValues, rows) : normalizedValues,
         rows ? { ...capturedRows, rows } : capturedRows,
         rows === null,
@@ -3283,6 +3290,7 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
+    const publicationStartedAt = queryCacheInternals.beginMutationPublication()
     await this.prepareMutation()
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
@@ -3298,7 +3306,7 @@ export class TableQueryBuilder<
         ))
     const capturedRows = result.rows ?? mutationRows
     if (result.affectedRows !== 0) {
-      await this.invalidateMutationQueries({}, capturedRows)
+      await this.invalidateMutationQueries(publicationStartedAt, {}, capturedRows)
     }
     return {
       affectedRows: result.affectedRows,
@@ -3649,7 +3657,7 @@ export class TableQueryBuilder<
     }
   }
 
-  private async invalidateTableQueries(kind: 'insert' | 'delete'): Promise<void> {
+  private async invalidateTableQueries(kind: 'insert' | 'delete', publicationStartedAt: number | undefined): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
@@ -3663,12 +3671,15 @@ export class TableQueryBuilder<
         createTableRowWildcardCacheDependency(connectionName, this.source.tableName),
       ],
       hasInvalidationListeners ? [createDatabaseMutationEvent(kind, connectionName, this.source)] : [],
+      undefined,
+      publicationStartedAt,
     )
   }
 
   private async invalidateInsertQueries(
     kind: 'insert' | 'upsert',
     rows: readonly Readonly<Record<string, unknown>>[],
+    publicationStartedAt: number | undefined,
     lastInsertId?: number | string,
     options: {
       readonly canReadRows?: boolean
@@ -3719,6 +3730,7 @@ export class TableQueryBuilder<
       invalidation.dependencies,
       mutations,
       invalidation,
+      publicationStartedAt,
     )
   }
 
@@ -3750,6 +3762,7 @@ export class TableQueryBuilder<
   }
 
   private async invalidateMutationQueries(
+    publicationStartedAt: number | undefined,
     values: Readonly<Record<string, unknown>> = {},
     capturedRows?: CapturedMutationRows,
     hasUnreadDecimals = false,
@@ -3789,6 +3802,7 @@ export class TableQueryBuilder<
       invalidation.dependencies,
       mutations,
       invalidation,
+      publicationStartedAt,
     )
   }
 
