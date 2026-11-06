@@ -1373,7 +1373,7 @@ export async function invalidateReplacedTableIdentity(
     return
   }
 
-  await invalidateQueryCacheDependencies(getRootDatabaseContext(connection), replacedTableIdentityDependencies(connection, identity))
+  await invalidateQueryCacheDependencies(connection, replacedTableIdentityDependencies(connection, identity))
 }
 
 export function normalizeQueryCacheDependencies(

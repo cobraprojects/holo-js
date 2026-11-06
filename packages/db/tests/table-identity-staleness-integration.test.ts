@@ -6,6 +6,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { configureCacheRuntime, resetCacheRuntime } from '../../cache/src'
 import { DB, clearGeneratedTables, onDatabaseDependencyInvalidated, column, configureDB, createConnectionManager, createDatabase, createDialect, createSchemaService, defineGeneratedTable, defineModel, registerGeneratedTables, unsafeSql } from '../src'
 import { integrationDrivers, mysqlTestConnection, openDatabase, postgresTestConnection, tableSpellings } from './support/database'
+import { runWithoutGeneratedSchema } from '../src/schema/generated'
 import type { TestDriver as Driver } from '../../../tests/support/real-database'
 
 const security = { allowUnsafeRawSql: true }
@@ -191,6 +192,30 @@ describe.each(integrationDrivers(['sqlite'] as const))('%s cached reads after th
     expect(reread.length).toBeGreaterThan(0)
     expect(reread.every(names => names.length === 1 && names[0] === 'first')).toBe(true)
   }, 10_000)
+
+  it('notifies invalidation listeners of an identity change inside a transaction only after it commits', async () => {
+    const { db, table } = await openDatabase(driver)
+    useMemoryCache()
+    const { bare, qualified } = tableSpellings(driver, table.tableName)
+    await DB.table(qualified).insert({ id: 1, name: 'first', active: false })
+    expect(await cachedNames(qualified)).toEqual(['first'])
+    let inside = false
+    const notifiedInside: unknown[] = []
+    const stop = onDatabaseDependencyInvalidated((event) => { if (inside) notifiedInside.push(event) })
+    onTestFinished(stop)
+
+    await expect(DB.transaction(async (transaction) => {
+      inside = true
+      await transaction.table(qualified).where('id', 1).update({ name: 'uncommitted' })
+      await transaction.executeSchemaStatement({ sql: `CREATE TEMP TABLE "${bare}" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL)`, source: 'schema' })
+      await transaction.table(qualified).orderBy('id').cache(60).get()
+      inside = false
+      throw new RollbackRequested()
+    })).rejects.toThrow(RollbackRequested)
+    inside = false
+
+    expect(notifiedInside).toEqual([])
+  })
 
   it('does not notify invalidation listeners when an unrelated schema change leaves a table identity unchanged', async () => {
     const { schema, table } = await openDatabase(driver)
@@ -601,6 +626,31 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       expect(await operatorInQuery.pluck('id')).toEqual([1])
       expect(await operatorBetweenQuery.pluck('id')).toEqual([1])
       expect(await objectQuery.pluck('id')).toEqual([1])
+    })
+
+    it('compiles a runnable statement synchronously for a where() on the qualified name before the generated definition binds', async () => {
+      const { db, table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      const items = defineGeneratedTable(bare, itemColumns)
+      useGeneratedTables({ items })
+      await DB.table(items).insert({ id: 1, name: 'first', active: true, settings: null })
+
+      const statement = DB.table(qualified).where('active', true).select('id').toSQL()
+
+      expect(statement.bindings).toEqual([1])
+      expect((await db.queryCompiled(statement)).rows.map(row => Number(row.id))).toEqual([1])
+    })
+
+    it('keeps an untyped model on its declared primary key while the generated schema is suspended', async () => {
+      const { table } = await openDatabase(driver)
+      const { bare, qualified } = tableSpellings(driver, table.tableName)
+      useGeneratedTables({ items: defineGeneratedTable(bare, { code: column.integer().primaryKey(), name: column.string() }) })
+
+      const primaryKey = runWithoutGeneratedSchema(() => defineModel(qualified, { timestamps: false, fillable: ['*'], name: uniqueName('SuspendedItem') }).definition.primaryKey)
+      const writable = runWithoutGeneratedSchema(() => defineModel(qualified, { timestamps: false, fillable: ['*'], name: uniqueName('SuspendedWritable') }).make({ code: 1 }).get('code'))
+
+      expect(primaryKey).toBe('id')
+      expect(writable).toBe(1)
     })
 
     it('normalizes a where() value on the qualified name again after an unrelated schema change', async () => {

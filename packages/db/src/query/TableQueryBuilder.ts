@@ -1978,7 +1978,7 @@ export class TableQueryBuilder<
   }
 
   toSQL() {
-    return this.getCompiler().compile(this.plan)
+    return this.getCompiler().compile(applyDeferredPredicateNormalizations(this.plan))
   }
 
   toRawSql(): string {
