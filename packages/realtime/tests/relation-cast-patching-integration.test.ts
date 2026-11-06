@@ -276,6 +276,19 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps relations ordered by a converted date equal to a fresh read when the parent changes', async () => {
+    if (!variant.dated) return
+    const { db, owners, items, Parent } = await openFixture(variant)
+    await db.table(items).where('id', 1).update({ born_on: '2024-01-01' })
+    await db.table(items).where('id', 2).update({ born_on: '2024-01-05' })
+    const expectFresh = await subscribeAll(variant, {
+      dated: () => db.model(Parent).query().with('items', query => query.orderBy('born_on')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(owners).where('id', 1).update(rowValues(variant, 19)))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {
@@ -438,6 +451,19 @@ describe.each(drivers)('realtime patches through models with different casts on 
     })
 
     await mutate(() => db.table(items).where('id', 2).update({ secret: 'two' }))
+    await expectFresh(false)
+  })
+
+  it('keeps aggregates over a cast column equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    const Scaled = defineModel(items, { timestamps: false, casts: { big: { get: (value: unknown) => Number(value) * 100, set: (value: unknown) => value } } })
+    const expectFresh = await subscribeAll(variant, {
+      sum: () => db.model(Scaled).query().where('owner_id', 1).sum('big'),
+      max: () => db.model(Scaled).query().where('owner_id', 1).max('big'),
+    })
+
+    await mutate(() => db.table(items).insert({ id: 7, owner_id: 1, ...rowValues(variant, 7) }))
     await expectFresh(false)
   })
 

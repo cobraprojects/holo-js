@@ -186,6 +186,11 @@ export class ModelValueTransformer<TTable extends TableDefinition> {
     return Object.freeze(Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, serializeModels(this.serializeAttributeValue(key, value))])))
   }
 
+  readsColumnAsStored(key: string): boolean {
+    const column = ownEntry(this.definition.table.columns, key)
+    return this.resolveCast(key) === undefined && !(column && isConvertedByModelReads(column))
+  }
+
   comparesWithStoredValues(key: string): boolean {
     const cast = this.resolveCast(key)
     const column = ownEntry(this.definition.table.columns, key)

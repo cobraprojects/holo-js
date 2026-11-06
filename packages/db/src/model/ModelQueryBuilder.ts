@@ -11,6 +11,7 @@ import {
   rebindDatabaseQueryObservationResult,
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
+  type DatabaseQueryAggregateObservation,
   type DatabaseQueryBelongsToHydrationObservation,
   type DatabaseQueryRelatedHydrationObservation,
   type DatabaseQueryRowReader,
@@ -1847,14 +1848,14 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, 0, Object.freeze({ column, kind: 'sum' }))
+        this.rebindModelAggregate(entities, 0, Object.freeze({ column, kind: 'sum' }))
       }
       return 0
     }
 
     const result = this.extractNumericValues(entities, column, 'sum').reduce((sum, value) => sum + value, 0)
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
+      this.rebindModelAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
     }
     return result
   }
@@ -1869,7 +1870,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
+        this.rebindModelAggregate(entities, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
       }
       return null
     }
@@ -1878,7 +1879,7 @@ class ModelQueryBuilderBase<
     const sum = values.reduce((total, value) => total + value, 0)
     const result = values.length > 0 ? sum / values.length : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
+      this.rebindModelAggregate(entities, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
     }
     return result
   }
@@ -1889,7 +1890,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'min' }))
+        this.rebindModelAggregate(entities, null, Object.freeze({ column, kind: 'min' }))
       }
       return null
     }
@@ -1897,7 +1898,7 @@ class ModelQueryBuilderBase<
     const values = this.extractNumericValues(entities, column, 'min')
     const result = values.length > 0 ? Math.min(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+      this.rebindModelAggregate(entities, result, Object.freeze({
         column,
         currentValueCount: values.filter(value => value === result).length,
         kind: 'min',
@@ -1913,7 +1914,7 @@ class ModelQueryBuilderBase<
     const entities = await this.get()
     if (entities.length === 0) {
       if (hasActiveDatabaseDependencyCollector()) {
-        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'max' }))
+        this.rebindModelAggregate(entities, null, Object.freeze({ column, kind: 'max' }))
       }
       return null
     }
@@ -1921,7 +1922,7 @@ class ModelQueryBuilderBase<
     const values = this.extractNumericValues(entities, column, 'max')
     const result = values.length > 0 ? Math.max(...values) : null
     if (hasActiveDatabaseDependencyCollector()) {
-      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+      this.rebindModelAggregate(entities, result, Object.freeze({
         column,
         currentValueCount: values.filter(value => value === result).length,
         kind: 'max',
@@ -2660,6 +2661,15 @@ class ModelQueryBuilderBase<
       this.aggregateLoads,
       (index, key) => Object.freeze(['data', index, key]),
     )
+  }
+
+  private rebindModelAggregate(entities: unknown, result: unknown, aggregate: DatabaseQueryAggregateObservation): void {
+    if (aggregate.column === undefined || this.repository.readsColumnAsStored(aggregate.column)) {
+      rebindDatabaseQueryObservationAggregate(entities, result, aggregate)
+      return
+    }
+
+    disableDatabaseQueryObservationPatching(entities, { serialized: true })
   }
 
   private relatedReadRow(related: () => ModelDefinitionLike): { readonly readRow?: DatabaseQueryRowReader } {

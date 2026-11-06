@@ -188,6 +188,10 @@ function compareRelatedValues(left: unknown, right: unknown): number {
     return 1
   }
 
+  if (left instanceof Date && right instanceof Date) {
+    return left.getTime() - right.getTime()
+  }
+
   return String(left).localeCompare(String(right), undefined, {
     numeric: true,
     sensitivity: 'base',

@@ -2669,6 +2669,10 @@ export class ModelRepository<
     return this.valueTransformer.readsRowsAsStored()
   }
 
+  readsColumnAsStored(column: string): boolean {
+    return this.valueTransformer.readsColumnAsStored(column)
+  }
+
   serializesBeyondRows(): boolean {
     return modelSerializesBeyondRows(this.definition) || this.eventDispatcher.hasHandlers('retrieved')
   }
