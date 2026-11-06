@@ -473,4 +473,64 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     expect((await DB.table(products).orderBy('id').get()).map(row => [Number(row.id), Number(row.factor)])).toEqual([[1, 9], [2, 4]])
     expect((await DB.table(orders).orderBy('id').get()).map(row => [Number(row.id), Number(row.factor)])).toEqual([[101, 7], [102, 5]])
   })
+
+  it('looks up the model key on a joined query by the qualified key', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    expect(attributes([(await joined().find(2))!])).toEqual([ownRows[1]])
+    expect(attributes([await joined().findOrFail(1)])).toEqual([ownRows[0]])
+    expect(attributes(await joined().whereKey(2).get())).toEqual([ownRows[1]])
+    expect(attributes(await joined().whereKey([1, 2]).get())).toEqual(ownRows)
+    expect(attributes(await joined().whereKeyNot(1).get())).toEqual([ownRows[1]])
+    expect(attributes(await joined().whereKeyNot([2]).get())).toEqual([ownRows[0]])
+    expect(attributes([(await joined().find(101, `${orders}.id`))!])).toEqual([ownRows[0]])
+    expect(joined().whereKey(1).toSQL().sql).toMatch(new RegExp(`WHERE [\`"]${products}[\`"]\\.[\`"]id[\`"]`))
+    await expect(joined().where('id', 1).get()).rejects.toThrow(/ambiguous/i)
+  })
+
+  it('cursor paginates a union of joined queries by output column names', async () => {
+    const { products, orders, joined } = await createFixture(driver)
+
+    const pages = async (query: ReturnType<typeof joined>) => {
+      const seen: number[][] = []
+      let cursor: string | null = null
+      do {
+        const page = await query.cursorPaginate(1, cursor)
+        seen.push(attributes(page.data).map(row => row.id))
+        cursor = page.nextCursor
+      } while (cursor !== null && seen.length < 4)
+      return seen
+    }
+    const aliased = () => joined().select(`${products}.*`, `${orders}.id as order_id` as never)
+    expect(await pages(aliased().where(`${orders}.id`, 101).union(aliased().where(`${orders}.id`, 102)).orderBy('order_id' as never, 'desc'))).toEqual([[2], [1]])
+    const own = () => joined().select(`${products}.*`)
+    expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)))).toEqual([[1], [2]])
+    expect(await pages(own().where(`${orders}.id`, 102).union(own().where(`${orders}.id`, 101)).orderBy('price', 'desc'))).toEqual([[2], [1]])
+  })
+
+  it('keeps the selection order between outputs that are not model columns', async () => {
+    const { schema, products, Product } = await createFixture(driver)
+    const notes = uniqueName('notes')
+    onTestFinished(async () => {
+      await schema.dropTable(notes)
+    })
+    await schema.createTable(notes, (table) => {
+      table.integer('id')
+      table.integer('product_id')
+      table.string('label')
+    })
+    await DB.table(notes).insert([{ id: 11, product_id: 1, label: 'first' }, { id: 12, product_id: 2, label: 'second' }])
+
+    const labels = async (...selections: string[]) => {
+      const rows = await Product.query().join(notes, `${notes}.product_id`, '=', `${products}.id`).select(...selections as never[]).get()
+      return rows.map(entity => [Number(entity.toAttributes().id), (entity.toAttributes() as Record<string, unknown>).label]).sort((left, right) => Number(left[0]) - Number(right[0]))
+    }
+    expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
+    expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+
+    registerGeneratedTables({ [notes]: defineGeneratedTable(notes, { id: column.integer(), product_id: column.integer(), label: column.string() }) })
+    onTestFinished(() => clearGeneratedTables())
+    expect(await labels(`${products}.*`, `${products}.price as label`, `${notes}.*`)).toEqual([[1, 'first'], [2, 'second']])
+    expect(await labels(`${products}.*`, `${notes}.*`, `${products}.price as label`)).toEqual([[1, 10], [2, 20]])
+  })
 })
