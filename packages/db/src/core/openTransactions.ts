@@ -19,3 +19,7 @@ export function currentRootTransaction(connection: DatabaseContext): Transaction
   const frame = openRootTransactions.getStore()?.get(getRootDatabaseContext(connection))
   return frame?.open ? frame : undefined
 }
+
+export function openSchemaChangingTransactions(): TransactionFrame[] {
+  return [...openRootTransactions.getStore()?.values() ?? []].filter(frame => frame.open && frame.schemaChanged)
+}
