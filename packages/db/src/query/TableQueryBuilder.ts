@@ -36,6 +36,7 @@ import {
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
   writesTextLiterals,
+  type QueryTextMatching,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -100,8 +101,8 @@ import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schem
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
 import { storesJson } from '../schema/normalization'
-import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
-import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -2027,7 +2028,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
-          textMatchesAnyNumber(this.connection),
+          cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -2996,8 +2997,10 @@ export class TableQueryBuilder<
 
     await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, {
       canReadRows: hasInvalidationListeners,
+      conflictColumns: result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy,
       previousRows,
       rowsAreWritten: !useReturningRows,
+      updatedColumns: updateColumns,
     })
     return upsertResult
   }
@@ -3542,8 +3545,10 @@ export class TableQueryBuilder<
     lastInsertId?: number | string,
     options: {
       readonly canReadRows?: boolean
+      readonly conflictColumns?: readonly string[] | 'any'
       readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
       readonly rowsAreWritten?: boolean
+      readonly updatedColumns?: readonly string[]
     } = {},
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
@@ -3580,6 +3585,8 @@ export class TableQueryBuilder<
       lastInsertId,
       hasInvalidationListeners,
       await this.resolveCaseInsensitiveColumns(rows),
+      options.conflictColumns,
+      options.updatedColumns,
     )
 
     await invalidateQueryCacheDependencies(
@@ -3594,13 +3601,27 @@ export class TableQueryBuilder<
     records: readonly Readonly<Record<string, unknown>>[],
     predicates: readonly QueryPredicateNode[] = [],
   ): Promise<CaseInsensitiveColumns> {
-    if (!isPostgresConnection(this.connection)) {
+    if (isMySQLConnection(this.connection)) {
+      const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
+    }
+
+    if (!isPostgresConnection(this.connection) && !isSQLiteConnection(this.connection)) {
       return 'all'
     }
 
     return writesTextLiterals(predicates, records)
       ? await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
       : new Set<string>()
+  }
+
+  private async resolveQueryTextMatching(): Promise<QueryTextMatching> {
+    if (!isMySQLConnection(this.connection)) {
+      return textMatchesAnyNumber(this.connection)
+    }
+
+    const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
   }
 
   private async invalidateMutationQueries(
