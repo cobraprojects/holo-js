@@ -78,7 +78,7 @@ describe.each(drivers)('realtime inserts on %s', (driver) => {
     await expectPatched('multi-row insert', runs)
   })
 
-  it.runIf(driver !== 'mysql')('patches subscriptions with only the rows insertOrIgnore inserts', async () => {
+  it('keeps subscriptions equal to fresh queries after insertOrIgnore skips a row, re-running on MySQL', async () => {
     const { db, posts, Post } = await openPosts(driver)
     const { expectPatched } = await subscribeCounted({
       table: () => db.table(posts).select('id', 'title').orderBy('id').get(),
@@ -86,6 +86,6 @@ describe.each(drivers)('realtime inserts on %s', (driver) => {
     })
 
     await mutate(() => db.table(posts).insertOrIgnore([{ id: 1, title: 'ignored', votes: 9 }, { id: 2, title: 'second', votes: 2 }]))
-    await expectPatched('insertOrIgnore')
+    await expectPatched('insertOrIgnore', driver === 'mysql' ? 2 : 1)
   })
 })
