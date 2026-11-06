@@ -19,7 +19,7 @@ import {
   type DatabaseQueryPredicateObservation,
   type DatabaseQueryResultPathSegment,
 } from '../cache'
-import { TableQueryBuilder, aliasSource, insertGetIdByKey, joinOnKeyColumns, requalifySource, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
+import { TableQueryBuilder, aliasTableSource, insertGetIdByKey, joinOnKeyColumns, requalifyTableSource, selectKeyColumn, whereKeyColumn } from '../query/TableQueryBuilder'
 import { sameTable, boundTableNames } from '../query/requalifyAliasedSource'
 import { getLoadedColumnListing, getLoadedTableDefinition, loadColumnListing, loadTableDefinition } from '../schema/columnListing'
 import { getConnectionGeneratedTableDefinition, isUnresolvedGeneratedPrimaryKey } from '../schema/generated'
@@ -2350,7 +2350,7 @@ export class ModelRepository<
     alias?: string,
   ): ModelQueryBuilder<TTable, RelationMap, unknown, TScopes> {
     const tableQuery = this.createTableQuery()
-    let query = new ModelQueryBuilder(this, alias === undefined ? tableQuery : tableQuery[aliasSource](alias))
+    let query = new ModelQueryBuilder(this, alias === undefined ? tableQuery : aliasTableSource(tableQuery, alias))
 
     const deletedAtColumn = this.getDeletedAtColumn()
     if (applySoftDeletes && deletedAtColumn) {
@@ -2780,14 +2780,14 @@ export class ModelRepository<
     const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
       const query = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
       if (alias === undefined) return query
-      if (query.getPlan().source.alias !== undefined) return query[requalifySource]()
+      if (query.getPlan().source.alias !== undefined) return requalifyTableSource(query)
       const bound = boundTableNames(query.getPlan())
       let unused = alias
       for (let reserved = 2; bound.has(unused); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
-      return query[aliasSource](unused)[requalifySource]()
+      return requalifyTableSource(aliasTableSource(query, unused))
     }
     const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
-      ? query[aliasSource](this.selfRelationAlias(parentAlias, 1))[requalifySource]()
+      ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)))
       : query
 
     switch (relation.kind) {

@@ -190,8 +190,6 @@ export const hasQueryCache = Symbol('hasQueryCache')
 export const whereResolvedColumn = Symbol('whereResolvedColumn')
 export const resolveAggregateSource = Symbol('resolveAggregateSource')
 export const projectModelRows = Symbol('projectModelRows')
-export const aliasSource = Symbol('aliasSource')
-export const requalifySource = Symbol('requalifySource')
 type KeyedInsert = (
   query: TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>,
   values: Readonly<Record<string, unknown>>,
@@ -203,6 +201,17 @@ type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, 
 let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnSelection: (query: AnyTableQuery, column: string, casts: QueryKeyCasts) => AnyTableQuery
 let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
+let sourceAliasing: (query: AnyTableQuery, alias: string) => AnyTableQuery
+let sourceRequalifying: (query: AnyTableQuery) => AnyTableQuery
+
+export function aliasTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, alias: string): TQuery {
+  if (!/^[A-Z_]\w*$/i.test(alias)) throw new CompilerError(`Table alias "${alias}" must be a plain identifier.`)
+  return sourceAliasing(query as unknown as AnyTableQuery, alias) as unknown as TQuery
+}
+
+export function requalifyTableSource<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery): TQuery {
+  return sourceRequalifying(query as unknown as AnyTableQuery) as unknown as TQuery
+}
 
 export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
   return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
@@ -2048,14 +2057,6 @@ export class TableQueryBuilder<
     return this
   }
 
-  [aliasSource](alias: string): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(withSource(this.plan, Object.freeze({ ...this.source, alias })))
-  }
-
-  [requalifySource](): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
-    return this.clone(requalifyAliasedSource(this.plan))
-  }
-
   [hasQueryCache](): boolean {
     return this.queryCacheConfig !== undefined
   }
@@ -3074,6 +3075,8 @@ export class TableQueryBuilder<
 
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+    sourceAliasing = (query, alias) => query.clone(withSource(query.plan, Object.freeze({ ...query.source, alias })))
+    sourceRequalifying = query => query.clone(requalifyAliasedSource(query.plan))
     keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
     keyColumnSelection = (query, column, casts) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(casts.left ? { keyCast: casts.left } : {}), ...(casts.unknownKind ? { unknownKeyKind: casts.unknownKind } : {}) })]) })
     keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {

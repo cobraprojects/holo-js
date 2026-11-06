@@ -27,7 +27,7 @@ import {
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { queryBatches, visitRows } from '../query/traversal'
-import { aliasSource, projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
+import { aliasTableSource, projectModelRows, resolveAggregateSource, TableQueryBuilder, whereResolvedColumn } from '../query/TableQueryBuilder'
 import { isAwaitingGeneratedTableIdentity } from '../schema/generated'
 import { knownJoinedColumns, resolveSourceColumnName, selectionOutputName, selectsJoinedColumn } from '../query/modelRowProjection'
 import { createAggregateValueCounts } from '../query/aggregateValueCounts'
@@ -286,7 +286,7 @@ class ModelQueryBuilderBase<
     const tableQuery = this.repository.createTableQuery(this.getConnection())
     const nested = new ModelQueryBuilderBase<TTable, TRelations, TLoaded, TScopes, TJoinedTables>(
       this.repository,
-      alias === undefined ? tableQuery : tableQuery[aliasSource](alias),
+      alias === undefined ? tableQuery : aliasTableSource(tableQuery, alias),
     ) as ModelQueryBuilder<TTable, TRelations, TLoaded, TScopes, TJoinedTables>
     const callbackResult = callback(nested)
     const result = callbackResult instanceof ModelQueryBuilderBase ? callbackResult : nested
