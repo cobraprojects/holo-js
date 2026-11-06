@@ -20,7 +20,7 @@ function related(entity: Category, name: string): Category[] {
 }
 
 async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
-  const { schema } = await openDatabase(driver)
+  const { schema, adapter, db } = await openDatabase(driver)
   onTestFinished(() => resetDB())
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const names = { categories: `sr_categories_${suffix}`, links: `sr_links_${suffix}`, posts: `sr_posts_${suffix}`, grants: `sr_grants_${suffix}` }
@@ -94,7 +94,7 @@ async function openSelfFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
   const QualifiedLeaf = defineModel(qualifiedCategories, { name: `QualifiedLeaf${suffix}`, timestamps: false })
   const QualifiedParent = defineModel(qualifiedCategories, { name: `QualifiedParent${suffix}`, timestamps: false, relations: { children: hasMany(() => Leaf, 'parent_id'), parent: belongsTo(() => Leaf, 'parent_id') } })
   const PlainParent = defineModel(categories, { timestamps: false, relations: { children: hasMany(() => QualifiedLeaf, 'parent_id'), parent: belongsTo(() => QualifiedLeaf, 'parent_id') } })
-  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schema, schemaName, table: names.categories }
+  return { Category, Leaf, ScopedParent, GrantedParent, QualifiedParent, PlainParent, schema, adapter, db, schemaName, table: names.categories }
 }
 
 const relationNames = ['children', 'firstChild', 'parent', 'linked'] as const
@@ -427,5 +427,33 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
 
     expect(has.map(id)).toEqual([1, 2])
     expect(sameTenant.map(id)).toEqual([1])
+  })
+
+  it('rewrites schema-qualified references next to a same-named table from another schema', async () => {
+    const { Category, table, schemaName, adapter, db, schema } = await openSelfFixtures(driver)
+    const audit = `sr_audit_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const quote = (identifier: string) => driver === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
+    if (driver === 'sqlite') {
+      await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS ${quote(audit)}`, source: 'schema' })
+    }
+    else {
+      await adapter.execute(`${driver === 'postgres' ? 'CREATE SCHEMA' : 'CREATE DATABASE'} ${quote(audit)}`)
+      onTestFinished(async () => {
+        await adapter.execute(`${driver === 'postgres' ? 'DROP SCHEMA IF EXISTS' : 'DROP DATABASE IF EXISTS'} ${quote(audit)}${driver === 'postgres' ? ' CASCADE' : ''}`)
+      })
+    }
+    await schema.createTable(`${audit}.${table}`, (columns) => {
+      columns.integer('id').primaryKey()
+      columns.integer('owner_id')
+    })
+    await DB.table(defineGeneratedTable(`${audit}.${table}`, { id: column.integer().primaryKey(), owner_id: column.integer() })).insert([{ id: 1, owner_id: 2 }])
+    const viaExists = (query: { whereExists(subquery: unknown): unknown }) => query.whereExists(DB.table(`${audit}.${table}`).whereColumn(`${audit}.${table}.owner_id`, '=', `${schemaName}.${table}.id`))
+
+    const loaded = await Category.with('children', viaExists as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+    const filtered = await Category.whereHas('children', viaExists as never).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1])
+    expect(filtered.map(id)).toEqual(expected)
   })
 })

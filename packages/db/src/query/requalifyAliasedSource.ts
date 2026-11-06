@@ -20,38 +20,51 @@ export function sameTable(left: string, right: string): boolean {
   return bindsTable(left, right) && (leftSchema === undefined || rightSchema === undefined || leftSchema === rightSchema)
 }
 
-function requalifyColumn(column: string, tableName: string, alias: string): string {
+interface Binding {
+  readonly name: string
+  readonly aliased: boolean
+}
+
+function bindingsOf(plan: SelectQueryPlan, includeSource = true): readonly Binding[] {
+  const source = plan.source.alias === undefined ? { name: plan.source.tableName, aliased: false } : { name: plan.source.alias, aliased: true }
+  const joins = plan.joins.flatMap((join): Binding[] => join.alias !== undefined
+    ? [{ name: join.alias, aliased: true }]
+    : join.table === undefined ? [] : [{ name: join.table, aliased: false }])
+  return includeSource ? [source, ...joins] : joins
+}
+
+function captures(binding: Binding, qualifier: string): boolean {
+  if (!bindsTable(binding.name, qualifier)) return false
+  const qualifierSchema = schemaOf(qualifier)
+  if (qualifierSchema === undefined) return true
+  if (binding.aliased) return false
+  const bindingSchema = schemaOf(binding.name)
+  return bindingSchema === undefined || bindingSchema === qualifierSchema
+}
+
+function requalifyColumn(column: string, tableName: string, alias: string, scope: readonly Binding[]): string {
   const pathIndex = column.indexOf('->')
   const root = pathIndex < 0 ? column : column.slice(0, pathIndex)
   const separator = root.lastIndexOf('.')
   if (separator < 0) return column
 
-  return sameTable(root.slice(0, separator), tableName) ? `${alias}${column.slice(separator)}` : column
+  const qualifier = root.slice(0, separator)
+  if (!sameTable(qualifier, tableName) || scope.some(binding => captures(binding, qualifier))) return column
+  return `${alias}${column.slice(separator)}`
 }
 
-function joinsShadowTable(plan: SelectQueryPlan, tableName: string): boolean {
-  return plan.joins.some((join) => {
-    const binding = join.alias ?? join.table
-    return binding !== undefined && bindsTable(binding, tableName)
-  })
-}
-
-function shadowsTable(plan: SelectQueryPlan, tableName: string): boolean {
-  return bindsTable(plan.source.alias ?? plan.source.tableName, tableName) || joinsShadowTable(plan, tableName)
-}
-
-function requalifyPlan(plan: SelectQueryPlan, tableName: string, alias: string): SelectQueryPlan {
-  return shadowsTable(plan, tableName) ? plan : requalifyPlanBody(plan, tableName, alias)
+function requalifyPlan(plan: SelectQueryPlan, tableName: string, alias: string, scope: readonly Binding[]): SelectQueryPlan {
+  return requalifyPlanBody(plan, tableName, alias, [...scope, ...bindingsOf(plan)])
 }
 
 export function requalifyAliasedSource(plan: SelectQueryPlan): SelectQueryPlan {
   const alias = plan.source.alias
-  if (alias === undefined || joinsShadowTable(plan, plan.source.tableName)) return plan
-  return requalifyPlanBody(plan, plan.source.tableName, alias)
+  if (alias === undefined) return plan
+  return requalifyPlanBody(plan, plan.source.tableName, alias, bindingsOf(plan, false))
 }
 
-function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: string): SelectQueryPlan {
-  const column = (value: string) => requalifyColumn(value, tableName, alias)
+function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: string, scope: readonly Binding[]): SelectQueryPlan {
+  const column = (value: string) => requalifyColumn(value, tableName, alias, scope)
   const selection = (item: QuerySelection): QuerySelection => {
     switch (item.kind) {
       case 'column':
@@ -59,7 +72,7 @@ function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: stri
       case 'aggregate':
         return item.column === '*' ? item : Object.freeze({ ...item, column: column(item.column) })
       case 'subquery':
-        return Object.freeze({ ...item, query: requalifyPlan(item.query, tableName, alias) })
+        return Object.freeze({ ...item, query: requalifyPlan(item.query, tableName, alias, scope) })
       case 'raw':
         return item
     }
@@ -68,7 +81,7 @@ function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: stri
     ...item,
     ...(item.leftColumn === undefined ? {} : { leftColumn: column(item.leftColumn) }),
     ...(item.rightColumn === undefined ? {} : { rightColumn: column(item.rightColumn) }),
-    ...(item.subquery === undefined ? {} : { subquery: requalifyPlan(item.subquery, tableName, alias) }),
+    ...(item.subquery === undefined ? {} : { subquery: requalifyPlan(item.subquery, tableName, alias, scope) }),
   })
   const orderBy = (item: QueryOrderBy): QueryOrderBy => item.kind === 'column' || item.kind === 'vector'
     ? Object.freeze({ ...item, column: column(item.column) })
@@ -78,8 +91,8 @@ function requalifyPlanBody(plan: SelectQueryPlan, tableName: string, alias: stri
     ...plan,
     selections: Object.freeze(plan.selections.map(selection)),
     joins: Object.freeze(plan.joins.map(join)),
-    unions: Object.freeze(plan.unions.map(union => Object.freeze({ ...union, query: requalifyPlan(union.query, tableName, alias) }))),
-    predicates: requalifyPredicates(plan.predicates, tableName, alias),
+    unions: Object.freeze(plan.unions.map(union => Object.freeze({ ...union, query: requalifyPlan(union.query, tableName, alias, scope) }))),
+    predicates: requalifyPredicates(plan.predicates, tableName, alias, scope),
     groupBy: Object.freeze(plan.groupBy.map(column)),
     orderBy: Object.freeze(plan.orderBy.map(orderBy)),
   })
@@ -89,8 +102,9 @@ function requalifyPredicates(
   predicates: readonly QueryPredicateNode[],
   tableName: string,
   alias: string,
+  scope: readonly Binding[],
 ): readonly QueryPredicateNode[] {
-  const column = (value: string) => requalifyColumn(value, tableName, alias)
+  const column = (value: string) => requalifyColumn(value, tableName, alias, scope)
   const remap = (normalized: Partial<QueryPredicateNode>): Partial<QueryPredicateNode> => ({
     ...normalized,
     ...('column' in normalized && typeof normalized.column === 'string' ? { column: column(normalized.column) } : {}),
@@ -107,7 +121,7 @@ function requalifyPredicates(
       case 'integer-in':
         return Object.freeze({ ...predicate, column: column(predicate.column) })
       case 'subquery':
-        return Object.freeze({ ...predicate, column: column(predicate.column), subquery: requalifyPlan(predicate.subquery, tableName, alias) })
+        return Object.freeze({ ...predicate, column: column(predicate.column), subquery: requalifyPlan(predicate.subquery, tableName, alias, scope) })
       case 'column':
         return Object.freeze({ ...predicate, column: column(predicate.column), compareTo: column(predicate.compareTo) })
       case 'between-columns':
@@ -119,9 +133,9 @@ function requalifyPredicates(
       case 'fulltext':
         return Object.freeze({ ...predicate, columns: Object.freeze(predicate.columns.map(column)) })
       case 'group':
-        return Object.freeze({ ...predicate, predicates: requalifyPredicates(predicate.predicates, tableName, alias) })
+        return Object.freeze({ ...predicate, predicates: requalifyPredicates(predicate.predicates, tableName, alias, scope) })
       case 'exists':
-        return Object.freeze({ ...predicate, subquery: requalifyPlan(predicate.subquery, tableName, alias) })
+        return Object.freeze({ ...predicate, subquery: requalifyPlan(predicate.subquery, tableName, alias, scope) })
       case 'raw':
         return predicate
     }
