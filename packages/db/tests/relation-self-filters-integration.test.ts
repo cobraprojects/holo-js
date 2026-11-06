@@ -312,4 +312,55 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(excluded.map(id)).toEqual([1, 4, 5])
     expect(schemaQualified.map(id)).toEqual(expected)
   })
+
+  it('applies soft deletes of a self table joined as the through table', async () => {
+    const { schema } = await openDatabase(driver)
+    onTestFinished(() => resetDB())
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const names = { nodes: `sr_nodes_${suffix}`, posts: `sr_node_posts_${suffix}` }
+    await schema.createTable(names.nodes, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('parent_id').nullable()
+      table.timestamp('deleted_at').nullable()
+    })
+    onTestFinished(() => schema.dropTable(names.nodes))
+    await schema.createTable(names.posts, (table) => {
+      table.integer('id').primaryKey()
+      table.integer('node_id')
+    })
+    onTestFinished(() => schema.dropTable(names.posts))
+    const nodes = defineGeneratedTable(names.nodes, { id: column.integer().primaryKey(), parent_id: column.integer().nullable(), deleted_at: column.timestamp().nullable() })
+    const posts = defineGeneratedTable(names.posts, { id: column.integer().primaryKey(), node_id: column.integer() })
+    const deletedAt = new Date('2026-01-01T00:00:00Z')
+    await DB.table(nodes).insert([
+      { id: 1, parent_id: null, deleted_at: null },
+      { id: 2, parent_id: 1, deleted_at: null },
+      { id: 3, parent_id: 2, deleted_at: null },
+      { id: 7, parent_id: null, deleted_at: null },
+      { id: 8, parent_id: 7, deleted_at: deletedAt },
+      { id: 9, parent_id: 8, deleted_at: null },
+    ])
+    await DB.table(posts).insert([{ id: 1, node_id: 2 }, { id: 2, node_id: 8 }])
+    const Post = defineModel(posts, { timestamps: false })
+    const Leaf = defineModel(nodes, { timestamps: false, softDeletes: true })
+    const Node = defineModel(nodes, {
+      timestamps: false,
+      softDeletes: true,
+      relations: {
+        grandchildren: hasManyThrough(() => Leaf, () => Leaf, 'parent_id', 'parent_id'),
+        childPosts: hasManyThrough(() => Post, () => Leaf, 'parent_id', 'node_id'),
+      },
+    })
+
+    for (const name of ['grandchildren', 'childPosts'] as const) {
+      const loaded = await Node.with(name).orderBy('id').get() as unknown as Category[]
+      const expected = loaded.filter(entity => related(entity, name).length > 0).map(id)
+      const has = await Node.has(name).orderBy('id').get() as unknown as Category[]
+      const doesntHave = await Node.doesntHave(name).orderBy('id').get() as unknown as Category[]
+
+      expect(expected).toEqual([1])
+      expect(has.map(id)).toEqual(expected)
+      expect(doesntHave.map(id)).toEqual(loaded.map(id).filter(value => !expected.includes(value)))
+    }
+  })
 })

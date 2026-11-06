@@ -198,7 +198,9 @@ class ModelQueryBuilderBase<
       ...(predicates.length > 0 ? [{ kind: 'group' as const, predicates }] : []),
     ])
     if (column && this.softDeleteMode !== 'with') {
-      query = this.softDeleteMode === 'only' ? query.whereNotNull(column as never) : query.whereNull(column as never)
+      const alias = query.getPlan().source.alias
+      const reference = (alias === undefined ? column : `${alias}.${column}`) as never
+      query = this.softDeleteMode === 'only' ? query.whereNotNull(reference) : query.whereNull(reference)
     }
     return query
   }

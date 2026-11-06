@@ -2845,7 +2845,10 @@ export class ModelRepository<
           { left: sourceKeyCast(ownEntry(throughColumns, relation.secondLocalKey), ownEntry(related.definition.table.columns, relation.secondKey)) },
         )
 
-        return [this.whereParentKey(joined, through.definition.table, relation.firstKey, relation.localKey, parentAlias, `${throughSource}.${relation.firstKey}`)]
+        const throughDeletedAt = through.getDeletedAtColumn()
+        const scopedJoin = throughDeletedAt === undefined ? joined : joined.whereNull(`${throughSource}.${throughDeletedAt}` as never)
+
+        return [this.whereParentKey(scopedJoin, through.definition.table, relation.firstKey, relation.localKey, parentAlias, `${throughSource}.${relation.firstKey}`)]
       }
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
