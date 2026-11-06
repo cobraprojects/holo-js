@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as holoConfig from '@holo-js/config'
 import * as holoDb from '@holo-js/db'
-import { importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
+import { bundleSourceInternals, importBundledRuntimeModule, loadProjectDefinitionRuntimeModules, runtimeModuleInternals, sourceModuleUrlInternals } from '../src/runtimeModule'
 import type * as runtimeModuleInternalsModule from '../src/runtimeModule'
 
 const postModule = "export const Post = { title: 'post' }\n"
@@ -815,6 +815,56 @@ try { ability.locate({ id: 7 }) } catch (error) { console.log(JSON.stringify({ o
     expect(result.stack).toContain(`${abilityPath}:5:${throwLine.indexOf('new Error') + 1}`)
   }, 30_000)
 
+  it.each([
+    ['Node', process.execPath, []],
+    ['Node with explicit resolution parents', process.execPath, ['--experimental-import-meta-resolve']],
+    ['Bun', 'bun', []],
+  ])('resolves import.meta.resolve as the unbundled source module would under %s', async (_runtime, command, flags) => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/queued jobs/locate.mts')
+    const packageRoot = join(projectRoot, 'server/node_modules/nested-locator')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: 'nested-locator', exports: { import: './esm.mjs', require: './cjs.cjs' } }))
+    await writeFile(join(packageRoot, 'esm.mjs'), '')
+    await writeFile(join(packageRoot, 'cjs.cjs'), '')
+    await writeFile(entryPath, [
+      'const meta = import.meta',
+      'const globalThis = {}, process = {}, Bun = {}',
+      'export const shadows = [globalThis, process, Bun]',
+      'const attempt = (run) => { try { return run() } catch (error) { return `${error.code}: ${error.message}` } }',
+      'export const report = () => [',
+      "  meta.resolve('./helper.ts'),",
+      "  import.meta.resolve('nested-locator'),",
+      "  attempt(() => import.meta.resolve('./helper.ts', 'file:///elsewhere/entry.mjs')),",
+      "  attempt(() => meta.resolve('missing-locator')),",
+      "  attempt(() => import.meta.resolve('./helper.ts', undefined)),",
+      ']',
+      '',
+    ].join('\n'))
+    const runtimeModuleUrl = pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href
+    const bundledPath = join(projectRoot, 'bundled.mjs')
+    const unbundledPath = join(projectRoot, 'unbundled.mjs')
+    await writeFile(bundledPath, `
+const runtimeModule = await import(${JSON.stringify(runtimeModuleUrl)})
+const loaded = await runtimeModule.importBundledRuntimeModule(${JSON.stringify(projectRoot)}, ${JSON.stringify(entryPath)})
+console.log(JSON.stringify(loaded.report()))
+`)
+    await writeFile(unbundledPath, `console.log(JSON.stringify((await import(${JSON.stringify(pathToFileURL(entryPath).href)})).report()))\n`)
+    const esbuildPackage = realpathSync(resolve(import.meta.dirname, '../node_modules/esbuild'))
+    const esbuildBinary = join(esbuildPackage, '..', '@esbuild', `${process.platform}-${process.arch}`, 'bin', 'esbuild')
+    const env: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS: '', ESBUILD_BINARY_PATH: esbuildBinary }
+    const run = async (path: string) => {
+      const { stdout } = await promisify(execFile)(command, [...flags, path], { cwd: projectRoot, env })
+      return JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as string[]
+    }
+
+    const unbundled = await run(unbundledPath)
+    expect(unbundled[1]).toBe(pathToFileURL(join(packageRoot, 'esm.mjs')).href)
+    expect(unbundled[3]).toContain('missing-locator')
+    expect(await run(bundledPath)).toEqual(unbundled)
+  }, 30_000)
+
   it('rewrites import.meta.url without colliding with module bindings', async () => {
     const projectRoot = await realpath(await createTempProject())
     const entryPath = join(projectRoot, 'server/jobs/collide.ts')
@@ -1011,6 +1061,45 @@ console.log(JSON.stringify({ copy: loaded.copy }))
     expect(typeof loaded.assign('file:///elsewhere')).toBe('string')
   })
 
+  it('gives aliased import.meta values the source module location', async () => {
+    const projectRoot = await realpath(await createTempProject())
+    const entryPath = join(projectRoot, 'server/jobs/meta-alias.ts')
+    await mkdir(dirname(entryPath), { recursive: true })
+    await writeFile(entryPath, [
+      'const meta = import.meta',
+      "import.meta['Made'] = class { readonly kind = 'made' }",
+      'export const constructed = [new import.meta.Made().kind, new import.meta.Made, new import.meta[\'Made\']().kind, new (import.meta).Made().kind]',
+      'const located = (value: ImportMeta) => [value.url, value.dirname, value.filename]',
+      'export const aliased = [meta.url, meta.dirname, meta.filename]',
+      'export const passed = located(import.meta)',
+      'export const wrapped = (import.meta).url',
+      'export const spread = { ...import.meta }.url',
+      'export const same = meta === import.meta',
+      "meta['custom'] = 'shared'",
+      "export const custom = (import.meta as ImportMeta & { custom?: string }).custom",
+      "export const resolved = meta.resolve('node:fs')",
+      "export const dynamic = ['url', 'filename'].map(key => import.meta[key as 'url' | 'filename'])",
+      'export const frozen = Object.isFrozen(Object.freeze(meta)) && meta.url',
+      'const Proxy = undefined',
+      'const Reflect = undefined',
+      'export const shadowed = [Proxy, Reflect]',
+      '',
+    ].join('\n'))
+    const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { aliased: string[], passed: string[], wrapped: string, spread: string, same: boolean, custom: string, resolved: string, dynamic: string[], frozen: string, shadowed: unknown[], constructed: unknown[] }
+    const sourceUrl = pathToFileURL(entryPath).href
+    expect(loaded.aliased).toEqual([sourceUrl, dirname(entryPath), entryPath])
+    expect(loaded.passed).toEqual([sourceUrl, dirname(entryPath), entryPath])
+    expect(loaded.wrapped).toBe(sourceUrl)
+    expect(loaded.spread).toBe(sourceUrl)
+    expect(loaded.same).toBe(true)
+    expect(loaded.custom).toBe('shared')
+    expect(loaded.resolved).toBe('node:fs')
+    expect(loaded.dynamic).toEqual([sourceUrl, entryPath])
+    expect(loaded.frozen).toBe(sourceUrl)
+    expect(loaded.shadowed).toEqual([undefined, undefined])
+    expect(loaded.constructed).toMatchObject(['made', { kind: 'made' }, 'made', 'made'])
+  })
+
   it('reports native TypeScript bundling failures and loads repaired modules with project aliases', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')
@@ -1024,5 +1113,179 @@ console.log(JSON.stringify({ copy: loaded.copy }))
     await writeFile(entryPath, 'import { value } from "@/value"\nexport default { value }\n')
     const loaded = await importBundledRuntimeModule(projectRoot, entryPath) as { default: { value: number } }
     expect(loaded.default).toEqual({ value: 42 })
+  })
+})
+
+describe('bundled module load errors', () => {
+  async function createSourceProject(files: Record<string, string>): Promise<string> {
+    const projectRoot = await realpath(await createTempProject())
+    await writeFile(join(projectRoot, 'package.json'), '{"type":"module"}\n')
+    for (const [name, contents] of Object.entries(files)) {
+      await mkdir(join(projectRoot, dirname(name)), { recursive: true })
+      await writeFile(join(projectRoot, name), contents)
+    }
+    return projectRoot
+  }
+
+  async function loadError(projectRoot: string, entry: string): Promise<Error & { code?: string }> {
+    const error = await importBundledRuntimeModule(projectRoot, join(projectRoot, entry)).then(() => undefined, (failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    return error as Error & { code?: string }
+  }
+
+  it('names the source file that imports a missing package instead of the bundle', async () => {
+    const projectRoot = await createSourceProject({
+      'server/models/User.ts': "import { slug } from 'missing-slugger'\nexport default { slug }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.code).toBe('ERR_MODULE_NOT_FOUND')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.stack).toContain("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.stack).not.toContain('.holo-js')
+  })
+
+  it('names the imported source file that reaches a missing scoped package', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/columns.ts': "import { columns } from '@scope/missing-columns/helpers'\nexport const extra = columns\n",
+      'server/models/User.ts': "import { extra } from '../support/columns'\nexport default { extra }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toMatch(/^Cannot find package '@scope\/missing-columns(?:\/helpers)?' imported from server\/support\/columns\.ts$/)
+  })
+
+  it('keeps dollar signs in the source path when rewriting a formatted stack', () => {
+    const bundlePath = join(tmpdir(), 'bundle-dollar', 'User.mjs')
+    const error = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    expect(error.stack).toContain(bundlePath)
+    bundleSourceInternals.withBundleSources(error, { path: bundlePath, sourcePath: 'server/$&lib/User.ts', importers: {} })
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/$&lib/User.ts")
+    expect(error.stack?.split('\n')[0]).toBe(`Error: ${error.message}`)
+  })
+
+  it('names the source file when the project root is reached through a symlink', async () => {
+    const projectRoot = await createSourceProject({
+      'server/models/User.ts': "import { slug } from 'missing-slugger'\nexport default { slug }\n",
+    })
+    const linkedRoot = join(await createTempProject(), 'linked')
+    await symlink(projectRoot, linkedRoot, 'dir')
+    const childPath = join(projectRoot, 'child.mjs')
+    await writeFile(childPath, `
+const runtimeModule = await import(${JSON.stringify(pathToFileURL(resolve(import.meta.dirname, '../src/runtimeModule.ts')).href)})
+await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${JSON.stringify(join(linkedRoot, 'server/models/User.ts'))}).catch(error => console.log(error.message))
+`)
+    const { stdout } = await promisify(execFile)(process.execPath, [childPath], { env: { ...process.env, NODE_OPTIONS: '' } })
+    expect(stdout.trim()).toBe("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+  })
+
+  it('names the importer of a package whose installed path appears in the error', () => {
+    const bundlePath = join(tmpdir(), 'bundle-installed', 'User.mjs')
+    for (const separator of ['/', '\\']) {
+      const installed = ['', 'app', 'node_modules', 'closed-package', 'package.json'].join(separator)
+      const error = Object.assign(new Error(`Package subpath './hidden' is not defined by "exports" in ${installed} imported from ${bundlePath}`), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })
+      bundleSourceInternals.withBundleSources(error, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: { 'closed-package/hidden': 'server/support/closed.ts' } })
+      expect(error.message).toBe(`Package subpath './hidden' is not defined by "exports" in ${installed} imported from server/support/closed.ts`)
+    }
+  })
+
+  it.each([
+    { form: 'an unexported subpath', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `Package subpath './hidden' is not defined by "exports" in ${root}/node_modules/pkg/package.json`, source: 'server/db/migrations/create.ts' },
+    { form: 'an unexported scoped subpath', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `Package subpath './deep/hidden' is not defined by "exports" in ${root}/node_modules/@scope/pkg/package.json`, source: 'server/support/scoped.ts' },
+    { form: 'a package without an exported main', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `No "exports" main defined in ${root}/node_modules/pkg/package.json`, source: 'server/support/helper.ts' },
+    { form: 'a missing file under a subpath', code: 'ERR_MODULE_NOT_FOUND', error: (root: string) => `Cannot find module '${root}/node_modules/pkg/hidden.js'`, source: 'server/db/migrations/create.ts' },
+    { form: 'a missing package', code: 'ERR_MODULE_NOT_FOUND', error: () => "Cannot find package 'pkg'", source: 'server/support/helper.ts' },
+    { form: 'a Bun subpath resolution failure', code: 'ERR_MODULE_NOT_FOUND', error: () => "Cannot find module 'pkg/hidden'", source: 'server/db/migrations/create.ts' },
+  ])('names the importer of the failing specifier for $form', ({ code, error, source }) => {
+    const bundlePath = join(tmpdir(), 'bundle-forms', 'create.mjs')
+    const importers = {
+      'pkg': 'server/support/helper.ts',
+      'pkg/hidden': 'server/db/migrations/create.ts',
+      '@scope/pkg': 'server/support/helper.ts',
+      '@scope/pkg/deep/hidden': 'server/support/scoped.ts',
+    }
+    for (const root of ['/app', 'C:\\app']) {
+      const separator = root.startsWith('/') ? '/' : '\\'
+      const detail = error(root).replaceAll('/', separator).replace(`'.${separator}`, "'./").replace(`${separator}deep${separator}`, '/deep/')
+      const failure = Object.assign(new Error(`${detail} imported from ${bundlePath}`), { code })
+      bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/db/migrations/create.ts', importers })
+      expect(failure.message).toBe(`${detail} imported from ${source}`)
+    }
+  })
+
+  it('prefers the importer of the exact missing file over its extensionless subpath', () => {
+    const bundlePath = join(tmpdir(), 'bundle-exact-file', 'create.mjs')
+    const failure = Object.assign(new Error(`Cannot find module '/app/node_modules/pkg/hidden.js' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    bundleSourceInternals.withBundleSources(failure, { path: bundlePath, importers: { 'pkg/hidden': 'server/support/helper.ts', 'pkg/hidden.js': 'server/db/migrations/create.ts' } })
+    expect(failure.message).toBe("Cannot find module '/app/node_modules/pkg/hidden.js' imported from server/db/migrations/create.ts")
+  })
+
+  it('wraps a load error whose stack is read-only and keeps its code', () => {
+    const bundlePath = join(tmpdir(), 'bundle-frozen', 'User.mjs')
+    const failure = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    Object.defineProperty(failure, 'stack', { value: `Error: ${failure.message}`, writable: false, configurable: false })
+    const error = bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: {} }) as Error & { code?: string }
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/models/User.ts")
+    expect(error.code).toBe('ERR_MODULE_NOT_FOUND')
+    expect(error.cause).toBe(failure)
+    expect(failure.message).toContain(bundlePath)
+  })
+
+  it('wraps a non-Error load failure with the source file and keeps its code', () => {
+    const bundlePath = join(tmpdir(), 'bundle-resolve', 'User.mjs')
+    const failure = { message: `Cannot find module 'missing-slugger' from '${bundlePath}'`, code: 'ERR_MODULE_NOT_FOUND' }
+    const error = bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: { 'missing-slugger': 'server/support/slug.ts' } }) as Error & { code?: string }
+    expect(error).toBeInstanceOf(Error)
+    expect(error.message).toBe("Cannot find module 'missing-slugger' from 'server/support/slug.ts'")
+    expect(error.code).toBe('ERR_MODULE_NOT_FOUND')
+    expect(error.cause).toBe(failure)
+  })
+
+  it('records importers of packages named like object prototype members', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/build.ts': "import { make } from 'constructor'\nimport { get } from 'toString/sub'\nimport { proto } from '__proto__'\nexport const built = [make, get, proto]\n",
+      'server/models/User.ts': "import { built } from '../support/build'\nexport default { built }\n",
+    })
+    const bundled = await runtimeModuleInternals.bundleRuntimeModule(projectRoot, join(projectRoot, 'server/models/User.ts'))
+    try {
+      const sources = bundleSourceInternals.collectBundleSources(projectRoot, bundled.metafile, bundled.path)
+      expect(Object.entries(sources.importers)).toEqual(expect.arrayContaining([['constructor', 'server/support/build.ts'], ['toString/sub', 'server/support/build.ts'], ['__proto__', 'server/support/build.ts']]))
+      expect(Object.keys(sources.importers)).toHaveLength(3)
+    } finally {
+      await bundled.cleanup()
+    }
+  })
+
+  it('names the file whose static import of a missing package survives in the bundle', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/lazy.ts': "globalThis.lazyLoaded = true\nexport function unused() { return import('missing-slugger') }\n",
+      'server/support/eager.ts': "import { slug } from 'missing-slugger'\nexport const eager = slug\n",
+      'server/models/User.ts': "import '../support/lazy'\nimport { eager } from '../support/eager'\nexport default { eager }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/eager.ts")
+  })
+
+  it('names the file whose top-level dynamic import of a missing package runs while loading', async () => {
+    const projectRoot = await createSourceProject({
+      'server/support/slugger.ts': "export const slugger = await import('missing-slugger')\n",
+      'server/models/User.ts': "import { slugger } from '../support/slugger'\nexport default { slugger }\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe("Cannot find package 'missing-slugger' imported from server/support/slugger.ts")
+  })
+
+  it('leaves errors that are not module resolution failures unchanged when their message names the bundle', () => {
+    const bundlePath = join(tmpdir(), 'bundle-thrown', 'User.mjs')
+    const message = `model failed\n    at ${pathToFileURL(bundlePath).href}:3:9`
+    const failure = new Error(message)
+    expect(bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/models/User.ts', importers: {} })).toBe(failure)
+    expect(failure.message).toBe(message)
+  })
+
+  it('leaves errors thrown by the loaded module unchanged', async () => {
+    const projectRoot = await createSourceProject({
+      'server/models/User.ts': "throw new Error('model failed')\n",
+    })
+    const error = await loadError(projectRoot, 'server/models/User.ts')
+    expect(error.message).toBe('model failed')
   })
 })

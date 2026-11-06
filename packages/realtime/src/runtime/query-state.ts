@@ -1,3 +1,4 @@
+import type { TableDefinition } from '@holo-js/db'
 import type {
   NO_EXACT_ID_PREDICATE,
   DatabaseQueryPredicateObservation,
@@ -53,6 +54,7 @@ export type DatabaseQueryObservation = {
   readonly selections?: readonly DatabaseQuerySelectionObservation[]
   readonly serialized?: boolean
   readonly tableName: string
+  readonly table?: TableDefinition
 }
 
 export type DatabaseQueryBelongsToHydrationObservation = {
@@ -62,6 +64,7 @@ export type DatabaseQueryBelongsToHydrationObservation = {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export type DatabaseQueryRelatedHydrationObservation = {
@@ -73,6 +76,7 @@ export type DatabaseQueryRelatedHydrationObservation = {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export type DatabaseQueryPaginationObservation =
@@ -174,6 +178,7 @@ export type DatabaseQueryBelongsToManyRelationObservation = {
   readonly relatedKey: string
   readonly relatedPivotKey: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export type DatabaseQueryBelongsToParentKeyRelationObservation = {
@@ -183,6 +188,7 @@ export type DatabaseQueryBelongsToParentKeyRelationObservation = {
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
+  readonly relatedTable?: TableDefinition
 }
 
 export type QueryResultBinding = {
@@ -416,7 +422,6 @@ export type AggregateCountState = {
 }
 
 export type AggregateSqlColumnBackfillResult = {
-  readonly avg: number | null
   readonly max: number | null
   readonly maxValueCount?: number
   readonly min: number | null

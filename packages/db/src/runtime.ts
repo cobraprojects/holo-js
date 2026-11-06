@@ -2,6 +2,7 @@ import { createConnectionManager, type ConnectionManager } from './connection/Co
 import { createDeferredDatabaseDriverAdapter } from './drivers/registry'
 import type { DatabaseCapabilities } from './core/capabilities'
 import type { DatabaseContextOptions, DatabaseLogger, Dialect, DriverAdapter } from './core/types'
+import { quoteIdentifierSegment, tablePathSegments } from './schema/identifiers'
 import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 
 export type SupportedDatabaseDriver = 'sqlite' | 'postgres' | 'mysql'
@@ -218,9 +219,8 @@ export function parseDatabaseDriver(value: string | undefined, fallback: Support
 }
 
 function quoteIdentifierSegments(identifier: string, quote: string): string {
-  return identifier
-    .split('.')
-    .map(part => `${quote}${part}${quote}`)
+  return tablePathSegments(identifier)
+    .map(segment => quoteIdentifierSegment(segment, quote))
     .join('.')
 }
 
@@ -287,7 +287,7 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
     name: 'sqlite',
     capabilities: { ...sqliteLike, returning: true, schemaQualifiedIdentifiers: true },
     quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
+      return quoteIdentifierSegment(identifier, '"')
     },
     createPlaceholder() {
       return '?'

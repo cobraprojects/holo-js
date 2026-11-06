@@ -39,7 +39,7 @@ describe.runIf(mysqlIntegration)('MySQL inserts read back for realtime listeners
   it('read back only the written rows of a table keyed by a composite key', async () => {
     const reads: number[] = []
     const { db, schema } = await openDatabase('mysql', { logger: { onQuerySuccess: (entry) => {
-      if (entry.kind === 'query') reads.push(entry.rowCount ?? 0)
+      if (entry.source?.startsWith('query:select:')) reads.push(entry.rowCount ?? 0)
     } } })
     const name = `holo_pairs_${randomUUID().replaceAll('-', '').slice(0, 12)}`
     await db.executeCompiled({ sql: `CREATE TABLE \`${name}\` (\`a\` INT NOT NULL, \`b\` INT NOT NULL, \`note\` VARCHAR(20) NULL, PRIMARY KEY (\`a\`, \`b\`))`, source: 'schema' })

@@ -72,7 +72,7 @@ async function bundleRuntimeEntries(projectRoot: string, entries: readonly strin
   for (const entry of entries) {
     const bundle = await bundleProjectModule(projectRoot, resolve(projectRoot, entry), { external: ['@holo-js/db'] })
     bundled.push(bundle)
-    bundledEntries.push({ sourcePath: entry, path: bundle.path })
+    bundledEntries.push({ sourcePath: entry, path: bundle.path, importers: bundle.sources.importers })
   }
   return bundledEntries
 }
@@ -144,7 +144,7 @@ export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath())
 export function runRuntimeInvocation(
   command: string,
   args: string[],
-  options: { cwd: string, env: NodeJS.ProcessEnv, input?: string },
+  options: { cwd: string, env: NodeJS.ProcessEnv, input?: string, onStderr?: (chunk: string) => void },
 ): Promise<RuntimeSpawnResult> {
   return new Promise(resolveInvocation => {
     const child = spawn(command, args, {
@@ -168,6 +168,7 @@ export function runRuntimeInvocation(
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk
+      options.onStderr?.(chunk)
     })
     const failureChannel = child.stdio[RUNTIME_FAILURE_FD]
     if (failureChannel instanceof Readable) {
@@ -248,8 +249,8 @@ async function refreshDiscoveryAfterFailedRun(
   }
 }
 
-function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string } {
-  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href }
+function toRuntimeModuleEntry(entry: BundledRuntimeEntry): { readonly sourcePath: string, readonly url: string, readonly importers: Readonly<Record<string, string>> } {
+  return { sourcePath: entry.sourcePath, url: pathToFileURL(entry.path).href, importers: entry.importers }
 }
 
 export async function withRuntimeEnvironment<T>(
@@ -296,6 +297,7 @@ export async function withRuntimeEnvironment<T>(
       cwd: projectRoot,
       env: process.env,
       input: runtimePayload,
+      onStderr: chunk => process.stderr.write(chunk),
     })
 
     if (result.status !== 0 || result.error) {

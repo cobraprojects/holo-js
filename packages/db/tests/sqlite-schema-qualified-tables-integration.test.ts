@@ -159,7 +159,7 @@ describe('SQLite schema operations on schema-qualified tables', () => {
     expect(await indexesOf(schema, 'main.things')).toEqual([
       { name: 'main_things_name_index', unique: false, columns: ['name'] },
     ])
-    expect(await indexesOf(schema, 'items')).toEqual([])
+    expect(await indexesOf(schema, 'main.items')).toEqual([])
     await expect(DB.table('archive.items').insert([{ id: 1, name: 'a', code: 'same' }, { id: 2, name: 'b', code: 'same' }])).rejects.toThrow('UNIQUE constraint failed')
   })
 
@@ -619,5 +619,23 @@ describe('SQLite schema operations on schema-qualified tables', () => {
       .join('archive.notes', 'archive.notes.product_id', '=', 'main.products.id')
       .select('archive.notes.*', 'main.products.name')
       .get()).toEqual([{ id: 9, product_id: 1, body: 'note', name: 'current' }])
+  })
+})
+
+describe('SQLite attached databases with dotted names', () => {
+  afterEach(() => {
+    resetDB()
+  })
+
+  it('truncates and resets the sequence of a table in an attached database named with a dot', async () => {
+    const { db } = await openProducts()
+    await db.executeCompiled({ sql: `ATTACH DATABASE ':memory:' AS "my.db"`, source: 'schema' })
+    await db.executeCompiled({ sql: 'CREATE TABLE "my.db"."ledger" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "note" TEXT)', source: 'schema' })
+    await db.executeCompiled({ sql: `INSERT INTO "my.db"."ledger" ("note") VALUES ('first'), ('second')`, source: 'schema' })
+
+    await DB.table('ledger').truncate()
+    await db.executeCompiled({ sql: `INSERT INTO "my.db"."ledger" ("note") VALUES ('fresh')`, source: 'schema' })
+
+    expect((await db.queryCompiled({ sql: 'SELECT "id", "note" FROM "my.db"."ledger"', source: 'schema' })).rows).toEqual([{ id: 1, note: 'fresh' }])
   })
 })
