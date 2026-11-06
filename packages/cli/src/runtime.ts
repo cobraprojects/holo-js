@@ -144,7 +144,7 @@ export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath())
 export function runRuntimeInvocation(
   command: string,
   args: string[],
-  options: { cwd: string, env: NodeJS.ProcessEnv, input?: string },
+  options: { cwd: string, env: NodeJS.ProcessEnv, input?: string, onStderr?: (chunk: string) => void },
 ): Promise<RuntimeSpawnResult> {
   return new Promise(resolveInvocation => {
     const child = spawn(command, args, {
@@ -168,6 +168,7 @@ export function runRuntimeInvocation(
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk
+      options.onStderr?.(chunk)
     })
     const failureChannel = child.stdio[RUNTIME_FAILURE_FD]
     if (failureChannel instanceof Readable) {
@@ -296,6 +297,7 @@ export async function withRuntimeEnvironment<T>(
       cwd: projectRoot,
       env: process.env,
       input: runtimePayload,
+      onStderr: chunk => process.stderr.write(chunk),
     })
 
     if (result.status !== 0 || result.error) {
