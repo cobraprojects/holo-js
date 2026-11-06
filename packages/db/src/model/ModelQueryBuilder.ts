@@ -1932,6 +1932,7 @@ class ModelQueryBuilderBase<
   }
 
   async find(value: unknown, column?: string): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
+    if (column === undefined) await this.repository.resolveTableIdentity()
     return this.where(column as ModelColumnName<TTable> ?? this.qualifiedKeyName(), value).first()
   }
 

@@ -312,7 +312,12 @@ export class ModelRepository<
     return this.createQuery(true, true, false)
   }
 
+  async resolveTableIdentity(): Promise<void> {
+    await resolveGeneratedTableIdentity(this.getConnection(), this.definition.table.tableName)
+  }
+
   async find(value: unknown): Promise<Entity<TTable> | undefined> {
+    await this.resolveTableIdentity()
     return this.query().find(value, this.definition.primaryKey)
   }
 
@@ -351,6 +356,7 @@ export class ModelRepository<
   }
 
   async findMany(values: readonly unknown[]): Promise<ModelCollection<TTable, RelationMap, Entity<TTable>, TScopes>> {
+    await this.resolveTableIdentity()
     const primaryKey = this.definition.primaryKey
     const keys = [...new Set(values)]
     if (keys.length === 0) {
@@ -3913,7 +3919,7 @@ export class ModelRepository<
   }
 
   async loadGuardableColumns(): Promise<void> {
-    await resolveGeneratedTableIdentity(this.getConnection(), this.definition.table.tableName)
+    await this.resolveTableIdentity()
     if (this.guardsByColumnListing()) {
       await loadColumnListing(this.getConnection(), this.definition.table.tableName)
     }
