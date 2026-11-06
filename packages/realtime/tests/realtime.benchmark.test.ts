@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   belongsTo,
   belongsToMany,
@@ -1151,14 +1151,6 @@ function createClientPatchOperations(count: number): readonly BenchmarkPatchOper
       value: `Updated ${rowIndex + 1}`,
     } satisfies BenchmarkPatchOperation
   }))
-}
-
-async function waitForBenchmarkCondition(condition: () => boolean): Promise<void> {
-  await vi.waitFor(() => {
-    if (!condition()) {
-      throw new Error('Benchmark condition was not met.')
-    }
-  }, { timeout: 1_000, interval: 1 })
 }
 
 function cloneRows(rows: readonly BenchmarkPostRow[]): BenchmarkPostRow[] {
@@ -4609,6 +4601,10 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const initialQueryGate = new Promise<void>((resolve) => {
       releaseInitialQuery = resolve
     })
+    let markAllStarted: () => void = () => undefined
+    const allStarted = new Promise<void>((resolve) => {
+      markAllStarted = resolve
+    })
     const counters: BenchmarkCounters = {
       emittedSnapshots: 0,
       queryExecutions: 0,
@@ -4618,6 +4614,9 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       access: 'public',
       handler: async () => {
         counters.queryExecutions += 1
+        if (counters.queryExecutions === subscriptionCount) {
+          markAllStarted()
+        }
         recordDatabaseQueryDependencies([tableDependency()])
         await initialQueryGate
 
@@ -4634,7 +4633,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       })
     }))
 
-    await waitForBenchmarkCondition(() => counters.queryExecutions === subscriptionCount)
+    await allStarted
     expect(realtimeRuntimeInternals.getRuntimeState().queryEntries.size).toBe(subscriptionCount)
     releaseInitialQuery?.()
     const subscriptions = await subscriptionsPromise

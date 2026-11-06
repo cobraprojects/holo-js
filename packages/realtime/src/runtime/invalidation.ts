@@ -1,5 +1,5 @@
 import { reportError } from '@holo-js/kernel/error-reporting'
-import { HydrationError, onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
+import { onDatabaseDependencyInvalidated, queryCacheInternals } from '@holo-js/db'
 import {
   EMPTY_TABLE_DEPENDENCIES,
   parseDatabaseDependency,
@@ -52,7 +52,7 @@ function requiresMutationPreviousRows(connectionName: string, tableName: string,
   }
   for (const key of entries) {
     for (const query of state.queryEntries.get(key)?.queries ?? []) {
-      if (query.connectionName !== connectionName || query.tableName !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
+      if (query.connectionName !== connectionName || queryCacheInternals.canonicalTableName(connectionName, query.tableName) !== tableName || (!query.aggregate && !query.groupedAggregate)) continue
       const aggregateColumn = query.aggregate?.column ?? query.groupedAggregate?.aggregateColumn
       if (columns.some(column => column === aggregateColumn || column === query.groupedAggregate?.groupColumn || query.predicates.some(predicate => predicate.column === column))) return true
     }
@@ -178,17 +178,11 @@ export function scheduleSubscriptionRefresh(
   return scheduleRefreshKey(subscription.refreshKey)
 }
 
-function rerunUnreadableRows(error: unknown): false {
-  if (error instanceof HydrationError) return false
-  throw error
-}
-
 async function refreshInvalidatedQueryEntry(
   entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
   backfills: BackfillCache,
 ): Promise<void> {
-  const patched = await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills)).catch(rerunUnreadableRows)
-  if (patched) {
+  if (await entry.runWithContext(async () => await tryPatchQueryEntry(entry, backfills))) {
     return
   }
 

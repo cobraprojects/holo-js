@@ -26,6 +26,11 @@ describe('@holo-js/realtime stable stringification', () => {
     expect(stableStringify(items)).toBe('["[Circular]"]')
   })
 
+  it('keeps distinct dates distinct', () => {
+    expect(stableStringify({ at: new Date('2026-01-01T00:00:00.000Z') }))
+      .not.toBe(stableStringify({ at: new Date('2026-02-01T00:00:00.000Z') }))
+  })
+
   it('serializes BigInt values apart from equal numbers and strings', () => {
     expect(stableStringify({ id: 9007199254740993n, ids: [1n, 2], n: 0n })).toBe('{"id":9007199254740993n,"ids":[1n,2],"n":0n}')
     expect(stableStringify(1n)).not.toBe(stableStringify(1))

@@ -238,7 +238,9 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
 
     expect(await Product.query()[kind](`${name}.price`)).toBe(expected[kind] * 2)
     expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
-    expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
+    expect(await Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price`, `${ordersName}.price`)[kind](`${name}.price`)).toBe(expected[kind] * 2)
+    await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`)[kind](`${name}.price`))
+      .rejects.toThrow(`Cannot select "${ordersName}.price" on a joined "${name}" model query: "price" is a "${name}" column. Qualify or alias it to a non-model name.`)
   })
 
   it.each(kinds)('%s on a joined model query reads the model table rather than an aliased self-join', async (kind) => {
@@ -305,13 +307,9 @@ describe.each(drivers)('aggregates on a table-qualified column on %s', (driver) 
     const Product = defineModel(defineGeneratedTable(name, { id: column.id(), price: column.integer() }), { timestamps: false })
 
     const query = Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.id`).orderBy('id').limit(1)
-    if (driver === 'sqlite') {
-      await expect(query.get()).rejects.toThrow('ambiguous column name: id')
-      await expect(query[kind](`${name}.price`)).rejects.toThrow('ambiguous column name: id')
-    }
-    else {
-      expect(await query[kind](`${name}.price`)).toBe(30)
-    }
+    const collision = `Cannot select "${ordersName}.id" on a joined "${name}" model query: "id" is a "${name}" column. Qualify or alias it to a non-model name.`
+    await expect(query.get()).rejects.toThrow(collision)
+    await expect(query[kind](`${name}.price`)).rejects.toThrow(collision)
     await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${ordersName}.price`).orderBy('price')[kind](`${name}.price`))
       .rejects.toThrow(`Cannot aggregate column "${name}.price" while ordering by "price", which names another selected column. Qualify the order by column.`)
     await expect(Product.query().join(ordersName, `${ordersName}.product_id`, '=', `${name}.id`).select(`${name}.price as price`, `${ordersName}.price`).orderBy('price')[kind](`${name}.price`))

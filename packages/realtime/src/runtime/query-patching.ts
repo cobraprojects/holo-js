@@ -1,5 +1,6 @@
-import type {
-  DatabaseMutationEvent,
+import {
+  createMutationIndexKey,
+  type DatabaseMutationEvent,
 } from './dependencies'
 import {
   hasRecordKey,
@@ -170,8 +171,7 @@ function readsConvertedColumnsAsDriverValues(
   query: DatabaseQueryObservation,
   mutations: readonly DatabaseMutationEvent[],
 ): boolean {
-  return query.table === undefined && mutations.some(mutation => mutation.connectionName === query.connectionName
-    && mutation.tableName === query.tableName
+  return query.table === undefined && mutations.some(mutation => createMutationIndexKey(mutation.connectionName, mutation.tableName) === createMutationIndexKey(query.connectionName, query.tableName)
     && mutation.convertedColumns !== undefined
     && hasReadColumn(query, mutation.convertedColumns))
 }
@@ -183,7 +183,7 @@ function insertsRowsWithUnknownPrimaryKey(
   const primaryKey = readPrimaryKey(query)
   return mutations.some(mutation => (mutation.kind === 'insert' || mutation.kind === 'upsert')
     && mutation.connectionName === query.connectionName
-    && mutation.tableName === query.tableName
+    && createMutationIndexKey(mutation.connectionName, mutation.tableName) === createMutationIndexKey(query.connectionName, query.tableName)
     && (
       mutation.rows?.some(row => !hasRecordKey(row, primaryKey))
       || upsertChangesPrimaryKey(mutation, primaryKey)

@@ -1,3 +1,4 @@
+import { TableQueryBuilder } from '@holo-js/db'
 import {
   createMutationIndexKey,
   EMPTY_DATABASE_MUTATIONS,
@@ -11,7 +12,6 @@ import {
   createAggregateScopeKey,
 } from './query-metadata'
 import {
-  createBackfillQuery,
   getBackfillDatabaseConnection,
 } from './query-backfill'
 import type {
@@ -195,7 +195,7 @@ async function fetchPaginationCountBackfill(query: DatabaseQueryObservation): Pr
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -217,28 +217,42 @@ async function fetchGroupedPaginationCountBackfill(
     return undefined
   }
 
-  const rows = await createBackfillQuery(query, connection)
+  const rows = await new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
     .where(groupColumn, 'in', values)
     .select(groupColumn)
     .addSelectCount('__holo_count')
     .groupBy(groupColumn)
     .get<Record<string, unknown>>()
   const counts = new Map<unknown, number>()
+  const requestedIntegers = new Map<string, unknown[]>()
+  const requestedValues = new Map<unknown, unknown[]>()
   for (const value of values) {
     counts.set(value, 0)
+    const requested = holdsIntegerKey(value) ? requestedIntegers : requestedValues
+    const key = holdsIntegerKey(value) ? String(value) : value
+    requested.set(key, [...requested.get(key) ?? [], value])
   }
 
   for (const row of rows) {
-    const value = row[groupColumn]
+    const groupValue = row[groupColumn]
+    const matches = holdsIntegerKey(groupValue) ? requestedIntegers.get(String(groupValue)) : requestedValues.get(groupValue)
     const count = normalizePaginationCount(row.__holo_count)
-    if (typeof count === 'undefined') {
+    if (!matches || typeof count === 'undefined') {
       return undefined
     }
 
-    counts.set(value, count)
+    for (const value of matches) {
+      counts.set(value, count)
+    }
   }
 
   return counts
+}
+
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+function holdsIntegerKey(value: unknown): value is bigint | number | string {
+  return (typeof value === 'number' && Number.isInteger(value)) || typeof value === 'bigint' || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value))
 }
 
 function normalizePaginationCount(value: unknown): number | undefined {

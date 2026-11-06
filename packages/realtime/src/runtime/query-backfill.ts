@@ -1,5 +1,5 @@
 import { getExecutionDatabase } from './execution-context'
-import { DB, TableQueryBuilder, queryCacheInternals, type DatabaseContext, type Dialect, type TableDefinition } from '@holo-js/db'
+import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition } from '@holo-js/db'
 import type { DatabaseQueryObservation, DatabaseQuerySelectionObservation } from './query-state'
 import type { DatabaseMutationEvent } from './dependencies'
 import type { BackfillCache } from './state'
@@ -26,39 +26,35 @@ export function createBackfillSelection(selection: DatabaseQuerySelectionObserva
     : `${selection.column} as ${selection.resultKey}`
 }
 
-export function createRelatedBackfillQuery(
-  relation: { readonly relatedTable?: TableDefinition, readonly relatedTableName: string },
-  connection: DatabaseContext,
-): TableQueryBuilder<string, Record<string, unknown>> {
-  return createBackfillQuery({ table: relation.relatedTable, tableName: relation.relatedTableName }, connection)
-}
-
-export function createBackfillQuery(
-  query: Pick<DatabaseQueryObservation, 'table' | 'tableName'>,
-  connection: DatabaseContext,
-): TableQueryBuilder<string, Record<string, unknown>> {
-  return new TableQueryBuilder<string, Record<string, unknown>>((query.table ?? query.tableName) as string, connection)
-}
-
 export function readBackfilledRows(
-  connection: DatabaseContext,
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
 ): Readonly<Record<string, unknown>>[] {
-  return rows.map(row => queryCacheInternals.readFetchedRow(connection, table, row, selections))
+  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections)
+    || queryCacheInternals.hasUnreadableFetchedInteger(table, row, selections))) {
+    throw new UnreadableBackfillError()
+  }
+  return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
+}
+
+export class UnreadableBackfillError extends Error {
+  constructor() {
+    super('A backfilled column holds a value the query cannot read.')
+    this.name = 'UnreadableBackfillError'
+  }
 }
 
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {
   return query.table ? `typed:${query.tableName}` : query.tableName
 }
 
-export function readBackfilledValue(connection: DatabaseContext, table: TableDefinition | undefined, column: string, value: unknown): unknown {
-  return queryCacheInternals.readFetchedRow(connection, table, { [column]: value })[column]
+export function readBackfilledValue(table: TableDefinition | undefined, column: string, value: unknown): unknown {
+  return queryCacheInternals.readFetchedRow(table, { [column]: value })[column]
 }
 
 function connectionTableKey(connectionName: string, tableName: string): string {
-  return `${connectionName}\0${tableName}`
+  return `${connectionName}\0${queryCacheInternals.canonicalTableName(connectionName, tableName)}`
 }
 
 function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, TableDefinition> {
@@ -78,14 +74,14 @@ function readRows(
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
   if (!rows) return rows
-  const read = rows.map(row => queryCacheInternals.readTypedMutationRow(table, row))
+  const read = rows.map(row => queryCacheInternals.readMutationRow(table, row))
   return read.every((row, index) => row === rows[index]) ? rows : Object.freeze(read)
 }
 
 function readMutation(table: TableDefinition, mutation: DatabaseMutationEvent): DatabaseMutationEvent {
   const rows = readRows(table, mutation.rows)
   const previousRows = readRows(table, mutation.previousRows)
-  const values = mutation.values ? queryCacheInternals.readTypedMutationRow(table, mutation.values) : mutation.values
+  const values = mutation.values ? queryCacheInternals.readMutationRow(table, mutation.values) : mutation.values
   if (rows === mutation.rows && previousRows === mutation.previousRows && values === mutation.values) return mutation
   return Object.freeze({ ...mutation, rows, previousRows, values })
 }
@@ -115,11 +111,4 @@ export function readMutationsForQuery(
     return next
   })
   return changed ? Object.freeze(read) : mutations
-}
-
-export function quoteTableReference(dialect: Dialect, tableName: string): string {
-  return tableName
-    .split('.')
-    .map(segment => dialect.quoteIdentifier(segment))
-    .join('.')
 }

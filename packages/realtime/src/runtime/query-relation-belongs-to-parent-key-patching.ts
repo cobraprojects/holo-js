@@ -44,6 +44,9 @@ export async function tryPatchBelongsToParentKeyRelation(
     for (const row of matchedRows) {
       const foreignKey = row[relation.foreignKey]
       const relatedValue = await readBelongsToHydratedValue(relation, foreignKey, backfills, mutation)
+      if (typeof relatedValue === 'undefined') {
+        return UNPATCHED_RESULT
+      }
 
       if (nextValue[relation.foreignKey] !== foreignKey || nextValue[relation.relationKey] !== relatedValue) {
         nextValue = Object.freeze({

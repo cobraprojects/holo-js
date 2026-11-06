@@ -1,11 +1,11 @@
-import type { TableQueryBuilder } from '@holo-js/db'
+import { TableQueryBuilder } from '@holo-js/db'
 import type { DatabaseMutationEvent } from './dependencies'
 import {
   matchesGroupedCountHaving,
   readMatchingGroupedAggregateValue,
   sortGroupedAggregateRows,
 } from './query-grouped-aggregate-common'
-import { createBackfillQuery, getBackfillDatabaseConnection, readBackfilledValue } from './query-backfill'
+import { getBackfillDatabaseConnection, readBackfilledValue } from './query-backfill'
 import {
   UNCHANGED_QUERY_RESULT,
   UNPATCHED_RESULT,
@@ -205,7 +205,7 @@ async function fetchGroupedAggregateValues(
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -246,7 +246,7 @@ async function fetchGroupedAggregateValues(
     .get<Record<string, unknown>>()
   const results = new Map<unknown, GroupedAggregateValueBackfillResult>()
   for (const row of rows) {
-    const groupValue = readBackfilledValue(connection, query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn])
+    const groupValue = readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn])
     const value = normalizeAggregateValue(row[GROUPED_AGGREGATE_VALUE_KEY])
     const rowCount = normalizeAggregateMetadataNumber(row[GROUPED_AGGREGATE_ROW_COUNT_KEY])
     if (typeof value === 'undefined') {
@@ -384,7 +384,7 @@ async function fetchGroupedAggregateValueCounts(
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -408,7 +408,7 @@ async function fetchGroupedAggregateValueCounts(
       return undefined
     }
 
-    pushGroupedAggregateValueCount(groups, readBackfilledValue(connection, query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn]), Object.freeze({ count, value }))
+    pushGroupedAggregateValueCount(groups, readBackfilledValue(query.table, groupedAggregate.groupColumn, row[groupedAggregate.groupColumn]), Object.freeze({ count, value }))
   }
 
   const results = new Map<unknown, readonly GroupedAggregateValueCountBackfillResult[]>()

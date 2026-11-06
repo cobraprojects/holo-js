@@ -86,6 +86,7 @@ import {
   bundleProjectModule,
   bundleProjectModules,
   findProjectRoot,
+  importBundledProjectModule,
   resolveProjectPackageImportSpecifier,
 } from './project/runtime'
 import { writeTextFile } from './project/atomic-file'
@@ -198,6 +199,7 @@ export function upsertProjectRegistration(
 export {
   bundleProjectModule,
   bundleProjectModules,
+  importBundledProjectModule,
   defaultProjectConfig,
   discoverAppCommands,
   ensureGeneratedSchemaPlaceholder,

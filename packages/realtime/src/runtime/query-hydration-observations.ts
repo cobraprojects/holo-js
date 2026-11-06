@@ -54,7 +54,7 @@ export function rebindBelongsToObservations(
           limit: 1,
           orderBy: [],
           patchable: hydration.primaryKey !== undefined,
-          predicates: Object.freeze([{ column: hydration.ownerKey, operator: '=' as const, value: foreignKey }]),
+          predicates: Object.freeze([{ column: hydration.ownerKey, operator: '=' as const, value: foreignKey }, ...hydration.predicates]),
           primaryKey: hydration.primaryKey,
           result: related,
           resultBound: true,
