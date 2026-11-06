@@ -1,6 +1,7 @@
+import { fileURLToPath } from 'node:url'
 import { writeSync } from 'node:fs'
 import { writeTextFile } from './project/atomic-file'
-import { initializeHolo } from '@holo-js/core'
+import { bundleSourceInternals, initializeHolo } from '@holo-js/core'
 import {
   configureDB,
   createMigrationService,
@@ -31,6 +32,7 @@ type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOpt
 type RuntimeModuleEntry = {
   readonly sourcePath: string
   readonly url: string
+  readonly importers: Readonly<Record<string, string>>
 }
 
 type RuntimePayload = {
@@ -96,6 +98,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadModule(path: string): Promise<unknown> {
   return import(`${path}?t=${Date.now()}`)
+}
+
+async function loadBundledModule(entry: RuntimeModuleEntry): Promise<unknown> {
+  return bundleSourceInternals.importBundle(
+    { path: fileURLToPath(entry.url), sourcePath: entry.sourcePath, importers: entry.importers },
+    url => import(url),
+  )
 }
 
 function resolveExport<TValue>(
@@ -182,7 +191,7 @@ async function loadRuntimeItem<TValue>(
   matcher: (value: unknown) => value is TValue,
   label: string,
 ): Promise<TValue> {
-  const item = resolveExport(await loadModule(entry.url), matcher)
+  const item = resolveExport(await loadBundledModule(entry), matcher)
   if (!item) {
     throw new Error(`Registered ${label} "${entry.sourcePath}" does not export a Holo ${label}.`)
   }

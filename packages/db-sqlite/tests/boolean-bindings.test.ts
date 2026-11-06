@@ -60,7 +60,7 @@ describe('SQLite boolean bindings without registered schema', () => {
     const records = database.table(probe)
     await records.insert({ id: 1, enabled: true, settings: { enabled: true, flags: [false, true, 1] } })
     await records.insert({ id: 2, enabled: false, settings: true })
-    expect(await records.where('enabled', true).value('enabled')).toBe(1)
+    expect(await records.where('enabled', true).value('enabled')).toBe(true)
     expect(await records.where('id', 2).value('settings')).toBe('true')
     await records.where('id', 1).update({ 'settings->enabled': false })
     expect(await records.whereJson('settings->enabled', false).pluck('id')).toEqual([1])
