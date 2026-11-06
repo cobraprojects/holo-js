@@ -30,6 +30,7 @@ export interface QueryColumnSelection {
   readonly column: string
   readonly alias?: string
   readonly keyCast?: QueryKeyCast
+  readonly unknownKeyKind?: QueryUnknownKeyKind
 }
 
 export function readAllColumnsSelectionTable(column: string): string | undefined {
@@ -61,11 +62,34 @@ export type QuerySelection
     | QueryRawSelection
     | QuerySubquerySelection
 
-export type QueryKeyCast = 'text' | 'integer'
+export type QueryKeyCast = 'text' | 'integer' | 'decimal' | 'decimalText'
+
+export type QueryKeyKind = 'integer' | 'decimal' | 'text'
+
+export interface QueryUnknownKeyKind {
+  readonly table: string
+  readonly column: string
+  readonly otherKind: QueryKeyKind
+}
 
 export interface QueryKeyCasts {
   readonly left?: QueryKeyCast
   readonly right?: QueryKeyCast
+  readonly unknownKind?: QueryUnknownKeyKind
+}
+
+const KEY_CASTS: Readonly<Record<QueryKeyKind, Partial<Record<QueryKeyKind, QueryKeyCast>>>> = {
+  integer: { text: 'text' },
+  decimal: { text: 'decimalText' },
+  text: { integer: 'integer', decimal: 'decimal' },
+}
+
+export function keyCastFor(source: QueryKeyKind | undefined, lookedUp: QueryKeyKind | undefined): QueryKeyCast | undefined {
+  return source && lookedUp ? KEY_CASTS[source][lookedUp] : undefined
+}
+
+export function hasKeyCasts(casts: QueryKeyCasts | undefined): casts is QueryKeyCasts {
+  return Boolean(casts?.left || casts?.right || casts?.unknownKind)
 }
 
 export interface QueryJoinClause {

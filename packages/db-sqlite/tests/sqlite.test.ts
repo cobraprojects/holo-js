@@ -90,6 +90,32 @@ describe('@holo-js/db-sqlite', () => {
     }
   })
 
+  it('reads stored decimal values as decimal key text on injected and opened databases', async () => {
+    const adapters = [createSQLiteAdapter({ database: new Database(':memory:') }), createSQLiteAdapter({ filename: ':memory:' })]
+    for (const adapter of adapters) {
+      try {
+        await adapter.execute('CREATE TABLE amounts (value NUMERIC)')
+        await adapter.execute('INSERT INTO amounts (value) VALUES (?), (?), (?), (?), (NULL)', ['21157831707170.605', '9223372036854775807', '0.000000000000000000001', 'abc'])
+        expect((await adapter.query('SELECT holo_decimal_text(value) AS text FROM amounts')).rows)
+          .toEqual([{ text: '21157831707170.605' }, { text: '9223372036854775807.00' }, { text: '0.000000000000000000001' }, { text: 'abc' }, { text: null }])
+      } finally {
+        await adapter.disconnect()
+      }
+    }
+  })
+
+  it('names the function() requirement when an injected database cannot register holo_decimal_text', async () => {
+    const real = new Database(':memory:')
+    const adapter = createSQLiteAdapter({ database: { prepare: sql => real.prepare(sql), exec: sql => real.exec(sql), close: () => real.close() } })
+    try {
+      await adapter.execute('CREATE TABLE amounts (value NUMERIC)')
+      await expect(adapter.query('SELECT holo_decimal_text(value) AS text FROM amounts'))
+        .rejects.toMatchObject({ code: 'CAPABILITY_ERROR', message: expect.stringContaining('function()') })
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
   it('uses a real injected database for bound writes and rollback in each transaction mode', async () => {
     const adapter = createSQLiteAdapter({ database: new Database(':memory:') })
     try {

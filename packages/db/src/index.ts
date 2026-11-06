@@ -10,6 +10,7 @@ import { getQueryBounds } from './query/queryBounds'
 import { createSchemaReader, listedTablePath } from './schema/introspection'
 import { quoteTablePath } from './schema/identifiers'
 import { useGeneratedSchemaConnection } from './schema/generated'
+import { SQLITE_DECIMAL_TEXT_FUNCTION, readSQLiteDecimal } from './schema/normalization'
 import { resolveRuntimeDefaultConnectionName } from './runtime'
 
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
@@ -422,6 +423,8 @@ export const holoRuntimeInternals = Object.freeze({
   parseSQLiteDateTime,
   SQLITE_WALL_CLOCK_FUNCTION,
   formatSQLiteWallClock,
+  SQLITE_DECIMAL_TEXT_FUNCTION,
+  readSQLiteDecimal,
   driverErrorCodes,
   isDatabaseDeadlockError,
   transactionScopeKey,
