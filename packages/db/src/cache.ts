@@ -368,7 +368,7 @@ type DatabaseDependencyCollectorState = {
   readonly contexts: Map<string, Set<number>>
   readonly dependencies: Set<string>
   readonly queries: DatabaseQueryObservation[]
-  readonly refreshQueries: Map<string, DatabaseQueryObservation>
+  readonly refreshQueries: DatabaseQueryObservation[]
   serializationOverridden: boolean
 }
 
@@ -385,6 +385,7 @@ const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
 const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
+const refreshOnlyObservations = new WeakSet<DatabaseQueryObservation>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -484,7 +485,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     contexts: new Map(),
     dependencies: new Set<string>(),
     queries: [],
-    refreshQueries: new Map(),
+    refreshQueries: [],
     serializationOverridden: false,
   }
   const value = await databaseDependencyCollector.run(state, callback)
@@ -493,7 +494,7 @@ async function collectDatabaseQueryDependenciesInternal<TValue>(
     value,
     contexts: state.contexts,
     dependencies: Object.freeze([...state.dependencies]),
-    queries: Object.freeze([...state.queries, ...state.refreshQueries.values()]),
+    queries: Object.freeze([...state.queries, ...state.refreshQueries]),
   })
 }
 
@@ -563,42 +564,6 @@ function serializedQueryObservation(observation: DatabaseQueryObservation): Data
   })
 }
 
-export function recordDatabaseQueryRefreshObservation(connectionName: string, tableName: string): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  const dependency = createTableCacheDependency(connectionName, tableName)
-  if (state.refreshQueries.has(dependency)) {
-    return
-  }
-
-  state.refreshQueries.set(dependency, Object.freeze({
-    connectionName,
-    dependencies: Object.freeze([dependency]),
-    orderBy: [],
-    patchable: false,
-    predicates: [],
-    selections: [],
-    serialized: true,
-    tableName,
-  }))
-}
-
-export function demoteDatabaseQueryObservationsToRefresh(count: number): void {
-  const state = databaseDependencyCollector.getStore()
-  if (!state) {
-    return
-  }
-
-  for (const observation of state.queries.slice(count)) {
-    recordDatabaseQueryRefreshObservation(observation.connectionName, observation.tableName)
-  }
-
-  truncateDatabaseQueryObservations(count)
-}
-
 export function readDatabaseQueryObservationCount(): number {
   return databaseDependencyCollector.getStore()?.queries.length ?? 0
 }
@@ -614,11 +579,17 @@ export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promi
   for (const index of indexes) {
     const query = state.queries[index]
     if (query) {
-      state.queries[index] = serializedQueryObservation(query)
+      state.queries[index] = refreshOnlyQueryObservation(query)
     }
   }
 
   return value
+}
+
+function refreshOnlyQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
+  const refreshOnly = serializedQueryObservation(observation)
+  refreshOnlyObservations.add(refreshOnly)
+  return refreshOnly
 }
 
 export function truncateDatabaseQueryObservations(count: number): void {
@@ -628,8 +599,16 @@ export function truncateDatabaseQueryObservations(count: number): void {
   }
 
   const length = Math.max(0, count)
-  state.queries.length = length
   const indexes = refreshOnlyObservationIndexes.getStore()
+  for (let index = length; index < state.queries.length; index += 1) {
+    const query = state.queries[index]!
+    if (refreshOnlyObservations.has(query)) {
+      state.refreshQueries.push(query)
+    } else if (indexes?.has(index)) {
+      state.refreshQueries.push(refreshOnlyQueryObservation(query))
+    }
+  }
+  state.queries.length = length
   if (indexes) {
     for (const index of indexes) {
       if (index >= length) {

@@ -11,8 +11,6 @@ import {
   inferDatabaseQueryObservationDependencies,
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
-  recordDatabaseQueryRefreshObservation,
-  demoteDatabaseQueryObservationsToRefresh,
   resolveQueryCacheDependencies,
   runRequiringDatabaseQueryRefresh,
   truncateDatabaseQueryObservations,
@@ -3555,21 +3553,7 @@ export class ModelRepository<
     relation: ThroughRelationDefinition,
     constraint?: RelationConstraint,
   ): Promise<StoredKeyMap<Entity[]>> {
-    const observationCount = hasActiveDatabaseDependencyCollector() ? readDatabaseQueryObservationCount() : undefined
-    const grouped = await this.queryThroughEntitiesByParentKey(entities, relation, constraint)
-    if (typeof observationCount === 'number') {
-      demoteDatabaseQueryObservationsToRefresh(observationCount)
-      this.recordThroughRelationObservations(relation)
-    }
-    return grouped
-  }
-
-  private recordThroughRelationObservations(
-    relation: ThroughRelationDefinition,
-  ): void {
-    for (const repository of [this.resolveThroughRepository(relation.through), this.resolveRelatedRepository(relation.related)]) {
-      recordDatabaseQueryRefreshObservation(repository.getConnectionName(), repository.definition.table.tableName)
-    }
+    return await runRequiringDatabaseQueryRefresh(() => this.queryThroughEntitiesByParentKey(entities, relation, constraint))
   }
 
   private async queryThroughEntitiesByParentKey(
