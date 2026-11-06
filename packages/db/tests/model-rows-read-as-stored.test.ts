@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel } from '../src'
 import { ModelRepository } from '../src/model/ModelRepository'
+import { createPostgresAdapter } from '@holo-js/db-postgres'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 
 function readsRowsAsStored(model: Parameters<typeof ModelRepository.from>[0]): boolean {
@@ -29,5 +30,15 @@ describe('model rows read as stored', () => {
     expect(readsRowsAsStored(defineModel('stored_untyped_notes', { connectionName: 'stored_untyped' }))).toBe(false)
     expect(readsRowsAsStored(defineModel('stored_untyped_plain_notes', { connectionName: 'stored_untyped', timestamps: false }))).toBe(true)
     expect(readsRowsAsStored(defineModel('stored_untyped_cast_notes', { connectionName: 'stored_untyped', timestamps: false, casts: { secret: { get: value => `masked:${String(value)}` } } }))).toBe(false)
+  })
+
+  it('reads rows with the dialect of the connection a model is used on', () => {
+    const notes = defineGeneratedTable('stored_json_notes', { id: column.id(), settings: column.json() })
+    const Note = defineModel(notes, { timestamps: false })
+    const sqlite = createDatabase({ connectionName: 'stored_sqlite', adapter: createSQLiteAdapter({ filename: ':memory:' }), dialect: createDialect('sqlite') })
+    const postgres = createDatabase({ connectionName: 'stored_postgres', adapter: createPostgresAdapter({ config: { host: '127.0.0.1', database: 'stored_unused' } }), dialect: createDialect('postgres') })
+
+    expect(sqlite.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: { x: 1 } })
+    expect(postgres.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: '{"x":1}' })
   })
 })

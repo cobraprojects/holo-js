@@ -121,8 +121,23 @@ function relatedRowsArePatchable(related: ModelRepository): boolean {
     && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
 }
 
-const storedRowReaders = new WeakMap<object, DatabaseQueryRowReader>()
-const storedAttributeReaders = new WeakMap<object, DatabaseQueryRowReader>()
+const storedRowReaders = new WeakMap<object, Map<string, DatabaseQueryRowReader>>()
+const storedAttributeReaders = new WeakMap<object, Map<string, DatabaseQueryRowReader>>()
+
+function cachedReader(
+  cache: WeakMap<object, Map<string, DatabaseQueryRowReader>>,
+  definition: object,
+  connectionName: string,
+  create: () => DatabaseQueryRowReader,
+): DatabaseQueryRowReader {
+  const readers = cache.get(definition) ?? new Map<string, DatabaseQueryRowReader>()
+  cache.set(definition, readers)
+  const cached = readers.get(connectionName)
+  if (cached) return cached
+  const reader = create()
+  readers.set(connectionName, reader)
+  return reader
+}
 
 function relatedReadRow(related: ModelRepository): { readonly relatedReadRow?: DatabaseQueryRowReader } {
   const reader = related.rowReader()
@@ -2648,20 +2663,12 @@ export class ModelRepository<
 
   rowReader(): DatabaseQueryRowReader | undefined {
     if (this.valueTransformer.readsRowsAsStored()) return undefined
-    const cached = storedRowReaders.get(this.definition)
-    if (cached) return cached
-    const reader: DatabaseQueryRowReader = (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written)
-    storedRowReaders.set(this.definition, reader)
-    return reader
+    return cachedReader(storedRowReaders, this.definition, this.getConnectionName(), () => (row, written) => this.valueTransformer.readStoredRow(row, this.getConnection().getDriver() as SchemaDialectName, written))
   }
 
   attributeReader(): DatabaseQueryRowReader | undefined {
     if (this.valueTransformer.readsRowsAsStored()) return undefined
-    const cached = storedAttributeReaders.get(this.definition)
-    if (cached) return cached
-    const reader: DatabaseQueryRowReader = (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written)
-    storedAttributeReaders.set(this.definition, reader)
-    return reader
+    return cachedReader(storedAttributeReaders, this.definition, this.getConnectionName(), () => (row, written) => this.valueTransformer.readStoredAttributes(row, this.getConnection().getDriver() as SchemaDialectName, written))
   }
 
   relatedRowReader(related: () => ModelDefinitionLike): DatabaseQueryRowReader | undefined {

@@ -261,6 +261,21 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh(false)
   })
 
+  it('keeps a hasOne constrained on its foreign key equal to a fresh read when parents shift', async () => {
+    const { db, owners, items, Parent } = await openFixture(variant)
+    await db.table(owners).insert({ id: 3, ...rowValues(variant, 16) })
+    await db.table(items).where('owner_id', 2).delete()
+    await db.table(owners).where('id', 2).delete()
+    const expectFresh = await subscribeAll(variant, {
+      constrained: () => db.model(Parent).query().with('firstItem', query => query.where('owner_id', 2).orderBy('id')).orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(owners).insert({ id: 2, ...rowValues(variant, 17) }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).insert({ id: 9, owner_id: 2, ...rowValues(variant, 18) }))
+    await expectFresh(false)
+  })
+
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
     const { db, owners, tags, ownerTags, Parent } = await openFixture(variant)
     const expectFresh = await subscribeAll(variant, {

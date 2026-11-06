@@ -196,9 +196,11 @@ function reusesRelatedHydrationChild(
   localKey: unknown,
   related: unknown,
 ): boolean {
+  const predicateIndex = foreignKeyPredicateIndex(query, hydration)
   return query.resultBound === true
     && query.result === related
-    && query.predicates.some(predicate => predicate.column === hydration.foreignKey && predicate.operator === '=' && Object.is(predicate.value, localKey))
+    && predicateIndex >= 0
+    && Object.is(query.predicates[predicateIndex]!.value, localKey)
 }
 
 function isBelongsToManyRelatedSide(query: DatabaseQueryObservation): boolean {
