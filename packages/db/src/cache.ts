@@ -128,7 +128,6 @@ export interface DatabaseQueryGroupedAggregateObservation {
   readonly aggregateColumn?: string
   readonly aggregateResultKey: string
   readonly aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[]
-  readonly averageStates?: readonly DatabaseQueryGroupedAverageStateObservation[]
   readonly groupColumn: string
   readonly groupResultKey: string
   readonly integerColumn?: true
@@ -146,13 +145,6 @@ export interface DatabaseQueryGroupedAggregateStateObservation {
 export interface DatabaseQueryGroupedAggregateValueCountObservation {
   readonly count: number
   readonly value: number
-}
-
-export interface DatabaseQueryGroupedAverageStateObservation {
-  readonly count: number
-  readonly groupValue: unknown
-  readonly rowCount: number
-  readonly sum: number
 }
 
 export interface DatabaseQueryGroupedAggregateHavingObservation {
@@ -2219,7 +2211,6 @@ function readsSourceIntegerColumn(plan: SelectQueryPlan, column: string): boolea
 
 function findGroupedAggregateObservation(
   plan: SelectQueryPlan,
-  averageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   aggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryGroupedAggregateObservation | undefined {
   if (
@@ -2266,7 +2257,6 @@ function findGroupedAggregateObservation(
     ...((aggregateKind === 'count' || aggregateKind === 'sum' || aggregateKind === 'min' || aggregateKind === 'max') && aggregateStates
       ? { aggregateStates: Object.freeze([...aggregateStates]) }
       : {}),
-    ...(aggregateKind === 'avg' && averageStates ? { averageStates: Object.freeze([...averageStates]) } : {}),
     groupColumn,
     groupResultKey: groupSelection.alias ?? groupColumn,
     having,
@@ -2479,7 +2469,6 @@ function createDatabaseQueryObservationFromPlan(
   dependencies: readonly string[],
   result?: unknown,
   patchable?: boolean,
-  groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
   const primaryKey = resolveObservedRowKey(plan.source, connectionName)
@@ -2490,7 +2479,7 @@ function createDatabaseQueryObservationFromPlan(
     tableName: plan.source.tableName,
     table: plan.source.table,
     dependencies: Object.freeze([...dependencies]),
-    groupedAggregate: findGroupedAggregateObservation(plan, groupedAverageStates, groupedAggregateStates),
+    groupedAggregate: findGroupedAggregateObservation(plan, groupedAggregateStates),
     limit: plan.limit,
     offset: plan.offset,
     orderBy: collectQueryOrderObservations(plan),
@@ -2508,7 +2497,6 @@ export function createDatabaseQueryObservation(
   connectionName: string,
   dependencies: readonly string[],
   result?: unknown,
-  groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ): DatabaseQueryObservation | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
@@ -2521,7 +2509,6 @@ export function createDatabaseQueryObservation(
     dependencies,
     result,
     undefined,
-    groupedAverageStates,
     groupedAggregateStates,
   )
 }

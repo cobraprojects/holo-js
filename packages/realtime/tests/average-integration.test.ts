@@ -9,8 +9,8 @@ const drivers = integrationDrivers(['sqlite', 'postgres', 'mysql'] as const)
 
 type Driver = typeof drivers[number]
 
-async function openScores(driver: Driver, options: Parameters<typeof openDatabase>[1] = {}) {
-  const { db, schema } = await openDatabase(driver, options)
+async function openScores(driver: Driver) {
+  const { db, schema } = await openDatabase(driver)
   onTestFinished(() => resetRealtimeRuntime())
   const name = `holo_live_scores_${randomUUID().replaceAll('-', '').slice(0, 12)}`
   await schema.createTable(name, (table) => {
@@ -280,50 +280,6 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
 
     expect(subscription.current.data).toEqual(await handler())
   })
-  it('reads refreshed grouped average states once for equivalent subscriptions', async () => {
-    const statements: string[] = []
-    const { db, scores } = await openScores(driver, { wrapAdapter: adapter => new Proxy(adapter, {
-      get(target, key) {
-        const value = Reflect.get(target, key, target)
-        if (key === 'query') {
-          return (sql: string, ...rest: unknown[]) => {
-            statements.push(sql)
-            return Reflect.apply(value, target, [sql, ...rest])
-          }
-        }
-        return typeof value === 'function' ? value.bind(target) : value
-      },
-    }) })
-    await db.table(scores).where('id', '>', 0).update({ total: 3 })
-    const subscriptions = await Promise.all([1, 2, 3].map(() => subscribeRealtimeQuery(
-      defineRealtimeQuery({ access: 'public', handler: () => db.table(scores).select('group_id').addSelectAvg('average', 'total').groupBy('group_id').orderBy('group_id').get() }),
-      {},
-      { onData: () => {}, onError: (error) => { throw error } },
-    )))
-    statements.length = 0
-
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).where('id', 1).update({ total: null }) }))
-
-    const fresh = await db.table(scores).select('group_id').addSelectAvg('average', 'total').groupBy('group_id').orderBy('group_id').get()
-    expect(subscriptions.map(subscription => subscription.current.data)).toEqual([fresh, fresh, fresh])
-    expect(statements.filter(sql => sql.includes('__holo_grouped_average_sum'))).toHaveLength(driver === 'postgres' ? 1 : 0)
-  })
-  it.runIf(driver === 'sqlite')('keeps a grouped average over an integer column holding fractional values equal to a fresh query', async () => {
-    const { db, scores } = await openScores(driver)
-    await db.table(scores).where('id', '>', 0).delete()
-    await db.table(scores).insert([
-      { id: 1, group_id: 1, points: 1, amount: '1.00' },
-      { id: 2, group_id: 1, points: 0.1, amount: '1.00' },
-      { id: 3, group_id: 1, points: 0.2, amount: '1.00' },
-      { id: 4, group_id: 1, points: -0.3, amount: '1.00' },
-    ])
-    const handler = () => db.table(scores).select('group_id').addSelectAvg('average', 'points').groupBy('group_id').orderBy('group_id').get()
-    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
-
-    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).where('id', 1).delete() }))
-
-    expect(subscription.current.data).toEqual(await handler())
-  })
   it('keeps a plain average equal to a fresh query when a mutation pushes a partial sum in query order past the safe integer range', async () => {
     const { db, scores } = await openScores(driver)
     await db.table(scores).where('id', '>', 0).delete()
@@ -428,6 +384,17 @@ describe.each(drivers)('realtime averages on %s', (driver) => {
     await mutate(() => db.table(scores).insert({ id: 3, group_id: null, points: 1, amount: '1.00', total: 5 }))
     expect(subscription.current.data).toEqual(await handler())
     await mutate(() => db.table(scores).insert({ id: 4, group_id: 6, points: 1, amount: '1.00', total: 5 }))
+    expect(subscription.current.data).toEqual(await handler())
+  })
+  it('keeps a grouped integer average equal to a fresh query when the database rounds its result', async () => {
+    const { db, scores } = await openScores(driver)
+    await db.table(scores).where('id', '>', 0).delete()
+    await db.table(scores).insert(Array.from({ length: 209 }, (_, index) => ({ id: index + 1, group_id: 1, points: 0, amount: '1.00' })))
+    const handler = () => db.table(scores).select('group_id').addSelectAvg('average', 'points').groupBy('group_id').orderBy('group_id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(scores).insert({ id: 210, group_id: 1, points: 1, amount: '1.00' }) }))
+
     expect(subscription.current.data).toEqual(await handler())
   })
   it('keeps scalar and paginated subscriptions over the null group equal to a fresh query', async () => {

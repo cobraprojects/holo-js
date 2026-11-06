@@ -223,7 +223,6 @@ function createInvalidationBackfills(
     exactPredicates: event ? readExactPredicatesForPatching(event) : createBatchedExactPredicatesForPatching(events),
     groupedAggregateValueCounts: new Map(),
     groupedAggregateValues: new Map(),
-    groupedAverageStates: new Map(),
     mutationExactPredicates: createMutationExactPredicatesForPatching(events),
     mutationMetadata: new WeakMap(),
     mutations: event ? createSingleEventMutationIndex(event) : createMutationIndex(events),

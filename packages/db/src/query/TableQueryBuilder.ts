@@ -42,7 +42,6 @@ import {
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
-  type DatabaseQueryGroupedAverageStateObservation,
   type DatabaseQueryGroupedAggregateObservation,
   type DatabaseQueryObservation,
   type NormalizedQueryCacheConfig,
@@ -164,7 +163,6 @@ type DatabaseQueryObservationFactory = (
   connectionName: string,
   dependencies: readonly string[],
   result?: unknown,
-  groupedAverageStates?: readonly DatabaseQueryGroupedAverageStateObservation[],
   groupedAggregateStates?: readonly DatabaseQueryGroupedAggregateStateObservation[],
 ) => DatabaseQueryObservation | undefined
 type DatabaseQueryGroupedAggregateValueCountGroupObservation = {
@@ -269,12 +267,8 @@ function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table'
   return alias === undefined ? { table: tableName } : { table: tableName, alias }
 }
 
-const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
-const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
-const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
 const rowsReadFromUnstoredBooleans = new WeakSet<readonly Record<string, unknown>[]>()
 
-const GROUPED_AVERAGE_GROUP_KEY = '__holo_grouped_average_group'
 const GROUPED_AGGREGATE_VALUE_KEY = '__holo_grouped_aggregate_state_value'
 const GROUPED_AGGREGATE_ROW_COUNT_KEY = '__holo_grouped_aggregate_state_row_count'
 const GROUPED_AGGREGATE_GROUP_KEY = '__holo_grouped_aggregate_state_group'
@@ -2278,9 +2272,6 @@ export class TableQueryBuilder<
       return
     }
 
-    const averageStates = groupedAggregate.kind === 'avg' && groupedAggregate.aggregateColumn && this.connection.getDriver() === 'postgres' && groupedAggregate.integerColumn
-      ? await this.readGroupedAverageStates(groupedAggregate)
-      : undefined
     const aggregateStates = (
       groupedAggregate.kind === 'count'
       || groupedAggregate.kind === 'sum'
@@ -2291,13 +2282,12 @@ export class TableQueryBuilder<
       ? await this.readGroupedAggregateStates(groupedAggregate)
       : undefined
 
-    recordDatabaseQueryObservation(averageStates || aggregateStates
+    recordDatabaseQueryObservation(aggregateStates
       ? createObservation(
           this.plan,
           this.connection.getConnectionName(),
           observationDependencies,
           rows,
-          averageStates,
           aggregateStates,
         )
       : observation)
@@ -2307,53 +2297,6 @@ export class TableQueryBuilder<
     const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
     const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
     return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
-  }
-
-  private async readGroupedAverageStates(
-    groupedAggregate: DatabaseQueryGroupedAggregateObservation,
-  ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
-    const aggregateColumn = groupedAggregate.aggregateColumn!
-
-    const selections: QuerySelection[] = [
-      Object.freeze({
-        alias: GROUPED_AVERAGE_GROUP_KEY,
-        column: groupedAggregate.groupColumn,
-        kind: 'column' as const,
-      }),
-      this.createAggregateSelection('count', GROUPED_AVERAGE_COUNT_KEY, aggregateColumn),
-      this.createAggregateSelection('count', GROUPED_AVERAGE_ROW_COUNT_KEY, '*'),
-      this.createAggregateSelection('sum', GROUPED_AVERAGE_SUM_KEY, aggregateColumn),
-    ]
-    const metadataPlan = Object.freeze({
-      ...this.plan,
-      having: Object.freeze([]),
-      selections: Object.freeze(selections),
-    }) satisfies SelectQueryPlan
-    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
-    const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result) {
-      const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
-      const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
-      const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
-      if (
-        typeof count === 'undefined'
-        || typeof rowCount === 'undefined'
-        || typeof sum === 'undefined'
-        || count < 0
-        || rowCount < 0
-      ) {
-        return undefined
-      }
-
-      states.push(Object.freeze({
-        count,
-        groupValue: row[GROUPED_AVERAGE_GROUP_KEY],
-        rowCount,
-        sum,
-      }))
-    }
-
-    return Object.freeze(states)
   }
 
   private async readGroupedAggregateStates(
