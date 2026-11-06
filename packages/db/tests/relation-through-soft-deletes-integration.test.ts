@@ -49,7 +49,7 @@ async function openThroughFixtures(driver: 'sqlite' | 'postgres' | 'mysql') {
       firstNote: hasOneThrough(() => Note, () => Member, 'team_id', 'member_id'),
     },
   })
-  return { Team, Member, membersTable: names.members }
+  return { Team, Member, membersTable: names.members, notesTable: names.notes }
 }
 
 describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('through relation filters and soft deletes on %s', (driver) => {
@@ -67,6 +67,14 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('thr
     expect(ids(expected)).toEqual([1])
     expect(ids(has)).toEqual([1])
     expect(ids(doesntHave)).toEqual([2, 3])
+  })
+
+  it('keeps an ungrouped orWhere constraint behind the through soft delete check', async () => {
+    const { Team, notesTable } = await openThroughFixtures(driver)
+
+    const matched = await Team.whereHas('notes', query => query.where(`${notesTable}.id` as never, 100).orWhere(`${notesTable}.id` as never, 200)).get() as unknown as Entity<TableDefinition>[]
+
+    expect(ids(matched)).toEqual([1])
   })
 
   it('reads the soft delete column from an aliased model source', async () => {

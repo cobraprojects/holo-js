@@ -509,4 +509,29 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(() => DB.table(table).from(`${grantsTable} as Holo_Reserved_2`)).toThrow('is reserved')
     expect(() => DB.table(table).joinSub(DB.table(grantsTable), 'holo_reserved_3', 'holo_reserved_3.category_id', '=', `${table}.id`)).toThrow('is reserved')
   })
+
+  it('keeps an ungrouped orWhere constraint inside the relation correlation', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const constraint = (query: { where(column: string, value: unknown): { orWhere(column: string, value: unknown): unknown } }) => query.where(`${table}.name`, 'leaf').orWhere(`${table}.name`, 'branch')
+    const loaded = await Category.with('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const expected = loaded.filter(entity => related(entity, 'children').length > 0).map(id)
+
+    const children = await Category.whereHas('children', constraint as never).orderBy('id').get() as unknown as Category[]
+    const posts = await Category.whereHas('posts', query => query.where('id', 1).orWhere('id', 3)).orderBy('id').get() as unknown as Category[]
+    const grandchildren = await Category.whereHas('grandchildren', constraint as never).orderBy('id').get() as unknown as Category[]
+
+    expect(expected).toEqual([1, 2])
+    expect(children.map(id)).toEqual(expected)
+    expect(posts.map(id)).toEqual([2, 3])
+    expect(grandchildren.map(id)).toEqual([1])
+  })
+
+  it('correlates against a parent alias that reuses the related table name', async () => {
+    const { Category, table } = await openSelfFixtures(driver)
+    const postsTable = table.replace('sr_categories_', 'sr_posts_')
+
+    const aliased = await Category.query().from(`${table} as ${postsTable}`).has('posts').get() as unknown as Category[]
+
+    expect(aliased.map(id).sort((left, right) => left - right)).toEqual([1, 2, 3])
+  })
 })

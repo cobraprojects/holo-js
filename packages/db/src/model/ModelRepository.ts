@@ -2774,11 +2774,16 @@ export class ModelRepository<
     morphTypes?: readonly string[],
   ): readonly TableQueryBuilder<TableDefinition, Record<string, unknown>>[] {
     const parent = (column: string) => this.qualifyParentColumn(column, parentAlias)
-    const aliasFor = (repository: ModelRepository, reserved: number = 0) => sameTable(repository.definition.table.tableName, this.definition.table.tableName)
+    const bindsParent = (tableName: string) => sameTable(tableName, this.definition.table.tableName) || (parentAlias !== undefined && sameTable(tableName, parentAlias))
+    const aliasFor = (repository: ModelRepository, reserved: number = 0) => bindsParent(repository.definition.table.tableName)
       ? this.selfRelationAlias(parentAlias, reserved)
       : undefined
     const existenceQuery = (repository: ModelRepository, alias = aliasFor(repository)) => {
-      const query = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
+      const constrained = this.applyRelationConstraint(relation, repository, constraint, alias).getTableQueryBuilder()
+      const predicates = constrained.getPlan().predicates
+      const query = predicates.some(predicate => predicate.boolean === 'or')
+        ? constrained.withPredicates([{ kind: 'group', boolean: 'and', predicates }])
+        : constrained
       if (alias === undefined) return query
       const current = query.getPlan().source.alias
       const nested = nestedTableNames(query.getPlan())
@@ -2787,7 +2792,7 @@ export class ModelRepository<
       for (let reserved = 2; nested.has(unused) || unused === query.getTableName(); reserved += 2) unused = this.selfRelationAlias(parentAlias, reserved)
       return requalifyTableSource(aliasTableSource(query, unused), this.definition.table.tableName, current)
     }
-    const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => sameTable(query.getTableName(), this.definition.table.tableName)
+    const pivotQuery = <TQuery extends TableQueryBuilder<string | TableDefinition>>(query: TQuery) => bindsParent(query.getTableName())
       ? requalifyTableSource(aliasTableSource(query, this.selfRelationAlias(parentAlias, 1)), query.getTableName())
       : query
 
