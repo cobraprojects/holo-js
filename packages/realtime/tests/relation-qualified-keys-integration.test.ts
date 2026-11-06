@@ -223,6 +223,7 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
       expect(text('morphTags')).toContain('programs')
       expect(text('taggedPosts')).toContain('Frequency Hopping')
       await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }))
 
       expect(qualified.runs).toEqual(plain.runs)
     })
@@ -238,9 +239,28 @@ describe.each(drivers)('realtime relations with table-qualified keys on %s', (dr
       await mutate(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
       expect(text('commentable')).toContain('Analytical Engines')
       await mutate(() => db.table(posts).where('id', 20).delete())
+      await mutate(() => db.table(posts).where('id', 30).update({ author_id: 2 }))
 
       expect(text('comments')).toContain('edited')
       expect(qualified.runs).toEqual(plain.runs)
     })
+  })
+
+  it('re-runs the same subscriptions for qualified and unqualified keys when other tables change', async () => {
+    const opened = await openLibrary(driver)
+    const { db, names, posts, reviews, comments, postType } = opened
+    await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping' })
+    const { qualified, plain } = await subscribeRelations(opened, Object.keys(readsOf(opened, opened.qualifiedLibrary)) as Relation[])
+    const write = (handler: () => Promise<unknown>) => executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler }))
+
+    await write(() => db.table(names.postTag).insert({ post_id: 30, tag_id: 100 }))
+    await write(() => db.table(reviews).insert({ id: 3000, post_id: 30, body: 'clear' }))
+    await write(() => db.table(comments).insert({ id: 7000, commentable_type: postType, commentable_id: 30, body: 'radio' }))
+    await write(() => db.table(names.taggables).insert({ tag_id: 200, taggable_type: postType, taggable_id: 30 }))
+    await write(() => db.table(comments).where('id', 5000).update({ body: 'edited' }))
+    await write(() => db.table(names.tags).where('id', 200).update({ label: 'programs' }))
+
+    expect(qualified.runs.topPost).toBe(1)
+    expect(qualified.runs).toEqual(plain.runs)
   })
 })

@@ -170,6 +170,8 @@ describe.each(drivers)('realtime morph relations on %s', (driver) => {
       const { db, names, posts, comments, tags, postType } = blog
       await seedFrequencyHopping(blog)
       await db.table(comments).where('id', 200).update({ commentable_id: 30 })
+      await db.table(names.taggables).where('tag_id', 2).update({ taggable_type: 'HoloMrOther', taggable_id: 30 })
+      await db.table(names.taggables).insert({ tag_id: 1, taggable_type: postType, taggable_id: 40 })
       const { current, mutate } = await subscribeMorphReads(blog)
 
       await mutate('deleting a pivot row', () => db.table(names.taggables).where('tag_id', 1).delete())

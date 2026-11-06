@@ -75,6 +75,11 @@ async function subscribeAll(reads: Record<string, () => Promise<unknown>>) {
   }
 }
 
+async function swapTagActivity({ db, tags }: Awaited<ReturnType<typeof openBlog>>) {
+  await db.table(tags).where('id', 2).update({ active: 1 })
+  await db.table(tags).where('id', 1).update({ active: 0 })
+}
+
 function subscribeConstrainedTags({ db, Post }: Awaited<ReturnType<typeof openBlog>>) {
   return subscribeAll({
     constrainedWithSibling: () => db.model(Post).query()
@@ -113,6 +118,7 @@ describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
     it('across pivot writes', async () => {
       const blog = await openBlog(driver)
       const { db, tags, postTags } = blog
+      await swapTagActivity(blog)
       await db.table(tags).insert([{ id: 4, label: 'draft', active: 0 }, { id: 5, label: 'live', active: 1 }])
       const mutate = await subscribeConstrainedTags(blog)
 
@@ -126,6 +132,7 @@ describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
     it('across post writes', async () => {
       const blog = await openBlog(driver)
       const { db, posts, postTags } = blog
+      await swapTagActivity(blog)
       const mutate = await subscribeConstrainedTags(blog)
 
       await mutate('inserting a post', () => db.table(posts).insert({ id: 30, title: 'Frequency Hopping' }))

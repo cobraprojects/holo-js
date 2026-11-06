@@ -100,6 +100,11 @@ type Mutate = Awaited<ReturnType<typeof subscribeAll>>
 
 const extraTags = [{ id: 4, label: 'draft', active: 0 }, { id: 5, label: 'live', active: 1 }]
 
+async function swapTagActivity({ db, tags }: Blog) {
+  await db.table(tags).where('id', 2).update({ active: 1 })
+  await db.table(tags).where('id', 1).update({ active: 0 })
+}
+
 const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, run: (mutate: Mutate, blog: Blog) => Promise<void> }[] = [
   {
     name: 'tag updates',
@@ -111,6 +116,10 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'tag inserts and deletes',
+    seed: async ({ db, posts, postTags }) => {
+      await db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 })
+      await db.table(postTags).insert({ post_id: 30, tag_id: 3 })
+    },
     run: async (mutate, { db, tags }) => {
       await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
       await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
@@ -119,7 +128,10 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'pivot inserts',
-    seed: ({ db, tags }) => db.table(tags).insert(extraTags),
+    seed: async (blog) => {
+      await swapTagActivity(blog)
+      await blog.db.table(blog.tags).insert(extraTags)
+    },
     run: async (mutate, { db, postTags }) => {
       await mutate('attaching an inactive tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 4 }))
       await mutate('attaching an active tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 5 }))
@@ -127,7 +139,9 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'pivot updates and deletes',
-    seed: async ({ db, tags, postTags }) => {
+    seed: async (blog) => {
+      const { db, tags, postTags } = blog
+      await swapTagActivity(blog)
       await db.table(tags).insert(extraTags)
       await db.table(postTags).insert([{ post_id: 20, tag_id: 4 }, { post_id: 20, tag_id: 5 }])
     },
@@ -139,6 +153,7 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'post updates',
+    seed: swapTagActivity,
     run: async (mutate, { db, posts }) => {
       await mutate('retitling a post', () => db.table(posts).where('id', 20).update({ title: 'Parsers' }))
       await mutate('publishing a post', () => db.table(posts).where('id', 20).update({ published: 1 }))
@@ -147,6 +162,10 @@ const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, 
   },
   {
     name: 'post inserts and deletes',
+    seed: async (blog) => {
+      await swapTagActivity(blog)
+      await blog.db.table(blog.postTags).insert({ post_id: 20, tag_id: 1 })
+    },
     run: async (mutate, { db, posts, postTags }) => {
       await mutate('inserting a post', () => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 }))
       await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 3 }))
@@ -237,10 +256,10 @@ const subscriptions: readonly { name: string, reads: (blog: Blog) => Record<stri
 ]
 
 describe.each(drivers)('realtime nested and constrained relations on %s', (driver) => {
-  for (const { name, reads } of subscriptions) {
-    describe(name, () => {
-      for (const { name, seed, run } of writes) {
-        it(`across ${name}`, async () => {
+  for (const { name: subscriptionName, reads } of subscriptions) {
+    describe(subscriptionName, () => {
+      for (const { name: writeName, seed, run } of writes) {
+        it(`across ${writeName}`, async () => {
           const blog = await openBlog(driver)
           await seed?.(blog)
           await run(await subscribeAll(reads(blog)), blog)
