@@ -1187,6 +1187,37 @@ await runtimeModule.importBundledRuntimeModule(${JSON.stringify(linkedRoot)}, ${
     }
   })
 
+  it.each([
+    { form: 'an unexported subpath', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `Package subpath './hidden' is not defined by "exports" in ${root}/node_modules/pkg/package.json`, source: 'server/db/migrations/create.ts' },
+    { form: 'an unexported scoped subpath', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `Package subpath './deep/hidden' is not defined by "exports" in ${root}/node_modules/@scope/pkg/package.json`, source: 'server/support/scoped.ts' },
+    { form: 'a package without an exported main', code: 'ERR_PACKAGE_PATH_NOT_EXPORTED', error: (root: string) => `No "exports" main defined in ${root}/node_modules/pkg/package.json`, source: 'server/support/helper.ts' },
+    { form: 'a missing file under a subpath', code: 'ERR_MODULE_NOT_FOUND', error: (root: string) => `Cannot find module '${root}/node_modules/pkg/hidden.js'`, source: 'server/db/migrations/create.ts' },
+    { form: 'a missing package', code: 'ERR_MODULE_NOT_FOUND', error: () => "Cannot find package 'pkg'", source: 'server/support/helper.ts' },
+    { form: 'a Bun subpath resolution failure', code: 'ERR_MODULE_NOT_FOUND', error: () => "Cannot find module 'pkg/hidden'", source: 'server/db/migrations/create.ts' },
+  ])('names the importer of the failing specifier for $form', ({ code, error, source }) => {
+    const bundlePath = join(tmpdir(), 'bundle-forms', 'create.mjs')
+    const importers = {
+      'pkg': 'server/support/helper.ts',
+      'pkg/hidden': 'server/db/migrations/create.ts',
+      '@scope/pkg': 'server/support/helper.ts',
+      '@scope/pkg/deep/hidden': 'server/support/scoped.ts',
+    }
+    for (const root of ['/app', 'C:\\app']) {
+      const separator = root.startsWith('/') ? '/' : '\\'
+      const detail = error(root).replaceAll('/', separator).replace(`'.${separator}`, "'./").replace(`${separator}deep${separator}`, '/deep/')
+      const failure = Object.assign(new Error(`${detail} imported from ${bundlePath}`), { code })
+      bundleSourceInternals.withBundleSources(failure, { path: bundlePath, sourcePath: 'server/db/migrations/create.ts', importers })
+      expect(failure.message).toBe(`${detail} imported from ${source}`)
+    }
+  })
+
+  it('prefers the importer of the exact missing file over its extensionless subpath', () => {
+    const bundlePath = join(tmpdir(), 'bundle-exact-file', 'create.mjs')
+    const failure = Object.assign(new Error(`Cannot find module '/app/node_modules/pkg/hidden.js' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
+    bundleSourceInternals.withBundleSources(failure, { path: bundlePath, importers: { 'pkg/hidden': 'server/support/helper.ts', 'pkg/hidden.js': 'server/db/migrations/create.ts' } })
+    expect(failure.message).toBe("Cannot find module '/app/node_modules/pkg/hidden.js' imported from server/db/migrations/create.ts")
+  })
+
   it('wraps a load error whose stack is read-only and keeps its code', () => {
     const bundlePath = join(tmpdir(), 'bundle-frozen', 'User.mjs')
     const failure = Object.assign(new Error(`Cannot find package 'missing-slugger' imported from ${bundlePath}`), { code: 'ERR_MODULE_NOT_FOUND' })
