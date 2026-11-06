@@ -49,7 +49,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { hasUnstoredBoolean, readConvertedResultColumns, readInsertedKey, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -230,6 +230,8 @@ function resolveJoinTarget(table: TableReference): Pick<QueryJoinClause, 'table'
 const GROUPED_AVERAGE_COUNT_KEY = '__holo_grouped_average_count'
 const GROUPED_AVERAGE_ROW_COUNT_KEY = '__holo_grouped_average_row_count'
 const GROUPED_AVERAGE_SUM_KEY = '__holo_grouped_average_sum'
+const rowsReadFromUnstoredBooleans = new WeakSet<readonly Record<string, unknown>[]>()
+
 const GROUPED_AVERAGE_GROUP_KEY = '__holo_grouped_average_group'
 const GROUPED_AGGREGATE_VALUE_KEY = '__holo_grouped_aggregate_state_value'
 const GROUPED_AGGREGATE_ROW_COUNT_KEY = '__holo_grouped_aggregate_state_row_count'
@@ -2103,7 +2105,10 @@ export class TableQueryBuilder<
     if (!convertColumns) return rows
     const plan = this.plan.source.table ? withResolvedDefinitions(this.plan, this.connection.getConnectionName()) : this.plan
     const convertedColumns = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan)
-    return convertedColumns.size === 0 ? rows : rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (convertedColumns.size === 0) return rows
+    const converted = rows.map(row => readConvertedResultColumns(row, convertedColumns) as TRow)
+    if (hasUnstoredBoolean(rows, convertedColumns)) rowsReadFromUnstoredBooleans.add(converted)
+    return converted
   }
 
   private async queryRows<TRow extends Record<string, unknown>>(statement: CompiledStatement): Promise<TRow[]> {
@@ -2161,7 +2166,7 @@ export class TableQueryBuilder<
       observationDependencies,
       rows,
     )
-    if (observation?.patchable && this.observesSQLiteDecimalColumn()) {
+    if (observation?.patchable && (rowsReadFromUnstoredBooleans.has(rows) || this.observesSQLiteDecimalColumn())) {
       recordDatabaseQueryObservation(Object.freeze({ ...observation, patchable: false }))
       return
     }
@@ -2200,6 +2205,12 @@ export class TableQueryBuilder<
       : observation)
   }
 
+  private async queryMetadataRows(plan: SelectQueryPlan, groupKey: string): Promise<readonly Record<string, unknown>[]> {
+    const { rows } = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(plan))
+    const read = resolveConvertedResultColumns(this.connection.getDriver() as SchemaDialectName, plan).get(groupKey)
+    return read ? rows.map(row => Object.hasOwn(row, groupKey) ? { ...row, [groupKey]: read(row[groupKey]) } : row) : rows
+  }
+
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
@@ -2220,9 +2231,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AVERAGE_GROUP_KEY)
     const states: DatabaseQueryGroupedAverageStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const count = this.normalizeNumericResult(row[GROUPED_AVERAGE_COUNT_KEY])
       const rowCount = this.normalizeNumericResult(row[GROUPED_AVERAGE_ROW_COUNT_KEY])
       const sum = this.normalizeNumericResult(row[GROUPED_AVERAGE_SUM_KEY] ?? 0)
@@ -2267,9 +2278,9 @@ export class TableQueryBuilder<
       having: Object.freeze([]),
       selections: Object.freeze(selections),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const states: DatabaseQueryGroupedAggregateStateObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const aggregateValue = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
         row[GROUPED_AGGREGATE_VALUE_KEY],
@@ -2324,9 +2335,9 @@ export class TableQueryBuilder<
         this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_COUNT_KEY, '*'),
       ]),
     }) satisfies SelectQueryPlan
-    const result = await this.connection.queryCompiled<Record<string, unknown>>(this.getCompiler().compile(metadataPlan))
+    const result = await this.queryMetadataRows(metadataPlan, GROUPED_AGGREGATE_GROUP_KEY)
     const groups: DatabaseQueryGroupedAggregateValueCountGroupObservation[] = []
-    for (const row of result.rows) {
+    for (const row of result) {
       const groupValue = row[GROUPED_AGGREGATE_GROUP_KEY]
       const value = this.normalizeGroupedAggregateStateValue(
         groupedAggregate,
@@ -2405,6 +2416,10 @@ export class TableQueryBuilder<
   private normalizeNumericResult(value: unknown): number | undefined {
     if (value === null) {
       return 0
+    }
+
+    if (typeof value === 'boolean') {
+      return Number(value)
     }
 
     if (typeof value === 'number') {

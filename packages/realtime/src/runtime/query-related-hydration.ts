@@ -9,6 +9,7 @@ import {
 import {
   getBackfillDatabaseConnection,
   quoteTableReference,
+  readBackfilledRows,
 } from './query-backfill'
 import type {
   BackfillCache,
@@ -294,7 +295,7 @@ async function fetchGroupedRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = await builder.get()
+  const rows = readBackfilledRows(hydration.relatedTable, await builder.get())
   const rowsByLocalKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const localKey = row[hydration.foreignKey]
@@ -322,7 +323,7 @@ async function fetchGroupedRelatedTopOneRows(
 ): Promise<ReadonlyMap<unknown, BackfillRows> | undefined> {
   const statement = compileGroupedRelatedTopOneStatement(connection, hydration, values)
   const rows = await connection.queryCompiled<Record<string, unknown>>(statement)
-  return groupRelatedTopOneRows(rows.rows, values)
+  return groupRelatedTopOneRows(readBackfilledRows(hydration.relatedTable, rows.rows), values)
 }
 
 function groupRelatedTopOneRows(
@@ -474,9 +475,9 @@ async function fetchRelatedHydrationRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  const rows = await builder
+  const rows = readBackfilledRows(hydration.relatedTable, await builder
     .limit(hydration.kind === 'hasOne' ? 1 : undefined)
-    .get()
+    .get())
   return validateRelatedHydrationRows(rows, hydration)
 }
 
