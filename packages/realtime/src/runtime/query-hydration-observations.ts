@@ -70,7 +70,7 @@ export function rebindBelongsToObservations(
   return next
 }
 
-function relatedHydrationPath(
+function isRelatedHydrationChild(
   query: DatabaseQueryObservation,
   owner: DatabaseQueryObservation,
 ): boolean {
@@ -116,7 +116,13 @@ export function rebindRelatedHydrationObservations(
       && rows.every(row => query.relatedHydrations?.every(hydration => Object.hasOwn(row, hydration.localKey) && Object.hasOwn(row, hydration.relationKey)))
   })
   if (owners.length === 0) return queries
-  const next = queries.filter(query => !owners.some(owner => relatedHydrationPath(query, owner)))
+  const children = new Map<string, DatabaseQueryObservation>()
+  const next = queries.filter((query) => {
+    if (!owners.some(owner => isRelatedHydrationChild(query, owner))) return true
+    children.set(JSON.stringify(query.resultPath), query)
+    return false
+  })
+  let changed = false
   for (const owner of owners) {
     const base = owner.resultPath ?? EMPTY_RESULT_PATH
     const rows = getValueAtPath(data, base)
@@ -127,11 +133,29 @@ export function rebindRelatedHydrationObservations(
         const related = row[hydration.relationKey]
         if (localKey === null || typeof localKey === 'undefined') continue
         if (hydration.kind === 'hasMany' ? !isRecordArray(related) : related !== null && !isRecord(related)) continue
-        next.push(createRelatedHydrationObservation(hydration, localKey, related, Object.freeze([...base, index, hydration.relationKey])))
+        const resultPath = Object.freeze([...base, index, hydration.relationKey])
+        const existing = children.get(JSON.stringify(resultPath))
+        if (existing && reusesRelatedHydrationChild(existing, hydration, localKey, related)) {
+          next.push(existing)
+          continue
+        }
+        changed = true
+        next.push(createRelatedHydrationObservation(hydration, localKey, related, resultPath))
       }
     }
   }
-  return next
+  return changed || next.length !== queries.length ? next : queries
+}
+
+function reusesRelatedHydrationChild(
+  query: DatabaseQueryObservation,
+  hydration: DatabaseQueryRelatedHydrationObservation,
+  localKey: unknown,
+  related: unknown,
+): boolean {
+  return query.resultBound === true
+    && query.result === related
+    && query.predicates.some(predicate => predicate.column === hydration.foreignKey && predicate.operator === '=' && Object.is(predicate.value, localKey))
 }
 
 function isBelongsToManyRelatedSide(query: DatabaseQueryObservation): boolean {
@@ -148,14 +172,16 @@ function createBelongsToManyRelatedSideObservation(
   pivotSide: DatabaseQueryObservation,
   relation: DatabaseQueryBelongsToManyRelationObservation,
   values: readonly unknown[],
+  existing: DatabaseQueryObservation | undefined,
 ): DatabaseQueryObservation {
+  const source = existing ?? pivotSide
   const dependencies = values.flatMap(value => queryCacheInternals.createTablePredicateCacheDependency(relation.relatedConnectionName, relation.relatedTableName, relation.relatedKey, value, true) ?? [])
   return Object.freeze({
     connectionName: relation.relatedConnectionName,
     dependencies: Object.freeze([...new Set([queryCacheInternals.createTableCacheDependency(relation.relatedConnectionName, relation.relatedTableName), ...dependencies])]),
     orderBy: [],
-    patchable: pivotSide.patchable,
-    ...pivotSide.serialized ? { serialized: true } : {},
+    patchable: source.patchable,
+    ...source.serialized ? { serialized: true } : {},
     predicates: Object.freeze([Object.freeze({ column: relation.relatedKey, operator: 'in' as const, value: Object.freeze([...values]) })]),
     relation,
     resultPath: pivotSide.resultPath,
@@ -188,7 +214,7 @@ export function rebindBelongsToManyRelatedObservations(
       next.splice(index, 1)
       continue
     }
-    const observation = createBelongsToManyRelatedSideObservation(pivotSide, relation, values)
+    const observation = createBelongsToManyRelatedSideObservation(pivotSide, relation, values, existing)
     if (index >= 0) next[index] = observation
     else next.push(observation)
   }

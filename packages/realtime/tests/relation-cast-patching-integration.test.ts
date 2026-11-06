@@ -122,7 +122,10 @@ async function openFixture(variant: Variant) {
   const Tag = defineModel(tags, { timestamps: false, casts })
   const Owner = defineModel(owners, { timestamps: false, casts })
   const Item = defineModel(items, { timestamps: false, casts, fillable: ['owner_id', ...Object.keys(columns)], relations: { owner: belongsTo(() => Owner, 'owner_id') } })
+  const ActiveItem = defineModel(items, { timestamps: false, casts, globalScopes: { active: query => query.where('active', true) } })
   const Parent = defineModel(owners, { timestamps: false, casts, relations: {
+    activeItems: hasMany(() => ActiveItem, 'owner_id'),
+    firstActiveItem: hasOne(() => ActiveItem, 'owner_id'),
     items: hasMany(() => Item, 'owner_id'),
     firstItem: hasOne(() => Item, 'owner_id'),
     tags: belongsToMany(() => Tag, ownerTags, 'owner_id', 'tag_id').withPivot('pinned').orderByPivot('tag_id'),
@@ -184,6 +187,21 @@ describe.each(variants)('realtime relation patches on $driver with $label', (var
     await expectFresh()
     await mutate(() => db.model(Item).create({ owner_id: 3, ...rowValues(variant, 13) }))
     await expectFresh()
+  })
+
+  it('keeps hasOne and hasMany rows hidden by a related global scope out of patched results', async () => {
+    const { db, owners, items, Parent } = await openFixture(variant)
+    const expectFresh = await subscribeAll(variant, {
+      many: () => db.model(Parent).query().with('activeItems').orderBy('id').getJson(),
+      one: () => db.model(Parent).query().with('firstActiveItem').orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(owners).where('id', 2).update(rowValues(variant, 10)))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 1).update({ active: false }))
+    await expectFresh(false)
+    await mutate(() => db.table(items).where('id', 3).update({ active: false }))
+    await expectFresh(false)
   })
 
   it('keeps eager-loaded belongsToMany rows equal to a fresh read', async () => {
