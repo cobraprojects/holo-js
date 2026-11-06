@@ -3,10 +3,12 @@ import { DB } from '../facade/DB'
 import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import { assertQueryTablePath } from '../query/validator'
 import {
+  createDatabaseQueryFallbackObservation,
   createDatabaseQueryObservation,
   createTableCacheDependency,
   createTablePredicateCacheDependency,
   hasActiveDatabaseDependencyCollector,
+  inferDatabaseQueryObservationDependencies,
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
@@ -96,6 +98,7 @@ type RelationAggregateObservationTarget = {
   readonly column: string
   readonly connectionName: string
   readonly primaryKey: string | undefined
+  readonly table: TableDefinition
   readonly tableName: string
   readonly value: unknown
 }
@@ -112,6 +115,16 @@ function readsSQLiteDecimals(connection: DatabaseContext, table: string | TableD
 
 function relatedRowsArePatchable(related: ModelRepository): boolean {
   return !modelNeedsSerialization(related.definition) && !readsSQLiteDecimals(related.getConnection(), related.definition.table)
+}
+
+function createRelationQueryObservation(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): DatabaseQueryObservation | undefined {
+  const dependencies = resolveQueryCacheDependencies(plan, connectionName, undefined, textMatchesAnyNumber)
+  const observation = dependencies ? createDatabaseQueryObservation(plan, connectionName, dependencies) : undefined
+  return observation ?? createDatabaseQueryFallbackObservation(
+    plan,
+    connectionName,
+    inferDatabaseQueryObservationDependencies(plan, connectionName) ?? [createTableCacheDependency(connectionName, plan.source.tableName)],
+  )
 }
 
 function serializedFlag(serialized: boolean): { readonly serialized?: true } {
@@ -525,6 +538,7 @@ export class ModelRepository<
       await this.loadRelation(pending, relationName, relation, node.constraint)
 
       if (node.children.length > 0) {
+        this.forgetPatchableRelationObservations(pending, relationName)
         const relatedEntities = this.collectLoadedRelationEntities(pending, relationName)
         if (relatedEntities.length > 0) {
           if (relation.kind === 'morphTo') {
@@ -830,7 +844,7 @@ export class ModelRepository<
           connectionName: target.connectionName,
           dependencies,
           orderBy: [],
-          patchable: primaryKey !== undefined,
+          patchable: primaryKey !== undefined && (aggregate.column === undefined || target.table.columns[aggregate.column]?.kind !== 'boolean'),
           ...serializedFlag(modelNeedsSerialization(this.definition)),
           predicates: Object.freeze([Object.freeze({
             column: target.column,
@@ -945,6 +959,7 @@ export class ModelRepository<
         primaryKey,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }))
     }
@@ -1003,6 +1018,7 @@ export class ModelRepository<
           value: parentKey,
         })]),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }), resultPath))
     }
@@ -1072,6 +1088,7 @@ export class ModelRepository<
           value: ownerKey,
         })]),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }), resultPath))
     }
@@ -1120,12 +1137,14 @@ export class ModelRepository<
         relationKey: relationName,
         relatedConnectionName: related.getConnectionName(),
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
+        relatedTable: related.definition.table,
       }),
       resultPath,
       selections: Object.freeze([Object.freeze({
         column: relation.foreignKey,
         resultKey: relation.foreignKey,
       })]),
+      table: this.definition.table,
       tableName: this.definition.table.tableName,
     })
   }
@@ -1150,11 +1169,14 @@ export class ModelRepository<
     related: ModelRepository,
     constrainedPlan: SelectQueryPlan,
     parentKey: unknown,
+    rowsPatchable: boolean,
   ): void {
-    const observation = this.createHasManyRelationObservation(relation, related, constrainedPlan, parentKey)
-    if (!observation) {
+    const created = this.createHasManyRelationObservation(relation, related, constrainedPlan, parentKey)
+    if (!created) {
       return
     }
+
+    const observation = rowsPatchable ? created : Object.freeze({ ...created, patchable: false })
 
     const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
     observations.set(relationName, observation)
@@ -1168,15 +1190,31 @@ export class ModelRepository<
     related: ModelRepository,
     constrainedPlan: SelectQueryPlan,
     ownerKey: unknown,
+    rowsPatchable: boolean,
   ): void {
-    const observation = this.createBelongsToRelationObservation(relation, related, constrainedPlan, ownerKey)
-    if (!observation) {
+    const created = this.createBelongsToRelationObservation(relation, related, constrainedPlan, ownerKey)
+    if (!created) {
       return
     }
+
+    const observation = rowsPatchable ? created : Object.freeze({ ...created, patchable: false })
 
     const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
     observations.set(relationName, observation)
     relationQueryObservationMetadata.set(entity, observations)
+  }
+
+  private forgetPatchableRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+  ): void {
+    for (const entity of entities) {
+      const observations = relationQueryObservationMetadata.get(entity)
+      const observation = observations?.get(relationName)
+      if (observations && observation?.patchable) {
+        observations.set(relationName, Object.freeze({ ...observation, patchable: false }))
+      }
+    }
   }
 
   private getRelationQueryObservation(
@@ -1202,8 +1240,7 @@ export class ModelRepository<
       operator: '=',
       value: parentKey,
     })
-    const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName(), undefined, this.textMatchesAnyNumber(related.getConnectionName()))
-    return createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies!)
+    return createRelationQueryObservation(parentPlan, related.getConnectionName(), this.textMatchesAnyNumber(related.getConnectionName()))
   }
 
   private createBelongsToRelationObservation(
@@ -1222,8 +1259,7 @@ export class ModelRepository<
       operator: '=',
       value: ownerKey,
     })
-    const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName(), undefined, this.textMatchesAnyNumber(related.getConnectionName()))
-    return createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies!)
+    return createRelationQueryObservation(ownerPlan, related.getConnectionName(), this.textMatchesAnyNumber(related.getConnectionName()))
   }
 
   private recordBelongsToManyRelationObservations(
@@ -1234,6 +1270,8 @@ export class ModelRepository<
   ): void {
     const related = this.resolveRelatedRepository(relation.related)
     const pivotTableName = this.resolvePivotTableName(relation.pivotTable)
+    const resolvedPivotTable = this.resolvePivotTable(relation.pivotTable, this.getConnection())
+    const pivotTable = typeof resolvedPivotTable === 'string' ? undefined : resolvedPivotTable
     for (let index = 0; index < entities.length; index += 1) {
       const entity = entities[index]
       if (!entity || !entity.hasRelation(relationName)) {
@@ -1270,6 +1308,7 @@ export class ModelRepository<
         relatedKey: relation.relatedKey,
         relatedPivotKey: relation.relatedPivotKey,
         relatedTableName: canonicalTableName(related.getConnectionName(), related.definition.table.tableName),
+        relatedTable: related.definition.table,
       })
 
       recordDatabaseQueryObservation(Object.freeze({
@@ -1286,6 +1325,7 @@ export class ModelRepository<
         relation: relationObservation,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: pivotTable,
         tableName: pivotTableName,
       }))
 
@@ -1310,6 +1350,7 @@ export class ModelRepository<
         relation: relationObservation,
         resultPath: createPath(index, relationName),
         selections: [],
+        table: related.definition.table,
         tableName: related.definition.table.tableName,
       }))
     }
@@ -1411,6 +1452,7 @@ export class ModelRepository<
           column: relation.ownerKey,
           connectionName: related.getConnectionName(),
           primaryKey: resolveModelRowKey(related.definition),
+          table: related.definition.table,
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -1423,6 +1465,7 @@ export class ModelRepository<
           column: relation.foreignKey,
           connectionName: related.getConnectionName(),
           primaryKey: resolveModelRowKey(related.definition),
+          table: related.definition.table,
           tableName: related.definition.table.tableName,
           value: this.getRelationParentValue(entity, relation),
         }
@@ -2318,7 +2361,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+    const { entities: relatedEntities, plan: constrainedPlan, rowsPatchable } = await retrieveRelation(
       foreignKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.ownerKey,
@@ -2331,7 +2374,7 @@ export class ModelRepository<
       const foreignKey = entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, relatedMap.get(foreignKey) ?? null)
       if (constrainedPlan) {
-        this.rememberBelongsToRelationObservation(entity, relationName, relation, related, constrainedPlan, foreignKey)
+        this.rememberBelongsToRelationObservation(entity, relationName, relation, related, constrainedPlan, foreignKey, rowsPatchable !== false)
       }
     }
   }
@@ -2352,7 +2395,7 @@ export class ModelRepository<
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const { entities: relatedEntities, plan: constrainedPlan } = await retrieveRelation(
+    const { entities: relatedEntities, plan: constrainedPlan, rowsPatchable } = await retrieveRelation(
       localKeys,
       () => this.applyRelationConstraint(relation, related, constraint),
       relation.foreignKey,
@@ -2365,7 +2408,7 @@ export class ModelRepository<
       const localKey = entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(localKey) ?? [])
       if (constrainedPlan) {
-        this.rememberHasManyRelationObservation(entity, relationName, relation, related, constrainedPlan, localKey)
+        this.rememberHasManyRelationObservation(entity, relationName, relation, related, constrainedPlan, localKey, rowsPatchable !== false)
       }
     }
   }
