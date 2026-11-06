@@ -7,7 +7,7 @@ import type {
 import type { RealtimePatchPathSegment } from './result-patching'
 import type { DatabaseMutationEvent, MutationIndex, PredicateDependencyIndex } from './dependencies'
 
-export type DatabaseQueryRowReader = (row: Readonly<Record<string, unknown>>, written?: boolean) => Readonly<Record<string, unknown>>
+export type RealtimeRowReader = (row: Readonly<Record<string, unknown>>, written?: boolean) => Readonly<Record<string, unknown>>
 
 export type DatabaseQueryObservation = {
   readonly aggregate?: DatabaseQueryAggregateObservation
@@ -37,7 +37,7 @@ export type DatabaseQueryObservation = {
   readonly predicateColumns?: readonly string[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
+  readonly readRow?: RealtimeRowReader
   readonly relation?: DatabaseQueryRelationObservation
   readonly projectedIdentityColumn?: string | typeof NO_PROJECTED_IDENTITY_COLUMN
   readonly result?: unknown
@@ -65,7 +65,7 @@ export type DatabaseQueryBelongsToHydrationObservation = {
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
+  readonly readRow?: RealtimeRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -79,7 +79,7 @@ export type DatabaseQueryRelatedHydrationObservation = {
   readonly orderBy: readonly DatabaseQueryOrderObservation[]
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
   readonly primaryKey?: string
-  readonly readRow?: DatabaseQueryRowReader
+  readonly readRow?: RealtimeRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string
@@ -184,7 +184,7 @@ export type DatabaseQueryBelongsToManyRelationObservation = {
   readonly relatedConnectionName: string
   readonly relatedKey: string
   readonly relatedPivotKey: string
-  readonly relatedReadRow?: DatabaseQueryRowReader
+  readonly relatedReadRow?: RealtimeRowReader
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition
 }
@@ -194,7 +194,7 @@ export type DatabaseQueryBelongsToParentKeyRelationObservation = {
   readonly kind: 'belongsToParentKey'
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly relatedReadRow?: DatabaseQueryRowReader
+  readonly relatedReadRow?: RealtimeRowReader
   readonly relationKey: string
   readonly relatedConnectionName: string
   readonly relatedTableName: string

@@ -16,7 +16,7 @@ import { canBackfillRelatedHydrationPredicates } from './query-related-hydration
 import type {
   BackfillCache,
   DatabaseQueryBelongsToHydrationObservation,
-  DatabaseQueryRowReader,
+  RealtimeRowReader,
 } from './query-state'
 import { stableStringify } from './stable-stringify'
 
@@ -24,8 +24,8 @@ type BelongsToHydrationTarget = {
   readonly foreignKey: string
   readonly ownerKey: string
   readonly predicates: readonly DatabaseQueryPredicateObservation[]
-  readonly readRow?: DatabaseQueryRowReader
-  readonly relatedReadRow?: DatabaseQueryRowReader
+  readonly readRow?: RealtimeRowReader
+  readonly relatedReadRow?: RealtimeRowReader
   readonly relatedConnectionName: string
   readonly relatedTableName: string
   readonly relatedTable?: TableDefinition

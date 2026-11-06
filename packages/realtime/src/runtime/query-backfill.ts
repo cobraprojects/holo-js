@@ -1,6 +1,6 @@
 import { getExecutionDatabase } from './execution-context'
 import { DB, queryCacheInternals, type DatabaseContext, type TableDefinition } from '@holo-js/db'
-import type { DatabaseQueryObservation, DatabaseQueryRowReader, DatabaseQuerySelectionObservation } from './query-state'
+import type { DatabaseQueryObservation, RealtimeRowReader, DatabaseQuerySelectionObservation } from './query-state'
 import type { DatabaseMutationEvent } from './dependencies'
 import type { BackfillCache } from './state'
 import { getRuntimeState } from './state'
@@ -30,7 +30,7 @@ export function readBackfilledRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
-  readRow?: DatabaseQueryRowReader,
+  readRow?: RealtimeRowReader,
 ): Readonly<Record<string, unknown>>[] {
   if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections)
     || queryCacheInternals.hasUnreadableFetchedInteger(table, row, selections))) {
@@ -40,7 +40,7 @@ export function readBackfilledRows(
   return readRow ? read.map(row => readWithReader(readRow, row)) : read
 }
 
-function readWithReader(readRow: DatabaseQueryRowReader, row: Readonly<Record<string, unknown>>, written = false): Readonly<Record<string, unknown>> {
+function readWithReader(readRow: RealtimeRowReader, row: Readonly<Record<string, unknown>>, written = false): Readonly<Record<string, unknown>> {
   try {
     return readRow(row, written)
   } catch {
@@ -55,10 +55,10 @@ export class UnreadableBackfillError extends Error {
   }
 }
 
-const readerIds = new WeakMap<DatabaseQueryRowReader, number>()
+const readerIds = new WeakMap<RealtimeRowReader, number>()
 let nextReaderId = 0
 
-export function readerCacheKey(readRow: DatabaseQueryRowReader | undefined): string {
+export function readerCacheKey(readRow: RealtimeRowReader | undefined): string {
   if (!readRow) return ''
   let id = readerIds.get(readRow)
   if (id === undefined) {
@@ -95,11 +95,11 @@ function observedTables(query: DatabaseQueryObservation): ReadonlyMap<string, Ta
 
 const CONFLICTING_READERS = Symbol('conflictingReaders')
 
-type ObservedReader = DatabaseQueryRowReader | typeof CONFLICTING_READERS
+type ObservedReader = RealtimeRowReader | typeof CONFLICTING_READERS
 
 function observedReaders(query: DatabaseQueryObservation): ReadonlyMap<string, ObservedReader> {
   const readers = new Map<string, ObservedReader | undefined>()
-  const add = (connectionName: string, tableName: string, readRow: DatabaseQueryRowReader | undefined) => {
+  const add = (connectionName: string, tableName: string, readRow: RealtimeRowReader | undefined) => {
     const key = connectionTableKey(connectionName, tableName)
     if (!readers.has(key)) readers.set(key, readRow)
     else if (readers.get(key) !== readRow) readers.set(key, CONFLICTING_READERS)
@@ -113,7 +113,7 @@ function observedReaders(query: DatabaseQueryObservation): ReadonlyMap<string, O
 
 function readRows(
   table: TableDefinition | undefined,
-  readRow: DatabaseQueryRowReader | undefined,
+  readRow: RealtimeRowReader | undefined,
   rows: readonly Readonly<Record<string, unknown>>[] | undefined,
   values: Readonly<Record<string, unknown>> | undefined,
 ): readonly Readonly<Record<string, unknown>>[] | undefined {
@@ -124,7 +124,7 @@ function readRows(
 
 export function readMergedRow(
   table: TableDefinition | undefined,
-  readRow: DatabaseQueryRowReader | undefined,
+  readRow: RealtimeRowReader | undefined,
   row: Readonly<Record<string, unknown>>,
   values: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, unknown>> {
@@ -135,9 +135,9 @@ export function readMergedRow(
   return Object.freeze({ ...readObservedRow(table, readRow, stored), ...readObservedRow(table, readRow, written, true) })
 }
 
-export function readObservedRow(
+function readObservedRow(
   table: TableDefinition | undefined,
-  readRow: DatabaseQueryRowReader | undefined,
+  readRow: RealtimeRowReader | undefined,
   row: Readonly<Record<string, unknown>>,
   written = false,
 ): Readonly<Record<string, unknown>> {
@@ -145,7 +145,7 @@ export function readObservedRow(
   return readRow ? readWithReader(readRow, read, written) : read
 }
 
-function readMutation(table: TableDefinition | undefined, readRow: DatabaseQueryRowReader | undefined, mutation: DatabaseMutationEvent): DatabaseMutationEvent {
+function readMutation(table: TableDefinition | undefined, readRow: RealtimeRowReader | undefined, mutation: DatabaseMutationEvent): DatabaseMutationEvent {
   const rows = readRows(table, readRow, mutation.rows, mutation.values)
   const previousRows = readRows(table, readRow, mutation.previousRows, undefined)
   const values = mutation.values ? readObservedRow(table, readRow, mutation.values, true) : mutation.values
