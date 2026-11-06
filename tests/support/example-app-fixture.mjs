@@ -24,8 +24,8 @@ export async function createExampleAppFixture(root, framework) {
     await mkdir(join(projectRoot, 'storage'))
     const manifestPath = join(projectRoot, 'package.json')
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => 'null'))
-    if (manifest?.scripts?.prepare) {
-      manifest.scripts.prepare = 'holo key:generate && holo prepare'
+    if (manifest?.scripts?.setup) {
+      manifest.scripts.setup = 'holo key:generate && holo prepare'
       await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
     }
     for (const name of ['packages', 'tests', 'node_modules']) {

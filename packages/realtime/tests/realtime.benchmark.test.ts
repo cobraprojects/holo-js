@@ -7224,6 +7224,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
             value: 700,
           }],
           result,
+          resultPath: [],
           selections: [{
             column: 'title',
             resultKey: 'title',
@@ -10544,7 +10545,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained table first record predicate move patch transport without rerunning the query', async () => {
+  it('measures constrained table first record predicate move transport with a rerun when the result empties', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10562,7 +10563,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchOptions = {
       onData(snapshot: { readonly data: BenchmarkPostRow | undefined }) {
         counters.emittedSnapshots += 1
-        observedInitialTitle = snapshot.data?.title ?? ''
+        observedInitialTitle ||= snapshot.data?.title ?? ''
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -10580,7 +10581,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       throw new Error('Expected benchmark constrained first row to exist.')
     }
 
-    const patchStartedAt = performance.now()
+    const rerunStartedAt = performance.now()
     const patchedRow = {
       id: previousRow.id,
       title: 'Updated 1',
@@ -10592,23 +10593,19 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       previousRow.title,
       previousRow.user_id,
     ))
-    const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
+    const rerunDurationMs = Number((performance.now() - rerunStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(subscriptionCount)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(emittedPatches).toBe(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+    expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
+    expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
-    expect(observedPatch?.operations).toEqual([{
-      op: 'replace',
-      path: [],
-      valueKind: 'undefined',
-    }])
+    expect(observedPatch).toBeUndefined()
 
     reportBenchmark({
-      benchmark: '@holo-js/realtime constrained table first predicate move patch transport',
+      benchmark: '@holo-js/realtime constrained table first predicate move rerun transport',
       metrics: {
         emittedPatches,
-        patchDurationMs,
+        rerunDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -10802,7 +10799,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained table scalar value predicate move patch transport without rerunning the query', async () => {
+  it('measures constrained table scalar value predicate move transport with a rerun when the result empties', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10820,7 +10817,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchOptions = {
       onData(snapshot: { readonly data: string | undefined }) {
         counters.emittedSnapshots += 1
-        observedInitialTitle = snapshot.data ?? ''
+        observedInitialTitle ||= snapshot.data ?? ''
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -10838,7 +10835,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       throw new Error('Expected benchmark constrained scalar row to exist.')
     }
 
-    const patchStartedAt = performance.now()
+    const rerunStartedAt = performance.now()
     const patchedRow = {
       id: previousRow.id,
       title: 'Updated 1',
@@ -10850,23 +10847,19 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       previousRow.title,
       previousRow.user_id,
     ))
-    const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
+    const rerunDurationMs = Number((performance.now() - rerunStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(subscriptionCount)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(emittedPatches).toBe(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+    expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
+    expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
-    expect(observedPatch?.operations).toEqual([{
-      op: 'replace',
-      path: [],
-      valueKind: 'undefined',
-    }])
+    expect(observedPatch).toBeUndefined()
 
     reportBenchmark({
-      benchmark: '@holo-js/realtime constrained table scalar predicate move patch transport',
+      benchmark: '@holo-js/realtime constrained table scalar predicate move rerun transport',
       metrics: {
         emittedPatches,
-        patchDurationMs,
+        rerunDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -10875,7 +10868,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures constrained table scalar predicate-only move patch transport without rerunning the query', async () => {
+  it('measures constrained table scalar predicate-only move transport with a rerun when the result empties', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10893,7 +10886,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchOptions = {
       onData(snapshot: { readonly data: string | undefined }) {
         counters.emittedSnapshots += 1
-        observedInitialTitle = snapshot.data ?? ''
+        observedInitialTitle ||= snapshot.data ?? ''
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -10911,7 +10904,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       throw new Error('Expected benchmark constrained scalar row to exist.')
     }
 
-    const patchStartedAt = performance.now()
+    const rerunStartedAt = performance.now()
     const patchedRow = {
       ...previousRow,
       user_id: 2,
@@ -10922,23 +10915,19 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       previousRow.title,
       previousRow.user_id,
     ))
-    const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
+    const rerunDurationMs = Number((performance.now() - rerunStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(subscriptionCount)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(emittedPatches).toBe(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+    expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
+    expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
-    expect(observedPatch?.operations).toEqual([{
-      op: 'replace',
-      path: [],
-      valueKind: 'undefined',
-    }])
+    expect(observedPatch).toBeUndefined()
 
     reportBenchmark({
-      benchmark: '@holo-js/realtime constrained table scalar predicate-only move patch transport',
+      benchmark: '@holo-js/realtime constrained table scalar predicate-only move rerun transport',
       metrics: {
         emittedPatches,
-        patchDurationMs,
+        rerunDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,
@@ -10947,7 +10936,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     })
   })
 
-  it('measures table scalar value delete patch transport without rerunning the query', async () => {
+  it('measures table scalar value delete transport with a rerun when the result empties', async () => {
     const rows = createPatchBenchmarkRows()
     const db = createBenchmarkModelDatabaseContext(rows)
     configureRealtimeRuntime({
@@ -10965,7 +10954,7 @@ describe('@holo-js/realtime invalidation benchmark', () => {
     const patchOptions = {
       onData(snapshot: { readonly data: string | undefined }) {
         counters.emittedSnapshots += 1
-        observedInitialTitle = snapshot.data ?? ''
+        observedInitialTitle ||= snapshot.data ?? ''
       },
       onPatch(patch: BenchmarkPatch) {
         emittedPatches += 1
@@ -10983,26 +10972,22 @@ describe('@holo-js/realtime invalidation benchmark', () => {
       throw new Error('Expected benchmark scalar value row to exist.')
     }
 
-    const patchStartedAt = performance.now()
+    const rerunStartedAt = performance.now()
     rows.splice(0, 1)
     await realtimeRuntimeInternals.handleDatabaseInvalidation(createPatchDeleteInvalidation(deletedRow))
-    const patchDurationMs = Number((performance.now() - patchStartedAt).toFixed(3))
+    const rerunDurationMs = Number((performance.now() - rerunStartedAt).toFixed(3))
 
-    expect(counters.queryExecutions).toBe(subscriptionCount)
-    expect(counters.emittedSnapshots).toBe(subscriptionCount)
-    expect(emittedPatches).toBe(subscriptionCount)
+    expect(counters.queryExecutions).toBe(subscriptionCount * 2)
+    expect(counters.emittedSnapshots).toBe(subscriptionCount * 2)
+    expect(emittedPatches).toBe(0)
     expect(observedInitialTitle).toBe('Post 1')
-    expect(observedPatch?.operations).toEqual([{
-      op: 'replace',
-      path: [],
-      valueKind: 'undefined',
-    }])
+    expect(observedPatch).toBeUndefined()
 
     reportBenchmark({
-      benchmark: '@holo-js/realtime table scalar value delete patch transport',
+      benchmark: '@holo-js/realtime table scalar value delete rerun transport',
       metrics: {
         emittedPatches,
-        patchDurationMs,
+        rerunDurationMs,
         patchOperations: observedPatch?.operations.length ?? 0,
         queryExecutions: counters.queryExecutions,
         setupDurationMs,

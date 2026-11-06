@@ -88,6 +88,8 @@ export function readIntegerKey(value: unknown): unknown {
 
 const SQLITE_DECIMAL_PLACES = 2
 
+export const SQLITE_DECIMAL_TEXT_FUNCTION = 'holo_decimal_text'
+
 const EXPONENT_NUMBER_TEXT = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/
 
 function plainNumberText(value: number): string {

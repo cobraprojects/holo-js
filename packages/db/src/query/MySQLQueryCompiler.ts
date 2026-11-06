@@ -7,6 +7,10 @@ import { formatWallClockSeconds } from '../applicationTime'
 import { getApplicationTimezone } from '../applicationTimezone'
 import type { DeleteQueryPlan, InsertStatementOptions, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLikePredicate, QueryLockMode, QueryPredicate, UpsertQueryPlan } from './ast'
 
+const MYSQL_DECIMAL_DIGITS = 65
+
+const MYSQL_DECIMAL_KEY_INTEGER_DIGITS = 35
+
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   override compileTableIdentityLookup(tableName: string): CompiledStatement {
     const { schema, table } = splitTablePath(tableName)
@@ -50,6 +54,27 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
 
   protected override compileIntegerKey(expression: string): string {
     return `CASE WHEN ${expression} REGEXP '^-?(0|[1-9][0-9]{0,18})([.]0+)?$' AND ${expression} NOT REGEXP '[^-.0-9]' THEN CAST(SUBSTRING_INDEX(${expression}, '.', 1) AS DECIMAL(65, 0)) END`
+  }
+
+  protected override compileDecimalKey(expression: string): string {
+    return `CASE WHEN ${expression} REGEXP '^-?(0|[1-9][0-9]{0,34})([.][0-9]{1,30}0*)?$' AND ${expression} NOT REGEXP '[^-.0-9]' THEN CAST(LEFT(${expression}, LOCATE('.', CONCAT(${expression}, '.')) + 30) AS DECIMAL(65, 30)) END`
+  }
+
+  protected override compileDecimalKeyComparison(lookedUp: string, source: string, operator: string): string {
+    const valid = `${source} REGEXP '^-?(0|[1-9][0-9]{0,64})([.][0-9]+)?$' AND ${source} NOT REGEXP '[^-.0-9]'`
+    const integer = `SUBSTRING_INDEX(${source}, '.', 1)`
+    const digits = `LENGTH(TRIM(LEADING '-' FROM ${integer}))`
+    const fraction = `IF(LOCATE('.', ${source}) > 0, TRIM(TRAILING '0' FROM SUBSTRING_INDEX(${source}, '.', -1)), '')`
+    const whole = `CASE WHEN ${valid} AND ${fraction} = '' THEN CAST(${integer} AS DECIMAL(65, 0)) END`
+    const wide = `${valid} AND ${digits} > ${MYSQL_DECIMAL_KEY_INTEGER_DIGITS} AND ${fraction} <> '' AND ${digits} + LENGTH(${fraction}) <= ${MYSQL_DECIMAL_DIGITS}`
+    const wideInteger = `CASE WHEN ${wide} THEN CAST(${integer} AS DECIMAL(65, 0)) END`
+    const wideFraction = `CAST(CASE WHEN ${wide} THEN CONCAT(IF(LEFT(${source}, 1) = '-', '-', ''), '0.', ${fraction}) END AS DECIMAL(65, 30))`
+    const wideMatch = `${lookedUp} > ${wideInteger} - 1 AND ${lookedUp} < ${wideInteger} + 1 AND TRUNCATE(${lookedUp}, 0) = ${wideInteger} AND ${lookedUp} - TRUNCATE(${lookedUp}, 0) = ${wideFraction}`
+    return `(${super.compileDecimalKeyComparison(lookedUp, source, operator)} OR ${lookedUp} ${operator} ${whole} OR (${wideMatch}))`
+  }
+
+  protected override compileKeyKind(expression: string): string {
+    return `CASE JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(${expression}), '$[0]')) WHEN 'INTEGER' THEN 'integer' WHEN 'UNSIGNED INTEGER' THEN 'integer' WHEN 'DECIMAL' THEN 'decimal' WHEN 'STRING' THEN 'text' END`
   }
 
   protected override createSqlStringLiteral(value: string): string {

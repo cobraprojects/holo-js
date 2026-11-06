@@ -90,7 +90,7 @@ export interface SQLiteDatabaseLike {
   prepare(sql: string): SQLiteStatementLike
   exec(sql: string): unknown
   close(): unknown
-  function?(name: string, options: { deterministic: boolean }, implementation: (...args: unknown[]) => unknown): unknown
+  function?(name: string, options: { deterministic: boolean, safeIntegers?: boolean }, implementation: (...args: unknown[]) => unknown): unknown
 }
 
 export interface SQLiteAdapterOptions {
@@ -102,7 +102,7 @@ export interface SQLiteAdapterOptions {
 export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
   private hasRegisteredFunctions = false
-  private canCallWallClock = false
+  private canCallFunctions = false
   private connected: boolean
   private readonly transactionKey: string | SQLiteAdapter
   private readonly filename: string
@@ -275,8 +275,12 @@ export class SQLiteAdapter implements DriverAdapter {
   private prepareExact(sql: string): SQLiteStatementLike {
     const database = this.getDatabase()
     const wallClockFunction = holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION
-    if (!this.canCallWallClock && sql.includes(`${wallClockFunction}(`)) {
+    if (!this.canCallFunctions && sql.includes(`${wallClockFunction}(`)) {
       throw new CapabilityError(`This query compares dates in app.timezone through the ${wallClockFunction}() SQL function, which the injected SQLite database can't register because it has no function() method. Pass a better-sqlite3 Database, or set app.timezone to UTC.`)
+    }
+    const decimalTextFunction = holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION
+    if (!this.canCallFunctions && sql.includes(`${decimalTextFunction}(`)) {
+      throw new CapabilityError(`This query compares decimal keys with text keys through the ${decimalTextFunction}() SQL function, which the injected SQLite database can't register because it has no function() method. Pass a better-sqlite3 Database.`)
     }
     const statement = database.prepare(sql)
     statement.safeIntegers?.(true)
@@ -289,8 +293,9 @@ export class SQLiteAdapter implements DriverAdapter {
       this.hasRegisteredFunctions = false
     }
     if (!this.hasRegisteredFunctions) {
-      this.canCallWallClock = typeof this.database.function === 'function'
+      this.canCallFunctions = typeof this.database.function === 'function'
       this.database.function?.(holoRuntimeInternals.SQLITE_WALL_CLOCK_FUNCTION, { deterministic: true }, holoRuntimeInternals.formatSQLiteWallClock)
+      this.database.function?.(holoRuntimeInternals.SQLITE_DECIMAL_TEXT_FUNCTION, { deterministic: true, safeIntegers: true }, holoRuntimeInternals.readSQLiteDecimal)
       this.hasRegisteredFunctions = true
     }
     this.connected = true

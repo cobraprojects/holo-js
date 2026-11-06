@@ -42,6 +42,13 @@ export type DatabaseQueryObservation = {
   readonly projectedIdentityColumn?: string | typeof NO_PROJECTED_IDENTITY_COLUMN
   readonly result?: unknown
   readonly resultBound?: boolean
+  readonly resultFoundInHandlerValue?: boolean
+  readonly serializedSources?: readonly unknown[]
+  readonly observedResult?: {
+    readonly list: boolean
+    readonly values: readonly unknown[]
+    readonly fields: readonly (Readonly<Record<string, unknown>> | undefined)[]
+  }
   readonly resultPath?: readonly RealtimePatchPathSegment[]
   readonly resultPathKey?: string
   readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]

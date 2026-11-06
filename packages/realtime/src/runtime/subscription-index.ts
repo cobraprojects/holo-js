@@ -1,6 +1,7 @@
 import {
-  collectPredicateDependencies,
+  collectReadPredicateDependencies,
   collectTableDependencies,
+  parseDatabaseDependency,
   type ParsedInvalidationEvent,
   type PredicateDependencyIndex,
 } from './dependencies'
@@ -169,7 +170,7 @@ export function updateQueryEntryDependencies(
 export function ensureRefreshDeliveryPredicateDependencies<TDefinition extends RealtimeQueryDefinitionMetadata>(
   delivery: RefreshDelivery<TDefinition>,
 ): PredicateDependencyIndex {
-  delivery.predicateDependencies ??= collectPredicateDependencies(delivery.result.dependencies)
+  delivery.predicateDependencies ??= collectReadPredicateDependencies(delivery.result.dependencies, delivery.result.queries)
   return delivery.predicateDependencies
 }
 
@@ -178,6 +179,41 @@ export function ensureRefreshDeliveryTableDependencies<TDefinition extends Realt
 ): readonly string[] {
   delivery.tableDependencies ??= collectTableDependencies(delivery.result.dependencies)
   return delivery.tableDependencies
+}
+
+export function arePredicateDependenciesEqual(
+  current: PredicateDependencyIndex,
+  next: PredicateDependencyIndex,
+): boolean {
+  if (current === next) {
+    return true
+  }
+
+  if (current.size !== next.size) {
+    return false
+  }
+
+  for (const [tableKey, currentColumns] of current) {
+    const nextColumns = next.get(tableKey)
+    if (!nextColumns || nextColumns.size !== currentColumns.size) {
+      return false
+    }
+
+    for (const [columnName, currentValues] of currentColumns) {
+      const nextValues = nextColumns.get(columnName)
+      if (!nextValues || nextValues.size !== currentValues.size) {
+        return false
+      }
+
+      for (const value of currentValues) {
+        if (!nextValues.has(value)) {
+          return false
+        }
+      }
+    }
+  }
+
+  return true
 }
 
 export function areDependencySetsEqual(
@@ -378,28 +414,95 @@ function isQueryEntryDependencyContradictedByInvalidation(
   }
 
   for (const [tableKey, tablePredicates] of entry.predicateDependencies) {
-    for (const [columnName, values] of tablePredicates) {
-      const invalidatedValues = event.predicates.get(tableKey)?.get(columnName)
-      const exactInvalidatedValues = event.exactPredicates.get(tableKey)?.get(columnName)
-      if (!exactInvalidatedValues) {
-        continue
-      }
+    if (tablePredicates.get(PREDICATE_WILDCARD_VALUE)?.has(PREDICATE_WILDCARD_VALUE)) {
+      continue
+    }
 
-      let hasMatchingValue = values.has(PREDICATE_WILDCARD_VALUE)
-      for (const value of values) {
-        if (invalidatedValues?.has(value) || exactInvalidatedValues.has(value)) {
-          hasMatchingValue = true
-          break
-        }
-      }
-
-      if (!hasMatchingValue) {
-        return true
-      }
+    if (isTablePredicatesContradicted(tableKey, tablePredicates, event) && isTableContradictedForEveryRead(entry, tableKey, event)) {
+      return true
     }
   }
 
   return false
+}
+
+function isTablePredicatesContradicted(
+  tableKey: string,
+  tablePredicates: ReadonlyMap<string, ReadonlySet<string>>,
+  event: ParsedInvalidationEvent,
+): boolean {
+  for (const [columnName, values] of tablePredicates) {
+    const invalidatedValues = event.predicates.get(tableKey)?.get(columnName)
+    const exactInvalidatedValues = event.exactPredicates.get(tableKey)?.get(columnName)
+    if (!exactInvalidatedValues) {
+      continue
+    }
+
+    let hasMatchingValue = values.has(PREDICATE_WILDCARD_VALUE)
+    for (const value of values) {
+      if (invalidatedValues?.has(value) || exactInvalidatedValues.has(value)) {
+        hasMatchingValue = true
+        break
+      }
+    }
+
+    if (!hasMatchingValue) {
+      return true
+    }
+  }
+
+  return false
+}
+
+type ReadPredicateIndex = {
+  readonly predicates: PredicateDependencyIndex
+  readonly tables: ReadonlySet<string>
+}
+
+const readPredicateIndexes = new WeakMap<readonly string[], ReadPredicateIndex>()
+
+function isTableContradictedForEveryRead(
+  entry: ActiveQueryEntry<RealtimeQueryDefinitionMetadata>,
+  tableKey: string,
+  event: ParsedInvalidationEvent,
+): boolean {
+  let readCount = 0
+  for (const query of entry.queries) {
+    const read = readPredicateIndex(query.dependencies)
+    if (!read.tables.has(tableKey)) {
+      continue
+    }
+
+    readCount += 1
+    const readPredicates = read.predicates.get(tableKey)
+    if (!readPredicates || !isTablePredicatesContradicted(tableKey, readPredicates, event)) {
+      return false
+    }
+  }
+
+  return readCount > 0 || entry.queries.length === 0
+}
+
+function readPredicateIndex(dependencies: readonly string[]): ReadPredicateIndex {
+  const cached = readPredicateIndexes.get(dependencies)
+  if (cached) {
+    return cached
+  }
+
+  const tables = new Set<string>()
+  for (const dependency of dependencies) {
+    const tableKey = parseDatabaseDependency(dependency)?.tableKey
+    if (tableKey) {
+      tables.add(tableKey)
+    }
+  }
+
+  const index = {
+    predicates: collectReadPredicateDependencies(dependencies, [{ dependencies }]),
+    tables,
+  }
+  readPredicateIndexes.set(dependencies, index)
+  return index
 }
 
 function isQueryEntryObservationContradictedByInvalidation(

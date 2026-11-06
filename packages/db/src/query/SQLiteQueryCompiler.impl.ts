@@ -6,6 +6,7 @@ import type { TableNameFolding } from '../schema/tableIdentityRegistry'
 import { CompilerError } from '../core/errors'
 import { splitTablePath } from '../schema/identifiers'
 import { sameIdentifier } from '../schema/introspection/sqliteTokens'
+import { SQLITE_DECIMAL_TEXT_FUNCTION } from '../schema/normalization'
 import type { InsertStatementOptions, QueryColumnPredicate, QueryDatePredicate, QueryJsonPredicate, QueryLikePredicate, QueryJsonUpdateOperation, QueryLockMode, QueryPredicate, SelectQueryPlan } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
@@ -46,6 +47,10 @@ function compileSqliteJsonEquality(
     ? `${extractedType} NOT IN ('integer', 'real')`
     : `${extractedType} != '${valueType}'`
   return `${extractedType} IS NOT NULL AND (${differingType} OR ${extracted} != ${placeholder})`
+}
+
+function canonicalDecimalText(text: string): string {
+  return `CASE WHEN instr(${text}, '.') > 0 THEN rtrim(rtrim(${text}, '0'), '.') ELSE ${text} END`
 }
 
 const SQLITE_GLOB_PATTERN_REPLACEMENTS: Readonly<Record<string, string>> = {
@@ -256,6 +261,28 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     const limit = `CASE WHEN ${integer} GLOB '-*' THEN '9223372036854775808' ELSE '9223372036854775807' END`
     const inRange = `(length(${digits}) < 19 OR (length(${digits}) = 19 AND ${digits} <= ${limit}))`
     return `CASE WHEN instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND ${inRange} AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0]*')) THEN CAST(${integer} AS INTEGER) END`
+  }
+
+  protected override compileDecimalTextKey(expression: string): string {
+    return `${SQLITE_DECIMAL_TEXT_FUNCTION}(${expression})`
+  }
+
+  protected override compileDecimalKey(expression: string): string {
+    const point = `instr(${expression}, '.')`
+    const integer = `CASE WHEN ${point} > 0 THEN substr(${expression}, 1, ${point} - 1) ELSE ${expression} END`
+    const digits = `CASE WHEN ${integer} GLOB '-*' THEN substr(${integer}, 2) ELSE ${integer} END`
+    const fraction = `CASE WHEN ${point} > 0 THEN substr(${expression}, ${point} + 1) ELSE '' END`
+    const valid = `instr(CAST(${expression} AS BLOB), x'00') = 0 AND ${digits} <> '' AND ${digits} NOT GLOB '*[^0-9]*' AND (${digits} = '0' OR ${digits} NOT GLOB '0*') AND (${point} = 0 OR (${fraction} <> '' AND ${fraction} NOT GLOB '*[^0-9]*'))`
+    const real = `CAST(${expression} AS REAL)`
+    const exact = `CASE WHEN ${canonicalDecimalText(this.compileDecimalTextKey(real))} = ${canonicalDecimalText(expression)} THEN ${real} END`
+    return `CASE WHEN ${valid} THEN COALESCE(${this.compileIntegerKey(expression)}, ${exact}) END`
+  }
+
+  protected override compileKeyKind(_expression: string, tableName: string, column: string): string {
+    const { schema, table } = splitTablePath(tableName)
+    const source = `pragma_table_info(${this.createSqlStringLiteral(table)}${schema ? `, ${this.createSqlStringLiteral(schema)}` : ''})`
+    const type = 'lower(type)'
+    return `(SELECT CASE WHEN ${type} GLOB 'numeric*' OR ${type} GLOB 'decimal*' THEN 'decimal' WHEN ${type} GLOB '*int*' THEN 'integer' WHEN ${type} GLOB '*char*' OR ${type} GLOB '*clob*' OR ${type} GLOB '*text*' THEN 'text' END FROM ${source} WHERE name = ${this.createSqlStringLiteral(column)} COLLATE NOCASE)`
   }
 
   protected override compileColumnComparison(predicate: QueryColumnPredicate): string {

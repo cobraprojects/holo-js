@@ -9,6 +9,7 @@ import {
   rebindDatabaseQueryObservationHydratedResult,
   rebindDatabaseQueryObservationAggregate,
   rebindDatabaseQueryObservationResult,
+  rebindDatabaseQueryObservationSerializedResult,
   rebindDatabaseQueryObservationScalar,
   rebindDatabaseQueryObservationScalarList,
   type DatabaseQueryAggregateObservation,
@@ -2814,7 +2815,8 @@ class ModelQueryBuilderBase<
       return
     }
 
-    disableDatabaseQueryObservationPatching(rows, {
+    rebindDatabaseQueryObservationSerializedResult(rows, result)
+    disableDatabaseQueryObservationPatching(result, {
       serialized: this.rowsNeedSerialization(),
     })
   }

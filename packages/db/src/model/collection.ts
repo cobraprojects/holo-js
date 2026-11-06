@@ -1,4 +1,4 @@
-import { markDatabaseQueryObservationsSerialized } from '../cache'
+import { markDatabaseQueryObservationsSerialized, requireDatabaseQueryRefreshForRows, runRequiringDatabaseQueryRefresh, rebindDatabaseQueryObservationSerializedResult } from '../cache'
 import { HydrationError } from '../core/errors'
 import { integerKeysToInline, singleStatementRelationKeys } from './relationRetrieval'
 import { whereIntegerKeysIn } from './ModelQueryBuilder'
@@ -173,7 +173,9 @@ export function createModelCollection<
       return repo.query().where(repo.definition.primaryKey as never, 'in', singleStatementRelationKeys(keys)) as ModelQueryBuilder<TTable, TRelations, unknown, TScopes>
     },
     toJSON(): Array<CollectionSerializedItem<TItem, TTable>> {
-      return collection.map(item => item.toJSON() as CollectionSerializedItem<TItem, TTable>)
+      const serialized = collection.map(item => item.toJSON() as CollectionSerializedItem<TItem, TTable>)
+      rebindDatabaseQueryObservationSerializedResult(collection, serialized)
+      return serialized
     },
     async load(...relations: readonly ModelRelationPath<TRelations>[]): Promise<ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>> {
       const first = collection[0]
@@ -182,7 +184,8 @@ export function createModelCollection<
       }
 
       const repo = getRepository(first)
-      await repo.loadRelations(collection, relations, false)
+      await runRequiringDatabaseQueryRefresh(() => repo.loadRelations(collection, relations, false))
+      requireDatabaseQueryRefreshForRows(collection)
       return collection as ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>
     },
     async loadMissing(...relations: readonly ModelRelationPath<TRelations>[]): Promise<ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>> {
@@ -192,7 +195,8 @@ export function createModelCollection<
       }
 
       const repo = getRepository(first)
-      await repo.loadRelations(collection, relations, true)
+      await runRequiringDatabaseQueryRefresh(() => repo.loadRelations(collection, relations, true))
+      requireDatabaseQueryRefreshForRows(collection)
       return collection as ModelCollection<TTable, TRelations, CollectionLoadedItem<TItem, TTable, TRelations, typeof relations>, TScopes>
     },
     async loadMorph(
@@ -209,6 +213,7 @@ export function createModelCollection<
         throw new HydrationError('The bound repository cannot load morph relations.')
       }
       await repo.loadMorphRelations(collection, relation, mapping)
+      requireDatabaseQueryRefreshForRows(collection)
       return collection
     },
     async loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<ModelCollection<TTable, TRelations, TItem, TScopes>> {

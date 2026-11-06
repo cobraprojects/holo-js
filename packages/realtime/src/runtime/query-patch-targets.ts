@@ -138,6 +138,7 @@ export function createPatchedQueryObservation(
     projectedIdentityColumn: readQueryProjectedIdentityColumn(query),
     result,
     resultBound: query.resultBound,
+    resultFoundInHandlerValue: query.resultFoundInHandlerValue,
     resultPath: query.resultPath ?? EMPTY_RESULT_PATH,
     resultPathKey,
     relatedHydrations: query.relatedHydrations,
@@ -399,7 +400,7 @@ function selectQueryPatchCapability(
   rowPatchMode: RowPatchMode | undefined,
   skipsPatching: boolean,
 ): QueryPatchCapability {
-  if (query.serialized) {
+  if (query.serialized || query.resultBound === false) {
     return 'refresh'
   }
 

@@ -466,7 +466,7 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework, cata
     } else {
       await createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNodeModules)
     }
-    run(appRoot, 'bun', ['run', 'prepare'], env)
+    run(appRoot, 'bun', ['run', 'setup'], env)
     run(appRoot, 'bun', ['x', 'holo', 'migrate:fresh', '--seed', '--force'], env)
     const build = run(appRoot, 'bun', ['run', 'build'], env)
     if (app.name === 'next') {

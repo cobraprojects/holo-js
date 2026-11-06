@@ -502,7 +502,7 @@ async function startBroadcastWorker(appUrl) {
 }
 
 try {
-  await run('bun', ['run', 'prepare'])
+  await run('bun', ['run', 'setup'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearExampleAppRateLimitBuckets(cwd)

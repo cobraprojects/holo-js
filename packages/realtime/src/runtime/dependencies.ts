@@ -215,7 +215,7 @@ function hasUpsertMutation(mutations: readonly DatabaseMutationEvent[]): boolean
   return mutations.some(mutation => mutation.kind === 'upsert')
 }
 
-export function collectPredicateDependencies(
+function collectPredicateDependencies(
   dependencies: readonly string[],
   parseDependency: (dependency: string) => ParsedPredicateDependency | undefined = parsePredicateDependency,
 ): PredicateDependencyIndex {
@@ -230,6 +230,43 @@ export function collectPredicateDependencies(
   }
 
   return predicates
+}
+
+export function collectReadPredicateDependencies(
+  dependencies: readonly string[],
+  reads: readonly { readonly dependencies: readonly string[] }[],
+): PredicateDependencyIndex {
+  const predicates = collectPredicateDependencies(dependencies)
+  if (predicates.size === 0) {
+    return predicates
+  }
+
+  for (const read of reads) {
+    for (const tableKey of collectBroadReadTables(read.dependencies)) {
+      predicates.delete(tableKey)
+    }
+  }
+
+  return predicates
+}
+
+function collectBroadReadTables(dependencies: readonly string[]): ReadonlySet<string> {
+  const tables = new Set<string>()
+  for (const dependency of dependencies) {
+    const tableKey = parseTableDependency(dependency)
+    if (tableKey) {
+      tables.add(tableKey)
+    }
+  }
+
+  for (const dependency of dependencies) {
+    const parsed = parsePredicateDependency(dependency)
+    if (parsed) {
+      tables.delete(parsed.tableKey)
+    }
+  }
+
+  return tables
 }
 
 function addPredicateDependency(

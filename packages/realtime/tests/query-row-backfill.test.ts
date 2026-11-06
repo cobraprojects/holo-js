@@ -34,12 +34,14 @@ describe('native subscription row backfills', () => {
       () => db.table('records').whereIn('id', [2, 4]).update({ group_id: 3 }),
       () => db.table('records').where('id', 6).update({ group_id: 2 }),
       () => db.table('records').where('id', 7).update({ score: 75 }),
-      () => db.table('records').whereIn('group_id', [1, 2]).delete(),
     ]) {
       await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
       await verify()
     }
-    expect(groups.map(state => state.reads)).toEqual([1, 1])
+    expect(groups.map(state => state.reads)).toEqual(offset === 0 ? [1, 1] : [2, 1])
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').whereIn('group_id', [1, 2]).delete() }))
+    await verify()
+    expect(groups.map(state => state.reads)).toEqual([2, 2])
     if (offset > 0) expect(queries.some(query => query.sql.includes('ROW_NUMBER() OVER'))).toBe(true)
   })
 
@@ -52,16 +54,17 @@ describe('native subscription row backfills', () => {
         return db.table('records').where('id', state.id).select('id', 'score').first()
       } }), {}, { onData: snapshot => { state.snapshots.push(snapshot.data) }, onError: error => { throw error } })
     }
-    for (const change of [
-      () => db.table('records').whereIn('id', [1, 2]).update({ score: 99 }),
-      () => db.table('records').whereIn('id', [1, 2]).delete(),
-    ]) {
-      await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: change }))
+    const verify = async () => {
       for (const state of states) {
         const expected = await adapter.query('SELECT id, score FROM records WHERE id = ?', [state.id])
         expect(state.snapshots.at(-1)).toEqual(expected.rows[0])
       }
     }
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').whereIn('id', [1, 2]).update({ score: 99 }) }))
+    await verify()
     expect(states.map(state => state.reads)).toEqual([1, 1])
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table('records').whereIn('id', [1, 2]).delete() }))
+    await verify()
+    expect(states.map(state => state.reads)).toEqual([2, 2])
   })
 })
