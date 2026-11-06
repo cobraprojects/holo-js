@@ -21,6 +21,10 @@ function holdsInteger(value: unknown): boolean {
   return typeof value === 'number' || readsIntegerText(value)
 }
 
+export function failsIntegerRead(value: unknown): boolean {
+  return holdsInteger(value) && !Number.isSafeInteger(Number(value))
+}
+
 function readIntegerResult(value: unknown): unknown {
   return holdsInteger(value) ? parseInteger(value) : value
 }

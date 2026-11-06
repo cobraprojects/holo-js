@@ -7,7 +7,7 @@ import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
 import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
-import { readCanonicalInteger } from './query/resultColumns'
+import { failsIntegerRead, readCanonicalInteger } from './query/resultColumns'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
 import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
@@ -2286,17 +2286,31 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
+function resultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  readsColumn: (table: TableDefinition, column: string) => boolean,
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    return reads(row[key]) && readsColumn(table, selection ? selection.column : key)
+  })
+}
+
+function isIntegerColumn(table: TableDefinition, column: string): boolean {
+  return Object.hasOwn(table.columns, column) && readsAsInteger(table.columns[column]!)
+}
+
 function booleanResultKeys(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[],
   reads: (value: unknown) => boolean,
 ): readonly string[] {
-  if (!table) return []
-  return Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
-  })
+  return resultKeys(table, row, selections, isBooleanColumn, reads)
 }
 
 function hasUnstoredFetchedBoolean(
@@ -2318,18 +2332,29 @@ function readBooleanColumns(
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
+function integerResultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  return resultKeys(table, row, selections, isIntegerColumn, reads)
+}
+
+function hasUnreadableFetchedInteger(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): boolean {
+  return integerResultKeys(table, row, selections, failsIntegerRead).length > 0
+}
+
 function readIntegerColumns(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[],
 ): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const integerKeys = Object.keys(row).filter((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    const column = selection ? selection.column : key
-    const definition = Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
-    return definition !== undefined && readsAsInteger(definition) && readCanonicalInteger(row[key]) !== row[key]
-  })
+  const integerKeys = integerResultKeys(table, row, selections, value => readCanonicalInteger(value) !== value)
   if (integerKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(integerKeys.map(key => [key, readCanonicalInteger(row[key])])) })
 }
@@ -2686,6 +2711,7 @@ export async function invalidateQueryCacheDependencies(
 export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
+  hasUnreadableFetchedInteger,
   hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,

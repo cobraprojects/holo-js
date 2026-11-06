@@ -31,13 +31,16 @@ export function readBackfilledRows(
   rows: readonly Readonly<Record<string, unknown>>[],
   selections?: readonly DatabaseQuerySelectionObservation[],
 ): Readonly<Record<string, unknown>>[] {
-  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections))) throw new UnreadableBackfillError()
+  if (rows.some(row => queryCacheInternals.hasUnstoredFetchedBoolean(table, row, selections)
+    || queryCacheInternals.hasUnreadableFetchedInteger(table, row, selections))) {
+    throw new UnreadableBackfillError()
+  }
   return rows.map(row => queryCacheInternals.readFetchedRow(table, row, selections))
 }
 
 export class UnreadableBackfillError extends Error {
   constructor() {
-    super('A backfilled boolean column holds a value other than 1 or 0.')
+    super('A backfilled column holds a value the query cannot read.')
     this.name = 'UnreadableBackfillError'
   }
 }

@@ -7,6 +7,7 @@ import {
 import {
   getBackfillDatabaseConnection,
   readBackfilledRows,
+  readBackfilledValue,
 } from './query-backfill'
 import { matchesPredicates, type DatabaseQueryPredicateObservation } from './predicate-matching'
 import { canBackfillRelatedHydrationPredicates } from './query-related-hydration'
@@ -190,7 +191,7 @@ async function fetchGroupedBelongsToRelatedValue(
     return undefined
   }
 
-  return rowsByForeignKey.get(foreignKey)?.[0] ?? null
+  return rowsByForeignKey.get(readBackfilledValue(target.relatedTable, target.ownerKey, foreignKey))?.[0] ?? null
 }
 
 function collectBelongsToForeignKeys(
@@ -246,10 +247,12 @@ async function fetchGroupedBelongsToRelatedRows(
 
   const rows = readBackfilledRows(target.relatedTable, await builder.get())
 
+  const readKey = (value: unknown) => readBackfilledValue(target.relatedTable, target.ownerKey, value)
+  const requestedKeys = new Set(values.map(readKey))
   const rowsByForeignKey = new Map<unknown, Readonly<Record<string, unknown>>[]>()
   for (const row of rows) {
     const ownerKey = row[target.ownerKey]
-    if (typeof ownerKey === 'undefined') {
+    if (typeof ownerKey === 'undefined' || !requestedKeys.has(ownerKey)) {
       return undefined
     }
 
@@ -260,7 +263,7 @@ async function fetchGroupedBelongsToRelatedRows(
 
   const result = new Map<unknown, readonly Readonly<Record<string, unknown>>[]>()
   for (const value of values) {
-    result.set(value, Object.freeze(rowsByForeignKey.get(value) ?? []))
+    result.set(readKey(value), Object.freeze(rowsByForeignKey.get(readKey(value)) ?? []))
   }
 
   return result
