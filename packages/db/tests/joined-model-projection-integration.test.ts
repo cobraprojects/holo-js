@@ -549,6 +549,8 @@ describe.each(drivers)('joined model queries keep the model columns on %s', (dri
     await DB.table(products).insert({ id: 3, price: 30, parent_id: 3, factor: 6 })
     const mixed = Reordered.query().select(`${products}.*`).where('id', 1).union(Reordered.query().select('id', 'price', 'parent_id', 'factor').whereIn('id', [2, 3])).orderBy('id')
     expect(await pages(mixed as never)).toEqual([[1], [2], [3]])
+    const wildcardLast = Reordered.query().select('id', 'price', 'parent_id', 'factor').where('id', 1).union(Reordered.query().whereIn('id', [2, 3])).orderBy('id')
+    expect(await pages(wildcardLast as never)).toEqual([[1], [2], [3]])
   })
 
   it('keeps the selection order between outputs that are not model columns', async () => {

@@ -56,7 +56,8 @@ function namedBranchColumn(branch: SelectQueryPlan, column: string): string {
 
 function positionedBranchColumn(branch: SelectQueryPlan, column: string, position: number, connectionName: string): string {
   const outputs = branchOutputs(branch, connectionName)
-  const output = outputs.slice(0, position).every(candidate => candidate.positioned) ? outputs[position] : undefined
+  if (!outputs.slice(0, position + 1).every(output => output.positioned)) return namedBranchColumn(branch, column)
+  const output = outputs[position]
   if (!output?.column) {
     throw new CompilerError(`Cannot cursor paginate a union by "${column}": a query in the union doesn't select a table column at its position. Select a column at the same position in each query.`)
   }
