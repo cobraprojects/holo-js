@@ -163,7 +163,7 @@ export function createRowBackfillKeyPrefix(query: DatabaseQueryObservation): str
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
-    + readerCacheKey(query.readRow)
+    + readerCacheKey(query.readRow, query)
 }
 
 export function createAggregateBackfillKey(query: DatabaseQueryObservation): string {

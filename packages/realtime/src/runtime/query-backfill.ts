@@ -55,18 +55,21 @@ export class UnreadableBackfillError extends Error {
   }
 }
 
-const readerIds = new WeakMap<RealtimeRowReader, number>()
-let nextReaderId = 0
+const scopeIds = new WeakMap<object, number>()
+let nextScopeId = 0
 
-export function readerCacheKey(readRow: RealtimeRowReader | undefined): string {
-  if (!readRow) return ''
-  let id = readerIds.get(readRow)
+function scopeId(scope: object): number {
+  let id = scopeIds.get(scope)
   if (id === undefined) {
-    nextReaderId += 1
-    id = nextReaderId
-    readerIds.set(readRow, id)
+    nextScopeId += 1
+    id = nextScopeId
+    scopeIds.set(scope, id)
   }
-  return `:reader:${id}`
+  return id
+}
+
+export function readerCacheKey(readRow: RealtimeRowReader | undefined, scope: object): string {
+  return readRow ? `:reader:${scopeId(readRow)}:${scopeId(scope)}` : ''
 }
 
 export function observedTableKey(query: { readonly tableName: string, readonly table?: TableDefinition }): string {

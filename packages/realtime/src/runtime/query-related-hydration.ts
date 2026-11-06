@@ -543,12 +543,12 @@ function createRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   localKey: unknown,
 ): string {
-  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow)}`
+  return `related:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(localKey)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }
 
 function createGroupedRelatedHydrationBackfillKey(
   hydration: DatabaseQueryRelatedHydrationObservation,
   values: readonly unknown[],
 ): string {
-  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow)}`
+  return `related-group:${hydration.kind}:${hydration.relatedConnectionName}:${hydration.relatedTableName}:${hydration.foreignKey}:${stableStringify(values)}:${stableStringify(hydration.predicates)}:${stableStringify(hydration.orderBy)}${readerCacheKey(hydration.readRow, hydration)}`
 }

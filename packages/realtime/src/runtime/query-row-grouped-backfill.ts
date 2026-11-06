@@ -176,7 +176,7 @@ function createGroupedExactRowBackfillKey(
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
-    + readerCacheKey(query.readRow)
+    + readerCacheKey(query.readRow, query)
     + '}'
 }
 
@@ -353,7 +353,7 @@ function createGroupedWindowBackfillKey(
     + stableStringify(query.selections ?? [])
     + ',"tableName":'
     + stableStringify(observedTableKey(query))
-    + readerCacheKey(query.readRow)
+    + readerCacheKey(query.readRow, query)
     + '}'
 }
 
