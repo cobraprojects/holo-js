@@ -41,7 +41,7 @@ describe('aliased table joins', () => {
       .join(`${source} as twin`, `${source}.id`, '=', 'twin.id')
       .count())
     expect(collected.value).toBe(3)
-    expect(collected.dependencies).toEqual([`db:default:${source}`])
+    expect(collected.dependencies).toEqual([`db:default:${source.split('.').at(-1)}`])
   })
 
   it.each(integrationDrivers(['sqlite', 'postgres', 'mysql']))('quotes the joined table and alias on %s', async driver => {

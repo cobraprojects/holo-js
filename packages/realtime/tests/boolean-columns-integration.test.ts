@@ -88,6 +88,29 @@ describe.each(drivers)('realtime boolean columns on %s', (driver) => {
     await expectPatched()
   })
 
+  it.runIf(driver === 'sqlite')('patches a subscription through a schema-qualified definition after name-only writes', async () => {
+    const { db, flags } = await openFlags(driver)
+    const qualified = defineGeneratedTable(`main.${flags.tableName}`, { id: column.id(), group_id: column.integer(), enabled: column.boolean() })
+    const { expectPatched } = await subscribeCounted({
+      rows: () => db.table(qualified).orderBy('id').get(),
+    })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).where('id', 1).update({ enabled: 0 }) }))
+    await expectPatched()
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 1 }) }))
+    await expectPatched()
+  })
+
+  it.runIf(driver === 'sqlite')('re-runs a schema-qualified name-only subscription when a typed write converts a column it reads', async () => {
+    const { db, flags } = await openFlags(driver)
+    const handler = () => db.table(`main.${flags.tableName}`).select('id', 'enabled').orderBy('id').get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
   it('re-runs a name-only subscription over a boolean column, which reads the values the driver returns', async () => {
     const { db, flags } = await openFlags(driver)
     registerGeneratedTables({ [flags.tableName]: flags })
@@ -279,6 +302,52 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rea
     await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 1, enabled: true }) }))
 
     expect(subscription.current.data).toEqual(await handler())
+  })
+
+  it.runIf(driver !== 'postgres')('re-runs an ordered window once a backfill loads a value other than one or zero', async () => {
+    const { db, flags } = await openFlags(driver)
+    await db.table(flags).where('id', 1).update({ enabled: false })
+    await db.table(flags).where('id', 2).update({ enabled: true })
+    await db.table(flags.tableName).insert({ id: 3, group_id: 1, enabled: 2 })
+    const handler = () => db.table(flags).orderBy('enabled').orderBy('id').limit(2).get()
+    const subscription = await subscribeRealtimeQuery(defineRealtimeQuery({ access: 'public', handler }), {}, { onData: () => {}, onError: (error) => { throw error } })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 1).delete() }))
+    expect(subscription.current.data).toEqual(await handler())
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 4, group_id: 1, enabled: true }) }))
+
+    expect(subscription.current.data).toEqual(await handler())
+  })
+
+  it.runIf(driver !== 'postgres')('keeps hydrated relations equal to fresh reads when a loaded related row holds a boolean other than one or zero', async () => {
+    const { db, flags, schema } = await openFlags(driver)
+    const groupsName = `holo_live_odd_groups_${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    await schema.createTable(groupsName, (table) => {
+      table.id()
+      table.boolean('visible')
+    })
+    onTestFinished(() => schema.dropTable(groupsName))
+    const groups = defineGeneratedTable(groupsName, { id: column.id(), visible: column.boolean() })
+    await db.table(groups).insert([{ id: 1, visible: true }, { id: 2, visible: true }, { id: 3, visible: true }])
+    const Group = defineModel(groups, { timestamps: false })
+    const Flag = defineModel(flags, { timestamps: false, relations: { group: belongsTo(() => Group, 'group_id') } })
+    const GroupWithFlags = defineModel(groups, { timestamps: false, relations: { flags: hasMany(() => Flag, 'group_id') } })
+    const queries: Record<string, () => Promise<unknown>> = {
+      parents: () => db.model(Flag).query().with('group').orderBy('id').getJson(),
+      children: () => db.model(GroupWithFlags).query().with({ flags: query => query.orderBy('id') }).orderBy('id').getJson(),
+    }
+    const subscriptions = await Promise.all(Object.values(queries).map(handler => subscribeRealtimeQuery(
+      defineRealtimeQuery({ access: 'public', handler }),
+      {},
+      { onData: () => {}, onError: (error) => { throw error } },
+    )))
+    await db.executeCompiled({ sql: `UPDATE ${groupsName} SET visible = 2 WHERE id = 3`, source: 'test:boolean-columns' })
+    await db.executeCompiled({ sql: `UPDATE ${flags.tableName} SET enabled = 2 WHERE id = 1`, source: 'test:boolean-columns' })
+
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).insert({ id: 3, group_id: 3, enabled: true }) }))
+    await executeRealtimeMutation(defineRealtimeMutation({ access: 'public', handler: () => db.table(flags).where('id', 2).update({ group_id: 1 }) }))
+
+    expect(subscriptions.map(subscription => subscription.current.data)).toEqual(await Promise.all(Object.values(queries).map(handler => handler())))
   })
 
   it.runIf(driver !== 'postgres')('reads a value other than one or zero that a window backfill loads the way a fresh read does', async () => {

@@ -36,6 +36,7 @@ import {
   recordDatabaseQueryContext,
   resolveQueryCacheDependencies,
   writesTextLiterals,
+  type QueryTextMatching,
   resolveQueryCacheKey,
   type DatabaseQueryGroupedAggregateStateObservation,
   type DatabaseQueryGroupedAggregateValueCountObservation,
@@ -48,7 +49,7 @@ import {
   type QueryCacheTtlInput,
 } from '../cache'
 import { queryBatches, visitRows } from './traversal'
-import { hasUnstoredBoolean, holdsUnsafeInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
+import { hasUnstoredBoolean, holdsUnreadableInteger, readConvertedResultColumns, readInsertedKey, readIntegerColumns, resolveConvertedResultColumns, tableForQualifier, withResolvedDefinitions } from './resultColumns'
 import {
   createCursorPaginator,
   createPaginator,
@@ -99,9 +100,10 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
-import { isPostgresConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
-import { resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
+import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
+import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { CompiledStatement, DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -112,6 +114,8 @@ import type {
   QueryJoinClause,
   QueryBetweenColumnsPredicate,
   QueryColumnPredicate,
+  QueryKeyCast,
+  QueryKeyCasts,
   QueryDatePart,
   QueryOperator,
   QueryPredicateNode,
@@ -129,6 +133,7 @@ import {
   normalizeQueryWriteValue,
 } from './queryValueNormalizer'
 import { createQueryCompiler } from './queryCompilerFactory'
+import { resolvePlanGeneratedTableIdentities, resolvePlanTableIdentities, resolveTableIdentity } from './tableIdentity'
 import { assertQueryTablePath, validateQueryPlan } from './validator'
 
 import type { AvailableTableColumns, ColumnSelection, NullableColumns, QualifiedTableColumns, SelectedColumns } from './selectionTypes'
@@ -182,6 +187,22 @@ type KeyedInsert = (
 ) => Promise<number | string | undefined>
 
 let keyedInsert: KeyedInsert
+type AnyTableQuery = TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>
+let keyColumnComparison: (query: AnyTableQuery, column: string, compareTo: string, casts: QueryKeyCasts) => AnyTableQuery
+let keyColumnSelection: (query: AnyTableQuery, column: string, cast: QueryKeyCast | undefined) => AnyTableQuery
+let keyColumnJoin: (query: AnyTableQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts) => AnyTableQuery
+
+export function whereKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, compareTo: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnComparison(query as unknown as AnyTableQuery, column, compareTo, casts) as unknown as TQuery
+}
+
+export function selectKeyColumn<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, column: string, cast: QueryKeyCast | undefined): TQuery {
+  return keyColumnSelection(query as unknown as AnyTableQuery, column, cast) as unknown as TQuery
+}
+
+export function joinOnKeyColumns<TQuery extends TableQueryBuilder<TableReference, Record<string, unknown>, Record<string, unknown>>>(query: TQuery, table: TableReference, leftColumn: string, rightColumn: string, casts: QueryKeyCasts): TQuery {
+  return keyColumnJoin(query as unknown as AnyTableQuery, table, leftColumn, rightColumn, casts) as unknown as TQuery
+}
 
 export function resolveSourceColumnName(source: Pick<QuerySource, 'tableName' | 'alias'>, column: string): string | undefined {
   const separator = column.lastIndexOf('.')
@@ -209,7 +230,7 @@ function selectionOutputName(selection: QuerySelection): string | undefined {
 }
 
 function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
-  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
+  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === splitTablePath(tableName).table))
 }
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
@@ -256,7 +277,8 @@ export class TableQueryBuilder<
   TSelectedRow extends Record<string, unknown> = SelectRow<TTableOrName>,
   TAvailableColumns extends Record<string, unknown> = AvailableTableColumns<TTableOrName>,
 > {
-  private readonly source: ReturnType<typeof createTableSource>
+  private readonly ownSource: ReturnType<typeof createTableSource>
+  private boundSource?: ReturnType<typeof createTableSource>
   private readonly plan: SelectQueryPlan
 
   constructor(
@@ -267,7 +289,7 @@ export class TableQueryBuilder<
     handoff?: symbol,
   ) {
     const source = plan?.source ?? createTableSource(table)
-    this.source = source.table ? source : { ...source, table: getConnectionGeneratedTableDefinition(source.tableName, connection.getConnectionName()) }
+    this.ownSource = source
     const ownPlan = plan && handoff !== internalPlanHandoff
       ? { ...plan, predicates: copyTopLevelPredicates(plan.predicates) }
       : plan
@@ -278,6 +300,26 @@ export class TableQueryBuilder<
       sql,
       bindings: Object.freeze([...bindings]),
     }))))
+  }
+
+  private get source(): ReturnType<typeof createTableSource> {
+    if (this.boundSource) return this.boundSource
+    if (this.ownSource.table) return this.ownSource
+    const table = getConnectionGeneratedTableDefinition(this.ownSource.tableName, this.connection.getConnectionName())
+    const source = { ...this.ownSource, table }
+    if (table) this.boundSource = source
+    return source
+  }
+
+  private async bindGeneratedTable(): Promise<void> {
+    await resolvePlanGeneratedTableIdentities(this.connection, this.plan)
+  }
+
+  private async prepareMutation(): Promise<void> {
+    await this.bindGeneratedTable()
+    if (getDatabaseQueryCacheBridge() || hasDatabaseDependencyInvalidationListeners() || hasDatabaseDependencyInvalidationPublisher()) {
+      await resolveTableIdentity(this.connection, this.ownSource.tableName)
+    }
   }
 
   getTableName(): string {
@@ -696,7 +738,7 @@ export class TableQueryBuilder<
 
     const qualifier = column.slice(0, separator)
     const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
-      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      ? table === qualifier || (table !== undefined && splitTablePath(table).table === qualifier)
       : alias === qualifier))
     return join?.definition?.columns[column.slice(separator + 1)]
   }
@@ -885,6 +927,7 @@ export class TableQueryBuilder<
     column: string,
     operatorOrCompareTo: string,
     compareTo?: string,
+    casts?: QueryKeyCasts,
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const comparedColumn = compareTo ?? operatorOrCompareTo
     const dateOperands = { column: this.isDateColumn(column), compareTo: this.isDateColumn(comparedColumn) }
@@ -895,6 +938,7 @@ export class TableQueryBuilder<
       operator: (typeof compareTo === 'undefined' ? '=' : operatorOrCompareTo) as QueryColumnPredicate['operator'],
       compareTo: comparedColumn,
       ...(dateOperands.column || dateOperands.compareTo ? { dateOperands } : {}),
+      ...(casts?.left || casts?.right ? { keyCasts: casts } : {}),
     }))
   }
 
@@ -1955,7 +1999,7 @@ export class TableQueryBuilder<
     }
     const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
     const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
-    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table}.*`
+    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? splitTablePath(table).table : table}.*`
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
@@ -1989,8 +2033,15 @@ export class TableQueryBuilder<
     scopeCacheKey = false,
     convertColumns = true,
   ): Promise<TRow[]> {
+    await this.bindGeneratedTable()
     const cacheConfig = this.queryCacheConfig
     const activeDependencyCollector = hasActiveDatabaseDependencyCollector()
+    if (activeDependencyCollector || (cacheConfig && !this.plan.lockMode)) {
+      await resolvePlanTableIdentities(this.connection, this.plan)
+      for (const dependency of cacheConfig?.invalidate ?? []) {
+        if (!dependency.startsWith('db:')) await resolveTableIdentity(this.connection, dependency)
+      }
+    }
     const dependencies = this.plan.lockMode
       || (!cacheConfig && !activeDependencyCollector)
       ? undefined
@@ -1998,7 +2049,7 @@ export class TableQueryBuilder<
           this.plan,
           this.connection.getConnectionName(),
           cacheConfig?.invalidate,
-          textMatchesAnyNumber(this.connection),
+          cacheConfig?.invalidate?.length ? false : await this.resolveQueryTextMatching(),
     )
     const observationDependencies = activeDependencyCollector && !this.plan.lockMode
       ? dependencies ?? inferDatabaseQueryObservationDependencies(this.plan, this.connection.getConnectionName())
@@ -2860,6 +2911,7 @@ export class TableQueryBuilder<
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
     generatedKeyColumn?: string,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2890,6 +2942,7 @@ export class TableQueryBuilder<
   async insertOrIgnore(
     values: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
@@ -2920,6 +2973,16 @@ export class TableQueryBuilder<
 
   static {
     keyedInsert = (query, values, keyColumn) => query.insertGetKey(values, keyColumn)
+    keyColumnComparison = (query, column, compareTo, casts) => query.whereColumnWithBoolean('and', column, '=', compareTo, casts)
+    keyColumnSelection = (query, column, cast) => query.clone({ ...query.plan, selections: Object.freeze([Object.freeze({ kind: 'column' as const, column, ...(cast ? { keyCast: cast } : {}) })]) })
+    keyColumnJoin = (query, table, leftColumn, rightColumn, casts) => query.clone(withJoin(query.plan, {
+      type: 'inner',
+      ...resolveJoinTarget(table),
+      leftColumn,
+      operator: '=',
+      rightColumn,
+      ...(casts.left || casts.right ? { keyCasts: casts } : {}),
+    }))
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
@@ -2937,6 +3000,7 @@ export class TableQueryBuilder<
     uniqueBy: readonly string[],
     requestedUpdateColumns: readonly string[] = [],
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const updateColumns = Object.keys(this.resolveSourceColumnKeys(requestedUpdateColumns.map(column => [column, column] as const), 'upsert'))
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
@@ -2964,8 +3028,10 @@ export class TableQueryBuilder<
 
     await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, {
       canReadRows: hasInvalidationListeners,
+      conflictColumns: result.rows ? undefined : isMySQLConnection(this.connection) ? 'any' : uniqueBy,
       previousRows,
       rowsAreWritten: !useReturningRows,
+      updatedColumns: updateColumns,
     })
     return upsertResult
   }
@@ -3046,6 +3112,7 @@ export class TableQueryBuilder<
       throw new SecurityError(`insertUsing() needs a source query on the same database connection as "${this.connection.getConnectionName()}".`)
     }
 
+    await this.prepareMutation()
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertUsingQueryPlan(this.source, columns, query.getPlan(), { ignoreConflicts }),
     ))
@@ -3061,16 +3128,19 @@ export class TableQueryBuilder<
       throw new TransactionError(`truncate() cannot run inside a transaction on "${this.connection.getDriver()}" because the database commits the transaction; use delete() instead.`)
     }
 
-    validateQueryPlan(createTruncateQueryPlan(this.source))
+    const plan = createTruncateQueryPlan(this.source)
+    validateQueryPlan(plan)
+    await this.prepareMutation()
     const tableName = await this.resolveTruncateTarget()
     await this.assertNotReferencedByOtherTables(tableName)
-    await this.connection.executeCompiled(this.getCompiler().compile(createTruncateQueryPlan({ ...this.source, tableName })))
+    await this.connection.executeCompiled(this.getCompiler().compileResolvedTruncate(plan, tableName))
     await this.resetSequence(tableName)
     await this.invalidateTableQueries('delete')
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
     assertQueryTablePath(this.source.tableName)
+    await this.prepareMutation()
     const normalizedValues = this.normalizeUpdateValues(values)
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
@@ -3121,6 +3191,7 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     const useReturningRows = this.shouldUseReturningMutationRows(hasInvalidationListeners)
     const mutationRows = hasInvalidationListeners && !useReturningRows
@@ -3318,17 +3389,9 @@ export class TableQueryBuilder<
     return uniqueBy.every(column => left[column] === right[column])
   }
 
-  private readIntegerValues(rows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
-    return Object.freeze(rows.map(row => this.readIntegerValue(row)))
-  }
-
-  private readIntegerValue(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-    return readIntegerColumns(this.resolveSourceTable(), row)
-  }
-
-  private holdsUnsafeInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
+  private holdsUnreadableInteger(rows: readonly Readonly<Record<string, unknown>>[]): boolean {
     const table = this.resolveSourceTable()
-    return rows.some(row => holdsUnsafeInteger(table, row))
+    return rows.some(row => holdsUnreadableInteger(table, row))
   }
 
   private resolveSourceTable(): TableDefinition | undefined {
@@ -3369,7 +3432,7 @@ export class TableQueryBuilder<
     const result = await this.connection.queryCompiled(this.getCompiler().compile(query.getPlan())).catch(() => undefined)
     if (!result) return undefined
     const keyOf = (row: Readonly<Record<string, unknown>>) => {
-      const readRow = this.readIntegerValue(row)
+      const readRow = readIntegerColumns(this.resolveSourceTable(), row)
       return JSON.stringify(keys.map(key => readRow[key] instanceof Uint8Array ? `bytes:${Buffer.from(readRow[key]).toString('hex')}` : `text:${String(readRow[key])}`))
     }
     const rowsByKey = new Map(result.rows.map(row => [keyOf(row), row]))
@@ -3514,8 +3577,10 @@ export class TableQueryBuilder<
     lastInsertId?: number | string,
     options: {
       readonly canReadRows?: boolean
+      readonly conflictColumns?: readonly string[] | 'any'
       readonly previousRows?: readonly Readonly<Record<string, unknown>>[]
       readonly rowsAreWritten?: boolean
+      readonly updatedColumns?: readonly string[]
     } = {},
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
@@ -3539,14 +3604,12 @@ export class TableQueryBuilder<
     const databaseRows = !hasWrittenDecimals
       ? keyedRows
       : options.canReadRows ? await this.readWrittenRows(keyedRows) : undefined
-    const eventRows = databaseRows && this.readIntegerValues(databaseRows)
-    const dependencyRows = eventRows ?? this.readIntegerValues(keyedRows.map(row => this.withoutDecimalColumns(row)))
-    const previousRows = options.previousRows && this.readIntegerValues(options.previousRows)
+    const dependencyRows = databaseRows ?? keyedRows.map(row => this.withoutDecimalColumns(row))
     const mutations = !hasInvalidationListeners
       ? []
-      : this.holdsUnsafeInteger([...eventRows ?? [], ...previousRows ?? []])
+      : this.holdsUnreadableInteger([...databaseRows ?? [], ...options.previousRows ?? []])
         ? [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source)]
-        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, eventRows, previousRows)]
+        : [createDatabaseMutationEvent(kind, this.connection.getConnectionName(), this.source, [], undefined, databaseRows, options.previousRows)]
     const invalidation = inferAutomaticInsertCacheInvalidationPlan(
       this.connection.getConnectionName(),
       this.source,
@@ -3554,6 +3617,8 @@ export class TableQueryBuilder<
       lastInsertId,
       hasInvalidationListeners,
       await this.resolveCaseInsensitiveColumns(rows),
+      options.conflictColumns,
+      options.updatedColumns,
     )
 
     await invalidateQueryCacheDependencies(
@@ -3568,7 +3633,12 @@ export class TableQueryBuilder<
     records: readonly Readonly<Record<string, unknown>>[],
     predicates: readonly QueryPredicateNode[] = [],
   ): Promise<CaseInsensitiveColumns> {
-    if (!isPostgresConnection(this.connection)) {
+    if (isMySQLConnection(this.connection)) {
+      const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+      return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
+    }
+
+    if (!isPostgresConnection(this.connection) && !isSQLiteConnection(this.connection)) {
       return 'all'
     }
 
@@ -3577,20 +3647,23 @@ export class TableQueryBuilder<
       : new Set<string>()
   }
 
+  private async resolveQueryTextMatching(): Promise<QueryTextMatching> {
+    if (!isMySQLConnection(this.connection)) {
+      return textMatchesAnyNumber(this.connection)
+    }
+
+    const columns = await resolveCaseInsensitiveColumns(this.connection, this.source.tableName)
+    return typeof columns === 'object' && 'findTextColumn' in columns ? columns : UNKNOWN_TEXT_COLUMNS
+  }
+
   private async invalidateMutationQueries(
-    writtenValues: Readonly<Record<string, unknown>> = {},
-    writtenRows?: CapturedMutationRows,
+    values: Readonly<Record<string, unknown>> = {},
+    capturedRows?: CapturedMutationRows,
     hasUnreadDecimals = false,
   ): Promise<void> {
     const hasInvalidationListeners = hasDatabaseDependencyInvalidationListeners()
     if (!getDatabaseQueryCacheBridge() && !hasInvalidationListeners && !hasDatabaseDependencyInvalidationPublisher()) {
       return
-    }
-
-    const values = this.readIntegerValue(writtenValues)
-    const capturedRows = writtenRows && {
-      previousRows: writtenRows.previousRows && this.readIntegerValues(writtenRows.previousRows),
-      rows: writtenRows.rows && this.readIntegerValues(writtenRows.rows),
     }
 
     const hasValues = Object.keys(values).length > 0
@@ -3604,8 +3677,8 @@ export class TableQueryBuilder<
     const numericColumns = hasInvalidationListeners
       ? Object.keys(values).filter(column => values[column] instanceof NumericAdjustment)
       : []
-    const holdsUnsafeInteger = this.holdsUnsafeInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
-    const mutations = !hasInvalidationListeners ? [] : holdsUnsafeInteger || hasUnreadDecimals
+    const holdsUnreadableInteger = this.holdsUnreadableInteger([values, ...capturedRows?.rows ?? [], ...capturedRows?.previousRows ?? []])
+    const mutations = !hasInvalidationListeners ? [] : holdsUnreadableInteger || hasUnreadDecimals
       ? [createDatabaseMutationEvent(hasValues ? 'update' : 'delete', this.connection.getConnectionName(), this.source, this.plan.predicates)]
       : numericColumns.length > 0 && capturedRows?.rows
       ? this.createNumericUpdateMutationEvents(values, numericColumns, capturedRows.rows, capturedRows.previousRows ?? [])
@@ -3678,6 +3751,7 @@ export class TableQueryBuilder<
     requestedAmounts: Readonly<Record<string, number>>,
     extraValues: Readonly<Record<string, unknown>>,
   ): Promise<DriverExecutionResult> {
+    await this.prepareMutation()
     const amounts = this.resolveSourceColumnKeys(requestedAmounts, 'increment/decrement')
     const columns = Object.keys(amounts)
     const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(

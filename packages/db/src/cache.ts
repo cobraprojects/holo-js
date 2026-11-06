@@ -6,14 +6,13 @@ import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
 import { getConnectionGeneratedTableDefinition } from './schema/generated'
-import { coerceBoolean, isStoredBoolean } from './schema/normalization'
+import { coerceBoolean, isStoredBoolean, readsAsInteger } from './schema/normalization'
+import { isUnreadableInteger, readCanonicalInteger } from './query/resultColumns'
 import { listTablePrimaryKeyColumns } from './schema/tablePrimaryKey'
-import type { CaseInsensitiveColumns } from './schema/caseInsensitiveColumns'
+import type { CaseInsensitiveColumns, TextColumnCollations } from './schema/caseInsensitiveColumns'
 import type { QueryOperator, QueryPredicateNode, QuerySelection, QuerySource, SelectQueryPlan } from './query/ast'
 import type { TableDefinition } from './schema/types'
-import { NumericAdjustment } from './query/NumericAdjustment'
-import { readColumnResult } from './query/resultColumns'
-import type { SchemaDialectName } from './schema/typeMapping'
+import { canonicalTableName } from './schema/tableIdentityRegistry'
 
 export type QueryCacheTtlInput = number | Date
 export type QueryCacheFlexibleTtlInput
@@ -356,6 +355,8 @@ type DatabaseDependencyInvalidationPlan = {
 
 type LiteralExpansion = (column: string, value: unknown) => readonly unknown[]
 
+export type QueryTextMatching = boolean | TextColumnCollations
+
 type DatabaseDependencyPredicateEntry = {
   readonly dependency: string
   readonly metadata: DatabaseDependencyPredicateMetadata
@@ -376,9 +377,11 @@ const WHERE_EXACT_DEPENDENCY_PREFIX = 'where-exact:'
 const EMPTY_COLUMNS: ReadonlySet<string> = new Set<string>()
 const PREDICATE_WILDCARD_VALUE = '*'
 const IDENTITY_EXPANSION: LiteralExpansion = (_column, value) => [value]
+const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', 'oid'])
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
+const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -453,8 +456,9 @@ function setMutationPreviousRowsRequirement(listener: DatabaseDependencyInvalida
 function requiresMutationPreviousRows(connectionName: string, tableName: string, columns: readonly string[]): boolean {
   const requirements = getQueryCacheBridgeState().mutationPreviousRowsRequirements
   if (!requirements) return false
+  const canonicalName = canonicalTableName(connectionName, tableName)
   for (const requirement of requirements.values()) {
-    if (requirement(connectionName, tableName, columns)) return true
+    if (requirement(connectionName, canonicalName, columns)) return true
   }
   return false
 }
@@ -539,7 +543,12 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
     return
   }
 
-  state.queries.push(state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+  pushDatabaseQueryObservation(state, state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+}
+
+function pushDatabaseQueryObservation(state: DatabaseDependencyCollectorState, observation: DatabaseQueryObservation): void {
+  state.queries.push(observation)
+  refreshOnlyObservationIndexes.getStore()?.add(state.queries.length - 1)
 }
 
 function serializedQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
@@ -554,13 +563,40 @@ export function readDatabaseQueryObservationCount(): number {
   return databaseDependencyCollector.getStore()?.queries.length ?? 0
 }
 
+export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promise<TValue>): Promise<TValue> {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return await load()
+  }
+
+  const indexes = new Set<number>()
+  const value = await refreshOnlyObservationIndexes.run(indexes, load)
+  for (const index of indexes) {
+    const query = state.queries[index]
+    if (query) {
+      state.queries[index] = serializedQueryObservation(query)
+    }
+  }
+
+  return value
+}
+
 export function truncateDatabaseQueryObservations(count: number): void {
   const state = databaseDependencyCollector.getStore()
   if (!state || count >= state.queries.length) {
     return
   }
 
-  state.queries.length = Math.max(0, count)
+  const length = Math.max(0, count)
+  state.queries.length = length
+  const indexes = refreshOnlyObservationIndexes.getStore()
+  if (indexes) {
+    for (const index of indexes) {
+      if (index >= length) {
+        indexes.delete(index)
+      }
+    }
+  }
 }
 
 export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown): void {
@@ -620,7 +656,7 @@ export function rebindDatabaseQueryObservationPagination(
       selections: query.selections,
       serialized: query.serialized,
     })
-    state.queries.push(Object.freeze({
+    pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,
@@ -694,7 +730,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       selections: query.selections,
       serialized: query.serialized,
     })
-    state.queries.push(Object.freeze({
+    pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,
@@ -1036,7 +1072,7 @@ export function createTableCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}`
+  return `db:${connectionName}:${canonicalTableName(connectionName, tableName)}`
 }
 
 function encodeDependencyValue(value: unknown): string {
@@ -1111,14 +1147,14 @@ export function createTableRowCacheDependency(
     return undefined
   }
 
-  return `db:${connectionName}:${tableName}:row:${columnName}:${encodeDependencyValue(value)}`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:${columnName}:${encodeDependencyValue(value)}`
 }
 
 export function createTableRowWildcardCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:row:*`
+  return `${createTableCacheDependency(connectionName, tableName)}:row:*`
 }
 
 export function createTablePredicateCacheDependency(
@@ -1126,13 +1162,13 @@ export function createTablePredicateCacheDependency(
   tableName: string,
   columnName: string,
   value: unknown,
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): string | undefined {
   if (typeof value === 'undefined') {
     return undefined
   }
 
-  return mayEqualNumber(value, textMatchesAnyNumber)
+  return queryTextMayMatchOtherValues(getColumnName(columnName), value, textMatching)
     ? createTablePredicateWildcardCacheDependency(connectionName, tableName, columnName)
     : createPredicateDependencyEntry(connectionName, tableName, columnName, value)?.dependency
 }
@@ -1149,7 +1185,7 @@ function createTableMutationCacheDependency(
   connectionName: string,
   tableName: string,
 ): string {
-  return `db:${connectionName}:${tableName}:mutation`
+  return `${createTableCacheDependency(connectionName, tableName)}:mutation`
 }
 
 function createTableExactPredicateCacheDependency(
@@ -1309,6 +1345,18 @@ function createDatabaseDependencyInvalidationEvent(
   return Object.freeze(event)
 }
 
+export async function invalidateReplacedTableIdentity(
+  connection: DatabaseContext,
+  identity: string,
+): Promise<void> {
+  if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners() && !hasDatabaseDependencyInvalidationPublisher()) {
+    return
+  }
+
+  const tableKey = `${DATABASE_DEPENDENCY_PREFIX}${connection.getConnectionName()}:${identity}`
+  await invalidateQueryCacheDependencies(connection, [tableKey, `${tableKey}:row:*`])
+}
+
 export function normalizeQueryCacheDependencies(
   connectionName: string,
   dependencies: readonly string[],
@@ -1371,16 +1419,21 @@ function hasAutoIncrementKey(source: Pick<QuerySource, 'tableName' | 'table'>, c
   return Object.values(table?.columns ?? {}).some(column => column.name === primaryKey && column.idStrategy === 'autoIncrement')
 }
 
-function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatchesAnyNumber: boolean): string | undefined {
+function createExactPrimaryKeyRowDependency(plan: SelectQueryPlan, connectionName: string, textMatching: QueryTextMatching): string | undefined {
   const primaryKey = resolveRowDependencyKey(plan.source, connectionName)
   if (primaryKey === undefined) {
     return undefined
   }
 
   const value = findExactPrimaryKeyValue(plan.predicates, primaryKey)
-  return mayEqualNumber(value, textMatchesAnyNumber)
+  return queryTextMayMatchOtherValues(primaryKey, value, textMatching)
     ? undefined
     : createTableRowCacheDependency(connectionName, plan.source.tableName, primaryKey, value)
+}
+
+function assignsPrimaryKey(column: string, primaryKey: string | undefined): boolean {
+  const name = getColumnName(column).toLowerCase()
+  return primaryKey === undefined || name === primaryKey.toLowerCase() || SQLITE_ROWID_ALIASES.has(name)
 }
 
 function isNumericText(value: unknown): boolean {
@@ -1395,6 +1448,23 @@ function createLiteralExpansion(caseInsensitiveColumns: CaseInsensitiveColumns):
   return (column, value) => readLiteralDependencyValues(column, value, caseInsensitiveColumns) ?? [value]
 }
 
+function comparesLoosely(column: string, value: unknown, caseInsensitiveColumns: CaseInsensitiveColumns): boolean {
+  if (caseInsensitiveColumns === 'all') {
+    return typeof value === 'string'
+  }
+
+  if (!('findTextColumn' in caseInsensitiveColumns)) {
+    return typeof value === 'string' && caseInsensitiveColumns.has(column)
+  }
+
+  const textColumn = caseInsensitiveColumns.findTextColumn(column)
+  if (typeof value === 'string') {
+    return textColumn === undefined || !textColumn.exact || (textColumn.padSpace && value.endsWith(' '))
+  }
+
+  return value !== null && textColumn !== undefined && caseInsensitiveColumns.numbersMatchText
+}
+
 function readLiteralDependencyValues(
   column: string,
   value: unknown,
@@ -1403,20 +1473,16 @@ function readLiteralDependencyValues(
   if (Array.isArray(value)) {
     return value.some(element => Array.isArray(element)
       ? typeof readLiteralDependencyValues(column, element, caseInsensitiveColumns) === 'undefined'
-      : typeof element === 'string' && (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column) || isNumericText(element)))
+      : comparesLoosely(column, element, caseInsensitiveColumns) || isNumericText(element))
       ? undefined
       : [value]
   }
 
-  if (typeof value !== 'string') {
-    return [value]
-  }
-
-  if (caseInsensitiveColumns === 'all' || caseInsensitiveColumns.has(column)) {
+  if (comparesLoosely(column, value, caseInsensitiveColumns)) {
     return undefined
   }
 
-  if (!isNumericText(value)) {
+  if (typeof value !== 'string' || !isNumericText(value)) {
     return [value]
   }
 
@@ -1481,20 +1547,24 @@ function collectMutationLooseColumns(
   return collectLooseColumns(predicates, records, (column, value) => mayEqualOtherLiteral(column, value, caseInsensitiveColumns))
 }
 
-function mayEqualNumber(value: unknown, textMatchesAnyNumber: boolean): boolean {
+function queryTextMayMatchOtherValues(column: string, value: unknown, textMatching: QueryTextMatching): boolean {
   if (Array.isArray(value)) {
-    return value.some(element => mayEqualNumber(element, textMatchesAnyNumber))
+    return value.some(element => queryTextMayMatchOtherValues(column, element, textMatching))
   }
 
-  return typeof value === 'string' && (textMatchesAnyNumber || isNumericText(value))
+  if (typeof textMatching === 'boolean') {
+    return typeof value === 'string' && (textMatching || isNumericText(value))
+  }
+
+  return comparesLoosely(column, value, textMatching) || (!textMatching.numbersMatchText && isNumericText(value))
 }
 
 function containsText(value: unknown): boolean {
   return typeof value === 'string' || (Array.isArray(value) && value.some(element => containsText(element)))
 }
 
-function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatchesAnyNumber: boolean): ReadonlySet<string> {
-  return collectLooseColumns(predicates, [], (_column, value) => mayEqualNumber(value, textMatchesAnyNumber))
+function collectNumberLikeColumns(predicates: readonly QueryPredicateNode[], textMatching: QueryTextMatching): ReadonlySet<string> {
+  return collectLooseColumns(predicates, [], (column, value) => queryTextMayMatchOtherValues(column, value, textMatching))
 }
 
 export function writesTextLiterals(
@@ -1518,12 +1588,12 @@ function createMutationRowDependencies(
 
   const createRowDependency = (value: unknown) => createRowDependencies(connectionName, plan.source.tableName, primaryKey, value, caseInsensitiveColumns)
   const current = createRowDependency(findExactPrimaryKeyValue(plan.predicates, primaryKey))
-  const assignedKeys = Object.entries(values).filter(([column]) => getColumnName(column) === primaryKey)
+  const assignedKeys = Object.entries(values).filter(([column]) => assignsPrimaryKey(column, primaryKey))
   if (assignedKeys.length === 0) {
     return current ?? [wildcard]
   }
 
-  if (current === undefined || assignedKeys.some(([, value]) => value instanceof NumericAdjustment)) {
+  if (current === undefined || assignedKeys.some(([, value]) => typeof value === 'object' && value !== null)) {
     return [wildcard]
   }
 
@@ -2185,13 +2255,13 @@ export function createDatabaseMutationEvent(
   const convertedColumns = convertedBooleanColumns(table, [...rows ?? [], ...previousRows ?? [], ...values ? [values] : []])
   return Object.freeze({
     connectionName,
-    tableName: source.tableName,
+    tableName: canonicalTableName(connectionName, source.tableName),
     kind,
     predicates: collectQueryPredicateObservations(predicates),
     previousRows: previousRows ? readMutationRows(table, previousRows) : undefined,
     primaryKey: resolveObservedRowKey(source, connectionName),
     rows: rows ? readMutationRows(table, rows) : undefined,
-    values: values ? readMutationRow(table, values) : values,
+    values: values ? readStoredBooleans(table, values) : values,
     ...convertedColumns.length > 0 ? { convertedColumns } : {},
   })
 }
@@ -2214,39 +2284,98 @@ function hasUnreadBoolean(table: TableDefinition | undefined, row: Readonly<Reco
   return table !== undefined && Object.keys(row).some(key => isBooleanColumn(table, key) && isDriverScalar(row[key]) && !isStoredBoolean(row[key]))
 }
 
-function readMutationRow(
+function booleanResultKeys(
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    return reads(row[key]) && isBooleanColumn(table, selection ? selection.column : key)
+  })
+}
+
+function hasUnstoredFetchedBoolean(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): boolean {
+  return booleanResultKeys(table, row, selections, value => isDriverScalar(value) && !isStoredBoolean(value)).length > 0
+}
+
+function readBooleanColumns(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
 ): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const booleanKeys = Object.keys(row).filter(key => isStoredBoolean(row[key]) && isBooleanColumn(table, key))
+  const booleanKeys = booleanResultKeys(table, row, selections, reads)
   if (booleanKeys.length === 0) return row
   return Object.freeze({ ...row, ...Object.fromEntries(booleanKeys.map(key => [key, coerceBoolean(row[key])])) })
 }
 
+function integerResultKeys(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+  reads: (value: unknown) => boolean,
+): readonly string[] {
+  if (!table) return []
+  return Object.keys(row).filter((key) => {
+    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
+    const column = selection ? selection.column : key
+    const definition = Object.hasOwn(table.columns, column) ? table.columns[column] : undefined
+    return definition !== undefined && readsAsInteger(definition) && reads(row[key])
+  })
+}
+
+function hasUnreadableFetchedInteger(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[] = [],
+): boolean {
+  return integerResultKeys(table, row, selections, isUnreadableInteger).length > 0
+}
+
+function readIntegerColumns(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+  selections: readonly DatabaseQuerySelectionObservation[],
+): Readonly<Record<string, unknown>> {
+  const integerKeys = integerResultKeys(table, row, selections, value => readCanonicalInteger(value) !== value)
+  if (integerKeys.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(integerKeys.map(key => [key, readCanonicalInteger(row[key])])) })
+}
+
+function readStoredBooleans(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readBooleanColumns(table, row, [], isStoredBoolean)
+}
+
+function readMutationRow(
+  table: TableDefinition | undefined,
+  row: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return readIntegerColumns(table, readStoredBooleans(table, row), [])
+}
+
 function readFetchedRow(
-  connection: DatabaseContext,
   table: TableDefinition | undefined,
   row: Readonly<Record<string, unknown>>,
   selections: readonly DatabaseQuerySelectionObservation[] = [],
 ): Readonly<Record<string, unknown>> {
-  if (!table) return row
-  const dialect = connection.getDriver() as SchemaDialectName
-  const read = Object.keys(row).flatMap((key) => {
-    const selection = [...selections].reverse().find(candidate => candidate.resultKey === key)
-    const column = selection ? selection.column : key
-    if (!Object.hasOwn(table.columns, column)) return []
-    const value = readColumnResult(dialect, table.columns[column], row[key])
-    return value === row[key] ? [] : [[key, value] as const]
-  })
-  return read.length === 0 ? row : Object.freeze({ ...row, ...Object.fromEntries(read) })
+  return readIntegerColumns(table, readBooleanColumns(table, row, selections, isDriverScalar), selections)
 }
 
 function readMutationRows(
   table: TableDefinition | undefined,
   rows: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
-  return Object.freeze(rows.map(row => readMutationRow(table, row)))
+  return Object.freeze(rows.map(row => readStoredBooleans(table, row)))
 }
 
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
@@ -2268,14 +2397,14 @@ export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): 
 export function inferAutomaticQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): readonly string[] | undefined {
   if (!supportsAutomaticQueryCacheInvalidation(plan)) {
     return undefined
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatchesAnyNumber)
+    const primaryKeyDependency = createExactPrimaryKeyRowDependency(plan, connectionName, textMatching)
     if (primaryKeyDependency) {
       return Object.freeze([
         primaryKeyDependency,
@@ -2285,7 +2414,7 @@ export function inferAutomaticQueryCacheDependencies(
   }
 
   if (!hasDisjunctivePredicate(plan.predicates)) {
-    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatchesAnyNumber)
+    const numberLikeColumns = collectNumberLikeColumns(plan.predicates, textMatching)
     const predicateDependencies = [
       ...collectExactPredicateDependencies(
         plan.predicates,
@@ -2426,9 +2555,14 @@ export function inferAutomaticInsertCacheInvalidationPlan(
   lastInsertId?: number | string,
   includeMetadata = false,
   caseInsensitiveColumns: CaseInsensitiveColumns = EMPTY_COLUMNS,
+  conflictColumns?: readonly string[] | 'any',
+  updatedColumns: readonly string[] = [],
 ): DatabaseDependencyInvalidationPlan {
   const { tableName } = source
   const primaryKey = resolveRowDependencyKey(source, connectionName)
+  const conflictsBeyondPrimaryKey = conflictColumns === 'any'
+    || (conflictColumns !== undefined && (primaryKey === undefined || conflictColumns.some(column => getColumnName(column) !== primaryKey)))
+    || updatedColumns.some(column => assignsPrimaryKey(column, primaryKey))
   const looseColumns = collectMutationLooseColumns([], rows, caseInsensitiveColumns)
   const literalExpansion = createLiteralExpansion(caseInsensitiveColumns)
   const createRowDependency = (value: unknown) => primaryKey === undefined
@@ -2487,7 +2621,7 @@ export function inferAutomaticInsertCacheInvalidationPlan(
     directDependencies.add(dependency)
   }
 
-  if (hasUnknownRowKey && !lastInsertDependencies) {
+  if ((hasUnknownRowKey && !lastInsertDependencies) || conflictsBeyondPrimaryKey) {
     const rowWildcardDependency = createTableRowWildcardCacheDependency(connectionName, tableName)
     dependencies.add(rowWildcardDependency)
     directDependencies.add(rowWildcardDependency)
@@ -2511,13 +2645,13 @@ export function resolveQueryCacheDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
   explicit?: readonly string[],
-  textMatchesAnyNumber = false,
+  textMatching: QueryTextMatching = false,
 ): readonly string[] | undefined {
   if (explicit && explicit.length > 0) {
     return normalizeQueryCacheDependencies(connectionName, explicit)
   }
 
-  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatchesAnyNumber)
+  return inferAutomaticQueryCacheDependencies(plan, connectionName, textMatching)
 }
 
 export async function invalidateQueryCacheDependencies(
@@ -2567,6 +2701,8 @@ export async function invalidateQueryCacheDependencies(
 export const queryCacheInternals = {
   getRootDatabaseContext,
   hasUnreadBoolean,
+  hasUnreadableFetchedInteger,
+  hasUnstoredFetchedBoolean,
   readFetchedRow,
   readMutationRow,
   setMutationPreviousRowsRequirement,
@@ -2575,6 +2711,7 @@ export const queryCacheInternals = {
   configureDatabaseQueryCacheBridge,
   createDatabaseMutationEvent,
   createDatabaseQueryObservation,
+  canonicalTableName,
   createDeterministicQueryCacheKey,
   createTablePredicateCacheDependency,
   createTableCacheDependency,

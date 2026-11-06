@@ -1,5 +1,6 @@
 import { coerceBoolean, isStoredBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
@@ -31,11 +32,6 @@ function columnReader(dialect: SchemaDialectName, column: AnyColumnDefinition | 
   return readsAsSQLiteDecimal(dialect, column) ? readSQLiteDecimal : undefined
 }
 
-export function readColumnResult(dialect: SchemaDialectName, column: AnyColumnDefinition | undefined, value: unknown): unknown {
-  const read = columnReader(dialect, column)
-  return read ? read(value) : value
-}
-
 function columnsOf(table: TableDefinition | undefined): SelectedColumn[] {
   return Object.entries(table?.columns ?? {})
 }
@@ -50,7 +46,7 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 
 export function tableForQualifier(tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
   if (tables.has(qualifier)) return tables.get(qualifier)
-  const matches = [...tables.entries()].filter(([name]) => name.includes('.') && name.slice(name.lastIndexOf('.') + 1) === qualifier)
+  const matches = [...tables.entries()].filter(([name]) => splitTablePath(name).schema !== undefined && splitTablePath(name).table === qualifier)
   return matches.length === 1 ? matches[0]![1] : undefined
 }
 
@@ -122,13 +118,34 @@ function unionBranches(plan: SelectQueryPlan): readonly SelectQueryPlan[] {
   return plan.unions.flatMap(union => [union.query, ...unionBranches(union.query)])
 }
 
+function hasWildcardProjection(plan: SelectQueryPlan): boolean {
+  return plan.selections.length === 0 || plan.selections.some(selection => selection.kind === 'column' && selection.column.endsWith('*'))
+}
+
+function projectionShape(plan: SelectQueryPlan): string {
+  return JSON.stringify([
+    plan.source.tableName,
+    plan.joins.map(join => join.table ?? null),
+    plan.selections.map(selection => selection.kind === 'column' ? [selection.column, selection.alias ?? null] : selection.kind),
+  ])
+}
+
+function hasAlignedWildcards(plan: SelectQueryPlan, branches: readonly SelectQueryPlan[]): boolean {
+  const plans = [plan, ...branches]
+  if (!plans.some(hasWildcardProjection)) return true
+  const shape = projectionShape(plan)
+  return branches.every(branch => projectionShape(branch) === shape)
+}
+
 function createUnionReaderCheck(
   dialect: SchemaDialectName,
   plan: SelectQueryPlan,
 ): (key: string, reader: ColumnReader) => boolean {
   if (plan.unions.length === 0) return () => true
+  const branchPlans = unionBranches(plan)
+  if (!hasAlignedWildcards(plan, branchPlans)) return () => false
   const selected = selectedResultColumns(plan)
-  const branches = unionBranches(plan).map(selectedResultColumns)
+  const branches = branchPlans.map(selectedResultColumns)
   if (!hasEveryPosition(selected) || branches.some(branch => branch.length !== selected.length || !hasEveryPosition(branch))) {
     return () => false
   }
@@ -156,32 +173,44 @@ export function readConvertedResultColumns(row: Record<string, unknown>, columns
   return values
 }
 
-const WRITTEN_INTEGER_TEXT = /^[+-]?\d+$/
-
-function holdsWrittenInteger(value: unknown): value is bigint | number | string {
-  return typeof value === 'bigint' || (typeof value === 'number' && Number.isInteger(value)) || (typeof value === 'string' && WRITTEN_INTEGER_TEXT.test(value))
-}
-
-function integerColumnsOf(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): string[] {
-  return columnsOf(table).flatMap(([key, definition]) => readsAsInteger(definition!) && Object.hasOwn(row, key) && holdsWrittenInteger(row[key]) ? [key] : [])
-}
-
-export function holdsUnsafeInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
-  return integerColumnsOf(table, row).some(key => !Number.isSafeInteger(Number(row[key])))
-}
-
-export function readIntegerColumns(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const columns = integerColumnsOf(table, row).filter(key => typeof row[key] !== 'number' && Number.isSafeInteger(Number(row[key])))
-  if (columns.length === 0) return row
-  return Object.freeze({ ...row, ...Object.fromEntries(columns.map(key => [key, Number(row[key])])) })
-}
-
 export function hasUnstoredBoolean(rows: readonly Record<string, unknown>[], columns: ConvertedResultColumns): boolean {
   const booleanKeys = [...columns].filter(([, read]) => read === coerceBoolean).map(([key]) => key)
   return booleanKeys.length > 0 && rows.some(row => booleanKeys.some((key) => {
     const value = row[key]
     return value != null && typeof value !== 'boolean' && !isStoredBoolean(value)
   }))
+}
+
+const CANONICAL_INTEGER_TEXT = /^(?:0|-?[1-9]\d*)$/
+
+function holdsIntegerValue(value: unknown): value is bigint | number | string {
+  return typeof value === 'bigint' || typeof value === 'number' || typeof value === 'string'
+}
+
+function readsCanonicalInteger(value: unknown): boolean {
+  return (typeof value === 'bigint' && Number.isSafeInteger(Number(value)))
+    || (typeof value === 'number' && Number.isSafeInteger(value))
+    || (typeof value === 'string' && CANONICAL_INTEGER_TEXT.test(value) && Number.isSafeInteger(Number(value)))
+}
+
+export function isUnreadableInteger(value: unknown): boolean {
+  return holdsIntegerValue(value) && !readsCanonicalInteger(value)
+}
+
+export function holdsUnreadableInteger(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): boolean {
+  return columnsOf(table).some(([key, definition]) => readsAsInteger(definition!)
+    && Object.hasOwn(row, key)
+    && isUnreadableInteger(row[key]))
+}
+
+export function readCanonicalInteger(value: unknown): unknown {
+  return readsCanonicalInteger(value) && typeof value !== 'number' ? Number(value) : value
+}
+
+export function readIntegerColumns(table: TableDefinition | undefined, row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const columns = columnsOf(table).flatMap(([key, definition]) => readsAsInteger(definition!) && Object.hasOwn(row, key) && readCanonicalInteger(row[key]) !== row[key] ? [key] : [])
+  if (columns.length === 0) return row
+  return Object.freeze({ ...row, ...Object.fromEntries(columns.map(key => [key, readCanonicalInteger(row[key])])) })
 }
 
 export function readInsertedKey(

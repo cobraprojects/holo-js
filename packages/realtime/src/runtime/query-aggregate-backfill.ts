@@ -1,5 +1,5 @@
-import type { DatabaseContext, TableQueryBuilder } from '@holo-js/db'
-import { createBackfillQuery, getBackfillDatabaseConnection } from './query-backfill'
+import { TableQueryBuilder, type DatabaseContext } from '@holo-js/db'
+import { getBackfillDatabaseConnection } from './query-backfill'
 import {
   createAggregateBackfillKey,
   createAggregateSqlBackfillKey,
@@ -53,7 +53,7 @@ function createAggregateBackfillBuilder(query: DatabaseQueryObservation): TableQ
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   for (const predicate of query.predicates) {
     builder = builder.where(predicate.column, predicate.operator, predicate.value)
   }
@@ -99,7 +99,7 @@ async function fetchGroupedAggregateSqlBackfill(
     return undefined
   }
 
-  let aggregateBuilder = createBackfillQuery(query, connection)
+  let aggregateBuilder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
     .where(groupColumn, 'in', values)
     .select(groupColumn)
     .addSelectCount('__holo_count')
@@ -305,7 +305,7 @@ async function attachGroupedAggregateSqlExtremeValueCounts(
       continue
     }
 
-    const rows = await createBackfillQuery(query, connection)
+    const rows = await new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
       .where(groupColumn, 'in', values)
       .where(column, 'in', extremeValues)
       .select(groupColumn)

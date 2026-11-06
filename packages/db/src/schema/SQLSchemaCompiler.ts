@@ -1,5 +1,5 @@
 import { SchemaError } from '../core/errors'
-import { assertValidTablePath, assertValidIdentifierSegment } from './identifiers'
+import { assertValidTablePath, assertValidIdentifierSegment, quoteTablePath, splitTablePath } from './identifiers'
 import { listTablePrimaryKeyColumns } from './tablePrimaryKey'
 import { assertSupportedColumnDefaultValue } from './defaultLiterals'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedCheckName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName, resolveGeneratedUniqueIndexName } from './generatedNames'
@@ -368,7 +368,8 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected compileTableSchemaIndexPath(tableName: string, indexName: string): string {
-    return this.compileIdentifierPath([...tableName.split('.').slice(0, -1), indexName].join('.'))
+    const { schema } = splitTablePath(tableName)
+    return this.compileIdentifierPath(schema === undefined ? indexName : `${schema}.${indexName}`)
   }
 
   protected compileTableDefinitions(table: TableDefinition): string[] {
@@ -456,14 +457,7 @@ export abstract class SQLSchemaCompiler {
 
   protected compileIdentifierPath(identifier: string): string {
     assertValidTablePath(identifier, 'Identifier path')
-    if (!identifier.includes('.')) {
-      return this.quoteIdentifier(identifier)
-    }
-
-    return identifier
-      .split('.')
-      .map(part => this.quoteIdentifier(part))
-      .join('.')
+    return quoteTablePath({ quoteIdentifier: segment => this.quoteIdentifier(segment) }, identifier)
   }
 
   protected assertSupportedDefaultValue(value: unknown, column: AnyColumnDefinition): void {

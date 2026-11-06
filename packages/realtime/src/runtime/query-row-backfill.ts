@@ -1,10 +1,10 @@
+import { TableQueryBuilder } from '@holo-js/db'
 import {
   createBackfillQueryKey,
   isOffsetOrderedLimitedWindow,
   readQueryRowWindowMode,
 } from './query-metadata'
 import {
-  createBackfillQuery,
   createBackfillSelection,
   getBackfillDatabaseConnection,
   readBackfilledRows,
@@ -42,7 +42,7 @@ async function fetchLimitedQueryBackfillRows(
     return undefined
   }
 
-  let builder = createBackfillQuery(query, connection)
+  let builder = new TableQueryBuilder<string, Record<string, unknown>>(query.tableName, connection)
   const selections = query.selections ?? []
   if (selections.length > 0) {
     builder = builder.select(...selections.map(createBackfillSelection))
@@ -54,7 +54,7 @@ async function fetchLimitedQueryBackfillRows(
     builder = builder.orderBy(order.column, order.direction)
   }
 
-  return readBackfilledRows(connection, query.table, await builder
+  return readBackfilledRows(query.table, await builder
     .offset(offset)
     .limit(limit)
     .get(), selections)

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne, latestOfMany, ofMany, RelationError, resetDB, type Entity, type TableDefinition } from '../src'
+import { DB, belongsTo, belongsToMany, column, defineGeneratedTable, defineModel, hasMany, hasOne, latestOfMany, ofMany, resetDB, type Entity, type TableDefinition } from '../src'
 import { integrationDrivers, openDatabase } from './support/database'
 
 type KeyKind = 'decimal' | 'text'
@@ -369,7 +369,7 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     expect(ids(relation(loaded[257], 'items'))).toEqual([10])
   })
 
-  it('rejects a one-of-many group whose related rows store one key in different forms', async () => {
+  it('loads the one-of-many row whose text key is the exact integer text', async () => {
     const { schema } = await openDatabase(driver)
     onTestFinished(() => resetDB())
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
@@ -390,12 +390,8 @@ describe.each(integrationDrivers(['sqlite', 'postgres', 'mysql'] as const))('rel
     const Item = defineModel(items, { timestamps: false })
     const Owner = defineModel(owners, { timestamps: false, relations: { latestItem: latestOfMany(() => Item, 'owner_id') } })
 
-    if (driver === 'mysql') {
-      await expect(Owner.with('latestItem').get()).rejects.toThrow(RelationError)
-    } else {
-      const [owner] = await Owner.with('latestItem').get()
-      expect(relation<Entity<TableDefinition>>(owner, 'latestItem').get('id' as never)).toBe(10)
-    }
+    const [owner] = await Owner.with('latestItem').get()
+    expect(relation<Entity<TableDefinition>>(owner, 'latestItem').get('id' as never)).toBe(10)
   })
 
   it('loads tied one-of-many rows whose projection leaves out the primary key', async () => {
