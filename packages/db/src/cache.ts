@@ -380,6 +380,7 @@ const SQLITE_ROWID_ALIASES: ReadonlySet<string> = new Set(['rowid', '_rowid_', '
 const NUMERIC_TEXT_PATTERN = /^\s*[+-]?(?:(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:e[+-]?\d[\d_]*)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|nan|inf(?:inity)?)\s*$/i
 
 const databaseDependencyCollector = new AsyncLocalStorage<DatabaseDependencyCollectorState>()
+const refreshOnlyObservationIndexes = new AsyncLocalStorage<Set<number>>()
 
 type MutationPreviousRowsRequirement = (connectionName: string, tableName: string, columns: readonly string[]) => boolean
 
@@ -541,7 +542,12 @@ export function recordDatabaseQueryObservation(observation: DatabaseQueryObserva
     return
   }
 
-  state.queries.push(state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+  pushDatabaseQueryObservation(state, state.serializationOverridden ? serializedQueryObservation(observation) : observation)
+}
+
+function pushDatabaseQueryObservation(state: DatabaseDependencyCollectorState, observation: DatabaseQueryObservation): void {
+  state.queries.push(observation)
+  refreshOnlyObservationIndexes.getStore()?.add(state.queries.length - 1)
 }
 
 function serializedQueryObservation(observation: DatabaseQueryObservation): DatabaseQueryObservation {
@@ -556,13 +562,40 @@ export function readDatabaseQueryObservationCount(): number {
   return databaseDependencyCollector.getStore()?.queries.length ?? 0
 }
 
+export async function runRequiringDatabaseQueryRefresh<TValue>(load: () => Promise<TValue>): Promise<TValue> {
+  const state = databaseDependencyCollector.getStore()
+  if (!state) {
+    return await load()
+  }
+
+  const indexes = new Set<number>()
+  const value = await refreshOnlyObservationIndexes.run(indexes, load)
+  for (const index of indexes) {
+    const query = state.queries[index]
+    if (query) {
+      state.queries[index] = serializedQueryObservation(query)
+    }
+  }
+
+  return value
+}
+
 export function truncateDatabaseQueryObservations(count: number): void {
   const state = databaseDependencyCollector.getStore()
   if (!state || count >= state.queries.length) {
     return
   }
 
-  state.queries.length = Math.max(0, count)
+  const length = Math.max(0, count)
+  state.queries.length = length
+  const indexes = refreshOnlyObservationIndexes.getStore()
+  if (indexes) {
+    for (const index of indexes) {
+      if (index >= length) {
+        indexes.delete(index)
+      }
+    }
+  }
 }
 
 export function rebindDatabaseQueryObservationResult(source: unknown, result: unknown): void {
@@ -622,7 +655,7 @@ export function rebindDatabaseQueryObservationPagination(
       selections: query.selections,
       serialized: query.serialized,
     })
-    state.queries.push(Object.freeze({
+    pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,
@@ -696,7 +729,7 @@ export function rebindDatabaseQueryObservationCursorPagination(
       selections: query.selections,
       serialized: query.serialized,
     })
-    state.queries.push(Object.freeze({
+    pushDatabaseQueryObservation(state, Object.freeze({
       aggregate: undefined,
       belongsToHydrations: undefined,
       connectionName: query.connectionName,

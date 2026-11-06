@@ -12,6 +12,7 @@ import {
   readDatabaseQueryObservationCount,
   recordDatabaseQueryObservation,
   resolveQueryCacheDependencies,
+  runRequiringDatabaseQueryRefresh,
   truncateDatabaseQueryObservations,
   type DatabaseQueryAggregateObservation,
   type DatabaseQueryObservation,
@@ -670,6 +671,15 @@ export class ModelRepository<
       throw new SecurityError(`Relation "${relationName}" does not support morph loading.`)
     }
 
+    await this.loadRequiringQueryRefresh(() => this.loadMorphTargets(entities, relationName, relation, mapping))
+  }
+
+  private async loadMorphTargets(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'morphTo' }>,
+    mapping: Readonly<Record<string, string | readonly string[] | Readonly<Record<string, RelationConstraint>>>>,
+  ): Promise<void> {
     const pending = entities.filter(entity => !entity.hasRelation(relationName))
     if (pending.length > 0) {
       await this.loadMorphToRelation(pending, relationName, relation)
@@ -2234,7 +2244,7 @@ export class ModelRepository<
         await this.loadBelongsToRelation(entities, relationName, relation, constraint)
         return
       case 'morphTo':
-        await this.loadMorphToRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphToRelation(entities, relationName, relation, constraint))
         return
       case 'hasMany':
         await this.loadHasManyRelation(entities, relationName, relation, constraint)
@@ -2246,13 +2256,13 @@ export class ModelRepository<
         await this.loadHasOneOfManyRelation(entities, relationName, relation, constraint)
         return
       case 'morphOne':
-        await this.loadMorphOneRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphOneRelation(entities, relationName, relation, constraint))
         return
       case 'morphMany':
-        await this.loadMorphManyRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphManyRelation(entities, relationName, relation, constraint))
         return
       case 'morphOneOfMany':
-        await this.loadMorphOneOfManyRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphOneOfManyRelation(entities, relationName, relation, constraint))
         return
       case 'hasOneThrough':
         await this.loadHasOneThroughRelation(entities, relationName, relation, constraint)
@@ -2264,12 +2274,16 @@ export class ModelRepository<
         await this.loadBelongsToManyRelation(entities, relationName, relation, constraint)
         return
       case 'morphToMany':
-        await this.loadMorphToManyRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphToManyRelation(entities, relationName, relation, constraint))
         return
       case 'morphedByMany':
-        await this.loadMorphedByManyRelation(entities, relationName, relation, constraint)
+        await this.loadRequiringQueryRefresh(() => this.loadMorphedByManyRelation(entities, relationName, relation, constraint))
         return
     }
+  }
+
+  private async loadRequiringQueryRefresh(load: () => Promise<void>): Promise<void> {
+    await runRequiringDatabaseQueryRefresh(load)
   }
 
   createTableQuery(connection: DatabaseContext = this.getConnection()): TableQueryBuilder<TTable> {
