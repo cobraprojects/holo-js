@@ -1,5 +1,6 @@
 import { coerceBoolean, isStoredBoolean, parseInteger, readSQLiteDecimal, readsAsCoercedBoolean, readsAsInteger, readsAsSQLiteDecimal } from '../schema/normalization'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { AnyColumnDefinition, TableDefinition } from '../schema/types'
 import type { QueryColumnSelection, SelectQueryPlan } from './ast'
@@ -45,7 +46,7 @@ function queryTables(plan: SelectQueryPlan): Map<string, TableDefinition | undef
 
 export function tableForQualifier(tables: ReadonlyMap<string, TableDefinition | undefined>, qualifier: string): TableDefinition | undefined {
   if (tables.has(qualifier)) return tables.get(qualifier)
-  const matches = [...tables.entries()].filter(([name]) => name.includes('.') && name.slice(name.lastIndexOf('.') + 1) === qualifier)
+  const matches = [...tables.entries()].filter(([name]) => splitTablePath(name).schema !== undefined && splitTablePath(name).table === qualifier)
   return matches.length === 1 ? matches[0]![1] : undefined
 }
 

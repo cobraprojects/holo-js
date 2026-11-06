@@ -100,6 +100,7 @@ import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, P
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import { assertSinglePrimaryKey, listTablePrimaryKeyColumns, resolveTablePrimaryKey, resolveTablePrimaryKeyColumns } from '../schema/tablePrimaryKey'
 import { getConnectionGeneratedTableDefinition } from '../schema/generated'
+import { splitTablePath } from '../schema/identifiers'
 import { storesJson } from '../schema/normalization'
 import { isMySQLConnection, isPostgresConnection, isSQLiteConnection, textMatchesAnyNumber } from '../schema/connectionDialect'
 import { UNKNOWN_TEXT_COLUMNS, resolveCaseInsensitiveColumns, type CaseInsensitiveColumns } from '../schema/caseInsensitiveColumns'
@@ -229,7 +230,7 @@ function selectionOutputName(selection: QuerySelection): string | undefined {
 }
 
 function qualifiesTable(qualifier: string, tableName: string | undefined, alias: string | undefined): boolean {
-  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === tableName.slice(tableName.lastIndexOf('.') + 1)))
+  return qualifier === alias || (typeof tableName === 'string' && (qualifier === tableName || qualifier === splitTablePath(tableName).table))
 }
 
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
@@ -737,7 +738,7 @@ export class TableQueryBuilder<
 
     const qualifier = column.slice(0, separator)
     const join = this.plan.joins.find(({ alias, table, definition }) => definition && (alias === undefined
-      ? table === qualifier || table?.slice(table.lastIndexOf('.') + 1) === qualifier
+      ? table === qualifier || (table !== undefined && splitTablePath(table).table === qualifier)
       : alias === qualifier))
     return join?.definition?.columns[column.slice(separator + 1)]
   }
@@ -1998,7 +1999,7 @@ export class TableQueryBuilder<
     }
     const key = join ? column.slice(qualifier.length + 1) : Object.keys(this.resolveSourceColumnKeys([[column, column]], 'aggregate'))[0]!
     const source = join ? join.alias ?? join.table! : this.source.alias ?? this.source.tableName
-    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? table.slice(table.lastIndexOf('.') + 1) : table}.*`
+    const wildcard = (table: string) => `${this.connection.getDriver() === 'sqlite' ? splitTablePath(table).table : table}.*`
     const implicitSelections = this.plan.selections.length > 0
       ? []
       : [this.source.alias ?? this.source.tableName, ...this.plan.joins.map(join => join.alias ?? join.table!)].map(wildcard)
