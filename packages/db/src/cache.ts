@@ -894,6 +894,10 @@ export function rebindDatabaseQueryObservationScalarList(
   column: string,
   readRow?: DatabaseQueryRowReader,
 ): void {
+  if (!databaseDependencyCollector.getStore()) {
+    return
+  }
+
   rebindDatabaseQueryObservation(rows, result, undefined, undefined, column, readRow ? Object.freeze(rows.map(row => readRow(row))) : rows, undefined, undefined, readRow)
 }
 

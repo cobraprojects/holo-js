@@ -405,6 +405,23 @@ describe.each(drivers)('realtime patches through models with different casts on 
     await expectFresh(false)
   })
 
+  it('keeps rows changed by a retrieved observer equal to a fresh read', async () => {
+    const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
+    const { db, items } = await openFixture(variant)
+    class RedactingObserver {
+      retrieved = (entity: { forceFill: (values: Record<string, unknown>) => unknown }) => {
+        entity.forceFill({ secret: 'redacted' })
+      }
+    }
+    const Redacted = defineModel(items, { timestamps: false, casts: { secret: 'string' }, observers: [RedactingObserver] })
+    const expectFresh = await subscribeAll(variant, {
+      redacted: () => db.model(Redacted).query().orderBy('id').getJson(),
+    })
+
+    await mutate(() => db.table(items).where('id', 2).update({ secret: 'new private' }))
+    await expectFresh(false)
+  })
+
   it('serializes cast values the way a fresh read does', async () => {
     const variant = variants.find(candidate => candidate.driver === driver && !candidate.dated)!
     const { db, items } = await openFixture(variant)

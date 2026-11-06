@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { column, configureDB, createConnectionManager, createDatabase, createDialect, defineGeneratedTable, defineModel } from '../src'
 import { ModelRepository } from '../src/model/ModelRepository'
 import { createPostgresAdapter } from '@holo-js/db-postgres'
+import { openDatabase } from './support/database'
 import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 
 function readsRowsAsStored(model: Parameters<typeof ModelRepository.from>[0]): boolean {
@@ -40,5 +41,23 @@ describe('model rows read as stored', () => {
 
     expect(sqlite.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: { x: 1 } })
     expect(postgres.model(Note).rowReader()?.({ settings: '{"x":1}' })).toEqual({ settings: '{"x":1}' })
+  })
+
+  it('applies casts once per plucked row outside realtime', async () => {
+    const { db, schema } = await openDatabase('sqlite')
+    await schema.createTable('stored_plucked_notes', (table) => {
+      table.id()
+      table.string('body')
+    })
+    const notes = defineGeneratedTable('stored_plucked_notes', { id: column.id(), body: column.string() })
+    await db.table(notes).insert([{ id: 1, body: 'a' }, { id: 2, body: 'b' }])
+    let reads = 0
+    const Note = defineModel(notes, { timestamps: false, casts: { body: { get: (value) => {
+      reads += 1
+      return `cast:${String(value)}`
+    } } } })
+
+    expect(await db.model(Note).query().orderBy('id').pluck('body')).toEqual(['cast:a', 'cast:b'])
+    expect(reads).toBe(2)
   })
 })
