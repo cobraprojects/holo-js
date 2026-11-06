@@ -696,6 +696,19 @@ function sameWidthReplacement(functionName: string, original: string, parenthesi
   return `${call}${breaks}${' '.repeat(lastLine.length)}`
 }
 
+function sourceModuleResolveSource(parentURL: string, parentPath: string, nodeModuleBinding: string): string {
+  return [
+    '(specifier, parent) => {',
+    'const target = `${specifier}`;',
+    'if (parent !== void 0 && import.meta.resolve(\'./\', \'file:///\') === \'file:///\') return import.meta.resolve(target, parent);',
+    `if ('dir' in import.meta) return import.meta.resolve(target, ${parentPath});`,
+    `const marker = ${JSON.stringify(importerResolutionRequest)};`,
+    `const hooks = ${nodeModuleBinding}.registerHooks({ resolve: (request, context, nextResolve) => request === marker ? nextResolve(target, { ...context, parentURL: ${parentURL} }) : nextResolve(request, context) });`,
+    'try { return import.meta.resolve(marker) } finally { hooks.deregister() }',
+    '}',
+  ].join(' ')
+}
+
 function createSourceModuleUrlPlugin(): Plugin {
   return {
     name: 'holo-source-module-url',
@@ -725,6 +738,7 @@ function createSourceModuleUrlPlugin(): Plugin {
           filename: unusedHelperName('__holoMetaFil', '__holoFil', 13, contents, identifiers),
         }
         const metaFunction = unusedHelperName('__hMeta', '__hM', 7, contents, identifiers)
+        const nodeModuleBinding = unusedHelperName('__hModule', '__hMod', 9, contents, identifiers)
         const isImportMeta = (node: TypeScriptNode): boolean => ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword
         const asSourceProperty = (name: string): SourceProperty | undefined => Object.hasOwn(sourceValues, name) ? name as SourceProperty : undefined
         const sourcePropertyRead = (node: TypeScriptNode): SourceProperty | undefined => {
@@ -803,7 +817,7 @@ function createSourceModuleUrlPlugin(): Plugin {
         if (cursor === 0) return { contents, loader }
         fragments.push(contents.slice(cursor))
         for (const property of usedProperties) fragments.push(`\nfunction ${propertyFunctions[property]}() { return ${sourceValues[property]} }\n`)
-        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename} } }\n`)
+        if (usesMetaFunction) fragments.push(`\nfunction ${metaFunction}() { return ${metaFunction}.meta ??= { ...import.meta, url: ${sourceValues.url}, dirname: ${sourceValues.dirname}, filename: ${sourceValues.filename}, resolve: ${sourceModuleResolveSource(sourceValues.url, sourceValues.filename, nodeModuleBinding)} } }\nimport * as ${nodeModuleBinding} from 'node:module'\n`)
         return { contents: fragments.join(''), loader }
       })
     },

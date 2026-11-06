@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -95,6 +95,28 @@ it.each([
     expect(output).toMatch(/Cannot find module 'missing-legacy'\nRequire stack:\n- \S*\/server\/support\/legacy\.ts\n/)
     expect(output).not.toContain(migration)
     expect(output).not.toMatch(/\.holo-js|\.mjs/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)
+
+it('resolves import.meta.resolve specifiers in a migration as the unbundled source file would', async () => {
+  const { root, write } = await createProject()
+  try {
+    const migrationDirectory = 'server/db/migrations'
+    const resolveCalls = "[import.meta.resolve('../support/columns.ts'), import.meta.resolve('nested-columns'), import.meta.resolve('nested-columns/helpers')]"
+    const resultPath = join(root, 'resolved.json')
+    await write('server/node_modules/nested-columns/package.json', JSON.stringify({ name: 'nested-columns', exports: { '.': { import: './esm.mjs', require: './cjs.cjs' }, './helpers': './helpers.mjs' } }))
+    await write('server/db/support/columns.ts', 'export const columns = []\n')
+    await write(`${migrationDirectory}/unbundled.mjs`, `console.log(JSON.stringify(${resolveCalls}))\n`)
+    await write(`${migrationDirectory}/2026_01_01_000000_create_foo_table.ts`, `import { writeFileSync } from 'node:fs'\nimport { defineMigration } from '@holo-js/db'\nwriteFileSync(${JSON.stringify(resultPath)}, JSON.stringify(${resolveCalls}))\nexport default defineMigration({ async up() {} })\n`)
+    const { stdout } = await execute(process.execPath, [join(root, migrationDirectory, 'unbundled.mjs')], { cwd: root })
+    await rm(join(root, migrationDirectory, 'unbundled.mjs'))
+    const unbundled = JSON.parse(stdout) as string[]
+    expect(unbundled[0]).toMatch(/\/server\/db\/support\/columns\.ts$/)
+    expect(unbundled[1]).toMatch(/\/server\/node_modules\/nested-columns\/esm\.mjs$/)
+    await execute(process.execPath, [cli, 'migrate'], { cwd: root })
+    expect(JSON.parse(await readFile(resultPath, 'utf8'))).toEqual(unbundled)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
