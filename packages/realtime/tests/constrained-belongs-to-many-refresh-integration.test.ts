@@ -75,41 +75,62 @@ async function subscribeAll(reads: Record<string, () => Promise<unknown>>) {
   }
 }
 
-describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
-  it('keeps a constrained belongsToMany next to an unconstrained sibling equal to a fresh read', async () => {
-    const { db, posts, tags, postTags, Post } = await openBlog(driver)
-    const reads = {
-      constrainedWithSibling: () => db.model(Post).query()
-        .with({ tags: query => query.where('active', 1).orderBy('id') })
-        .with('allTags')
-        .orderBy('id')
-        .getJson(),
-      siblingFirst: () => db.model(Post).query()
-        .with('allTags')
-        .with({ tags: query => query.where('active', 1).orderBy('id') })
-        .orderBy('id')
-        .getJson(),
-      scopedWithSibling: () => db.model(Post).query().with('activeTags', 'allTags').orderBy('id').getJson(),
-      constrainedOnly: () => db.model(Post).query()
-        .with({ tags: query => query.where('active', 1).orderBy('id') })
-        .orderBy('id')
-        .getJson(),
-    }
-    const mutate = await subscribeAll(reads)
+function subscribeConstrainedTags({ db, Post }: Awaited<ReturnType<typeof openBlog>>) {
+  return subscribeAll({
+    constrainedWithSibling: () => db.model(Post).query()
+      .with({ tags: query => query.where('active', 1).orderBy('id') })
+      .with('allTags')
+      .orderBy('id')
+      .getJson(),
+    siblingFirst: () => db.model(Post).query()
+      .with('allTags')
+      .with({ tags: query => query.where('active', 1).orderBy('id') })
+      .orderBy('id')
+      .getJson(),
+    scopedWithSibling: () => db.model(Post).query().with('activeTags', 'allTags').orderBy('id').getJson(),
+    constrainedOnly: () => db.model(Post).query()
+      .with({ tags: query => query.where('active', 1).orderBy('id') })
+      .orderBy('id')
+      .getJson(),
+  })
+}
 
-    await mutate('activating a tag', () => db.table(tags).where('id', 2).update({ active: 1 }))
-    await mutate('deactivating a tag', () => db.table(tags).where('id', 1).update({ active: 0 }))
-    await mutate('relabeling a tag', () => db.table(tags).where('id', 3).update({ label: 'signals' }))
-    await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
-    await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
-    await mutate('attaching an inactive tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 4 }))
-    await mutate('attaching an active tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 5 }))
-    await mutate('moving a pivot row', () => db.table(postTags).where('tag_id', 2).update({ post_id: 20 }))
-    await mutate('retargeting a pivot row', () => db.table(postTags).where('tag_id', 4).update({ tag_id: 1 }))
-    await mutate('deleting a pivot row', () => db.table(postTags).where('tag_id', 5).delete())
-    await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
-    await mutate('inserting a post', () => db.table(posts).insert({ id: 30, title: 'Frequency Hopping' }))
-    await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 2 }))
+describe.each(drivers)('realtime constrained belongsToMany on %s', (driver) => {
+  describe('keeps a constrained belongsToMany next to an unconstrained sibling equal to a fresh read', () => {
+    it('across tag writes', async () => {
+      const blog = await openBlog(driver)
+      const { db, tags } = blog
+      const mutate = await subscribeConstrainedTags(blog)
+
+      await mutate('activating a tag', () => db.table(tags).where('id', 2).update({ active: 1 }))
+      await mutate('deactivating a tag', () => db.table(tags).where('id', 1).update({ active: 0 }))
+      await mutate('relabeling a tag', () => db.table(tags).where('id', 3).update({ label: 'signals' }))
+      await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
+      await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
+      await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
+    })
+
+    it('across pivot writes', async () => {
+      const blog = await openBlog(driver)
+      const { db, tags, postTags } = blog
+      await db.table(tags).insert([{ id: 4, label: 'draft', active: 0 }, { id: 5, label: 'live', active: 1 }])
+      const mutate = await subscribeConstrainedTags(blog)
+
+      await mutate('attaching an inactive tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 4 }))
+      await mutate('attaching an active tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 5 }))
+      await mutate('moving a pivot row', () => db.table(postTags).where('tag_id', 2).update({ post_id: 20 }))
+      await mutate('retargeting a pivot row', () => db.table(postTags).where('tag_id', 4).update({ tag_id: 1 }))
+      await mutate('deleting a pivot row', () => db.table(postTags).where('tag_id', 5).delete())
+    })
+
+    it('across post writes', async () => {
+      const blog = await openBlog(driver)
+      const { db, posts, postTags } = blog
+      const mutate = await subscribeConstrainedTags(blog)
+
+      await mutate('inserting a post', () => db.table(posts).insert({ id: 30, title: 'Frequency Hopping' }))
+      await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 2 }))
+    })
   })
 
   it('keeps a lazily loaded scoped belongsToMany equal to a fresh read', async () => {

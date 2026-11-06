@@ -95,37 +95,78 @@ async function subscribeAll(reads: Record<string, () => Promise<unknown>>) {
   }
 }
 
-async function runSteps(
-  mutate: Awaited<ReturnType<typeof subscribeAll>>,
-  { db, authors, posts, tags, postTags }: Awaited<ReturnType<typeof openBlog>>,
-) {
-  await mutate('activating a tag', () => db.table(tags).where('id', 2).update({ active: 1 }))
-  await mutate('deactivating a tag', () => db.table(tags).where('id', 1).update({ active: 0 }))
-  await mutate('relabeling a tag', () => db.table(tags).where('id', 3).update({ label: 'signals' }))
-  await mutate('retitling a post', () => db.table(posts).where('id', 20).update({ title: 'Parsers' }))
-  await mutate('publishing a post', () => db.table(posts).where('id', 20).update({ published: 1 }))
-  await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
-  await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
-  await mutate('attaching an inactive tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 4 }))
-  await mutate('attaching an active tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 5 }))
-  await mutate('moving a pivot row', () => db.table(postTags).where('tag_id', 2).update({ post_id: 20 }))
-  await mutate('retargeting a pivot row', () => db.table(postTags).where('tag_id', 4).update({ tag_id: 1 }))
-  await mutate('deleting a pivot row', () => db.table(postTags).where('tag_id', 5).delete())
-  await mutate('inserting a post', () => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 }))
-  await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 3 }))
-  await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
-  await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
-  await mutate('inserting an author', () => db.table(authors).insert({ id: 4, name: 'Radia' }))
-  await mutate('writing a post for the new author', () => db.table(posts).insert({ id: 40, author_id: 4, title: 'Spanning Trees', published: 0 }))
-  await mutate('renaming an author', () => db.table(authors).where('id', 2).update({ name: 'Grace Hopper' }))
-  await mutate('deleting a post', () => db.table(posts).where('id', 10).delete())
-}
+type Blog = Awaited<ReturnType<typeof openBlog>>
+type Mutate = Awaited<ReturnType<typeof subscribeAll>>
 
-describe.each(drivers)('realtime nested and constrained relations on %s', (driver) => {
-  it('keeps nested eager loads next to a sibling relation equal to a fresh read', async () => {
-    const blog = await openBlog(driver)
-    const { db, Post } = blog
-    const mutate = await subscribeAll({
+const extraTags = [{ id: 4, label: 'draft', active: 0 }, { id: 5, label: 'live', active: 1 }]
+
+const writes: readonly { name: string, seed?: (blog: Blog) => Promise<unknown>, run: (mutate: Mutate, blog: Blog) => Promise<void> }[] = [
+  {
+    name: 'tag updates',
+    run: async (mutate, { db, tags }) => {
+      await mutate('activating a tag', () => db.table(tags).where('id', 2).update({ active: 1 }))
+      await mutate('deactivating a tag', () => db.table(tags).where('id', 1).update({ active: 0 }))
+      await mutate('relabeling a tag', () => db.table(tags).where('id', 3).update({ label: 'signals' }))
+    },
+  },
+  {
+    name: 'tag inserts and deletes',
+    run: async (mutate, { db, tags }) => {
+      await mutate('inserting an inactive tag', () => db.table(tags).insert({ id: 4, label: 'draft', active: 0 }))
+      await mutate('inserting an active tag', () => db.table(tags).insert({ id: 5, label: 'live', active: 1 }))
+      await mutate('deleting a tag', () => db.table(tags).where('id', 3).delete())
+    },
+  },
+  {
+    name: 'pivot inserts',
+    seed: ({ db, tags }) => db.table(tags).insert(extraTags),
+    run: async (mutate, { db, postTags }) => {
+      await mutate('attaching an inactive tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 4 }))
+      await mutate('attaching an active tag', () => db.table(postTags).insert({ post_id: 20, tag_id: 5 }))
+    },
+  },
+  {
+    name: 'pivot updates and deletes',
+    seed: async ({ db, tags, postTags }) => {
+      await db.table(tags).insert(extraTags)
+      await db.table(postTags).insert([{ post_id: 20, tag_id: 4 }, { post_id: 20, tag_id: 5 }])
+    },
+    run: async (mutate, { db, postTags }) => {
+      await mutate('moving a pivot row', () => db.table(postTags).where('tag_id', 2).update({ post_id: 20 }))
+      await mutate('retargeting a pivot row', () => db.table(postTags).where('tag_id', 4).update({ tag_id: 1 }))
+      await mutate('deleting a pivot row', () => db.table(postTags).where('tag_id', 5).delete())
+    },
+  },
+  {
+    name: 'post updates',
+    run: async (mutate, { db, posts }) => {
+      await mutate('retitling a post', () => db.table(posts).where('id', 20).update({ title: 'Parsers' }))
+      await mutate('publishing a post', () => db.table(posts).where('id', 20).update({ published: 1 }))
+      await mutate('moving a post to another author', () => db.table(posts).where('id', 20).update({ author_id: 1 }))
+    },
+  },
+  {
+    name: 'post inserts and deletes',
+    run: async (mutate, { db, posts, postTags }) => {
+      await mutate('inserting a post', () => db.table(posts).insert({ id: 30, author_id: 3, title: 'Frequency Hopping', published: 1 }))
+      await mutate('tagging the new post', () => db.table(postTags).insert({ post_id: 30, tag_id: 3 }))
+      await mutate('deleting a post', () => db.table(posts).where('id', 10).delete())
+    },
+  },
+  {
+    name: 'author writes',
+    run: async (mutate, { db, authors, posts }) => {
+      await mutate('inserting an author', () => db.table(authors).insert({ id: 4, name: 'Radia' }))
+      await mutate('writing a post for the new author', () => db.table(posts).insert({ id: 40, author_id: 4, title: 'Spanning Trees', published: 0 }))
+      await mutate('renaming an author', () => db.table(authors).where('id', 2).update({ name: 'Grace Hopper' }))
+    },
+  },
+]
+
+const subscriptions: readonly { name: string, reads: (blog: Blog) => Record<string, () => Promise<unknown>> }[] = [
+  {
+    name: 'keeps nested eager loads next to a sibling relation equal to a fresh read',
+    reads: ({ db, Post }) => ({
       nestedWithSibling: () => db.model(Post).query().with('allTags.posts', 'tags').orderBy('id').getJson(),
       siblingFirst: () => db.model(Post).query().with('tags', 'allTags.posts').orderBy('id').getJson(),
       nestedOnly: () => db.model(Post).query().with('allTags.posts').orderBy('id').getJson(),
@@ -135,15 +176,11 @@ describe.each(drivers)('realtime nested and constrained relations on %s', (drive
         .with('tags')
         .orderBy('id')
         .getJson(),
-    })
-
-    await runSteps(mutate, blog)
-  })
-
-  it('keeps a constrained whereHas next to a sibling relation equal to a fresh read', async () => {
-    const blog = await openBlog(driver)
-    const { db, Post } = blog
-    const mutate = await subscribeAll({
+    }),
+  },
+  {
+    name: 'keeps a constrained whereHas next to a sibling relation equal to a fresh read',
+    reads: ({ db, Post }) => ({
       whereHasWithSibling: () => db.model(Post).query()
         .whereHas('tags', query => query.where('active', 1))
         .with('allTags')
@@ -163,15 +200,11 @@ describe.each(drivers)('realtime nested and constrained relations on %s', (drive
         .whereHas('tags', query => query.where('active', 1))
         .orderBy('id')
         .getJson(),
-    })
-
-    await runSteps(mutate, blog)
-  })
-
-  it('keeps a whereHas with a withCount on the same relation equal to a fresh read', async () => {
-    const blog = await openBlog(driver)
-    const { db, Author, Post } = blog
-    const mutate = await subscribeAll({
+    }),
+  },
+  {
+    name: 'keeps a whereHas with a withCount on the same relation equal to a fresh read',
+    reads: ({ db, Author, Post }) => ({
       hasManyWhereHasWithCount: () => db.model(Author).query().whereHas('posts').withCount('posts').orderBy('id').getJson(),
       hasManyConstrainedWhereHasWithCount: () => db.model(Author).query()
         .whereHas('posts', query => query.where('published', 1))
@@ -180,15 +213,11 @@ describe.each(drivers)('realtime nested and constrained relations on %s', (drive
         .getJson(),
       hasManyWhereHasWithSibling: () => db.model(Author).query().whereHas('posts').with('allPosts').orderBy('id').getJson(),
       belongsToManyWhereHasWithCount: () => db.model(Post).query().whereHas('tags').withCount('tags').orderBy('id').getJson(),
-    })
-
-    await runSteps(mutate, blog)
-  })
-
-  it('keeps a constrained withCount equal to a fresh read', async () => {
-    const blog = await openBlog(driver)
-    const { db, Post } = blog
-    const mutate = await subscribeAll({
+    }),
+  },
+  {
+    name: 'keeps a constrained withCount equal to a fresh read',
+    reads: ({ db, Post }) => ({
       constrainedCount: () => db.model(Post).query()
         .withCount({ tags: query => query.where('active', 1) })
         .orderBy('id')
@@ -203,8 +232,20 @@ describe.each(drivers)('realtime nested and constrained relations on %s', (drive
         .with('allTags')
         .orderBy('id')
         .getJson(),
-    })
+    }),
+  },
+]
 
-    await runSteps(mutate, blog)
-  })
+describe.each(drivers)('realtime nested and constrained relations on %s', (driver) => {
+  for (const { name, reads } of subscriptions) {
+    describe(name, () => {
+      for (const { name, seed, run } of writes) {
+        it(`across ${name}`, async () => {
+          const blog = await openBlog(driver)
+          await seed?.(blog)
+          await run(await subscribeAll(reads(blog)), blog)
+        })
+      }
+    })
+  }
 })
