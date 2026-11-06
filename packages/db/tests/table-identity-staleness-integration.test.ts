@@ -548,12 +548,16 @@ for (const driver of integrationDrivers(['sqlite', 'postgres', 'mysql'] as const
       const range: [number, number] = [1, 1]
       const inQuery = DB.table(qualified).whereIn('id', ids)
       const betweenQuery = DB.table(qualified).whereBetween('id', range)
+      const operatorInQuery = DB.table(qualified).where('id', 'in', ids)
+      const operatorBetweenQuery = DB.table(qualified).where('id', 'between', range)
 
       ids.push(2)
       range[1] = 3
 
       expect(await inQuery.pluck('id')).toEqual([1])
       expect(await betweenQuery.pluck('id')).toEqual([1])
+      expect(await operatorInQuery.pluck('id')).toEqual([1])
+      expect(await operatorBetweenQuery.pluck('id')).toEqual([1])
     })
 
     it('normalizes a where() value on the qualified name again after an unrelated schema change', async () => {

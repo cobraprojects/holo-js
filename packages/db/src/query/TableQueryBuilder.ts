@@ -224,6 +224,10 @@ const internalPlanHandoff: unique symbol = Symbol('internalPlanHandoff')
 
 const aggregateValueKey = 'holo_aggregate_value'
 
+function snapshotPredicateValue(value: unknown): unknown {
+  return Array.isArray(value) ? Object.freeze([...value]) : value
+}
+
 function copyTopLevelPredicates(predicates: readonly QueryPredicateNode[]): readonly QueryPredicateNode[] {
   return Object.freeze(predicates.map((predicate) => {
     const copied = Object.freeze({ ...predicate }) as QueryPredicateNode
@@ -653,13 +657,14 @@ export class TableQueryBuilder<
       }))
     }
 
+    const snapshot = snapshotPredicateValue(normalized.value)
     return this.clone(withPredicate(this.plan, this.withNormalizedValue<QueryPredicate>({
       kind: 'comparison',
       boolean,
       column,
       operator: normalized.operator as QueryOperator,
-      value: normalized.value,
-    }, () => this.normalizeComparisonValue(column, normalized.value, normalized.operator))))
+      value: snapshot,
+    }, () => this.normalizeComparisonValue(column, snapshot, normalized.operator))))
   }
 
   private whereExistsWithBoolean(
@@ -699,6 +704,7 @@ export class TableQueryBuilder<
   ): TableQueryBuilder<TTableOrName, TSelectedRow, TAvailableColumns> {
     const normalized = this.normalizeOperatorValue(operator, value)
     const partValue = normalizeDatePartPredicateValue(part, normalized.value)
+    const snapshot = snapshotPredicateValue(normalized.value)
 
     const predicate: QueryDatePredicate = {
       kind: 'date',
@@ -706,10 +712,10 @@ export class TableQueryBuilder<
       column,
       part,
       operator: normalized.operator as Exclude<QueryOperator, 'in' | 'not in' | 'between' | 'not between'>,
-      value: partValue ?? normalized.value,
+      value: partValue ?? snapshot,
     }
     return this.clone(withPredicate(this.plan, partValue === undefined
-      ? this.withNormalizedValue(predicate, () => ({ value: this.normalizePredicateValueForColumn(column, normalized.value, normalized.operator) }))
+      ? this.withNormalizedValue(predicate, () => ({ value: this.normalizePredicateValueForColumn(column, snapshot, normalized.operator) }))
       : predicate))
   }
 
